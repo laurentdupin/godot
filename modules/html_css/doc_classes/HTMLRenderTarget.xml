@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="HTMLRenderTarget" inherits="Node" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		Node that renders an HTML/CSS document to a reusable texture.
+	</brief_description>
+	<description>
+		Produces a [Texture2D] from an [HTMLDocument] without drawing it directly. The current checkpoint produces a CPU placeholder texture.
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="backend_preference" type="int" setter="set_backend_preference" getter="get_backend_preference" enum="HTMLView.BackendPreference" default="0" />
+		<member name="document" type="HTMLDocument" setter="set_document" getter="get_document" />
+		<member name="size" type="Vector2i" setter="set_size" getter="get_size" default="Vector2i(512, 512)" />
+	</members>
+	<signals>
+		<signal name="rendered">
+			<description>
+				Emitted after [method render_now] updates the texture.
+			</description>
+		</signal>
+		<signal name="texture_changed">
+			<description>
+				Emitted when the output texture content changes.
+			</description>
+		</signal>
+	</signals>
+	<methods>
+		<method name="get_texture">
+			<return type="Texture2D" />
+			<description>
+				Returns the output texture.
+			</description>
+		</method>
+		<method name="render_now">
+			<return type="void" />
+			<description>
+				Requests an immediate placeholder render.
+			</description>
+		</method>
+	</methods>
+</class>

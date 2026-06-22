@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="HTMLDocument" inherits="Resource" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		HTML/CSS source data for an HTML render surface.
+	</brief_description>
+	<description>
+		Stores pure HTML and CSS-oriented document inputs for [HTMLView], [HTMLRenderTarget], and [HTMLSurface3D]. This resource does not expose JavaScript or browser navigation behavior.
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="default_size" type="Vector2i" setter="set_default_size" getter="get_default_size" default="Vector2i(512, 512)">
+			Default render size used when a surface has no explicit size.
+		</member>
+		<member name="html" type="String" setter="set_html" getter="get_html" default="&quot;&quot;">
+			Inline HTML/CSS source.
+		</member>
+		<member name="html_file" type="String" setter="set_html_file" getter="get_html_file" default="&quot;&quot;">
+			Path to an HTML file. File loading is reserved for the renderer backend.
+		</member>
+		<member name="resource_root" type="String" setter="set_resource_root" getter="get_resource_root" default="&quot;res://&quot;">
+			Base resource root used by the renderer backend for local assets.
+		</member>
+		<member name="transparent_background" type="bool" setter="set_transparent_background" getter="is_transparent_background" default="true">
+			If [code]true[/code], surfaces request a transparent background from the renderer backend.
+		</member>
+	</members>
+	<methods>
+		<method name="reload">
+			<return type="void" />
+			<description>
+				Requests that dependent surfaces reload the document.
+			</description>
+		</method>
+	</methods>
+</class>

@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="HTMLView" inherits="Control" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		Control that draws a pure HTML/CSS document as a texture.
+	</brief_description>
+	<description>
+		Draws an [HTMLDocument] into the control rectangle. Actions are delivered through Godot signals and bound [Callable]s rather than JavaScript.
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="backend_preference" type="int" setter="set_backend_preference" getter="get_backend_preference" enum="HTMLView.BackendPreference" default="0">
+			Preferred render backend. The current checkpoint supports [constant BACKEND_AUTO] and [constant BACKEND_CPU].
+		</member>
+		<member name="document" type="HTMLDocument" setter="set_document" getter="get_document">
+			Document rendered by this view.
+		</member>
+		<member name="focus_on_click" type="bool" setter="set_focus_on_click" getter="is_focus_on_click_enabled" default="true">
+			If [code]true[/code], the view grabs keyboard focus when clicked.
+		</member>
+		<member name="html" type="String" setter="set_html" getter="get_html" default="&quot;&quot;">
+			Convenience access to the assigned document's inline HTML source.
+		</member>
+		<member name="html_file" type="String" setter="set_html_file" getter="get_html_file" default="&quot;&quot;">
+			Convenience access to the assigned document's HTML file path.
+		</member>
+		<member name="input_enabled" type="bool" setter="set_input_enabled" getter="is_input_enabled" default="true">
+			If [code]true[/code], the view accepts pointer input for HTML action activation.
+		</member>
+	</members>
+	<signals>
+		<signal name="action_requested">
+			<param index="0" name="action" type="StringName" />
+			<param index="1" name="payload" type="Dictionary" />
+			<description>
+				Emitted when the activation layer requests a Godot action.
+			</description>
+		</signal>
+		<signal name="element_clicked">
+			<param index="0" name="element_id" type="StringName" />
+			<param index="1" name="button" type="int" />
+			<description>
+				Emitted when an HTML element is clicked.
+			</description>
+		</signal>
+		<signal name="render_error">
+			<param index="0" name="message" type="String" />
+			<description>
+				Emitted when the renderer or action layer reports an error.
+			</description>
+		</signal>
+	</signals>
+	<methods>
+		<method name="bind_action">
+			<return type="void" />
+			<param index="0" name="action" type="StringName" />
+			<param index="1" name="callable" type="Callable" />
+			<description>
+				Binds a Godot callable to an HTML action name.
+			</description>
+		</method>
+		<method name="get_texture">
+			<return type="Texture2D" />
+			<description>
+				Returns the current render texture.
+			</description>
+		</method>
+		<method name="has_action" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="action" type="StringName" />
+			<description>
+				Returns whether an action has a callable binding.
+			</description>
+		</method>
+		<method name="unbind_action">
+			<return type="void" />
+			<param index="0" name="action" type="StringName" />
+			<description>
+				Removes an action binding.
+			</description>
+		</method>
+	</methods>
+	<constants>
+		<constant name="BACKEND_AUTO" value="0" enum="BackendPreference">
+			Automatically chooses the best available backend.
+		</constant>
+		<constant name="BACKEND_CPU" value="1" enum="BackendPreference">
+			Uses the portable CPU texture backend.
+		</constant>
+	</constants>
+</class>

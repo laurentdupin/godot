@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="HTMLSurface3D" inherits="Node3D" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		3D-oriented shell for an HTML/CSS render texture.
+	</brief_description>
+	<description>
+		Provides a texture-producing 3D node for mapping HTML/CSS output onto materials. Mesh and collision generation are reserved for a later implementation checkpoint.
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="backend_preference" type="int" setter="set_backend_preference" getter="get_backend_preference" enum="HTMLView.BackendPreference" default="0" />
+		<member name="document" type="HTMLDocument" setter="set_document" getter="get_document" />
+		<member name="input_enabled" type="bool" setter="set_input_enabled" getter="is_input_enabled" default="true" />
+		<member name="physical_size" type="Vector2" setter="set_physical_size" getter="get_physical_size" default="Vector2(1, 1)" />
+		<member name="texture_size" type="Vector2i" setter="set_texture_size" getter="get_texture_size" default="Vector2i(512, 512)" />
+	</members>
+	<signals>
+		<signal name="texture_changed">
+			<description>
+				Emitted when the output texture content changes.
+			</description>
+		</signal>
+	</signals>
+	<methods>
+		<method name="get_texture">
+			<return type="Texture2D" />
+			<description>
+				Returns the output texture.
+			</description>
+		</method>
+	</methods>
+</class>

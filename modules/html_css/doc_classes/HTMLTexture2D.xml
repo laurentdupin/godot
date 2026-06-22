@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="HTMLTexture2D" inherits="Texture2D" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		Texture resource produced by an HTML/CSS render surface.
+	</brief_description>
+	<description>
+		Represents the texture output of a pure HTML/CSS render surface. The initial implementation uses a CPU [ImageTexture] placeholder until the external renderer supplies raw frame pixels.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="update_placeholder">
+			<return type="void" />
+			<param index="0" name="size" type="Vector2i" />
+			<param index="1" name="background" type="Color" />
+			<param index="2" name="marker" type="String" default="&quot;&quot;" />
+			<description>
+				Updates the texture with a generated placeholder image.
+			</description>
+		</method>
+	</methods>
+</class>
