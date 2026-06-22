@@ -4,7 +4,7 @@
 		HTML/CSS source data for an HTML render surface.
 	</brief_description>
 	<description>
-		Stores pure HTML and CSS-oriented document inputs for [HTMLView], [HTMLRenderTarget], and [HTMLSurface3D].
+		Stores pure HTML and CSS-oriented document inputs for [HTMLView], [HTMLRenderTarget], and [HTMLSurface3D]. Unsupported executable constructs are reported by [method get_source_errors].
 	</description>
 	<tutorials>
 	</tutorials>
@@ -26,6 +26,18 @@
 		</member>
 	</members>
 	<methods>
+		<method name="get_source_errors" qualifiers="const">
+			<return type="PackedStringArray" />
+			<description>
+				Returns unsupported source constructs found during the document preflight check.
+			</description>
+		</method>
+		<method name="is_source_valid" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns [code]true[/code] when the document source preflight check found no unsupported constructs.
+			</description>
+		</method>
 		<method name="reload">
 			<return type="void" />
 			<description>

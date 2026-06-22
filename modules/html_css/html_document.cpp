@@ -30,6 +30,8 @@
 
 #include "html_document.h"
 
+#include "bridge/html_source_validator.h"
+
 #include "core/object/class_db.h"
 
 void HTMLDocument::_bind_methods() {
@@ -43,6 +45,8 @@ void HTMLDocument::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_default_size"), &HTMLDocument::get_default_size);
 	ClassDB::bind_method(D_METHOD("set_transparent_background", "transparent_background"), &HTMLDocument::set_transparent_background);
 	ClassDB::bind_method(D_METHOD("is_transparent_background"), &HTMLDocument::is_transparent_background);
+	ClassDB::bind_method(D_METHOD("is_source_valid"), &HTMLDocument::is_source_valid);
+	ClassDB::bind_method(D_METHOD("get_source_errors"), &HTMLDocument::get_source_errors);
 	ClassDB::bind_method(D_METHOD("reload"), &HTMLDocument::reload);
 
 	ADD_PROPERTY(PropertyInfo(Variant::STRING, "html", PROPERTY_HINT_MULTILINE_TEXT), "set_html", "get_html");
@@ -52,11 +56,33 @@ void HTMLDocument::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "transparent_background"), "set_transparent_background", "is_transparent_background");
 }
 
+bool HTMLDocument::_validate_source() {
+	PackedStringArray new_errors = HTMLSourceValidator::validate_inline_source(html);
+
+	PackedStringArray path_errors = HTMLSourceValidator::validate_resource_path(html_file);
+	for (const String &error : path_errors) {
+		new_errors.push_back(error);
+	}
+
+	PackedStringArray root_errors = HTMLSourceValidator::validate_resource_path(resource_root);
+	for (const String &error : root_errors) {
+		new_errors.push_back("Resource root: " + error);
+	}
+
+	if (source_errors == new_errors) {
+		return false;
+	}
+
+	source_errors = new_errors;
+	return true;
+}
+
 void HTMLDocument::set_html(const String &p_html) {
 	if (html == p_html) {
 		return;
 	}
 	html = p_html;
+	_validate_source();
 	emit_changed();
 }
 
@@ -69,6 +95,7 @@ void HTMLDocument::set_html_file(const String &p_html_file) {
 		return;
 	}
 	html_file = p_html_file;
+	_validate_source();
 	emit_changed();
 }
 
@@ -81,6 +108,7 @@ void HTMLDocument::set_resource_root(const String &p_resource_root) {
 		return;
 	}
 	resource_root = p_resource_root;
+	_validate_source();
 	emit_changed();
 }
 
@@ -113,6 +141,15 @@ bool HTMLDocument::is_transparent_background() const {
 	return transparent_background;
 }
 
+bool HTMLDocument::is_source_valid() const {
+	return source_errors.is_empty();
+}
+
+PackedStringArray HTMLDocument::get_source_errors() const {
+	return source_errors;
+}
+
 void HTMLDocument::reload() {
+	_validate_source();
 	emit_changed();
 }

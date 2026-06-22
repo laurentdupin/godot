@@ -73,6 +73,7 @@ public:
 	Error submit_cpu_frame(const HTMLCPUFrame &p_frame, const HTMLFrameMetadata &p_metadata = HTMLFrameMetadata());
 	const HTMLFrameMetadata &get_frame_metadata() const;
 	const HTMLElementHit *find_hit_at(const Point2i &p_position) const;
+	bool is_document_source_valid() const;
 	Ref<Texture2D> get_texture() const;
 	Ref<HTMLTexture2D> get_html_texture() const;
 

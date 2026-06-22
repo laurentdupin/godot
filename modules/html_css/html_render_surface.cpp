@@ -157,6 +157,10 @@ const HTMLElementHit *HTMLRenderSurface::find_hit_at(const Point2i &p_position) 
 	return frame_metadata.find_hit_at(p_position);
 }
 
+bool HTMLRenderSurface::is_document_source_valid() const {
+	return document.is_null() || document->is_source_valid();
+}
+
 Ref<Texture2D> HTMLRenderSurface::get_texture() const {
 	return backend != nullptr ? backend->get_texture() : Ref<Texture2D>();
 }

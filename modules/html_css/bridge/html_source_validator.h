@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  html_document.h                                                       */
+/*  html_source_validator.h                                               */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -30,43 +30,10 @@
 
 #pragma once
 
-#include "core/io/resource.h"
 #include "core/variant/variant.h"
 
-class HTMLDocument : public Resource {
-	GDCLASS(HTMLDocument, Resource);
-	RES_BASE_EXTENSION("htmlcss");
-
-	String html;
-	String html_file;
-	String resource_root = "res://";
-	Size2i default_size = Size2i(512, 512);
-	bool transparent_background = true;
-	PackedStringArray source_errors;
-
-	bool _validate_source();
-
-protected:
-	static void _bind_methods();
-
+class HTMLSourceValidator {
 public:
-	void set_html(const String &p_html);
-	String get_html() const;
-
-	void set_html_file(const String &p_html_file);
-	String get_html_file() const;
-
-	void set_resource_root(const String &p_resource_root);
-	String get_resource_root() const;
-
-	void set_default_size(const Size2i &p_default_size);
-	Size2i get_default_size() const;
-
-	void set_transparent_background(bool p_transparent_background);
-	bool is_transparent_background() const;
-
-	bool is_source_valid() const;
-	PackedStringArray get_source_errors() const;
-
-	void reload();
+	static PackedStringArray validate_inline_source(const String &p_source);
+	static PackedStringArray validate_resource_path(const String &p_path);
 };
