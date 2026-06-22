@@ -34,6 +34,10 @@
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 
+static HTMLSurfaceBackendPreference html_view_to_surface_backend_preference(HTMLView::BackendPreference p_backend_preference) {
+	return p_backend_preference == HTMLView::BACKEND_CPU ? HTML_SURFACE_BACKEND_CPU : HTML_SURFACE_BACKEND_AUTO;
+}
+
 void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_document", "document"), &HTMLView::set_document);
 	ClassDB::bind_method(D_METHOD("get_document"), &HTMLView::get_document);
@@ -70,41 +74,41 @@ void HTMLView::_bind_methods() {
 void HTMLView::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_DRAW: {
-			_ensure_texture();
+			Ref<Texture2D> texture = surface->get_texture();
 			if (texture.is_valid() && texture->get_width() > 0 && texture->get_height() > 0) {
 				draw_texture_rect(texture, Rect2(Vector2(), get_size()));
 			}
 		} break;
 
 		case NOTIFICATION_RESIZED: {
-			_update_placeholder();
+			_update_surface_size();
 			update_minimum_size();
 		} break;
 	}
 }
 
-void HTMLView::_document_changed() {
-	_update_placeholder();
+void HTMLView::_surface_changed() {
 	update_minimum_size();
 	queue_redraw();
 }
 
-void HTMLView::_ensure_texture() {
-	if (texture.is_null()) {
-		texture.instantiate();
-		_update_placeholder();
+void HTMLView::_ensure_document() {
+	if (surface->get_document().is_null()) {
+		Ref<HTMLDocument> document;
+		document.instantiate();
+		surface->set_document(document);
 	}
 }
 
-void HTMLView::_update_placeholder() {
-	_ensure_texture();
+void HTMLView::_update_surface_size() {
 	Size2 control_size = get_size();
 	Size2i target_size = Size2i(control_size.x, control_size.y);
 	if (target_size.x <= 0 || target_size.y <= 0) {
+		Ref<HTMLDocument> document = surface->get_document();
 		target_size = document.is_valid() ? document->get_default_size() : Size2i(512, 512);
 	}
-	Color background = Color(0.08, 0.09, 0.1, document.is_valid() && document->is_transparent_background() ? 0.0 : 1.0);
-	texture->update_placeholder(target_size, background, "HTMLView");
+	surface->set_size(target_size);
+	surface->render_now("HTMLView");
 	queue_redraw();
 }
 
@@ -140,44 +144,31 @@ void HTMLView::_call_bound_action(const StringName &p_action, const Dictionary &
 }
 
 void HTMLView::set_document(const Ref<HTMLDocument> &p_document) {
-	if (document == p_document) {
-		return;
-	}
-	if (document.is_valid()) {
-		document->disconnect_changed(callable_mp(this, &HTMLView::_document_changed));
-	}
-	document = p_document;
-	if (document.is_valid()) {
-		document->connect_changed(callable_mp(this, &HTMLView::_document_changed));
-	}
-	_document_changed();
+	surface->set_document(p_document);
+	_update_surface_size();
 }
 
 Ref<HTMLDocument> HTMLView::get_document() const {
-	return document;
+	return surface->get_document();
 }
 
 void HTMLView::set_html(const String &p_html) {
-	if (document.is_null()) {
-		document.instantiate();
-		document->connect_changed(callable_mp(this, &HTMLView::_document_changed));
-	}
-	document->set_html(p_html);
+	_ensure_document();
+	surface->get_document()->set_html(p_html);
 }
 
 String HTMLView::get_html() const {
+	Ref<HTMLDocument> document = surface->get_document();
 	return document.is_valid() ? document->get_html() : String();
 }
 
 void HTMLView::set_html_file(const String &p_html_file) {
-	if (document.is_null()) {
-		document.instantiate();
-		document->connect_changed(callable_mp(this, &HTMLView::_document_changed));
-	}
-	document->set_html_file(p_html_file);
+	_ensure_document();
+	surface->get_document()->set_html_file(p_html_file);
 }
 
 String HTMLView::get_html_file() const {
+	Ref<HTMLDocument> document = surface->get_document();
 	return document.is_valid() ? document->get_html_file() : String();
 }
 
@@ -198,7 +189,9 @@ bool HTMLView::is_focus_on_click_enabled() const {
 }
 
 void HTMLView::set_backend_preference(BackendPreference p_backend_preference) {
+	ERR_FAIL_INDEX((int)p_backend_preference, 2);
 	backend_preference = p_backend_preference;
+	surface->set_backend_preference(html_view_to_surface_backend_preference(p_backend_preference));
 }
 
 HTMLView::BackendPreference HTMLView::get_backend_preference() const {
@@ -206,7 +199,7 @@ HTMLView::BackendPreference HTMLView::get_backend_preference() const {
 }
 
 Ref<Texture2D> HTMLView::get_texture() const {
-	return texture;
+	return surface->get_texture();
 }
 
 void HTMLView::bind_action(const StringName &p_action, const Callable &p_callable) {
@@ -243,6 +236,7 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 }
 
 Size2 HTMLView::get_minimum_size() const {
+	Ref<HTMLDocument> document = surface->get_document();
 	if (document.is_valid()) {
 		return document->get_default_size();
 	}
@@ -250,6 +244,10 @@ Size2 HTMLView::get_minimum_size() const {
 }
 
 HTMLView::HTMLView() {
-	texture.instantiate();
+	surface.instantiate();
+	surface->set_changed_callback(callable_mp(this, &HTMLView::_surface_changed));
+	surface->set_placeholder_background(Color(0.08, 0.09, 0.1, 1.0));
+	surface->set_backend_preference(html_view_to_surface_backend_preference(backend_preference));
+	surface->render_now("HTMLView");
 	set_focus_mode(FOCUS_CLICK);
 }

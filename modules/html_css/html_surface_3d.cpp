@@ -33,6 +33,10 @@
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 
+static HTMLSurfaceBackendPreference html_surface_3d_to_surface_backend_preference(HTMLView::BackendPreference p_backend_preference) {
+	return p_backend_preference == HTMLView::BACKEND_CPU ? HTML_SURFACE_BACKEND_CPU : HTML_SURFACE_BACKEND_AUTO;
+}
+
 void HTMLSurface3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_document", "document"), &HTMLSurface3D::set_document);
 	ClassDB::bind_method(D_METHOD("get_document"), &HTMLSurface3D::get_document);
@@ -55,32 +59,16 @@ void HTMLSurface3D::_bind_methods() {
 	ADD_SIGNAL(MethodInfo("texture_changed"));
 }
 
-void HTMLSurface3D::_document_changed() {
-	_update_placeholder();
-}
-
-void HTMLSurface3D::_update_placeholder() {
-	Color background = Color(0.05, 0.055, 0.065, document.is_valid() && document->is_transparent_background() ? 0.0 : 1.0);
-	texture->update_placeholder(texture_size, background, "HTMLSurface3D");
+void HTMLSurface3D::_surface_changed() {
 	emit_signal(SNAME("texture_changed"));
 }
 
 void HTMLSurface3D::set_document(const Ref<HTMLDocument> &p_document) {
-	if (document == p_document) {
-		return;
-	}
-	if (document.is_valid()) {
-		document->disconnect_changed(callable_mp(this, &HTMLSurface3D::_document_changed));
-	}
-	document = p_document;
-	if (document.is_valid()) {
-		document->connect_changed(callable_mp(this, &HTMLSurface3D::_document_changed));
-	}
-	_update_placeholder();
+	surface->set_document(p_document);
 }
 
 Ref<HTMLDocument> HTMLSurface3D::get_document() const {
-	return document;
+	return surface->get_document();
 }
 
 void HTMLSurface3D::set_texture_size(const Size2i &p_texture_size) {
@@ -89,7 +77,7 @@ void HTMLSurface3D::set_texture_size(const Size2i &p_texture_size) {
 		return;
 	}
 	texture_size = new_size;
-	_update_placeholder();
+	surface->set_size(texture_size);
 }
 
 Size2i HTMLSurface3D::get_texture_size() const {
@@ -113,7 +101,9 @@ bool HTMLSurface3D::is_input_enabled() const {
 }
 
 void HTMLSurface3D::set_backend_preference(HTMLView::BackendPreference p_backend_preference) {
+	ERR_FAIL_INDEX((int)p_backend_preference, 2);
 	backend_preference = p_backend_preference;
+	surface->set_backend_preference(html_surface_3d_to_surface_backend_preference(p_backend_preference));
 }
 
 HTMLView::BackendPreference HTMLSurface3D::get_backend_preference() const {
@@ -121,10 +111,14 @@ HTMLView::BackendPreference HTMLSurface3D::get_backend_preference() const {
 }
 
 Ref<Texture2D> HTMLSurface3D::get_texture() const {
-	return texture;
+	return surface->get_texture();
 }
 
 HTMLSurface3D::HTMLSurface3D() {
-	texture.instantiate();
-	_update_placeholder();
+	surface.instantiate();
+	surface->set_changed_callback(callable_mp(this, &HTMLSurface3D::_surface_changed));
+	surface->set_placeholder_background(Color(0.05, 0.055, 0.065, 1.0));
+	surface->set_size(texture_size);
+	surface->set_backend_preference(html_surface_3d_to_surface_backend_preference(backend_preference));
+	surface->render_now("HTMLSurface3D");
 }

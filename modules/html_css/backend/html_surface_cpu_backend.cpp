@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  html_render_target.h                                                  */
+/*  html_surface_cpu_backend.cpp                                          */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -28,38 +28,36 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
-#pragma once
+#include "html_surface_cpu_backend.h"
 
-#include "html_document.h"
-#include "html_render_surface.h"
-#include "html_view.h"
+void HTMLSurfaceCPUBackend::set_size(const Size2i &p_size) {
+	size = Size2i(MAX(1, p_size.x), MAX(1, p_size.y));
+}
 
-#include "scene/main/node.h"
+void HTMLSurfaceCPUBackend::set_transparent_background(bool p_transparent_background) {
+	transparent_background = p_transparent_background;
+}
 
-class HTMLRenderTarget : public Node {
-	GDCLASS(HTMLRenderTarget, Node);
+void HTMLSurfaceCPUBackend::set_placeholder_background(const Color &p_color) {
+	placeholder_background = p_color;
+}
 
-	Ref<HTMLRenderSurface> surface;
-	Size2i size = Size2i(512, 512);
-	HTMLView::BackendPreference backend_preference = HTMLView::BACKEND_AUTO;
+void HTMLSurfaceCPUBackend::render_placeholder(const String &p_marker) {
+	Color background = placeholder_background;
+	if (transparent_background) {
+		background.a = 0.0;
+	}
+	texture->update_placeholder(size, background, p_marker);
+}
 
-	void _surface_changed();
+Ref<Texture2D> HTMLSurfaceCPUBackend::get_texture() const {
+	return texture;
+}
 
-protected:
-	static void _bind_methods();
+Ref<HTMLTexture2D> HTMLSurfaceCPUBackend::get_html_texture() const {
+	return texture;
+}
 
-public:
-	void set_document(const Ref<HTMLDocument> &p_document);
-	Ref<HTMLDocument> get_document() const;
-
-	void set_size(const Size2i &p_size);
-	Size2i get_size() const;
-
-	void set_backend_preference(HTMLView::BackendPreference p_backend_preference);
-	HTMLView::BackendPreference get_backend_preference() const;
-
-	Ref<Texture2D> get_texture() const;
-	void render_now();
-
-	HTMLRenderTarget();
-};
+HTMLSurfaceCPUBackend::HTMLSurfaceCPUBackend() {
+	texture.instantiate();
+}

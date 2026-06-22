@@ -31,7 +31,7 @@
 #pragma once
 
 #include "html_document.h"
-#include "html_texture.h"
+#include "html_render_surface.h"
 
 #include "core/templates/hash_map.h"
 #include "scene/gui/control.h"
@@ -46,16 +46,15 @@ public:
 	};
 
 private:
-	Ref<HTMLDocument> document;
-	Ref<HTMLTexture2D> texture;
+	Ref<HTMLRenderSurface> surface;
 	HashMap<StringName, Callable> action_bindings;
 	bool input_enabled = true;
 	bool focus_on_click = true;
 	BackendPreference backend_preference = BACKEND_AUTO;
 
-	void _document_changed();
-	void _ensure_texture();
-	void _update_placeholder();
+	void _surface_changed();
+	void _ensure_document();
+	void _update_surface_size();
 	void _emit_placeholder_click(const Vector2 &p_position, MouseButton p_button);
 	void _call_bound_action(const StringName &p_action, const Dictionary &p_payload);
 

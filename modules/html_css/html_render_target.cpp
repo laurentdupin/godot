@@ -33,6 +33,10 @@
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 
+static HTMLSurfaceBackendPreference html_render_target_to_surface_backend_preference(HTMLView::BackendPreference p_backend_preference) {
+	return p_backend_preference == HTMLView::BACKEND_CPU ? HTML_SURFACE_BACKEND_CPU : HTML_SURFACE_BACKEND_AUTO;
+}
+
 void HTMLRenderTarget::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_document", "document"), &HTMLRenderTarget::set_document);
 	ClassDB::bind_method(D_METHOD("get_document"), &HTMLRenderTarget::get_document);
@@ -51,32 +55,16 @@ void HTMLRenderTarget::_bind_methods() {
 	ADD_SIGNAL(MethodInfo("texture_changed"));
 }
 
-void HTMLRenderTarget::_document_changed() {
-	_update_placeholder();
-}
-
-void HTMLRenderTarget::_update_placeholder() {
-	Color background = Color(0.06, 0.07, 0.08, document.is_valid() && document->is_transparent_background() ? 0.0 : 1.0);
-	texture->update_placeholder(size, background, "HTMLRenderTarget");
+void HTMLRenderTarget::_surface_changed() {
 	emit_signal(SNAME("texture_changed"));
 }
 
 void HTMLRenderTarget::set_document(const Ref<HTMLDocument> &p_document) {
-	if (document == p_document) {
-		return;
-	}
-	if (document.is_valid()) {
-		document->disconnect_changed(callable_mp(this, &HTMLRenderTarget::_document_changed));
-	}
-	document = p_document;
-	if (document.is_valid()) {
-		document->connect_changed(callable_mp(this, &HTMLRenderTarget::_document_changed));
-	}
-	_update_placeholder();
+	surface->set_document(p_document);
 }
 
 Ref<HTMLDocument> HTMLRenderTarget::get_document() const {
-	return document;
+	return surface->get_document();
 }
 
 void HTMLRenderTarget::set_size(const Size2i &p_size) {
@@ -85,7 +73,7 @@ void HTMLRenderTarget::set_size(const Size2i &p_size) {
 		return;
 	}
 	size = new_size;
-	_update_placeholder();
+	surface->set_size(size);
 }
 
 Size2i HTMLRenderTarget::get_size() const {
@@ -93,7 +81,9 @@ Size2i HTMLRenderTarget::get_size() const {
 }
 
 void HTMLRenderTarget::set_backend_preference(HTMLView::BackendPreference p_backend_preference) {
+	ERR_FAIL_INDEX((int)p_backend_preference, 2);
 	backend_preference = p_backend_preference;
+	surface->set_backend_preference(html_render_target_to_surface_backend_preference(p_backend_preference));
 }
 
 HTMLView::BackendPreference HTMLRenderTarget::get_backend_preference() const {
@@ -101,15 +91,19 @@ HTMLView::BackendPreference HTMLRenderTarget::get_backend_preference() const {
 }
 
 Ref<Texture2D> HTMLRenderTarget::get_texture() const {
-	return texture;
+	return surface->get_texture();
 }
 
 void HTMLRenderTarget::render_now() {
-	_update_placeholder();
+	surface->render_now("HTMLRenderTarget");
 	emit_signal(SNAME("rendered"));
 }
 
 HTMLRenderTarget::HTMLRenderTarget() {
-	texture.instantiate();
-	_update_placeholder();
+	surface.instantiate();
+	surface->set_changed_callback(callable_mp(this, &HTMLRenderTarget::_surface_changed));
+	surface->set_placeholder_background(Color(0.06, 0.07, 0.08, 1.0));
+	surface->set_size(size);
+	surface->set_backend_preference(html_render_target_to_surface_backend_preference(backend_preference));
+	surface->render_now("HTMLRenderTarget");
 }

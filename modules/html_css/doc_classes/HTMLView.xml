@@ -4,7 +4,7 @@
 		Control that draws a pure HTML/CSS document as a texture.
 	</brief_description>
 	<description>
-		Draws an [HTMLDocument] into the control rectangle. Actions are delivered through Godot signals and bound [Callable]s rather than JavaScript.
+		Draws an [HTMLDocument] into the control rectangle. Actions are delivered through Godot signals and bound [Callable]s.
 	</description>
 	<tutorials>
 	</tutorials>

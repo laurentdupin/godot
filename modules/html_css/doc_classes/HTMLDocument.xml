@@ -4,7 +4,7 @@
 		HTML/CSS source data for an HTML render surface.
 	</brief_description>
 	<description>
-		Stores pure HTML and CSS-oriented document inputs for [HTMLView], [HTMLRenderTarget], and [HTMLSurface3D]. This resource does not expose JavaScript or browser navigation behavior.
+		Stores pure HTML and CSS-oriented document inputs for [HTMLView], [HTMLRenderTarget], and [HTMLSurface3D].
 	</description>
 	<tutorials>
 	</tutorials>

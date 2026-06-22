@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  html_render_target.h                                                  */
+/*  html_render_surface.h                                                 */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -30,23 +30,30 @@
 
 #pragma once
 
+#include "backend/html_surface_backend.h"
 #include "html_document.h"
-#include "html_render_surface.h"
-#include "html_view.h"
 
-#include "scene/main/node.h"
+#include "core/object/ref_counted.h"
+#include "core/variant/callable.h"
 
-class HTMLRenderTarget : public Node {
-	GDCLASS(HTMLRenderTarget, Node);
+enum HTMLSurfaceBackendPreference {
+	HTML_SURFACE_BACKEND_AUTO,
+	HTML_SURFACE_BACKEND_CPU,
+};
 
-	Ref<HTMLRenderSurface> surface;
+class HTMLRenderSurface : public RefCounted {
+	Ref<HTMLDocument> document;
+	HTMLSurfaceBackend *backend = nullptr;
 	Size2i size = Size2i(512, 512);
-	HTMLView::BackendPreference backend_preference = HTMLView::BACKEND_AUTO;
+	Color placeholder_background = Color(0.08, 0.09, 0.1, 1.0);
+	String marker = "HTML";
+	HTMLSurfaceBackendPreference backend_preference = HTML_SURFACE_BACKEND_AUTO;
+	Callable changed_callback;
 
-	void _surface_changed();
-
-protected:
-	static void _bind_methods();
+	void _ensure_backend();
+	void _sync_backend_state();
+	void _document_changed();
+	void _notify_changed() const;
 
 public:
 	void set_document(const Ref<HTMLDocument> &p_document);
@@ -55,11 +62,16 @@ public:
 	void set_size(const Size2i &p_size);
 	Size2i get_size() const;
 
-	void set_backend_preference(HTMLView::BackendPreference p_backend_preference);
-	HTMLView::BackendPreference get_backend_preference() const;
+	void set_placeholder_background(const Color &p_color);
 
+	void set_backend_preference(HTMLSurfaceBackendPreference p_backend_preference);
+	HTMLSurfaceBackendPreference get_backend_preference() const;
+
+	void set_changed_callback(const Callable &p_callback);
+	void render_now(const String &p_marker);
 	Ref<Texture2D> get_texture() const;
-	void render_now();
+	Ref<HTMLTexture2D> get_html_texture() const;
 
-	HTMLRenderTarget();
+	HTMLRenderSurface();
+	~HTMLRenderSurface();
 };

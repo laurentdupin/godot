@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  html_render_target.h                                                  */
+/*  html_surface_backend.h                                                */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -30,36 +30,16 @@
 
 #pragma once
 
-#include "html_document.h"
-#include "html_render_surface.h"
-#include "html_view.h"
+#include "../html_texture.h"
 
-#include "scene/main/node.h"
-
-class HTMLRenderTarget : public Node {
-	GDCLASS(HTMLRenderTarget, Node);
-
-	Ref<HTMLRenderSurface> surface;
-	Size2i size = Size2i(512, 512);
-	HTMLView::BackendPreference backend_preference = HTMLView::BACKEND_AUTO;
-
-	void _surface_changed();
-
-protected:
-	static void _bind_methods();
-
+class HTMLSurfaceBackend {
 public:
-	void set_document(const Ref<HTMLDocument> &p_document);
-	Ref<HTMLDocument> get_document() const;
+	virtual ~HTMLSurfaceBackend() {}
 
-	void set_size(const Size2i &p_size);
-	Size2i get_size() const;
-
-	void set_backend_preference(HTMLView::BackendPreference p_backend_preference);
-	HTMLView::BackendPreference get_backend_preference() const;
-
-	Ref<Texture2D> get_texture() const;
-	void render_now();
-
-	HTMLRenderTarget();
+	virtual void set_size(const Size2i &p_size) = 0;
+	virtual void set_transparent_background(bool p_transparent_background) = 0;
+	virtual void set_placeholder_background(const Color &p_color) = 0;
+	virtual void render_placeholder(const String &p_marker) = 0;
+	virtual Ref<Texture2D> get_texture() const = 0;
+	virtual Ref<HTMLTexture2D> get_html_texture() const = 0;
 };

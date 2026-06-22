@@ -31,7 +31,7 @@
 #pragma once
 
 #include "html_document.h"
-#include "html_texture.h"
+#include "html_render_surface.h"
 #include "html_view.h"
 
 #include "scene/3d/node_3d.h"
@@ -39,15 +39,13 @@
 class HTMLSurface3D : public Node3D {
 	GDCLASS(HTMLSurface3D, Node3D);
 
-	Ref<HTMLDocument> document;
-	Ref<HTMLTexture2D> texture;
+	Ref<HTMLRenderSurface> surface;
 	Size2i texture_size = Size2i(512, 512);
 	Size2 physical_size = Size2(1, 1);
 	bool input_enabled = true;
 	HTMLView::BackendPreference backend_preference = HTMLView::BACKEND_AUTO;
 
-	void _document_changed();
-	void _update_placeholder();
+	void _surface_changed();
 
 protected:
 	static void _bind_methods();
