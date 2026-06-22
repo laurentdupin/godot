@@ -1,0 +1,3 @@
+[submodule "thirdparty/blink-standalone-ui"]
+	path = thirdparty/blink-standalone-ui
+	url = https://github.com/laurentdupin/blink-standalone-ui
