@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  html_render_surface.h                                                 */
+/*  html_activation_engine.cpp                                            */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -28,54 +28,37 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
-#pragma once
+#include "html_activation_engine.h"
 
-#include "backend/html_surface_backend.h"
-#include "html_document.h"
+HTMLActionActivation HTMLActivationEngine::activate(const HTMLElementHit &p_hit, const Point2i &p_position, MouseButton p_button) {
+	HTMLActionActivation activation;
+	activation.element_id = p_hit.element_id;
 
-#include "core/object/ref_counted.h"
-#include "core/variant/callable.h"
+	const String data_action = p_hit.get_attribute(SNAME("data-godot-action"));
+	if (!data_action.is_empty()) {
+		activation.action = StringName(data_action);
+		activation.has_action = true;
+	} else if (p_hit.element_id != StringName()) {
+		// Deterministic fallback for authored metadata that omits an explicit action.
+		activation.action = p_hit.element_id;
+		activation.has_action = true;
+	}
 
-enum HTMLSurfaceBackendPreference {
-	HTML_SURFACE_BACKEND_AUTO,
-	HTML_SURFACE_BACKEND_CPU,
-};
+	activation.payload[SNAME("element_id")] = p_hit.element_id;
+	activation.payload[SNAME("tag_name")] = p_hit.tag_name;
+	activation.payload[SNAME("position")] = p_position;
+	activation.payload[SNAME("button")] = (int)p_button;
+	activation.payload[SNAME("bounds")] = p_hit.bounds;
+	activation.payload[SNAME("disabled")] = p_hit.disabled;
+	activation.payload[SNAME("editable")] = p_hit.editable;
+	activation.payload[SNAME("checked")] = p_hit.checked;
+	activation.payload[SNAME("focused")] = p_hit.focused;
 
-class HTMLRenderSurface : public RefCounted {
-	Ref<HTMLDocument> document;
-	HTMLSurfaceBackend *backend = nullptr;
-	Size2i size = Size2i(512, 512);
-	Color placeholder_background = Color(0.08, 0.09, 0.1, 1.0);
-	String marker = "HTML";
-	HTMLFrameMetadata frame_metadata;
-	HTMLSurfaceBackendPreference backend_preference = HTML_SURFACE_BACKEND_AUTO;
-	Callable changed_callback;
+	Dictionary attributes;
+	for (const HTMLElementAttribute &attribute : p_hit.attributes) {
+		attributes[attribute.name] = attribute.value;
+	}
+	activation.payload[SNAME("attributes")] = attributes;
 
-	void _ensure_backend();
-	void _sync_backend_state();
-	void _document_changed();
-	void _notify_changed() const;
-
-public:
-	void set_document(const Ref<HTMLDocument> &p_document);
-	Ref<HTMLDocument> get_document() const;
-
-	void set_size(const Size2i &p_size);
-	Size2i get_size() const;
-
-	void set_placeholder_background(const Color &p_color);
-
-	void set_backend_preference(HTMLSurfaceBackendPreference p_backend_preference);
-	HTMLSurfaceBackendPreference get_backend_preference() const;
-
-	void set_changed_callback(const Callable &p_callback);
-	void render_now(const String &p_marker);
-	Error submit_cpu_frame(const HTMLCPUFrame &p_frame, const HTMLFrameMetadata &p_metadata = HTMLFrameMetadata());
-	const HTMLFrameMetadata &get_frame_metadata() const;
-	const HTMLElementHit *find_hit_at(const Point2i &p_position) const;
-	Ref<Texture2D> get_texture() const;
-	Ref<HTMLTexture2D> get_html_texture() const;
-
-	HTMLRenderSurface();
-	~HTMLRenderSurface();
-};
+	return activation;
+}

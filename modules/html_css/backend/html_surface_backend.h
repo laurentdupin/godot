@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "../bridge/html_frame_types.h"
 #include "../html_texture.h"
 
 class HTMLSurfaceBackend {
@@ -40,6 +41,7 @@ public:
 	virtual void set_transparent_background(bool p_transparent_background) = 0;
 	virtual void set_placeholder_background(const Color &p_color) = 0;
 	virtual void render_placeholder(const String &p_marker) = 0;
+	virtual Error submit_cpu_frame(const HTMLCPUFrame &p_frame) = 0;
 	virtual Ref<Texture2D> get_texture() const = 0;
 	virtual Ref<HTMLTexture2D> get_html_texture() const = 0;
 };

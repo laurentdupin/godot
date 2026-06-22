@@ -50,6 +50,46 @@ void HTMLSurfaceCPUBackend::render_placeholder(const String &p_marker) {
 	texture->update_placeholder(size, background, p_marker);
 }
 
+Error HTMLSurfaceCPUBackend::submit_cpu_frame(const HTMLCPUFrame &p_frame) {
+	ERR_FAIL_COND_V_MSG(p_frame.size.x <= 0 || p_frame.size.y <= 0, ERR_INVALID_PARAMETER, "HTML CPU frame size must be positive.");
+	ERR_FAIL_COND_V_MSG(p_frame.pixel_format != HTML_FRAME_PIXEL_FORMAT_RGBA8 && p_frame.pixel_format != HTML_FRAME_PIXEL_FORMAT_BGRA8, ERR_INVALID_PARAMETER, "HTML CPU frame pixel format is not supported.");
+
+	const int row_bytes = p_frame.size.x * 4;
+	ERR_FAIL_COND_V_MSG(p_frame.stride < row_bytes, ERR_INVALID_PARAMETER, "HTML CPU frame stride is smaller than the row size.");
+
+	const int64_t required_size = int64_t(p_frame.stride) * int64_t(p_frame.size.y - 1) + row_bytes;
+	ERR_FAIL_COND_V_MSG(p_frame.pixels.size() < required_size, ERR_INVALID_DATA, "HTML CPU frame pixel buffer is shorter than the declared size.");
+
+	Vector<uint8_t> rgba;
+	rgba.resize(row_bytes * p_frame.size.y);
+	uint8_t *write = rgba.ptrw();
+	const uint8_t *read = p_frame.pixels.ptr();
+
+	for (int y = 0; y < p_frame.size.y; y++) {
+		const uint8_t *src_row = read + int64_t(p_frame.stride) * y;
+		uint8_t *dst_row = write + int64_t(row_bytes) * y;
+		if (p_frame.pixel_format == HTML_FRAME_PIXEL_FORMAT_RGBA8) {
+			memcpy(dst_row, src_row, row_bytes);
+		} else {
+			for (int x = 0; x < p_frame.size.x; x++) {
+				const uint8_t *src = src_row + x * 4;
+				uint8_t *dst = dst_row + x * 4;
+				dst[0] = src[2];
+				dst[1] = src[1];
+				dst[2] = src[0];
+				dst[3] = src[3];
+			}
+		}
+	}
+
+	Ref<Image> image = Image::create_from_data(p_frame.size.x, p_frame.size.y, false, Image::FORMAT_RGBA8, rgba);
+	ERR_FAIL_COND_V_MSG(image.is_null() || image->is_empty(), ERR_CANT_CREATE, "Could not create an Image from the HTML CPU frame.");
+
+	size = p_frame.size;
+	texture->update_from_image(image);
+	return OK;
+}
+
 Ref<Texture2D> HTMLSurfaceCPUBackend::get_texture() const {
 	return texture;
 }

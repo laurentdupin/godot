@@ -134,7 +134,27 @@ void HTMLRenderSurface::render_now(const String &p_marker) {
 	_ensure_backend();
 	_sync_backend_state();
 	backend->render_placeholder(marker);
+	frame_metadata = HTMLFrameMetadata();
 	_notify_changed();
+}
+
+Error HTMLRenderSurface::submit_cpu_frame(const HTMLCPUFrame &p_frame, const HTMLFrameMetadata &p_metadata) {
+	_ensure_backend();
+	Error err = backend->submit_cpu_frame(p_frame);
+	ERR_FAIL_COND_V(err != OK, err);
+
+	size = p_frame.size;
+	frame_metadata = p_metadata;
+	_notify_changed();
+	return OK;
+}
+
+const HTMLFrameMetadata &HTMLRenderSurface::get_frame_metadata() const {
+	return frame_metadata;
+}
+
+const HTMLElementHit *HTMLRenderSurface::find_hit_at(const Point2i &p_position) const {
+	return frame_metadata.find_hit_at(p_position);
 }
 
 Ref<Texture2D> HTMLRenderSurface::get_texture() const {

@@ -55,6 +55,7 @@ private:
 	void _surface_changed();
 	void _ensure_document();
 	void _update_surface_size();
+	bool _emit_metadata_click(const Vector2 &p_position, MouseButton p_button);
 	void _emit_placeholder_click(const Vector2 &p_position, MouseButton p_button);
 	void _call_bound_action(const StringName &p_action, const Dictionary &p_payload);
 

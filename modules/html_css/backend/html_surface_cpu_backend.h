@@ -43,6 +43,7 @@ public:
 	virtual void set_transparent_background(bool p_transparent_background) override;
 	virtual void set_placeholder_background(const Color &p_color) override;
 	virtual void render_placeholder(const String &p_marker) override;
+	virtual Error submit_cpu_frame(const HTMLCPUFrame &p_frame) override;
 	virtual Ref<Texture2D> get_texture() const override;
 	virtual Ref<HTMLTexture2D> get_html_texture() const override;
 

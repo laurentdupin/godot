@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  html_render_surface.h                                                 */
+/*  html_frame_types.h                                                    */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -30,52 +30,96 @@
 
 #pragma once
 
-#include "backend/html_surface_backend.h"
-#include "html_document.h"
+#include "core/math/rect2i.h"
+#include "core/string/string_name.h"
+#include "core/templates/vector.h"
 
-#include "core/object/ref_counted.h"
-#include "core/variant/callable.h"
-
-enum HTMLSurfaceBackendPreference {
-	HTML_SURFACE_BACKEND_AUTO,
-	HTML_SURFACE_BACKEND_CPU,
+enum HTMLFramePixelFormat {
+	HTML_FRAME_PIXEL_FORMAT_RGBA8,
+	HTML_FRAME_PIXEL_FORMAT_BGRA8,
 };
 
-class HTMLRenderSurface : public RefCounted {
-	Ref<HTMLDocument> document;
-	HTMLSurfaceBackend *backend = nullptr;
-	Size2i size = Size2i(512, 512);
-	Color placeholder_background = Color(0.08, 0.09, 0.1, 1.0);
-	String marker = "HTML";
-	HTMLFrameMetadata frame_metadata;
-	HTMLSurfaceBackendPreference backend_preference = HTML_SURFACE_BACKEND_AUTO;
-	Callable changed_callback;
+struct HTMLFrameDamage {
+	Vector<Rect2i> rects;
+	bool full_frame = true;
+};
 
-	void _ensure_backend();
-	void _sync_backend_state();
-	void _document_changed();
-	void _notify_changed() const;
+struct HTMLCPUFrame {
+	Size2i size;
+	int stride = 0;
+	HTMLFramePixelFormat pixel_format = HTML_FRAME_PIXEL_FORMAT_RGBA8;
+	bool premultiplied_alpha = true;
+	Vector<uint8_t> pixels;
+	HTMLFrameDamage damage;
 
-public:
-	void set_document(const Ref<HTMLDocument> &p_document);
-	Ref<HTMLDocument> get_document() const;
+	bool is_valid() const {
+		if (size.x <= 0 || size.y <= 0) {
+			return false;
+		}
+		if (pixel_format != HTML_FRAME_PIXEL_FORMAT_RGBA8 && pixel_format != HTML_FRAME_PIXEL_FORMAT_BGRA8) {
+			return false;
+		}
+		const int minimum_stride = size.x * 4;
+		if (stride < minimum_stride) {
+			return false;
+		}
+		const int64_t required_size = int64_t(stride) * int64_t(size.y - 1) + minimum_stride;
+		return pixels.size() >= required_size;
+	}
+};
 
-	void set_size(const Size2i &p_size);
-	Size2i get_size() const;
+struct HTMLElementAttribute {
+	StringName name;
+	String value;
+};
 
-	void set_placeholder_background(const Color &p_color);
+struct HTMLElementHit {
+	StringName element_id;
+	StringName tag_name;
+	Rect2i bounds;
+	bool disabled = false;
+	bool editable = false;
+	bool checked = false;
+	bool focused = false;
+	Vector<HTMLElementAttribute> attributes;
 
-	void set_backend_preference(HTMLSurfaceBackendPreference p_backend_preference);
-	HTMLSurfaceBackendPreference get_backend_preference() const;
+	String get_attribute(const StringName &p_name) const {
+		for (const HTMLElementAttribute &attribute : attributes) {
+			if (attribute.name == p_name) {
+				return attribute.value;
+			}
+		}
+		return String();
+	}
 
-	void set_changed_callback(const Callable &p_callback);
-	void render_now(const String &p_marker);
-	Error submit_cpu_frame(const HTMLCPUFrame &p_frame, const HTMLFrameMetadata &p_metadata = HTMLFrameMetadata());
-	const HTMLFrameMetadata &get_frame_metadata() const;
-	const HTMLElementHit *find_hit_at(const Point2i &p_position) const;
-	Ref<Texture2D> get_texture() const;
-	Ref<HTMLTexture2D> get_html_texture() const;
+	bool has_attribute(const StringName &p_name) const {
+		for (const HTMLElementAttribute &attribute : attributes) {
+			if (attribute.name == p_name) {
+				return true;
+			}
+		}
+		return false;
+	}
+};
 
-	HTMLRenderSurface();
-	~HTMLRenderSurface();
+struct HTMLFrameMetadata {
+	Vector<HTMLElementHit> hits;
+
+	const HTMLElementHit *find_hit_at(const Point2i &p_position) const {
+		for (int i = hits.size() - 1; i >= 0; i--) {
+			if (hits[i].bounds.has_point(p_position)) {
+				return &hits[i];
+			}
+		}
+		return nullptr;
+	}
+
+	const HTMLElementHit *find_hit_by_id(const StringName &p_id) const {
+		for (const HTMLElementHit &hit : hits) {
+			if (hit.element_id == p_id) {
+				return &hit;
+			}
+		}
+		return nullptr;
+	}
 };

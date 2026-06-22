@@ -30,6 +30,8 @@
 
 #include "html_view.h"
 
+#include "bridge/html_activation_engine.h"
+
 #include "core/input/input_event.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
@@ -110,6 +112,29 @@ void HTMLView::_update_surface_size() {
 	surface->set_size(target_size);
 	surface->render_now("HTMLView");
 	queue_redraw();
+}
+
+bool HTMLView::_emit_metadata_click(const Vector2 &p_position, MouseButton p_button) {
+	const HTMLFrameMetadata &frame_metadata = surface->get_frame_metadata();
+	if (frame_metadata.hits.is_empty()) {
+		return false;
+	}
+
+	Point2i document_position = Point2i(p_position.x, p_position.y);
+	const HTMLElementHit *hit = surface->find_hit_at(document_position);
+	if (hit == nullptr || hit->disabled) {
+		return true;
+	}
+
+	HTMLActionActivation activation = HTMLActivationEngine::activate(*hit, document_position, p_button);
+	if (!activation.has_action) {
+		return true;
+	}
+
+	emit_signal(SNAME("element_clicked"), activation.element_id, (int)p_button);
+	emit_signal(SNAME("action_requested"), activation.action, activation.payload);
+	_call_bound_action(activation.action, activation.payload);
+	return true;
 }
 
 void HTMLView::_emit_placeholder_click(const Vector2 &p_position, MouseButton p_button) {
@@ -229,7 +254,9 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 			grab_focus();
 		}
 		if (!mb->is_pressed()) {
-			_emit_placeholder_click(mb->get_position(), mb->get_button_index());
+			if (!_emit_metadata_click(mb->get_position(), mb->get_button_index())) {
+				_emit_placeholder_click(mb->get_position(), mb->get_button_index());
+			}
 			accept_event();
 		}
 	}
