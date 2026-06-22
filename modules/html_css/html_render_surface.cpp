@@ -161,6 +161,10 @@ bool HTMLRenderSurface::is_document_source_valid() const {
 	return document.is_null() || document->is_source_valid();
 }
 
+Error HTMLRenderSurface::load_asset(const String &p_uri, HTMLAssetResource &r_asset, String *r_error) const {
+	return HTMLGodotAssetProvider::load_asset(document, p_uri, r_asset, r_error);
+}
+
 Ref<Texture2D> HTMLRenderSurface::get_texture() const {
 	return backend != nullptr ? backend->get_texture() : Ref<Texture2D>();
 }

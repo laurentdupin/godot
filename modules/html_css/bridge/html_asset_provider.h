@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  html_render_surface.h                                                 */
+/*  html_asset_provider.h                                                 */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -30,55 +30,17 @@
 
 #pragma once
 
-#include "backend/html_surface_backend.h"
-#include "bridge/html_asset_provider.h"
-#include "html_document.h"
+#include "../html_document.h"
 
-#include "core/object/ref_counted.h"
-#include "core/variant/callable.h"
-
-enum HTMLSurfaceBackendPreference {
-	HTML_SURFACE_BACKEND_AUTO,
-	HTML_SURFACE_BACKEND_CPU,
+struct HTMLAssetResource {
+	String path;
+	String mime_type;
+	Vector<uint8_t> bytes;
 };
 
-class HTMLRenderSurface : public RefCounted {
-	Ref<HTMLDocument> document;
-	HTMLSurfaceBackend *backend = nullptr;
-	Size2i size = Size2i(512, 512);
-	Color placeholder_background = Color(0.08, 0.09, 0.1, 1.0);
-	String marker = "HTML";
-	HTMLFrameMetadata frame_metadata;
-	HTMLSurfaceBackendPreference backend_preference = HTML_SURFACE_BACKEND_AUTO;
-	Callable changed_callback;
-
-	void _ensure_backend();
-	void _sync_backend_state();
-	void _document_changed();
-	void _notify_changed() const;
-
+class HTMLGodotAssetProvider {
 public:
-	void set_document(const Ref<HTMLDocument> &p_document);
-	Ref<HTMLDocument> get_document() const;
-
-	void set_size(const Size2i &p_size);
-	Size2i get_size() const;
-
-	void set_placeholder_background(const Color &p_color);
-
-	void set_backend_preference(HTMLSurfaceBackendPreference p_backend_preference);
-	HTMLSurfaceBackendPreference get_backend_preference() const;
-
-	void set_changed_callback(const Callable &p_callback);
-	void render_now(const String &p_marker);
-	Error submit_cpu_frame(const HTMLCPUFrame &p_frame, const HTMLFrameMetadata &p_metadata = HTMLFrameMetadata());
-	const HTMLFrameMetadata &get_frame_metadata() const;
-	const HTMLElementHit *find_hit_at(const Point2i &p_position) const;
-	bool is_document_source_valid() const;
-	Error load_asset(const String &p_uri, HTMLAssetResource &r_asset, String *r_error = nullptr) const;
-	Ref<Texture2D> get_texture() const;
-	Ref<HTMLTexture2D> get_html_texture() const;
-
-	HTMLRenderSurface();
-	~HTMLRenderSurface();
+	static Error resolve_asset_path(const Ref<HTMLDocument> &p_document, const String &p_uri, String &r_path, String *r_error = nullptr);
+	static Error load_asset(const Ref<HTMLDocument> &p_document, const String &p_uri, HTMLAssetResource &r_asset, String *r_error = nullptr);
+	static String get_mime_type_for_path(const String &p_path);
 };

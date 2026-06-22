@@ -7,6 +7,7 @@ Import("env_modules")
 env_html_css = env_modules.Clone()
 
 env_html_css.add_source_files(env.modules_sources, "bridge/html_activation_engine.cpp")
+env_html_css.add_source_files(env.modules_sources, "bridge/html_asset_provider.cpp")
 env_html_css.add_source_files(env.modules_sources, "bridge/html_source_validator.cpp")
 env_html_css.add_source_files(env.modules_sources, "backend/html_surface_cpu_backend.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_document.cpp")
