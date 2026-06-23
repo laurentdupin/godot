@@ -134,6 +134,11 @@ bool HTMLSurfaceExternalCApiBackend::_sync_document() {
 	}
 
 	const String html = _load_document_html();
+	if (html.strip_edges().is_empty()) {
+		document_dirty = false;
+		return false;
+	}
+
 	const String resource_root = document.is_valid() ? document->get_resource_root() : String("res://");
 	const String base_path = _get_document_base_path();
 
@@ -190,7 +195,18 @@ bool HTMLSurfaceExternalCApiBackend::_copy_latest_output() {
 	frame.pixel_format = hcsr_pixel_format_to_frame_format(output.pixel_format);
 	frame.premultiplied_alpha = output.premultiplied_alpha != 0;
 	frame.pixels.resize(output.pixel_count);
-	memcpy(frame.pixels.ptrw(), output.pixels, output.pixel_count);
+	const size_t expected_pixel_count = (size_t)output.stride * (size_t)output.height;
+	if (output.pixel_count < expected_pixel_count) {
+		hcsr_renderer_release_latest_output(renderer);
+		return false;
+	}
+
+	uint8_t *frame_pixels = frame.pixels.ptrw();
+	for (int y = 0; y < output.height; y++) {
+		const uint8_t *src_row = output.pixels + (int64_t)output.stride * (output.height - 1 - y);
+		uint8_t *dst_row = frame_pixels + (int64_t)output.stride * y;
+		memcpy(dst_row, src_row, output.stride);
+	}
 	frame.damage.full_frame = output.dirty_rect_count == 0;
 	for (size_t i = 0; i < output.dirty_rect_count; i++) {
 		frame.damage.rects.push_back(hcsr_rect_to_rect2i(output.dirty_rects[i]));
@@ -238,11 +254,10 @@ void HTMLSurfaceExternalCApiBackend::_clear_output() {
 
 void HTMLSurfaceExternalCApiBackend::set_size(const Size2i &p_size) {
 	Size2i new_size = Size2i(MAX(1, p_size.x), MAX(1, p_size.y));
-	HTMLSurfaceCPUBackend::set_size(new_size);
 	if (size == new_size) {
 		return;
 	}
-	size = new_size;
+	HTMLSurfaceCPUBackend::set_size(new_size);
 	viewport_dirty = true;
 }
 

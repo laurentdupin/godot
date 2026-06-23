@@ -39,21 +39,7 @@ void HTMLTexture2D::_bind_methods() {
 void HTMLTexture2D::update_placeholder(const Size2i &p_size, const Color &p_background, const String &p_marker) {
 	Size2i new_size = Size2i(MAX(1, p_size.x), MAX(1, p_size.y));
 	Ref<Image> image = Image::create_empty(new_size.x, new_size.y, false, Image::FORMAT_RGBA8);
-
-	Color accent = p_background.get_luminance() > 0.5 ? Color(0.12, 0.2, 0.32, 0.55) : Color(0.82, 0.9, 1.0, 0.55);
-	const int grid = 16;
-	for (int y = 0; y < new_size.y; y++) {
-		for (int x = 0; x < new_size.x; x++) {
-			Color color = p_background;
-			if (((x / grid) + (y / grid)) % 2 == 0) {
-				color = color.lerp(accent, 0.16);
-			}
-			if (x < 2 || y < 2 || x >= new_size.x - 2 || y >= new_size.y - 2) {
-				color = accent;
-			}
-			image->set_pixel(x, y, color);
-		}
-	}
+	image->fill(p_background);
 
 	// The marker is accepted so the API can stay stable when the real renderer
 	// starts labeling debug frames; this placeholder does not rasterize text.
@@ -64,6 +50,8 @@ void HTMLTexture2D::update_placeholder(const Size2i &p_size, const Color &p_back
 void HTMLTexture2D::update_from_image(const Ref<Image> &p_image) {
 	ERR_FAIL_COND(p_image.is_null());
 	ERR_FAIL_COND(p_image->is_empty());
+
+	latest_image = p_image;
 
 	if (texture.is_null()) {
 		texture.instantiate();
@@ -100,10 +88,7 @@ bool HTMLTexture2D::has_alpha() const {
 }
 
 Ref<Image> HTMLTexture2D::get_image() const {
-	if (texture.is_null()) {
-		return Ref<Image>();
-	}
-	return texture->get_image();
+	return latest_image;
 }
 
 void HTMLTexture2D::draw(RID p_canvas_item, const Point2 &p_pos, const Color &p_modulate, bool p_transpose) const {

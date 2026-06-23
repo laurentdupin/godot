@@ -37,7 +37,6 @@
 class HTMLSurfaceExternalCApiBackend : public HTMLSurfaceCPUBackend {
 	hcsr_renderer_t *renderer = nullptr;
 	Ref<HTMLDocument> document;
-	Size2i size = Size2i(512, 512);
 	HTMLFrameMetadata frame_metadata;
 	bool document_dirty = true;
 	bool viewport_dirty = true;

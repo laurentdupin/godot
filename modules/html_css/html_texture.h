@@ -36,6 +36,7 @@ class HTMLTexture2D : public Texture2D {
 	GDCLASS(HTMLTexture2D, Texture2D);
 
 	Ref<ImageTexture> texture;
+	Ref<Image> latest_image;
 	Size2i size;
 	bool alpha = true;
 

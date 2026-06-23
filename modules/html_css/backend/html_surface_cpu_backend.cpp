@@ -52,11 +52,8 @@ void HTMLSurfaceCPUBackend::set_placeholder_background(const Color &p_color) {
 }
 
 void HTMLSurfaceCPUBackend::render_placeholder(const String &p_marker) {
-	Color background = placeholder_background;
-	if (transparent_background) {
-		background.a = 0.0;
-	}
-	texture->update_placeholder(size, background, p_marker);
+	(void)p_marker;
+	clear_to_transparent();
 }
 
 Error HTMLSurfaceCPUBackend::submit_cpu_frame(const HTMLCPUFrame &p_frame) {
