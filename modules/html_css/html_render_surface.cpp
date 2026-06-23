@@ -30,6 +30,9 @@
 
 #include "html_render_surface.h"
 
+#ifdef HTML_CSS_USE_BLINK_C_API
+#include "backend/html_surface_blink_c_api_backend.h"
+#endif
 #include "backend/html_surface_cpu_backend.h"
 
 #include "core/object/callable_mp.h"
@@ -39,13 +42,21 @@ void HTMLRenderSurface::_ensure_backend() {
 		return;
 	}
 
-	backend = memnew(HTMLSurfaceCPUBackend);
+#ifdef HTML_CSS_USE_BLINK_C_API
+	if (backend_preference == HTML_SURFACE_BACKEND_AUTO) {
+		backend = memnew(HTMLSurfaceExternalCApiBackend);
+	} else
+#endif
+	{
+		backend = memnew(HTMLSurfaceCPUBackend);
+	}
 	_sync_backend_state();
 }
 
 void HTMLRenderSurface::_sync_backend_state() {
 	ERR_FAIL_NULL(backend);
 	backend->set_size(size);
+	backend->set_document(document);
 	backend->set_transparent_background(document.is_valid() && document->is_transparent_background());
 	backend->set_placeholder_background(placeholder_background);
 }
@@ -116,8 +127,10 @@ void HTMLRenderSurface::set_backend_preference(HTMLSurfaceBackendPreference p_ba
 		return;
 	}
 	backend_preference = p_backend_preference;
-	// AUTO and CPU intentionally select the same portable backend for now.
-	_sync_backend_state();
+	if (backend != nullptr) {
+		memdelete(backend);
+		backend = nullptr;
+	}
 	render_now(marker);
 }
 
@@ -134,7 +147,7 @@ void HTMLRenderSurface::render_now(const String &p_marker) {
 	_ensure_backend();
 	_sync_backend_state();
 	backend->render_placeholder(marker);
-	frame_metadata = HTMLFrameMetadata();
+	backend->get_frame_metadata(frame_metadata);
 	_notify_changed();
 }
 

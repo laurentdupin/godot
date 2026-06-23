@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  html_surface_backend.h                                                */
+/*  html_surface_blink_c_api_backend.h                                    */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -30,21 +30,32 @@
 
 #pragma once
 
-#include "../bridge/html_frame_types.h"
-#include "../html_document.h"
-#include "../html_texture.h"
+#include "html_surface_cpu_backend.h"
 
-class HTMLSurfaceBackend {
+#include "html_css_renderer/renderer_c_api.h"
+
+class HTMLSurfaceExternalCApiBackend : public HTMLSurfaceCPUBackend {
+	hcsr_renderer_t *renderer = nullptr;
+	Ref<HTMLDocument> document;
+	Size2i size = Size2i(512, 512);
+	HTMLFrameMetadata frame_metadata;
+	bool document_dirty = true;
+	bool viewport_dirty = true;
+
+	bool _ensure_renderer();
+	bool _sync_document();
+	bool _sync_viewport();
+	bool _copy_latest_output();
+	void _read_frame_metadata();
+	String _load_document_html() const;
+	String _get_document_base_path() const;
+	void _clear_output();
+
 public:
-	virtual ~HTMLSurfaceBackend() {}
+	virtual void set_size(const Size2i &p_size) override;
+	virtual void set_document(const Ref<HTMLDocument> &p_document) override;
+	virtual void render_placeholder(const String &p_marker) override;
+	virtual void get_frame_metadata(HTMLFrameMetadata &r_metadata) const override;
 
-	virtual void set_size(const Size2i &p_size) = 0;
-	virtual void set_document(const Ref<HTMLDocument> &p_document) = 0;
-	virtual void set_transparent_background(bool p_transparent_background) = 0;
-	virtual void set_placeholder_background(const Color &p_color) = 0;
-	virtual void render_placeholder(const String &p_marker) = 0;
-	virtual Error submit_cpu_frame(const HTMLCPUFrame &p_frame) = 0;
-	virtual void get_frame_metadata(HTMLFrameMetadata &r_metadata) const = 0;
-	virtual Ref<Texture2D> get_texture() const = 0;
-	virtual Ref<HTMLTexture2D> get_html_texture() const = 0;
+	~HTMLSurfaceExternalCApiBackend();
 };

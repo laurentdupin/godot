@@ -33,17 +33,22 @@
 #include "html_surface_backend.h"
 
 class HTMLSurfaceCPUBackend : public HTMLSurfaceBackend {
+protected:
 	Ref<HTMLTexture2D> texture;
 	Size2i size = Size2i(512, 512);
 	Color placeholder_background = Color(0.08, 0.09, 0.1, 1.0);
 	bool transparent_background = false;
 
+	void clear_to_transparent();
+
 public:
 	virtual void set_size(const Size2i &p_size) override;
+	virtual void set_document(const Ref<HTMLDocument> &p_document) override;
 	virtual void set_transparent_background(bool p_transparent_background) override;
 	virtual void set_placeholder_background(const Color &p_color) override;
 	virtual void render_placeholder(const String &p_marker) override;
 	virtual Error submit_cpu_frame(const HTMLCPUFrame &p_frame) override;
+	virtual void get_frame_metadata(HTMLFrameMetadata &r_metadata) const override;
 	virtual Ref<Texture2D> get_texture() const override;
 	virtual Ref<HTMLTexture2D> get_html_texture() const override;
 

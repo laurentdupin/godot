@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+import os
+
 from misc.utility.scons_hints import *
 
 Import("env")
@@ -10,6 +12,18 @@ env_html_css.add_source_files(env.modules_sources, "bridge/html_activation_engin
 env_html_css.add_source_files(env.modules_sources, "bridge/html_asset_provider.cpp")
 env_html_css.add_source_files(env.modules_sources, "bridge/html_source_validator.cpp")
 env_html_css.add_source_files(env.modules_sources, "backend/html_surface_cpu_backend.cpp")
+if env["module_html_css_blink_enabled"]:
+    env_html_css.Append(CPPDEFINES=["HTML_CSS_USE_BLINK_C_API"])
+    env_html_css.Append(
+        CPPPATH=[
+            "#thirdparty/blink-standalone-ui/upstream/chromium/standalone_renderer/include",
+        ]
+    )
+    env_html_css.add_source_files(env.modules_sources, "backend/html_surface_blink_c_api_backend.cpp")
+    external_renderer_lib = env["module_html_css_blink_lib"]
+    if env["module_html_css_blink_lib_path"]:
+        external_renderer_lib = os.path.join(env["module_html_css_blink_lib_path"], external_renderer_lib)
+    env.Append(LINKFLAGS=[external_renderer_lib])
 env_html_css.add_source_files(env.modules_sources, "html_document.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_render_target.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_render_surface.cpp")

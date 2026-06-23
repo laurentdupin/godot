@@ -30,8 +30,17 @@
 
 #include "html_surface_cpu_backend.h"
 
+void HTMLSurfaceCPUBackend::clear_to_transparent() {
+	Ref<Image> image = Image::create_empty(size.x, size.y, false, Image::FORMAT_RGBA8);
+	image->fill(Color(0, 0, 0, 0));
+	texture->update_from_image(image);
+}
+
 void HTMLSurfaceCPUBackend::set_size(const Size2i &p_size) {
 	size = Size2i(MAX(1, p_size.x), MAX(1, p_size.y));
+}
+
+void HTMLSurfaceCPUBackend::set_document(const Ref<HTMLDocument> &p_document) {
 }
 
 void HTMLSurfaceCPUBackend::set_transparent_background(bool p_transparent_background) {
@@ -88,6 +97,10 @@ Error HTMLSurfaceCPUBackend::submit_cpu_frame(const HTMLCPUFrame &p_frame) {
 	size = p_frame.size;
 	texture->update_from_image(image);
 	return OK;
+}
+
+void HTMLSurfaceCPUBackend::get_frame_metadata(HTMLFrameMetadata &r_metadata) const {
+	r_metadata = HTMLFrameMetadata();
 }
 
 Ref<Texture2D> HTMLSurfaceCPUBackend::get_texture() const {
