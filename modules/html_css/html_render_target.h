@@ -59,7 +59,14 @@ public:
 	HTMLView::BackendPreference get_backend_preference() const;
 
 	Ref<Texture2D> get_texture() const;
+	Ref<Image> get_image() const;
 	void render_now();
+	Error set_element_text(const StringName &p_id, const String &p_text);
+	Error set_element_attribute(const StringName &p_id, const StringName &p_name, const String &p_value);
+	Error remove_element_attribute(const StringName &p_id, const StringName &p_name);
+	Error set_element_style(const StringName &p_id, const String &p_css_text);
+	Error replace_stylesheet_text(const StringName &p_style_id, const String &p_css_text);
+	Dictionary get_form_control_state(const StringName &p_id);
 
 	HTMLRenderTarget();
 };

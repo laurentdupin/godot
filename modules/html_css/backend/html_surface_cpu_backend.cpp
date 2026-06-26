@@ -30,9 +30,9 @@
 
 #include "html_surface_cpu_backend.h"
 
-void HTMLSurfaceCPUBackend::clear_to_transparent() {
+void HTMLSurfaceCPUBackend::clear_to_background() {
 	Ref<Image> image = Image::create_empty(size.x, size.y, false, Image::FORMAT_RGBA8);
-	image->fill(Color(0, 0, 0, 0));
+	image->fill(background_color);
 	texture->update_from_image(image);
 }
 
@@ -47,13 +47,17 @@ void HTMLSurfaceCPUBackend::set_transparent_background(bool p_transparent_backgr
 	transparent_background = p_transparent_background;
 }
 
+void HTMLSurfaceCPUBackend::set_background_color(const Color &p_background_color) {
+	background_color = p_background_color;
+}
+
 void HTMLSurfaceCPUBackend::set_placeholder_background(const Color &p_color) {
 	placeholder_background = p_color;
 }
 
 void HTMLSurfaceCPUBackend::render_placeholder(const String &p_marker) {
 	(void)p_marker;
-	clear_to_transparent();
+	clear_to_background();
 }
 
 Error HTMLSurfaceCPUBackend::submit_cpu_frame(const HTMLCPUFrame &p_frame) {

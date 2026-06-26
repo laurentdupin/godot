@@ -37,6 +37,19 @@ static HTMLSurfaceBackendPreference html_render_target_to_surface_backend_prefer
 	return p_backend_preference == HTMLView::BACKEND_CPU ? HTML_SURFACE_BACKEND_CPU : HTML_SURFACE_BACKEND_AUTO;
 }
 
+static Dictionary html_render_target_form_control_state_to_dictionary(const HTMLFormControlState &p_state) {
+	Dictionary state;
+	state[SNAME("element_id")] = p_state.element_id;
+	state[SNAME("tag_name")] = p_state.tag_name;
+	state[SNAME("value")] = p_state.value;
+	state[SNAME("checked")] = p_state.checked;
+	state[SNAME("focused")] = p_state.focused;
+	state[SNAME("selection_offsets_present")] = p_state.selection_offsets_present;
+	state[SNAME("selection_start")] = p_state.selection_start;
+	state[SNAME("selection_end")] = p_state.selection_end;
+	return state;
+}
+
 void HTMLRenderTarget::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_document", "document"), &HTMLRenderTarget::set_document);
 	ClassDB::bind_method(D_METHOD("get_document"), &HTMLRenderTarget::get_document);
@@ -45,7 +58,14 @@ void HTMLRenderTarget::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_backend_preference", "backend_preference"), &HTMLRenderTarget::set_backend_preference);
 	ClassDB::bind_method(D_METHOD("get_backend_preference"), &HTMLRenderTarget::get_backend_preference);
 	ClassDB::bind_method(D_METHOD("get_texture"), &HTMLRenderTarget::get_texture);
+	ClassDB::bind_method(D_METHOD("get_image"), &HTMLRenderTarget::get_image);
 	ClassDB::bind_method(D_METHOD("render_now"), &HTMLRenderTarget::render_now);
+	ClassDB::bind_method(D_METHOD("set_element_text", "id", "text"), &HTMLRenderTarget::set_element_text);
+	ClassDB::bind_method(D_METHOD("set_element_attribute", "id", "name", "value"), &HTMLRenderTarget::set_element_attribute);
+	ClassDB::bind_method(D_METHOD("remove_element_attribute", "id", "name"), &HTMLRenderTarget::remove_element_attribute);
+	ClassDB::bind_method(D_METHOD("set_element_style", "id", "css_text"), &HTMLRenderTarget::set_element_style);
+	ClassDB::bind_method(D_METHOD("replace_stylesheet_text", "style_id", "css_text"), &HTMLRenderTarget::replace_stylesheet_text);
+	ClassDB::bind_method(D_METHOD("get_form_control_state", "id"), &HTMLRenderTarget::get_form_control_state);
 
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "document", PROPERTY_HINT_RESOURCE_TYPE, HTMLDocument::get_class_static()), "set_document", "get_document");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2I, "size", PROPERTY_HINT_RANGE, "1,16384,1,or_greater,suffix:px"), "set_size", "get_size");
@@ -94,9 +114,62 @@ Ref<Texture2D> HTMLRenderTarget::get_texture() const {
 	return surface->get_texture();
 }
 
+Ref<Image> HTMLRenderTarget::get_image() const {
+	Ref<HTMLTexture2D> texture = surface->get_html_texture();
+	return texture.is_valid() ? texture->get_latest_image() : Ref<Image>();
+}
+
 void HTMLRenderTarget::render_now() {
 	surface->render_now("HTMLRenderTarget");
 	emit_signal(SNAME("rendered"));
+}
+
+Error HTMLRenderTarget::set_element_text(const StringName &p_id, const String &p_text) {
+	Error err = surface->set_element_text(p_id, p_text);
+	if (err == OK) {
+		emit_signal(SNAME("rendered"));
+	}
+	return err;
+}
+
+Error HTMLRenderTarget::set_element_attribute(const StringName &p_id, const StringName &p_name, const String &p_value) {
+	Error err = surface->set_element_attribute(p_id, p_name, p_value);
+	if (err == OK) {
+		emit_signal(SNAME("rendered"));
+	}
+	return err;
+}
+
+Error HTMLRenderTarget::remove_element_attribute(const StringName &p_id, const StringName &p_name) {
+	Error err = surface->remove_element_attribute(p_id, p_name);
+	if (err == OK) {
+		emit_signal(SNAME("rendered"));
+	}
+	return err;
+}
+
+Error HTMLRenderTarget::set_element_style(const StringName &p_id, const String &p_css_text) {
+	Error err = surface->set_element_style(p_id, p_css_text);
+	if (err == OK) {
+		emit_signal(SNAME("rendered"));
+	}
+	return err;
+}
+
+Error HTMLRenderTarget::replace_stylesheet_text(const StringName &p_style_id, const String &p_css_text) {
+	Error err = surface->replace_stylesheet_text(p_style_id, p_css_text);
+	if (err == OK) {
+		emit_signal(SNAME("rendered"));
+	}
+	return err;
+}
+
+Dictionary HTMLRenderTarget::get_form_control_state(const StringName &p_id) {
+	HTMLFormControlState state;
+	if (!surface->get_form_control_state(p_id, state)) {
+		return Dictionary();
+	}
+	return html_render_target_form_control_state_to_dictionary(state);
 }
 
 HTMLRenderTarget::HTMLRenderTarget() {

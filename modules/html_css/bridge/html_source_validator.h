@@ -35,5 +35,7 @@
 class HTMLSourceValidator {
 public:
 	static PackedStringArray validate_inline_source(const String &p_source);
+	static PackedStringArray validate_inline_css(const String &p_css);
 	static PackedStringArray validate_resource_path(const String &p_path);
+	static PackedStringArray validate_resource_uri(const String &p_uri);
 };

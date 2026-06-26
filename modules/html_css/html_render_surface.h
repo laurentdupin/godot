@@ -46,6 +46,7 @@ class HTMLRenderSurface : public RefCounted {
 	Ref<HTMLDocument> document;
 	HTMLSurfaceBackend *backend = nullptr;
 	Size2i size = Size2i(512, 512);
+	float device_scale_factor = 1.0f;
 	Color placeholder_background = Color(0.08, 0.09, 0.1, 1.0);
 	String marker = "HTML";
 	HTMLFrameMetadata frame_metadata;
@@ -61,8 +62,11 @@ public:
 	void set_document(const Ref<HTMLDocument> &p_document);
 	Ref<HTMLDocument> get_document() const;
 
-	void set_size(const Size2i &p_size);
+	bool set_size(const Size2i &p_size);
 	Size2i get_size() const;
+	bool set_device_scale_factor(float p_device_scale_factor);
+	float get_device_scale_factor() const;
+	bool set_viewport(const Size2i &p_size, float p_device_scale_factor);
 
 	void set_placeholder_background(const Color &p_color);
 
@@ -74,6 +78,20 @@ public:
 	Error submit_cpu_frame(const HTMLCPUFrame &p_frame, const HTMLFrameMetadata &p_metadata = HTMLFrameMetadata());
 	const HTMLFrameMetadata &get_frame_metadata() const;
 	const HTMLElementHit *find_hit_at(const Point2i &p_position) const;
+	bool hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const;
+	Error mouse_move(const Point2 &p_position, int p_modifiers);
+	Error mouse_down(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count);
+	Error mouse_up(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count);
+	Error wheel(const Point2 &p_position, const Vector2 &p_delta);
+	Error key_down(HTMLSurfaceInputKey p_key, int p_modifiers);
+	Error key_up(HTMLSurfaceInputKey p_key, int p_modifiers);
+	Error text_input(const String &p_text);
+	Error set_element_text(const StringName &p_id, const String &p_text);
+	Error set_element_attribute(const StringName &p_id, const StringName &p_name, const String &p_value);
+	Error remove_element_attribute(const StringName &p_id, const StringName &p_name);
+	Error set_element_style(const StringName &p_id, const String &p_css_text);
+	Error replace_stylesheet_text(const StringName &p_style_id, const String &p_css_text);
+	bool get_form_control_state(const StringName &p_id, HTMLFormControlState &r_state);
 	bool is_document_source_valid() const;
 	Error load_asset(const String &p_uri, HTMLAssetResource &r_asset, String *r_error = nullptr) const;
 	Ref<Texture2D> get_texture() const;

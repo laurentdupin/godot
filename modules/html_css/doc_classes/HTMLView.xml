@@ -4,7 +4,7 @@
 		Control that draws a pure HTML/CSS document as a texture.
 	</brief_description>
 	<description>
-		Draws an [HTMLDocument] into the control rectangle. Actions are delivered through Godot signals and bound [Callable]s.
+		Draws an [HTMLDocument] into the control rectangle. Actions are delivered through Godot signals and bound [Callable]s. Resizing the control updates the HTML viewport while keeping the current document state alive.
 	</description>
 	<tutorials>
 	</tutorials>
@@ -12,11 +12,26 @@
 		<member name="backend_preference" type="int" setter="set_backend_preference" getter="get_backend_preference" enum="HTMLView.BackendPreference" default="0">
 			Preferred render backend. The current checkpoint supports [constant BACKEND_AUTO] and [constant BACKEND_CPU].
 		</member>
+		<member name="css" type="String" setter="set_css" getter="get_css" default="&quot;&quot;">
+			Convenience access to the assigned document's inline CSS source.
+		</member>
+		<member name="css_files" type="PackedStringArray" setter="set_css_files" getter="get_css_files" default="PackedStringArray()">
+			Convenience access to the assigned document's ordered CSS file list.
+		</member>
 		<member name="document" type="HTMLDocument" setter="set_document" getter="get_document">
 			Document rendered by this view.
 		</member>
 		<member name="focus_on_click" type="bool" setter="set_focus_on_click" getter="is_focus_on_click_enabled" default="true">
 			If [code]true[/code], the view grabs keyboard focus when clicked.
+		</member>
+		<member name="accept_action" type="StringName" setter="set_accept_action" getter="get_accept_action" default="&amp;&quot;ui_accept&quot;">
+			Godot input action translated to Blink's Enter key for focused HTML activation.
+		</member>
+		<member name="focus_next_action" type="StringName" setter="set_focus_next_action" getter="get_focus_next_action" default="&amp;&quot;ui_focus_next&quot;">
+			Godot input action translated to Blink's Tab key.
+		</member>
+		<member name="focus_previous_action" type="StringName" setter="set_focus_previous_action" getter="get_focus_previous_action" default="&amp;&quot;ui_focus_prev&quot;">
+			Godot input action translated to Blink's Shift+Tab key.
 		</member>
 		<member name="html" type="String" setter="set_html" getter="get_html" default="&quot;&quot;">
 			Convenience access to the assigned document's inline HTML source.
@@ -25,7 +40,25 @@
 			Convenience access to the assigned document's HTML file path.
 		</member>
 		<member name="input_enabled" type="bool" setter="set_input_enabled" getter="is_input_enabled" default="true">
-			If [code]true[/code], the view accepts pointer input for HTML action activation.
+			If [code]true[/code], the view accepts pointer, wheel, key, text, and mapped action input for HTML interaction.
+		</member>
+		<member name="fixed_viewport_size" type="Vector2i" setter="set_fixed_viewport_size" getter="get_fixed_viewport_size" default="Vector2i(0, 0)">
+			HTML viewport size used when [member viewport_size_mode] is [constant VIEWPORT_SIZE_FIXED]. If either component is [code]0[/code], the assigned document's default size is used.
+		</member>
+		<member name="text_backspace_action" type="StringName" setter="set_text_backspace_action" getter="get_text_backspace_action" default="&amp;&quot;ui_text_backspace&quot;">
+			Godot input action translated to Blink's Backspace key.
+		</member>
+		<member name="text_delete_action" type="StringName" setter="set_text_delete_action" getter="get_text_delete_action" default="&amp;&quot;ui_text_delete&quot;">
+			Godot input action translated to Blink's Delete key.
+		</member>
+		<member name="text_submit_action" type="StringName" setter="set_text_submit_action" getter="get_text_submit_action" default="&amp;&quot;ui_text_submit&quot;">
+			Godot input action translated to Blink's Enter key for text submit.
+		</member>
+		<member name="use_document_minimum_size" type="bool" setter="set_use_document_minimum_size" getter="is_using_document_minimum_size" default="false">
+			If [code]true[/code], the assigned document's default size is reported as this control's minimum size. Leave disabled when the HTML viewport should follow the actual Control or screen-pixel size.
+		</member>
+		<member name="viewport_size_mode" type="int" setter="set_viewport_size_mode" getter="get_viewport_size_mode" enum="HTMLView.ViewportSizeMode" default="1">
+			Controls how the HTML viewport size is chosen. [constant VIEWPORT_SIZE_SCREEN_PIXELS] renders CSS pixels at final screen-pixel size, [constant VIEWPORT_SIZE_CONTROL] renders in Godot Control coordinates with a device scale factor, and [constant VIEWPORT_SIZE_FIXED] renders a fixed HTML resolution scaled into the Control.
 		</member>
 	</members>
 	<signals>
@@ -51,6 +84,13 @@
 		</signal>
 	</signals>
 	<methods>
+		<method name="add_css_file">
+			<return type="void" />
+			<param index="0" name="css_file" type="String" />
+			<description>
+				Appends a CSS file path to the assigned document's CSS file list.
+			</description>
+		</method>
 		<method name="bind_action">
 			<return type="void" />
 			<param index="0" name="action" type="StringName" />
@@ -65,11 +105,72 @@
 				Returns the current render texture.
 			</description>
 		</method>
+		<method name="get_form_control_state">
+			<return type="Dictionary" />
+			<param index="0" name="id" type="StringName" />
+			<description>
+				Returns the latest state for a form control in the live document, or an empty [Dictionary] when no control with [param id] is available. The dictionary contains [code]element_id[/code], [code]tag_name[/code], [code]value[/code], [code]checked[/code], [code]focused[/code], [code]selection_offsets_present[/code], [code]selection_start[/code], and [code]selection_end[/code].
+			</description>
+		</method>
+		<method name="local_to_html_position" qualifiers="const">
+			<return type="Vector2" />
+			<param index="0" name="position" type="Vector2" />
+			<description>
+				Converts a local [HTMLView] position to document pixel coordinates in the rendered HTML viewport.
+			</description>
+		</method>
+		<method name="set_element_attribute">
+			<return type="int" enum="Error" />
+			<param index="0" name="id" type="StringName" />
+			<param index="1" name="name" type="StringName" />
+			<param index="2" name="value" type="String" />
+			<description>
+				Sets an attribute on an element in the live rendered document without reloading the document. Returns [constant OK] on success. The no-script profile rejects inline event handlers and [code]javascript:[/code] URL surfaces with a recoverable error.
+			</description>
+		</method>
+		<method name="remove_element_attribute">
+			<return type="int" enum="Error" />
+			<param index="0" name="id" type="StringName" />
+			<param index="1" name="name" type="StringName" />
+			<description>
+				Removes an attribute from an element in the live rendered document without reloading the document.
+			</description>
+		</method>
+		<method name="set_element_style">
+			<return type="int" enum="Error" />
+			<param index="0" name="id" type="StringName" />
+			<param index="1" name="css_text" type="String" />
+			<description>
+				Replaces the element's inline [code]style[/code] attribute in the live rendered document without reloading the document.
+			</description>
+		</method>
+		<method name="set_element_text">
+			<return type="int" enum="Error" />
+			<param index="0" name="id" type="StringName" />
+			<param index="1" name="text" type="String" />
+			<description>
+				Replaces the text content of an element in the live rendered document without reloading the document.
+			</description>
+		</method>
+		<method name="replace_stylesheet_text">
+			<return type="int" enum="Error" />
+			<param index="0" name="style_id" type="StringName" />
+			<param index="1" name="css_text" type="String" />
+			<description>
+				Replaces the text of a [code]&lt;style&gt;[/code] element in the live rendered document without reloading the document.
+			</description>
+		</method>
 		<method name="has_action" qualifiers="const">
 			<return type="bool" />
 			<param index="0" name="action" type="StringName" />
 			<description>
 				Returns whether an action has a callable binding.
+			</description>
+		</method>
+		<method name="clear_css_files">
+			<return type="void" />
+			<description>
+				Clears the assigned document's CSS file list.
 			</description>
 		</method>
 		<method name="unbind_action">
@@ -79,6 +180,13 @@
 				Removes an action binding.
 			</description>
 		</method>
+		<method name="remove_css_file">
+			<return type="void" />
+			<param index="0" name="css_file" type="String" />
+			<description>
+				Removes all matching CSS file paths from the assigned document's CSS file list.
+			</description>
+		</method>
 	</methods>
 	<constants>
 		<constant name="BACKEND_AUTO" value="0" enum="BackendPreference">
@@ -86,6 +194,15 @@
 		</constant>
 		<constant name="BACKEND_CPU" value="1" enum="BackendPreference">
 			Uses the portable CPU texture backend.
+		</constant>
+		<constant name="VIEWPORT_SIZE_CONTROL" value="0" enum="ViewportSizeMode">
+			The HTML viewport follows the Control's local size. The renderer receives the effective screen scale as device scale factor for sharper output.
+		</constant>
+		<constant name="VIEWPORT_SIZE_SCREEN_PIXELS" value="1" enum="ViewportSizeMode">
+			The HTML viewport follows the Control's final screen-pixel size. This keeps CSS pixels mapped 1:1 to final pixels when the Control is scaled by window stretch or canvas transforms.
+		</constant>
+		<constant name="VIEWPORT_SIZE_FIXED" value="2" enum="ViewportSizeMode">
+			The HTML viewport uses [member fixed_viewport_size], or the document default size when unset, and Godot scales the resulting texture into the Control.
 		</constant>
 	</constants>
 </class>

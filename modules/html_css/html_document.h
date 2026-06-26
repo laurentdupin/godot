@@ -38,10 +38,12 @@ class HTMLDocument : public Resource {
 	RES_BASE_EXTENSION("htmlcss");
 
 	String html;
+	String css;
 	String html_file;
+	PackedStringArray css_files;
 	String resource_root = "res://";
 	Size2i default_size = Size2i(512, 512);
-	bool transparent_background = true;
+	Color background_color = Color(0, 0, 0, 0);
 	PackedStringArray source_errors;
 
 	bool _validate_source();
@@ -53,14 +55,26 @@ public:
 	void set_html(const String &p_html);
 	String get_html() const;
 
+	void set_css(const String &p_css);
+	String get_css() const;
+
 	void set_html_file(const String &p_html_file);
 	String get_html_file() const;
+
+	void set_css_files(const PackedStringArray &p_css_files);
+	PackedStringArray get_css_files() const;
+	void add_css_file(const String &p_css_file);
+	void remove_css_file(const String &p_css_file);
+	void clear_css_files();
 
 	void set_resource_root(const String &p_resource_root);
 	String get_resource_root() const;
 
 	void set_default_size(const Size2i &p_default_size);
 	Size2i get_default_size() const;
+
+	void set_background_color(const Color &p_background_color);
+	Color get_background_color() const;
 
 	void set_transparent_background(bool p_transparent_background);
 	bool is_transparent_background() const;

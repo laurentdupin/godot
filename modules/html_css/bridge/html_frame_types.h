@@ -32,6 +32,7 @@
 
 #include "core/math/rect2i.h"
 #include "core/string/string_name.h"
+#include "core/string/ustring.h"
 #include "core/templates/vector.h"
 
 enum HTMLFramePixelFormat {
@@ -100,6 +101,17 @@ struct HTMLElementHit {
 		}
 		return false;
 	}
+};
+
+struct HTMLFormControlState {
+	StringName element_id;
+	StringName tag_name;
+	String value;
+	bool checked = false;
+	bool focused = false;
+	bool selection_offsets_present = false;
+	uint32_t selection_start = 0;
+	uint32_t selection_end = 0;
 };
 
 struct HTMLFrameMetadata {

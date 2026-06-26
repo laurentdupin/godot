@@ -4,7 +4,7 @@
 		Node that renders an HTML/CSS document to a reusable texture.
 	</brief_description>
 	<description>
-		Produces a [Texture2D] from an [HTMLDocument] without drawing it directly. The current checkpoint produces a CPU placeholder texture.
+		Produces a [Texture2D] from an [HTMLDocument] without drawing it directly.
 	</description>
 	<tutorials>
 	</tutorials>
@@ -26,16 +26,70 @@
 		</signal>
 	</signals>
 	<methods>
+		<method name="get_image">
+			<return type="Image" />
+			<description>
+				Returns the latest CPU image for tests, export tooling, and headless rendering paths.
+			</description>
+		</method>
 		<method name="get_texture">
 			<return type="Texture2D" />
 			<description>
 				Returns the output texture.
 			</description>
 		</method>
+		<method name="get_form_control_state">
+			<return type="Dictionary" />
+			<param index="0" name="id" type="StringName" />
+			<description>
+				Returns the latest state for a form control in the live document, or an empty [Dictionary] when no control with [param id] is available.
+			</description>
+		</method>
 		<method name="render_now">
 			<return type="void" />
 			<description>
-				Requests an immediate placeholder render.
+				Requests an immediate render.
+			</description>
+		</method>
+		<method name="set_element_attribute">
+			<return type="int" enum="Error" />
+			<param index="0" name="id" type="StringName" />
+			<param index="1" name="name" type="StringName" />
+			<param index="2" name="value" type="String" />
+			<description>
+				Sets an attribute on an element in the live rendered document without reloading the document. Inline event handlers and [code]javascript:[/code] URL surfaces are rejected by the no-script profile.
+			</description>
+		</method>
+		<method name="remove_element_attribute">
+			<return type="int" enum="Error" />
+			<param index="0" name="id" type="StringName" />
+			<param index="1" name="name" type="StringName" />
+			<description>
+				Removes an attribute from an element in the live rendered document without reloading the document.
+			</description>
+		</method>
+		<method name="set_element_style">
+			<return type="int" enum="Error" />
+			<param index="0" name="id" type="StringName" />
+			<param index="1" name="css_text" type="String" />
+			<description>
+				Replaces the element's inline [code]style[/code] attribute in the live rendered document without reloading the document.
+			</description>
+		</method>
+		<method name="set_element_text">
+			<return type="int" enum="Error" />
+			<param index="0" name="id" type="StringName" />
+			<param index="1" name="text" type="String" />
+			<description>
+				Replaces the text content of an element in the live rendered document without reloading the document.
+			</description>
+		</method>
+		<method name="replace_stylesheet_text">
+			<return type="int" enum="Error" />
+			<param index="0" name="style_id" type="StringName" />
+			<param index="1" name="css_text" type="String" />
+			<description>
+				Replaces the text of a [code]&lt;style&gt;[/code] element in the live rendered document without reloading the document.
 			</description>
 		</method>
 	</methods>

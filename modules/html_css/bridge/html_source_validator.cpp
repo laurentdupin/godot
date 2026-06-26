@@ -68,6 +68,22 @@ static bool _has_inline_event_attribute(const String &p_lower_source) {
 	return false;
 }
 
+static bool _has_uri_scheme(const String &p_uri) {
+	const int colon = p_uri.find(":");
+	if (colon <= 0) {
+		return false;
+	}
+
+	for (int i = 0; i < colon; i++) {
+		const char32_t c = p_uri[i];
+		const bool valid_scheme_char = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '+' || c == '-' || c == '.';
+		if (!valid_scheme_char) {
+			return false;
+		}
+	}
+	return true;
+}
+
 PackedStringArray HTMLSourceValidator::validate_inline_source(const String &p_source) {
 	PackedStringArray errors;
 	if (p_source.is_empty()) {
@@ -91,6 +107,26 @@ PackedStringArray HTMLSourceValidator::validate_inline_source(const String &p_so
 	return errors;
 }
 
+PackedStringArray HTMLSourceValidator::validate_inline_css(const String &p_css) {
+	PackedStringArray errors;
+	if (p_css.is_empty()) {
+		return errors;
+	}
+
+	const String lower_css = p_css.to_lower();
+	if (lower_css.find("<script") != -1) {
+		errors.push_back("Script elements are not supported in HTMLDocument CSS.");
+	}
+	if (lower_css.find("javascript:") != -1) {
+		errors.push_back("Executable URL schemes are not supported in HTMLDocument CSS.");
+	}
+	if (lower_css.find(".wasm") != -1 || lower_css.find("application/wasm") != -1) {
+		errors.push_back("WebAssembly resources are not supported in HTMLDocument CSS.");
+	}
+
+	return errors;
+}
+
 PackedStringArray HTMLSourceValidator::validate_resource_path(const String &p_path) {
 	PackedStringArray errors;
 	if (p_path.is_empty() || p_path.begins_with("res://") || p_path.begins_with("user://")) {
@@ -98,5 +134,19 @@ PackedStringArray HTMLSourceValidator::validate_resource_path(const String &p_pa
 	}
 
 	errors.push_back("Only res:// and user:// document paths are supported.");
+	return errors;
+}
+
+PackedStringArray HTMLSourceValidator::validate_resource_uri(const String &p_uri) {
+	PackedStringArray errors;
+	const String uri = p_uri.strip_edges();
+	if (uri.is_empty() || uri.begins_with("res://") || uri.begins_with("user://")) {
+		return errors;
+	}
+
+	if (_has_uri_scheme(uri) || uri.begins_with("//")) {
+		errors.push_back("External URL schemes are not supported by HTMLDocument resources.");
+	}
+
 	return errors;
 }

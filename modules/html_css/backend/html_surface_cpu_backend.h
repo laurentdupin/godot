@@ -37,14 +37,16 @@ protected:
 	Ref<HTMLTexture2D> texture;
 	Size2i size = Size2i(512, 512);
 	Color placeholder_background = Color(0.08, 0.09, 0.1, 1.0);
+	Color background_color = Color(0, 0, 0, 0);
 	bool transparent_background = false;
 
-	void clear_to_transparent();
+	void clear_to_background();
 
 public:
 	virtual void set_size(const Size2i &p_size) override;
 	virtual void set_document(const Ref<HTMLDocument> &p_document) override;
 	virtual void set_transparent_background(bool p_transparent_background) override;
+	virtual void set_background_color(const Color &p_background_color) override;
 	virtual void set_placeholder_background(const Color &p_color) override;
 	virtual void render_placeholder(const String &p_marker) override;
 	virtual Error submit_cpu_frame(const HTMLCPUFrame &p_frame) override;

@@ -9,8 +9,17 @@
 	<tutorials>
 	</tutorials>
 	<members>
+		<member name="background_color" type="Color" setter="set_background_color" getter="get_background_color" default="Color(0, 0, 0, 0)">
+			Default document background color used when the HTML/CSS source does not provide one. The default is transparent black.
+		</member>
 		<member name="default_size" type="Vector2i" setter="set_default_size" getter="get_default_size" default="Vector2i(512, 512)">
 			Default render size used when a surface has no explicit size.
+		</member>
+		<member name="css" type="String" setter="set_css" getter="get_css" default="&quot;&quot;">
+			Inline CSS source applied after [member css_files].
+		</member>
+		<member name="css_files" type="PackedStringArray" setter="set_css_files" getter="get_css_files" default="PackedStringArray()">
+			Ordered list of CSS files applied to the document. Entries may be [code]res://[/code], [code]user://[/code], or relative to [member html_file]'s directory or [member resource_root].
 		</member>
 		<member name="html" type="String" setter="set_html" getter="get_html" default="&quot;&quot;">
 			Inline HTML/CSS source.
@@ -22,10 +31,23 @@
 			Base resource root used by the renderer backend for local assets.
 		</member>
 		<member name="transparent_background" type="bool" setter="set_transparent_background" getter="is_transparent_background" default="true">
-			If [code]true[/code], surfaces request a transparent background from the renderer backend.
+			Compatibility shortcut for setting [member background_color]'s alpha to transparent or opaque.
 		</member>
 	</members>
 	<methods>
+		<method name="add_css_file">
+			<return type="void" />
+			<param index="0" name="css_file" type="String" />
+			<description>
+				Appends a CSS file path to [member css_files].
+			</description>
+		</method>
+		<method name="clear_css_files">
+			<return type="void" />
+			<description>
+				Clears [member css_files].
+			</description>
+		</method>
 		<method name="get_source_errors" qualifiers="const">
 			<return type="PackedStringArray" />
 			<description>
@@ -42,6 +64,13 @@
 			<return type="void" />
 			<description>
 				Requests that dependent surfaces reload the document.
+			</description>
+		</method>
+		<method name="remove_css_file">
+			<return type="void" />
+			<param index="0" name="css_file" type="String" />
+			<description>
+				Removes all matching CSS file paths from [member css_files].
 			</description>
 		</method>
 	</methods>

@@ -34,6 +34,7 @@
 
 void HTMLTexture2D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("update_placeholder", "size", "background", "marker"), &HTMLTexture2D::update_placeholder, DEFVAL(String()));
+	ClassDB::bind_method(D_METHOD("get_latest_image"), &HTMLTexture2D::get_latest_image);
 }
 
 void HTMLTexture2D::update_placeholder(const Size2i &p_size, const Color &p_background, const String &p_marker) {
@@ -88,6 +89,10 @@ bool HTMLTexture2D::has_alpha() const {
 }
 
 Ref<Image> HTMLTexture2D::get_image() const {
+	return latest_image;
+}
+
+Ref<Image> HTMLTexture2D::get_latest_image() const {
 	return latest_image;
 }
 

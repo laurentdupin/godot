@@ -35,6 +35,7 @@
 #endif
 #include "backend/html_surface_cpu_backend.h"
 
+#include "core/math/math_funcs.h"
 #include "core/object/callable_mp.h"
 
 void HTMLRenderSurface::_ensure_backend() {
@@ -55,13 +56,19 @@ void HTMLRenderSurface::_ensure_backend() {
 
 void HTMLRenderSurface::_sync_backend_state() {
 	ERR_FAIL_NULL(backend);
+	Color background_color = document.is_valid() ? document->get_background_color() : Color(0, 0, 0, 0);
 	backend->set_size(size);
+	backend->set_device_scale_factor(device_scale_factor);
 	backend->set_document(document);
-	backend->set_transparent_background(document.is_valid() && document->is_transparent_background());
+	backend->set_transparent_background(background_color.a < 1.0);
+	backend->set_background_color(background_color);
 	backend->set_placeholder_background(placeholder_background);
 }
 
 void HTMLRenderSurface::_document_changed() {
+	if (backend != nullptr) {
+		backend->mark_document_dirty();
+	}
 	_sync_backend_state();
 	render_now(marker);
 }
@@ -98,18 +105,36 @@ Ref<HTMLDocument> HTMLRenderSurface::get_document() const {
 	return document;
 }
 
-void HTMLRenderSurface::set_size(const Size2i &p_size) {
-	Size2i new_size = Size2i(MAX(1, p_size.x), MAX(1, p_size.y));
-	if (size == new_size) {
-		return;
-	}
-	size = new_size;
-	_sync_backend_state();
-	render_now(marker);
+bool HTMLRenderSurface::set_size(const Size2i &p_size) {
+	return set_viewport(p_size, device_scale_factor);
 }
 
 Size2i HTMLRenderSurface::get_size() const {
 	return size;
+}
+
+bool HTMLRenderSurface::set_device_scale_factor(float p_device_scale_factor) {
+	return set_viewport(size, p_device_scale_factor);
+}
+
+float HTMLRenderSurface::get_device_scale_factor() const {
+	return device_scale_factor;
+}
+
+bool HTMLRenderSurface::set_viewport(const Size2i &p_size, float p_device_scale_factor) {
+	Size2i new_size = Size2i(MAX(1, p_size.x), MAX(1, p_size.y));
+	float new_device_scale_factor = p_device_scale_factor;
+	if (!Math::is_finite(new_device_scale_factor) || new_device_scale_factor <= 0.0f) {
+		new_device_scale_factor = 1.0f;
+	}
+	new_device_scale_factor = CLAMP(new_device_scale_factor, 0.01f, 8.0f);
+	if (size == new_size && Math::is_equal_approx(device_scale_factor, new_device_scale_factor)) {
+		return false;
+	}
+	size = new_size;
+	device_scale_factor = new_device_scale_factor;
+	render_now(marker);
+	return true;
 }
 
 void HTMLRenderSurface::set_placeholder_background(const Color &p_color) {
@@ -156,7 +181,6 @@ Error HTMLRenderSurface::submit_cpu_frame(const HTMLCPUFrame &p_frame, const HTM
 	Error err = backend->submit_cpu_frame(p_frame);
 	ERR_FAIL_COND_V(err != OK, err);
 
-	size = p_frame.size;
 	frame_metadata = p_metadata;
 	_notify_changed();
 	return OK;
@@ -168,6 +192,106 @@ const HTMLFrameMetadata &HTMLRenderSurface::get_frame_metadata() const {
 
 const HTMLElementHit *HTMLRenderSurface::find_hit_at(const Point2i &p_position) const {
 	return frame_metadata.find_hit_at(p_position);
+}
+
+bool HTMLRenderSurface::hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const {
+	const HTMLElementHit *hit = frame_metadata.find_hit_at(Point2i(Math::floor(p_position.x), Math::floor(p_position.y)));
+	if (hit == nullptr) {
+		return false;
+	}
+
+	r_hit = *hit;
+	return true;
+}
+
+Error HTMLRenderSurface::mouse_move(const Point2 &p_position, int p_modifiers) {
+	_ensure_backend();
+	return backend->mouse_move(p_position, p_modifiers);
+}
+
+Error HTMLRenderSurface::mouse_down(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) {
+	_ensure_backend();
+	return backend->mouse_down(p_position, p_button, p_modifiers, p_click_count);
+}
+
+Error HTMLRenderSurface::mouse_up(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) {
+	_ensure_backend();
+	return backend->mouse_up(p_position, p_button, p_modifiers, p_click_count);
+}
+
+Error HTMLRenderSurface::wheel(const Point2 &p_position, const Vector2 &p_delta) {
+	_ensure_backend();
+	return backend->wheel(p_position, p_delta);
+}
+
+Error HTMLRenderSurface::key_down(HTMLSurfaceInputKey p_key, int p_modifiers) {
+	_ensure_backend();
+	return backend->key_down(p_key, p_modifiers);
+}
+
+Error HTMLRenderSurface::key_up(HTMLSurfaceInputKey p_key, int p_modifiers) {
+	_ensure_backend();
+	return backend->key_up(p_key, p_modifiers);
+}
+
+Error HTMLRenderSurface::text_input(const String &p_text) {
+	_ensure_backend();
+	return backend->text_input(p_text);
+}
+
+Error HTMLRenderSurface::set_element_text(const StringName &p_id, const String &p_text) {
+	_ensure_backend();
+	Error err = backend->set_element_text(p_id, p_text);
+	if (err != OK) {
+		return err;
+	}
+	render_now(marker);
+	return OK;
+}
+
+Error HTMLRenderSurface::set_element_attribute(const StringName &p_id, const StringName &p_name, const String &p_value) {
+	_ensure_backend();
+	Error err = backend->set_element_attribute(p_id, p_name, p_value);
+	if (err != OK) {
+		return err;
+	}
+	render_now(marker);
+	return OK;
+}
+
+Error HTMLRenderSurface::remove_element_attribute(const StringName &p_id, const StringName &p_name) {
+	_ensure_backend();
+	Error err = backend->remove_element_attribute(p_id, p_name);
+	if (err != OK) {
+		return err;
+	}
+	render_now(marker);
+	return OK;
+}
+
+Error HTMLRenderSurface::set_element_style(const StringName &p_id, const String &p_css_text) {
+	_ensure_backend();
+	Error err = backend->set_element_style(p_id, p_css_text);
+	if (err != OK) {
+		return err;
+	}
+	render_now(marker);
+	return OK;
+}
+
+Error HTMLRenderSurface::replace_stylesheet_text(const StringName &p_style_id, const String &p_css_text) {
+	_ensure_backend();
+	Error err = backend->replace_stylesheet_text(p_style_id, p_css_text);
+	if (err != OK) {
+		return err;
+	}
+	render_now(marker);
+	return OK;
+}
+
+bool HTMLRenderSurface::get_form_control_state(const StringName &p_id, HTMLFormControlState &r_state) {
+	_ensure_backend();
+	return backend->get_form_control_state(p_id, r_state);
 }
 
 bool HTMLRenderSurface::is_document_source_valid() const {
