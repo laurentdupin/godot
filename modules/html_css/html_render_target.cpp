@@ -65,6 +65,11 @@ void HTMLRenderTarget::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("remove_element_attribute", "id", "name"), &HTMLRenderTarget::remove_element_attribute);
 	ClassDB::bind_method(D_METHOD("set_element_style", "id", "css_text"), &HTMLRenderTarget::set_element_style);
 	ClassDB::bind_method(D_METHOD("replace_stylesheet_text", "style_id", "css_text"), &HTMLRenderTarget::replace_stylesheet_text);
+	ClassDB::bind_method(D_METHOD("set_form_control_value", "id", "value"), &HTMLRenderTarget::set_form_control_value);
+	ClassDB::bind_method(D_METHOD("set_form_control_checked", "id", "checked"), &HTMLRenderTarget::set_form_control_checked);
+	ClassDB::bind_method(D_METHOD("focus_element", "id"), &HTMLRenderTarget::focus_element);
+	ClassDB::bind_method(D_METHOD("blur_focused_element"), &HTMLRenderTarget::blur_focused_element);
+	ClassDB::bind_method(D_METHOD("set_text_selection", "id", "start", "end"), &HTMLRenderTarget::set_text_selection);
 	ClassDB::bind_method(D_METHOD("get_form_control_state", "id"), &HTMLRenderTarget::get_form_control_state);
 
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "document", PROPERTY_HINT_RESOURCE_TYPE, HTMLDocument::get_class_static()), "set_document", "get_document");
@@ -158,6 +163,46 @@ Error HTMLRenderTarget::set_element_style(const StringName &p_id, const String &
 
 Error HTMLRenderTarget::replace_stylesheet_text(const StringName &p_style_id, const String &p_css_text) {
 	Error err = surface->replace_stylesheet_text(p_style_id, p_css_text);
+	if (err == OK) {
+		emit_signal(SNAME("rendered"));
+	}
+	return err;
+}
+
+Error HTMLRenderTarget::set_form_control_value(const StringName &p_id, const String &p_value) {
+	Error err = surface->set_form_control_value(p_id, p_value);
+	if (err == OK) {
+		emit_signal(SNAME("rendered"));
+	}
+	return err;
+}
+
+Error HTMLRenderTarget::set_form_control_checked(const StringName &p_id, bool p_checked) {
+	Error err = surface->set_form_control_checked(p_id, p_checked);
+	if (err == OK) {
+		emit_signal(SNAME("rendered"));
+	}
+	return err;
+}
+
+Error HTMLRenderTarget::focus_element(const StringName &p_id) {
+	Error err = surface->focus_element(p_id);
+	if (err == OK) {
+		emit_signal(SNAME("rendered"));
+	}
+	return err;
+}
+
+Error HTMLRenderTarget::blur_focused_element() {
+	Error err = surface->blur_focused_element();
+	if (err == OK) {
+		emit_signal(SNAME("rendered"));
+	}
+	return err;
+}
+
+Error HTMLRenderTarget::set_text_selection(const StringName &p_id, int p_start, int p_end) {
+	Error err = surface->set_text_selection(p_id, p_start, p_end);
 	if (err == OK) {
 		emit_signal(SNAME("rendered"));
 	}

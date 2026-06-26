@@ -99,6 +99,11 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("remove_element_attribute", "id", "name"), &HTMLView::remove_element_attribute);
 	ClassDB::bind_method(D_METHOD("set_element_style", "id", "css_text"), &HTMLView::set_element_style);
 	ClassDB::bind_method(D_METHOD("replace_stylesheet_text", "style_id", "css_text"), &HTMLView::replace_stylesheet_text);
+	ClassDB::bind_method(D_METHOD("set_form_control_value", "id", "value"), &HTMLView::set_form_control_value);
+	ClassDB::bind_method(D_METHOD("set_form_control_checked", "id", "checked"), &HTMLView::set_form_control_checked);
+	ClassDB::bind_method(D_METHOD("focus_element", "id"), &HTMLView::focus_element);
+	ClassDB::bind_method(D_METHOD("blur_focused_element"), &HTMLView::blur_focused_element);
+	ClassDB::bind_method(D_METHOD("set_text_selection", "id", "start", "end"), &HTMLView::set_text_selection);
 	ClassDB::bind_method(D_METHOD("get_form_control_state", "id"), &HTMLView::get_form_control_state);
 	ClassDB::bind_method(D_METHOD("bind_action", "action", "callable"), &HTMLView::bind_action);
 	ClassDB::bind_method(D_METHOD("unbind_action", "action"), &HTMLView::unbind_action);
@@ -675,6 +680,26 @@ Error HTMLView::set_element_style(const StringName &p_id, const String &p_css_te
 
 Error HTMLView::replace_stylesheet_text(const StringName &p_style_id, const String &p_css_text) {
 	return surface->replace_stylesheet_text(p_style_id, p_css_text);
+}
+
+Error HTMLView::set_form_control_value(const StringName &p_id, const String &p_value) {
+	return surface->set_form_control_value(p_id, p_value);
+}
+
+Error HTMLView::set_form_control_checked(const StringName &p_id, bool p_checked) {
+	return surface->set_form_control_checked(p_id, p_checked);
+}
+
+Error HTMLView::focus_element(const StringName &p_id) {
+	return surface->focus_element(p_id);
+}
+
+Error HTMLView::blur_focused_element() {
+	return surface->blur_focused_element();
+}
+
+Error HTMLView::set_text_selection(const StringName &p_id, int p_start, int p_end) {
+	return surface->set_text_selection(p_id, p_start, p_end);
 }
 
 Dictionary HTMLView::get_form_control_state(const StringName &p_id) {

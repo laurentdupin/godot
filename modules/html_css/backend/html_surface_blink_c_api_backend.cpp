@@ -657,6 +657,54 @@ Error HTMLSurfaceExternalCApiBackend::replace_stylesheet_text(const StringName &
 	return _status_to_error(blink_standalone_renderer_replace_stylesheet_text(renderer, id_utf8.ptr(), css_utf8.ptr()), "replace_stylesheet_text");
 }
 
+Error HTMLSurfaceExternalCApiBackend::set_form_control_value(const StringName &p_id, const String &p_value) {
+	if (!_prepare_for_input()) {
+		return ERR_UNAVAILABLE;
+	}
+
+	CharString id_utf8 = String(p_id).utf8();
+	CharString value_utf8 = p_value.utf8();
+	return _status_to_error(blink_standalone_renderer_set_form_control_value(renderer, id_utf8.ptr(), value_utf8.ptr()), "set_form_control_value");
+}
+
+Error HTMLSurfaceExternalCApiBackend::set_form_control_checked(const StringName &p_id, bool p_checked) {
+	if (!_prepare_for_input()) {
+		return ERR_UNAVAILABLE;
+	}
+
+	CharString id_utf8 = String(p_id).utf8();
+	return _status_to_error(blink_standalone_renderer_set_form_control_checked(renderer, id_utf8.ptr(), p_checked ? 1 : 0), "set_form_control_checked");
+}
+
+Error HTMLSurfaceExternalCApiBackend::focus_element(const StringName &p_id) {
+	if (!_prepare_for_input()) {
+		return ERR_UNAVAILABLE;
+	}
+
+	CharString id_utf8 = String(p_id).utf8();
+	return _status_to_error(blink_standalone_renderer_focus_element(renderer, id_utf8.ptr()), "focus_element");
+}
+
+Error HTMLSurfaceExternalCApiBackend::blur_focused_element() {
+	if (!_prepare_for_input()) {
+		return ERR_UNAVAILABLE;
+	}
+
+	return _status_to_error(blink_standalone_renderer_blur_focused_element(renderer), "blur_focused_element");
+}
+
+Error HTMLSurfaceExternalCApiBackend::set_text_selection(const StringName &p_id, int p_start, int p_end) {
+	if (p_start < 0 || p_end < 0) {
+		return ERR_INVALID_PARAMETER;
+	}
+	if (!_prepare_for_input()) {
+		return ERR_UNAVAILABLE;
+	}
+
+	CharString id_utf8 = String(p_id).utf8();
+	return _status_to_error(blink_standalone_renderer_set_text_selection(renderer, id_utf8.ptr(), (unsigned)p_start, (unsigned)p_end), "set_text_selection");
+}
+
 bool HTMLSurfaceExternalCApiBackend::get_form_control_state(const StringName &p_id, HTMLFormControlState &r_state) {
 	if (!_prepare_for_input()) {
 		return false;

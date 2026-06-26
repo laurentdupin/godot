@@ -289,6 +289,56 @@ Error HTMLRenderSurface::replace_stylesheet_text(const StringName &p_style_id, c
 	return OK;
 }
 
+Error HTMLRenderSurface::set_form_control_value(const StringName &p_id, const String &p_value) {
+	_ensure_backend();
+	Error err = backend->set_form_control_value(p_id, p_value);
+	if (err != OK) {
+		return err;
+	}
+	render_now(marker);
+	return OK;
+}
+
+Error HTMLRenderSurface::set_form_control_checked(const StringName &p_id, bool p_checked) {
+	_ensure_backend();
+	Error err = backend->set_form_control_checked(p_id, p_checked);
+	if (err != OK) {
+		return err;
+	}
+	render_now(marker);
+	return OK;
+}
+
+Error HTMLRenderSurface::focus_element(const StringName &p_id) {
+	_ensure_backend();
+	Error err = backend->focus_element(p_id);
+	if (err != OK) {
+		return err;
+	}
+	render_now(marker);
+	return OK;
+}
+
+Error HTMLRenderSurface::blur_focused_element() {
+	_ensure_backend();
+	Error err = backend->blur_focused_element();
+	if (err != OK) {
+		return err;
+	}
+	render_now(marker);
+	return OK;
+}
+
+Error HTMLRenderSurface::set_text_selection(const StringName &p_id, int p_start, int p_end) {
+	_ensure_backend();
+	Error err = backend->set_text_selection(p_id, p_start, p_end);
+	if (err != OK) {
+		return err;
+	}
+	render_now(marker);
+	return OK;
+}
+
 bool HTMLRenderSurface::get_form_control_state(const StringName &p_id, HTMLFormControlState &r_state) {
 	_ensure_backend();
 	return backend->get_form_control_state(p_id, r_state);

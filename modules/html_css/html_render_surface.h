@@ -91,6 +91,11 @@ public:
 	Error remove_element_attribute(const StringName &p_id, const StringName &p_name);
 	Error set_element_style(const StringName &p_id, const String &p_css_text);
 	Error replace_stylesheet_text(const StringName &p_style_id, const String &p_css_text);
+	Error set_form_control_value(const StringName &p_id, const String &p_value);
+	Error set_form_control_checked(const StringName &p_id, bool p_checked);
+	Error focus_element(const StringName &p_id);
+	Error blur_focused_element();
+	Error set_text_selection(const StringName &p_id, int p_start, int p_end);
 	bool get_form_control_state(const StringName &p_id, HTMLFormControlState &r_state);
 	bool is_document_source_valid() const;
 	Error load_asset(const String &p_uri, HTMLAssetResource &r_asset, String *r_error = nullptr) const;

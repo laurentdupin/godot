@@ -85,6 +85,11 @@ public:
 	virtual Error remove_element_attribute(const StringName &, const StringName &) { return ERR_UNAVAILABLE; }
 	virtual Error set_element_style(const StringName &, const String &) { return ERR_UNAVAILABLE; }
 	virtual Error replace_stylesheet_text(const StringName &, const String &) { return ERR_UNAVAILABLE; }
+	virtual Error set_form_control_value(const StringName &, const String &) { return ERR_UNAVAILABLE; }
+	virtual Error set_form_control_checked(const StringName &, bool) { return ERR_UNAVAILABLE; }
+	virtual Error focus_element(const StringName &) { return ERR_UNAVAILABLE; }
+	virtual Error blur_focused_element() { return ERR_UNAVAILABLE; }
+	virtual Error set_text_selection(const StringName &, int, int) { return ERR_UNAVAILABLE; }
 	virtual bool get_form_control_state(const StringName &, HTMLFormControlState &) { return false; }
 	virtual bool hit_test(const Point2 &, HTMLElementHit &) const { return false; }
 	virtual Ref<Texture2D> get_texture() const = 0;

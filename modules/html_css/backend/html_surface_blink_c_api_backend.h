@@ -74,6 +74,11 @@ public:
 	virtual Error remove_element_attribute(const StringName &p_id, const StringName &p_name) override;
 	virtual Error set_element_style(const StringName &p_id, const String &p_css_text) override;
 	virtual Error replace_stylesheet_text(const StringName &p_style_id, const String &p_css_text) override;
+	virtual Error set_form_control_value(const StringName &p_id, const String &p_value) override;
+	virtual Error set_form_control_checked(const StringName &p_id, bool p_checked) override;
+	virtual Error focus_element(const StringName &p_id) override;
+	virtual Error blur_focused_element() override;
+	virtual Error set_text_selection(const StringName &p_id, int p_start, int p_end) override;
 	virtual bool get_form_control_state(const StringName &p_id, HTMLFormControlState &r_state) override;
 	virtual bool hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const override;
 

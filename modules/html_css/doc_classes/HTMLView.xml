@@ -152,6 +152,44 @@
 				Replaces the text content of an element in the live rendered document without reloading the document.
 			</description>
 		</method>
+		<method name="set_form_control_value">
+			<return type="int" enum="Error" />
+			<param index="0" name="id" type="StringName" />
+			<param index="1" name="value" type="String" />
+			<description>
+				Sets the live value of a text-like form control without reloading the document.
+			</description>
+		</method>
+		<method name="set_form_control_checked">
+			<return type="int" enum="Error" />
+			<param index="0" name="id" type="StringName" />
+			<param index="1" name="checked" type="bool" />
+			<description>
+				Sets the live checked state of a checkbox or radio control using Blink form-control semantics.
+			</description>
+		</method>
+		<method name="focus_element">
+			<return type="int" enum="Error" />
+			<param index="0" name="id" type="StringName" />
+			<description>
+				Moves live document focus to the element with [param id].
+			</description>
+		</method>
+		<method name="blur_focused_element">
+			<return type="int" enum="Error" />
+			<description>
+				Blurs the currently focused element in the live document.
+			</description>
+		</method>
+		<method name="set_text_selection">
+			<return type="int" enum="Error" />
+			<param index="0" name="id" type="StringName" />
+			<param index="1" name="start" type="int" />
+			<param index="2" name="end" type="int" />
+			<description>
+				Sets the selection or caret range for a text-like form control in the live document.
+			</description>
+		</method>
 		<method name="replace_stylesheet_text">
 			<return type="int" enum="Error" />
 			<param index="0" name="style_id" type="StringName" />
