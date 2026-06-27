@@ -92,6 +92,13 @@
 				Replaces the inner HTML of an element in the live rendered document without reloading the document. Unsafe fragments are rejected by the no-script profile.
 			</description>
 		</method>
+		<method name="set_body_inner_html">
+			<return type="int" enum="Error" />
+			<param index="0" name="html_fragment" type="String" />
+			<description>
+				Replaces the inner HTML of the live document body without reloading the document. Unsafe fragments are rejected by the no-script profile.
+			</description>
+		</method>
 		<method name="set_form_control_value">
 			<return type="int" enum="Error" />
 			<param index="0" name="id" type="StringName" />

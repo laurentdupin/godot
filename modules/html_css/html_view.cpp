@@ -96,6 +96,7 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("local_to_html_position", "position"), &HTMLView::local_to_html_position);
 	ClassDB::bind_method(D_METHOD("set_element_text", "id", "text"), &HTMLView::set_element_text);
 	ClassDB::bind_method(D_METHOD("set_element_inner_html", "id", "html_fragment"), &HTMLView::set_element_inner_html);
+	ClassDB::bind_method(D_METHOD("set_body_inner_html", "html_fragment"), &HTMLView::set_body_inner_html);
 	ClassDB::bind_method(D_METHOD("set_element_attribute", "id", "name", "value"), &HTMLView::set_element_attribute);
 	ClassDB::bind_method(D_METHOD("remove_element_attribute", "id", "name"), &HTMLView::remove_element_attribute);
 	ClassDB::bind_method(D_METHOD("set_element_style", "id", "css_text"), &HTMLView::set_element_style);
@@ -669,6 +670,10 @@ Error HTMLView::set_element_text(const StringName &p_id, const String &p_text) {
 
 Error HTMLView::set_element_inner_html(const StringName &p_id, const String &p_html_fragment) {
 	return surface->set_element_inner_html(p_id, p_html_fragment);
+}
+
+Error HTMLView::set_body_inner_html(const String &p_html_fragment) {
+	return surface->set_body_inner_html(p_html_fragment);
 }
 
 Error HTMLView::set_element_attribute(const StringName &p_id, const StringName &p_name, const String &p_value) {

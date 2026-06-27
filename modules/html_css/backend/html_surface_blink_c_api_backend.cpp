@@ -626,6 +626,15 @@ Error HTMLSurfaceExternalCApiBackend::set_element_inner_html(const StringName &p
 	return _status_to_error(blink_standalone_renderer_set_element_inner_html(renderer, id_utf8.ptr(), html_utf8.ptr()), "set_element_inner_html");
 }
 
+Error HTMLSurfaceExternalCApiBackend::set_body_inner_html(const String &p_html_fragment) {
+	if (!_prepare_for_input()) {
+		return ERR_UNAVAILABLE;
+	}
+
+	CharString html_utf8 = p_html_fragment.utf8();
+	return _status_to_error(blink_standalone_renderer_set_body_inner_html(renderer, html_utf8.ptr()), "set_body_inner_html");
+}
+
 Error HTMLSurfaceExternalCApiBackend::set_element_attribute(const StringName &p_id, const StringName &p_name, const String &p_value) {
 	if (!_prepare_for_input()) {
 		return ERR_UNAVAILABLE;
