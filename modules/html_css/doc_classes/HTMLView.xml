@@ -152,6 +152,14 @@
 				Replaces the text content of an element in the live rendered document without reloading the document.
 			</description>
 		</method>
+		<method name="set_element_inner_html">
+			<return type="int" enum="Error" />
+			<param index="0" name="id" type="StringName" />
+			<param index="1" name="html_fragment" type="String" />
+			<description>
+				Replaces the inner HTML of an element in the live rendered document without reloading the document. The no-script profile rejects unsafe fragments such as scripts, inline event handlers, and [code]javascript:[/code] URL surfaces with a recoverable error.
+			</description>
+		</method>
 		<method name="set_form_control_value">
 			<return type="int" enum="Error" />
 			<param index="0" name="id" type="StringName" />

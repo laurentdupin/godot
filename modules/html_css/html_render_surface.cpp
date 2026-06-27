@@ -249,6 +249,16 @@ Error HTMLRenderSurface::set_element_text(const StringName &p_id, const String &
 	return OK;
 }
 
+Error HTMLRenderSurface::set_element_inner_html(const StringName &p_id, const String &p_html_fragment) {
+	_ensure_backend();
+	Error err = backend->set_element_inner_html(p_id, p_html_fragment);
+	if (err != OK) {
+		return err;
+	}
+	render_now(marker);
+	return OK;
+}
+
 Error HTMLRenderSurface::set_element_attribute(const StringName &p_id, const StringName &p_name, const String &p_value) {
 	_ensure_backend();
 	Error err = backend->set_element_attribute(p_id, p_name, p_value);

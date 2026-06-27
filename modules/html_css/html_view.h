@@ -152,6 +152,7 @@ public:
 	Ref<Texture2D> get_texture() const;
 	Vector2 local_to_html_position(const Vector2 &p_position) const;
 	Error set_element_text(const StringName &p_id, const String &p_text);
+	Error set_element_inner_html(const StringName &p_id, const String &p_html_fragment);
 	Error set_element_attribute(const StringName &p_id, const StringName &p_name, const String &p_value);
 	Error remove_element_attribute(const StringName &p_id, const StringName &p_name);
 	Error set_element_style(const StringName &p_id, const String &p_css_text);

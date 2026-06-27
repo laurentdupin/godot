@@ -61,6 +61,7 @@ void HTMLRenderTarget::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_image"), &HTMLRenderTarget::get_image);
 	ClassDB::bind_method(D_METHOD("render_now"), &HTMLRenderTarget::render_now);
 	ClassDB::bind_method(D_METHOD("set_element_text", "id", "text"), &HTMLRenderTarget::set_element_text);
+	ClassDB::bind_method(D_METHOD("set_element_inner_html", "id", "html_fragment"), &HTMLRenderTarget::set_element_inner_html);
 	ClassDB::bind_method(D_METHOD("set_element_attribute", "id", "name", "value"), &HTMLRenderTarget::set_element_attribute);
 	ClassDB::bind_method(D_METHOD("remove_element_attribute", "id", "name"), &HTMLRenderTarget::remove_element_attribute);
 	ClassDB::bind_method(D_METHOD("set_element_style", "id", "css_text"), &HTMLRenderTarget::set_element_style);
@@ -131,6 +132,14 @@ void HTMLRenderTarget::render_now() {
 
 Error HTMLRenderTarget::set_element_text(const StringName &p_id, const String &p_text) {
 	Error err = surface->set_element_text(p_id, p_text);
+	if (err == OK) {
+		emit_signal(SNAME("rendered"));
+	}
+	return err;
+}
+
+Error HTMLRenderTarget::set_element_inner_html(const StringName &p_id, const String &p_html_fragment) {
+	Error err = surface->set_element_inner_html(p_id, p_html_fragment);
 	if (err == OK) {
 		emit_signal(SNAME("rendered"));
 	}
