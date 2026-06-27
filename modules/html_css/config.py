@@ -11,7 +11,7 @@ def get_opts(platform):
         ),
         PathVariable(
             "module_html_css_blink_lib_path",
-            "Path to the prebuilt external HTML/CSS renderer C API library directory",
+            "Path to the prebuilt external HTML/CSS renderer C API package directory, such as thirdparty/blink-standalone-ui/build/cmake-generated-v8-chromium-llvm/package/c_api_runtime",
             "",
             PathVariable.PathAccept,
         ),
