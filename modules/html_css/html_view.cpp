@@ -36,6 +36,161 @@
 #include "core/math/math_funcs.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
+#include "scene/gui/color_rect.h"
+#include "scene/resources/material.h"
+#include "servers/rendering/rendering_server.h"
+
+static constexpr int HTML_VIEW_MAX_BACKDROP_FILTER_REGIONS = 8;
+static constexpr int HTML_VIEW_MAX_BACKDROP_FILTER_OPERATIONS = 64;
+
+static const char *html_view_backdrop_filter_shader_code = R"(
+shader_type canvas_item;
+render_mode blend_mix, unshaded;
+
+uniform sampler2D screen_texture : hint_screen_texture, repeat_disable, filter_linear_mipmap;
+uniform vec2 view_size = vec2(1.0, 1.0);
+uniform int region_count = 0;
+uniform vec4 region_rects[8];
+uniform vec4 region_radii[8];
+uniform vec4 region_params[8];
+uniform vec4 filter_ops[64];
+
+const int FILTER_BLUR = 0;
+const int FILTER_BRIGHTNESS = 1;
+const int FILTER_CONTRAST = 2;
+const int FILTER_SATURATE = 3;
+const int FILTER_GRAYSCALE = 4;
+const int FILTER_SEPIA = 5;
+const int FILTER_INVERT = 6;
+const int FILTER_HUE_ROTATE = 7;
+const int FILTER_OPACITY = 8;
+
+float corner_mask(vec2 p, vec2 center, float radius) {
+	if (radius <= 0.0) {
+		return 1.0;
+	}
+	float dist = length(p - center) - radius;
+	return 1.0 - smoothstep(-1.0, 1.0, dist);
+}
+
+float rounded_rect_mask(vec2 p, vec4 rect, vec4 radii) {
+	vec2 minp = rect.xy;
+	vec2 maxp = rect.xy + rect.zw;
+	if (p.x < minp.x || p.y < minp.y || p.x > maxp.x || p.y > maxp.y) {
+		return 0.0;
+	}
+
+	float max_radius = max(0.0, min(rect.z, rect.w) * 0.5);
+	radii = clamp(radii, vec4(0.0), vec4(max_radius));
+
+	if (p.x < minp.x + radii.x && p.y < minp.y + radii.x) {
+		return corner_mask(p, minp + vec2(radii.x, radii.x), radii.x);
+	}
+	if (p.x > maxp.x - radii.y && p.y < minp.y + radii.y) {
+		return corner_mask(p, vec2(maxp.x - radii.y, minp.y + radii.y), radii.y);
+	}
+	if (p.x > maxp.x - radii.z && p.y > maxp.y - radii.z) {
+		return corner_mask(p, maxp - vec2(radii.z, radii.z), radii.z);
+	}
+	if (p.x < minp.x + radii.w && p.y > maxp.y - radii.w) {
+		return corner_mask(p, vec2(minp.x + radii.w, maxp.y - radii.w), radii.w);
+	}
+	return 1.0;
+}
+
+vec3 apply_saturate(vec3 color, float amount) {
+	return mat3(
+		vec3(0.213 + 0.787 * amount, 0.213 - 0.213 * amount, 0.213 - 0.213 * amount),
+		vec3(0.715 - 0.715 * amount, 0.715 + 0.285 * amount, 0.715 - 0.715 * amount),
+		vec3(0.072 - 0.072 * amount, 0.072 - 0.072 * amount, 0.072 + 0.928 * amount)
+	) * color;
+}
+
+vec3 apply_sepia(vec3 color, float amount) {
+	mat3 sepia = mat3(
+		vec3(0.393, 0.349, 0.272),
+		vec3(0.769, 0.686, 0.534),
+		vec3(0.189, 0.168, 0.131)
+	);
+	return mix(color, sepia * color, amount);
+}
+
+vec3 apply_hue_rotate(vec3 color, float degrees) {
+	float angle = radians(degrees);
+	float c = cos(angle);
+	float s = sin(angle);
+	mat3 hue = mat3(
+		vec3(0.213 + c * 0.787 - s * 0.213, 0.213 - c * 0.213 + s * 0.143, 0.213 - c * 0.213 - s * 0.787),
+		vec3(0.715 - c * 0.715 - s * 0.715, 0.715 + c * 0.285 + s * 0.140, 0.715 - c * 0.715 + s * 0.715),
+		vec3(0.072 - c * 0.072 + s * 0.928, 0.072 - c * 0.072 - s * 0.283, 0.072 + c * 0.928 + s * 0.072)
+	);
+	return hue * color;
+}
+
+void apply_color_filter(inout vec4 color, int filter_type, float amount) {
+	if (filter_type == FILTER_BLUR) {
+		return;
+	}
+	if (filter_type == FILTER_BRIGHTNESS) {
+		color.rgb *= amount;
+	} else if (filter_type == FILTER_CONTRAST) {
+		color.rgb = (color.rgb - vec3(0.5)) * amount + vec3(0.5);
+	} else if (filter_type == FILTER_SATURATE) {
+		color.rgb = apply_saturate(color.rgb, amount);
+	} else if (filter_type == FILTER_GRAYSCALE) {
+		color.rgb = apply_saturate(color.rgb, 1.0 - amount);
+	} else if (filter_type == FILTER_SEPIA) {
+		color.rgb = apply_sepia(color.rgb, amount);
+	} else if (filter_type == FILTER_INVERT) {
+		color.rgb = mix(color.rgb, vec3(1.0) - color.rgb, amount);
+	} else if (filter_type == FILTER_HUE_ROTATE) {
+		color.rgb = apply_hue_rotate(color.rgb, amount);
+	} else if (filter_type == FILTER_OPACITY) {
+		color.a *= amount;
+	}
+}
+
+void fragment() {
+	vec2 local_pos = UV * view_size;
+	float mask = 0.0;
+	float blur_radius = 0.0;
+	float opacity = 1.0;
+	int op_start = 0;
+	int op_count = 0;
+
+	for (int i = 0; i < 8; i++) {
+		if (i >= region_count) {
+			break;
+		}
+		float region_mask = rounded_rect_mask(local_pos, region_rects[i], region_radii[i]);
+		if (region_mask > mask) {
+			mask = region_mask;
+			blur_radius = region_params[i].x;
+			opacity = region_params[i].y;
+			op_start = int(region_params[i].z + 0.5);
+			op_count = int(region_params[i].w + 0.5);
+		}
+	}
+
+	if (mask <= 0.0) {
+		COLOR = vec4(0.0);
+	} else {
+		float lod = clamp(log2(max(blur_radius, 1.0)), 0.0, 6.0);
+		vec4 filtered = textureLod(screen_texture, SCREEN_UV, lod);
+		for (int i = 0; i < 64; i++) {
+			if (i >= op_count) {
+				break;
+			}
+			int op_index = op_start + i;
+			if (op_index < 0 || op_index >= 64) {
+				break;
+			}
+			apply_color_filter(filtered, int(filter_ops[op_index].x + 0.5), filter_ops[op_index].y);
+		}
+		COLOR = vec4(clamp(filtered.rgb, vec3(0.0), vec3(1.0)), mask * opacity * filtered.a);
+	}
+}
+)";
 
 static HTMLSurfaceBackendPreference html_view_to_surface_backend_preference(HTMLView::BackendPreference p_backend_preference) {
 	return p_backend_preference == HTMLView::BACKEND_CPU ? HTML_SURFACE_BACKEND_CPU : HTML_SURFACE_BACKEND_AUTO;
@@ -52,6 +207,29 @@ static Dictionary html_form_control_state_to_dictionary(const HTMLFormControlSta
 	state[SNAME("selection_start")] = p_state.selection_start;
 	state[SNAME("selection_end")] = p_state.selection_end;
 	return state;
+}
+
+static Dictionary html_backdrop_filter_region_to_dictionary(const HTMLBackdropFilterRegion &p_region) {
+	Dictionary region;
+	region[SNAME("element_id")] = p_region.element_id;
+	region[SNAME("bounds")] = p_region.bounds;
+	region[SNAME("blur_radius_css_px")] = p_region.blur_radius_css_px;
+	region[SNAME("border_radius_top_left")] = p_region.border_radius_top_left;
+	region[SNAME("border_radius_top_right")] = p_region.border_radius_top_right;
+	region[SNAME("border_radius_bottom_right")] = p_region.border_radius_bottom_right;
+	region[SNAME("border_radius_bottom_left")] = p_region.border_radius_bottom_left;
+	region[SNAME("opacity")] = p_region.opacity;
+	region[SNAME("flags")] = (int64_t)p_region.flags;
+	region[SNAME("supported")] = !p_region.has_unsupported_flags();
+	Array operations;
+	for (const HTMLBackdropFilterOperation &operation : p_region.filter_operations) {
+		Dictionary operation_data;
+		operation_data[SNAME("type")] = operation.type;
+		operation_data[SNAME("amount")] = operation.amount;
+		operations.push_back(operation_data);
+	}
+	region[SNAME("filter_operations")] = operations;
+	return region;
 }
 
 void HTMLView::_bind_methods() {
@@ -92,6 +270,9 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_fixed_viewport_size"), &HTMLView::get_fixed_viewport_size);
 	ClassDB::bind_method(D_METHOD("set_use_document_minimum_size", "use_document_minimum_size"), &HTMLView::set_use_document_minimum_size);
 	ClassDB::bind_method(D_METHOD("is_using_document_minimum_size"), &HTMLView::is_using_document_minimum_size);
+	ClassDB::bind_method(D_METHOD("set_backdrop_filter_enabled", "backdrop_filter_enabled"), &HTMLView::set_backdrop_filter_enabled);
+	ClassDB::bind_method(D_METHOD("is_backdrop_filter_enabled"), &HTMLView::is_backdrop_filter_enabled);
+	ClassDB::bind_method(D_METHOD("get_backdrop_filter_regions"), &HTMLView::get_backdrop_filter_regions);
 	ClassDB::bind_method(D_METHOD("get_texture"), &HTMLView::get_texture);
 	ClassDB::bind_method(D_METHOD("local_to_html_position", "position"), &HTMLView::local_to_html_position);
 	ClassDB::bind_method(D_METHOD("set_element_text", "id", "text"), &HTMLView::set_element_text);
@@ -128,6 +309,7 @@ void HTMLView::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "viewport_size_mode", PROPERTY_HINT_ENUM, "Control Size,Screen Pixels,Fixed"), "set_viewport_size_mode", "get_viewport_size_mode");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2I, "fixed_viewport_size", PROPERTY_HINT_RANGE, "0,16384,1,or_greater,suffix:px"), "set_fixed_viewport_size", "get_fixed_viewport_size");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "use_document_minimum_size"), "set_use_document_minimum_size", "is_using_document_minimum_size");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "backdrop_filter_enabled"), "set_backdrop_filter_enabled", "is_backdrop_filter_enabled");
 
 	ADD_SIGNAL(MethodInfo("action_requested", PropertyInfo(Variant::STRING_NAME, "action"), PropertyInfo(Variant::DICTIONARY, "payload")));
 	ADD_SIGNAL(MethodInfo("element_clicked", PropertyInfo(Variant::STRING_NAME, "element_id"), PropertyInfo(Variant::INT, "button")));
@@ -138,6 +320,21 @@ void HTMLView::_bind_methods() {
 	BIND_ENUM_CONSTANT(VIEWPORT_SIZE_CONTROL);
 	BIND_ENUM_CONSTANT(VIEWPORT_SIZE_SCREEN_PIXELS);
 	BIND_ENUM_CONSTANT(VIEWPORT_SIZE_FIXED);
+
+	BIND_CONSTANT(HTML_BACKDROP_FILTER_ROUNDED_RECT);
+	BIND_CONSTANT(HTML_BACKDROP_FILTER_UNSUPPORTED_COMPLEX_CLIP);
+	BIND_CONSTANT(HTML_BACKDROP_FILTER_UNSUPPORTED_TRANSFORM);
+	BIND_CONSTANT(HTML_BACKDROP_FILTER_UNSUPPORTED_FILTER_OP);
+	BIND_CONSTANT(HTML_BACKDROP_FILTER_UNSUPPORTED_MASK_OR_BLEND);
+	BIND_CONSTANT(HTML_BACKDROP_FILTER_OPERATION_BLUR);
+	BIND_CONSTANT(HTML_BACKDROP_FILTER_OPERATION_BRIGHTNESS);
+	BIND_CONSTANT(HTML_BACKDROP_FILTER_OPERATION_CONTRAST);
+	BIND_CONSTANT(HTML_BACKDROP_FILTER_OPERATION_SATURATE);
+	BIND_CONSTANT(HTML_BACKDROP_FILTER_OPERATION_GRAYSCALE);
+	BIND_CONSTANT(HTML_BACKDROP_FILTER_OPERATION_SEPIA);
+	BIND_CONSTANT(HTML_BACKDROP_FILTER_OPERATION_INVERT);
+	BIND_CONSTANT(HTML_BACKDROP_FILTER_OPERATION_HUE_ROTATE);
+	BIND_CONSTANT(HTML_BACKDROP_FILTER_OPERATION_OPACITY);
 }
 
 void HTMLView::_notification(int p_what) {
@@ -147,9 +344,11 @@ void HTMLView::_notification(int p_what) {
 				set_process_internal(true);
 			}
 			_update_surface_size();
+			_update_backdrop_filter_canvas();
 		} break;
 
 		case NOTIFICATION_DRAW: {
+			_update_backdrop_filter_canvas();
 			Ref<Texture2D> texture = surface->get_texture();
 			if (texture.is_valid() && texture->get_width() > 0 && texture->get_height() > 0) {
 				draw_texture_rect(texture, Rect2(Vector2(), get_size()));
@@ -174,17 +373,20 @@ void HTMLView::_notification(int p_what) {
 
 		case NOTIFICATION_RESIZED: {
 			_update_surface_size();
+			_update_backdrop_filter_canvas();
 			update_minimum_size();
 		} break;
 
 		case NOTIFICATION_TRANSFORM_CHANGED: {
 			_update_surface_size(false);
+			_update_backdrop_filter_canvas();
 		} break;
 	}
 }
 
 void HTMLView::_surface_changed() {
 	update_minimum_size();
+	_update_backdrop_filter_canvas();
 	queue_redraw();
 }
 
@@ -194,6 +396,122 @@ void HTMLView::_ensure_document() {
 		document.instantiate();
 		surface->set_document(document);
 	}
+}
+
+void HTMLView::_ensure_backdrop_filter_canvas() {
+	if (backdrop_filter_rect != nullptr) {
+		return;
+	}
+
+	backdrop_filter_shader.instantiate();
+	backdrop_filter_shader->set_code(html_view_backdrop_filter_shader_code);
+	backdrop_filter_material.instantiate();
+	backdrop_filter_material->set_shader(backdrop_filter_shader);
+
+	backdrop_filter_rect = memnew(ColorRect);
+	backdrop_filter_rect->set_name("_HTMLBackdropFilter");
+	backdrop_filter_rect->set_mouse_filter(Control::MOUSE_FILTER_IGNORE);
+	backdrop_filter_rect->set_draw_behind_parent(true);
+	backdrop_filter_rect->set_color(Color(1, 1, 1, 1));
+	backdrop_filter_rect->set_material(backdrop_filter_material);
+	backdrop_filter_rect->hide();
+	add_child(backdrop_filter_rect, false, INTERNAL_MODE_BACK);
+}
+
+void HTMLView::_update_backdrop_filter_canvas() {
+	_ensure_backdrop_filter_canvas();
+	ERR_FAIL_NULL(backdrop_filter_rect);
+
+	const Size2 control_size = get_size();
+	if (!backdrop_filter_enabled || control_size.x <= 0.0 || control_size.y <= 0.0) {
+		backdrop_filter_rect->hide();
+		RS::get_singleton()->canvas_item_set_copy_to_backbuffer(backdrop_filter_rect->get_canvas_item(), false, Rect2());
+		return;
+	}
+
+	const Size2i html_size = surface->get_size();
+	if (html_size.x <= 0 || html_size.y <= 0) {
+		backdrop_filter_rect->hide();
+		RS::get_singleton()->canvas_item_set_copy_to_backbuffer(backdrop_filter_rect->get_canvas_item(), false, Rect2());
+		return;
+	}
+
+	PackedVector4Array rects;
+	PackedVector4Array radii;
+	PackedVector4Array params;
+	PackedVector4Array filter_ops;
+	rects.resize(HTML_VIEW_MAX_BACKDROP_FILTER_REGIONS);
+	radii.resize(HTML_VIEW_MAX_BACKDROP_FILTER_REGIONS);
+	params.resize(HTML_VIEW_MAX_BACKDROP_FILTER_REGIONS);
+	filter_ops.resize(HTML_VIEW_MAX_BACKDROP_FILTER_OPERATIONS);
+
+	const Vector<HTMLBackdropFilterRegion> &regions = surface->get_backdrop_filter_regions();
+	const float scale_x = control_size.x / (float)html_size.x;
+	const float scale_y = control_size.y / (float)html_size.y;
+	const float radius_scale = MAX(scale_x, scale_y);
+	int supported_count = 0;
+	int supported_op_count = 0;
+	float max_blur_radius = 0.0f;
+
+	for (const HTMLBackdropFilterRegion &region : regions) {
+		if (supported_count >= HTML_VIEW_MAX_BACKDROP_FILTER_REGIONS) {
+			break;
+		}
+		if (region.has_unsupported_flags() || region.bounds.size.x <= 0.0f || region.bounds.size.y <= 0.0f || !region.has_filter_operations()) {
+			continue;
+		}
+
+		const Rect2 local_rect(
+				Point2(region.bounds.position.x * scale_x, region.bounds.position.y * scale_y),
+				Size2(region.bounds.size.x * scale_x, region.bounds.size.y * scale_y));
+		rects.set(supported_count, Vector4(local_rect.position.x, local_rect.position.y, local_rect.size.x, local_rect.size.y));
+		radii.set(supported_count, Vector4(
+										 region.border_radius_top_left * radius_scale,
+										 region.border_radius_top_right * radius_scale,
+										 region.border_radius_bottom_right * radius_scale,
+										 region.border_radius_bottom_left * radius_scale));
+		const int op_start = supported_op_count;
+		float local_blur_radius = region.blur_radius_css_px * radius_scale;
+		for (const HTMLBackdropFilterOperation &operation : region.filter_operations) {
+			if (supported_op_count >= HTML_VIEW_MAX_BACKDROP_FILTER_OPERATIONS) {
+				break;
+			}
+			float amount = operation.amount;
+			if (operation.type == HTML_BACKDROP_FILTER_OPERATION_BLUR) {
+				amount = MAX(0.0f, amount * radius_scale);
+				local_blur_radius = MAX(local_blur_radius, amount);
+			}
+			filter_ops.set(supported_op_count, Vector4(operation.type, amount, 0.0f, 0.0f));
+			supported_op_count++;
+		}
+		const int op_count = supported_op_count - op_start;
+		if (op_count == 0 && local_blur_radius <= 0.0f) {
+			continue;
+		}
+		params.set(supported_count, Vector4(local_blur_radius, region.opacity, op_start, op_count));
+		max_blur_radius = MAX(max_blur_radius, local_blur_radius);
+		supported_count++;
+	}
+
+	if (supported_count == 0) {
+		backdrop_filter_rect->hide();
+		RS::get_singleton()->canvas_item_set_copy_to_backbuffer(backdrop_filter_rect->get_canvas_item(), false, Rect2());
+		return;
+	}
+
+	backdrop_filter_rect->show();
+	backdrop_filter_rect->set_position(Point2());
+	backdrop_filter_rect->set_size(control_size);
+	backdrop_filter_material->set_shader_parameter(SNAME("view_size"), control_size);
+	backdrop_filter_material->set_shader_parameter(SNAME("region_count"), supported_count);
+	backdrop_filter_material->set_shader_parameter(SNAME("region_rects"), rects);
+	backdrop_filter_material->set_shader_parameter(SNAME("region_radii"), radii);
+	backdrop_filter_material->set_shader_parameter(SNAME("region_params"), params);
+	backdrop_filter_material->set_shader_parameter(SNAME("filter_ops"), filter_ops);
+
+	const Rect2 copy_rect = Rect2(Point2(), control_size).grow(max_blur_radius * 2.0f);
+	RS::get_singleton()->canvas_item_set_copy_to_backbuffer(backdrop_filter_rect->get_canvas_item(), true, copy_rect);
+	backdrop_filter_rect->queue_redraw();
 }
 
 Vector2 HTMLView::_get_screen_pixel_scale() const {
@@ -656,6 +974,27 @@ bool HTMLView::is_using_document_minimum_size() const {
 	return use_document_minimum_size;
 }
 
+void HTMLView::set_backdrop_filter_enabled(bool p_backdrop_filter_enabled) {
+	if (backdrop_filter_enabled == p_backdrop_filter_enabled) {
+		return;
+	}
+	backdrop_filter_enabled = p_backdrop_filter_enabled;
+	_update_backdrop_filter_canvas();
+	queue_redraw();
+}
+
+bool HTMLView::is_backdrop_filter_enabled() const {
+	return backdrop_filter_enabled;
+}
+
+Array HTMLView::get_backdrop_filter_regions() const {
+	Array regions;
+	for (const HTMLBackdropFilterRegion &region : surface->get_backdrop_filter_regions()) {
+		regions.push_back(html_backdrop_filter_region_to_dictionary(region));
+	}
+	return regions;
+}
+
 Ref<Texture2D> HTMLView::get_texture() const {
 	return surface->get_texture();
 }
@@ -848,6 +1187,7 @@ HTMLView::HTMLView() {
 	surface->set_placeholder_background(Color(0.08, 0.09, 0.1, 1.0));
 	surface->set_backend_preference(html_view_to_surface_backend_preference(backend_preference));
 	surface->render_now("HTMLView");
+	_ensure_backdrop_filter_canvas();
 	set_focus_mode(FOCUS_CLICK);
 	set_texture_filter(CanvasItem::TEXTURE_FILTER_NEAREST);
 	set_notify_transform(true);

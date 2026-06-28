@@ -136,6 +136,41 @@ static bool is_godot_local_path(const String &p_path) {
 	return p_path.begins_with("res://") || p_path.begins_with("user://");
 }
 
+static String file_url_to_godot_path(const String &p_url) {
+	if (!p_url.begins_with("file://")) {
+		return p_url;
+	}
+
+	String path = p_url.trim_prefix("file://");
+	if (path.begins_with("/") && path.length() >= 3 && path[2] == ':') {
+		path = path.substr(1);
+	}
+	path = path.uri_decode().replace("\\", "/").simplify_path();
+
+	ProjectSettings *project_settings = ProjectSettings::get_singleton();
+	if (project_settings == nullptr) {
+		return String();
+	}
+
+	const String localized = project_settings->localize_path(path);
+	return is_godot_local_path(localized) ? localized : String();
+}
+
+static String native_path_to_godot_path(const String &p_path) {
+	if (p_path.is_empty() || is_godot_local_path(p_path)) {
+		return p_path;
+	}
+
+	ProjectSettings *project_settings = ProjectSettings::get_singleton();
+	if (project_settings == nullptr) {
+		return p_path;
+	}
+
+	const String normalized = p_path.uri_decode().replace("\\", "/").simplify_path();
+	const String localized = project_settings->localize_path(normalized);
+	return is_godot_local_path(localized) ? localized : p_path;
+}
+
 static String to_external_resource_path(const String &p_path) {
 	if (p_path.is_empty()) {
 		return String();
@@ -150,6 +185,13 @@ static String to_external_resource_path(const String &p_path) {
 	}
 
 	return p_path.simplify_path();
+}
+
+static String ensure_directory_url(const String &p_path) {
+	if (p_path.is_empty() || p_path.ends_with("/") || p_path.ends_with("\\")) {
+		return p_path;
+	}
+	return p_path + "/";
 }
 
 static void blink_standalone_hit_to_element_hit(const blink_standalone_hit_metadata_t &p_hit, HTMLElementHit &r_hit) {
@@ -171,8 +213,61 @@ static void blink_standalone_hit_to_element_hit(const blink_standalone_hit_metad
 	}
 }
 
+static void blink_standalone_backdrop_filter_to_region(const blink_standalone_backdrop_filter_region_t &p_region, HTMLBackdropFilterRegion &r_region) {
+	r_region = HTMLBackdropFilterRegion();
+	r_region.element_id = StringName(blink_standalone_string_to_godot(p_region.element_id));
+	r_region.bounds = Rect2(
+			p_region.bounds.x,
+			p_region.bounds.y,
+			MAX(0.0f, p_region.bounds.width),
+			MAX(0.0f, p_region.bounds.height));
+	r_region.blur_radius_css_px = MAX(0.0f, p_region.blur_radius_css_px);
+	r_region.border_radius_top_left = MAX(0.0f, p_region.border_radius_top_left);
+	r_region.border_radius_top_right = MAX(0.0f, p_region.border_radius_top_right);
+	r_region.border_radius_bottom_right = MAX(0.0f, p_region.border_radius_bottom_right);
+	r_region.border_radius_bottom_left = MAX(0.0f, p_region.border_radius_bottom_left);
+	r_region.opacity = CLAMP(p_region.opacity, 0.0f, 1.0f);
+	r_region.flags = p_region.flags;
+	const uint32_t operation_count = MIN(p_region.filter_op_count, (uint32_t)BLINK_STANDALONE_MAX_BACKDROP_FILTER_OPS);
+	for (uint32_t i = 0; i < operation_count; ++i) {
+		if (p_region.filter_ops[i].type > HTML_BACKDROP_FILTER_OPERATION_OPACITY) {
+			continue;
+		}
+		HTMLBackdropFilterOperation operation;
+		operation.type = (HTMLBackdropFilterOperationType)p_region.filter_ops[i].type;
+		operation.amount = p_region.filter_ops[i].amount;
+		if (operation.type == HTML_BACKDROP_FILTER_OPERATION_BLUR) {
+			operation.amount = MAX(0.0f, operation.amount);
+		}
+		r_region.filter_operations.push_back(operation);
+	}
+	if (r_region.filter_operations.is_empty() && r_region.blur_radius_css_px > 0.0f) {
+		HTMLBackdropFilterOperation operation;
+		operation.type = HTML_BACKDROP_FILTER_OPERATION_BLUR;
+		operation.amount = r_region.blur_radius_css_px;
+		r_region.filter_operations.push_back(operation);
+	}
+}
+
 static Error blink_standalone_status_to_error(blink_standalone_status_code_t p_status) {
 	return p_status == BLINK_STANDALONE_STATUS_OK ? OK : FAILED;
+}
+
+static blink_standalone_resource_status_t error_to_blink_resource_status(Error p_error) {
+	switch (p_error) {
+		case OK:
+			return BLINK_STANDALONE_RESOURCE_STATUS_OK;
+		case ERR_FILE_NOT_FOUND:
+		case ERR_FILE_BAD_PATH:
+			return BLINK_STANDALONE_RESOURCE_STATUS_NOT_FOUND;
+		case ERR_UNAVAILABLE:
+			return BLINK_STANDALONE_RESOURCE_STATUS_UNSUPPORTED_SCHEME;
+		case ERR_INVALID_PARAMETER:
+		case ERR_UNAUTHORIZED:
+			return BLINK_STANDALONE_RESOURCE_STATUS_BLOCKED;
+		default:
+			return BLINK_STANDALONE_RESOURCE_STATUS_ERROR;
+	}
 }
 
 static void blink_standalone_form_control_to_state(const blink_standalone_form_control_state_t &p_state, HTMLFormControlState &r_state) {
@@ -204,8 +299,36 @@ bool HTMLSurfaceExternalCApiBackend::_ensure_renderer() {
 		return false;
 	}
 
+	if (!_install_resource_provider()) {
+		blink_standalone_renderer_destroy(renderer);
+		renderer = nullptr;
+		return false;
+	}
+
 	document_dirty = true;
 	viewport_dirty = false;
+	return true;
+}
+
+bool HTMLSurfaceExternalCApiBackend::_install_resource_provider() {
+	if (renderer == nullptr) {
+		return false;
+	}
+
+	const uint32_t flags = BLINK_STANDALONE_RESOURCE_PROVIDER_DISABLE_FILE_FALLBACK |
+			BLINK_STANDALONE_RESOURCE_PROVIDER_DISABLE_NETWORK |
+			BLINK_STANDALONE_RESOURCE_PROVIDER_REQUIRE_PROVIDER_FOR_EXTERNAL;
+	const blink_standalone_status_code_t status = blink_standalone_renderer_set_resource_provider(
+			renderer,
+			&HTMLSurfaceExternalCApiBackend::_load_resource_callback,
+			&HTMLSurfaceExternalCApiBackend::_release_resource_callback,
+			this,
+			flags);
+	if (status != BLINK_STANDALONE_STATUS_OK) {
+		ERR_PRINT("Could not install the Godot HTML/CSS resource provider.");
+		return false;
+	}
+
 	return true;
 }
 
@@ -289,16 +412,104 @@ String HTMLSurfaceExternalCApiBackend::_get_document_base_path() const {
 	if (document.is_valid()) {
 		const String html_file = document->get_html_file();
 		if (!html_file.is_empty() && is_godot_local_path(html_file)) {
-			return to_external_resource_path(html_file.get_base_dir());
+			return ensure_directory_url(to_external_resource_path(html_file.get_base_dir()));
 		}
 
 		const String resource_root = document->get_resource_root();
 		if (!resource_root.is_empty()) {
-			return to_external_resource_path(resource_root);
+			return ensure_directory_url(to_external_resource_path(resource_root));
 		}
 	}
 
 	return String();
+}
+
+blink_standalone_resource_status_t HTMLSurfaceExternalCApiBackend::_load_resource(const blink_standalone_resource_request_t *p_request, blink_standalone_resource_response_t *r_response) {
+	if (p_request == nullptr || r_response == nullptr) {
+		return BLINK_STANDALONE_RESOURCE_STATUS_ERROR;
+	}
+
+	String url = blink_standalone_string_to_godot(p_request->url);
+	if (url.is_empty()) {
+		r_response->status = BLINK_STANDALONE_RESOURCE_STATUS_NOT_FOUND;
+		return BLINK_STANDALONE_RESOURCE_STATUS_NOT_FOUND;
+	}
+
+	if (url.begins_with("asset://")) {
+		url = url.trim_prefix("asset://");
+	}
+	if (url.begins_with("file://")) {
+		url = file_url_to_godot_path(url);
+		if (url.is_empty()) {
+			r_response->status = BLINK_STANDALONE_RESOURCE_STATUS_BLOCKED;
+			return BLINK_STANDALONE_RESOURCE_STATUS_BLOCKED;
+		}
+	} else {
+		url = native_path_to_godot_path(url);
+	}
+
+	HTMLAssetResource asset;
+	String error;
+	const Error err = HTMLGodotAssetProvider::load_asset(document, url, asset, &error);
+	const blink_standalone_resource_status_t status = error_to_blink_resource_status(err);
+	if (err != OK) {
+		if (!error.is_empty()) {
+			print_verbose(vformat("HTML/CSS resource provider blocked '%s': %s", url, error));
+		}
+		r_response->status = status;
+		return status;
+	}
+
+	if (asset.bytes.is_empty()) {
+		r_response->status = BLINK_STANDALONE_RESOURCE_STATUS_NOT_FOUND;
+		return BLINK_STANDALONE_RESOURCE_STATUS_NOT_FOUND;
+	}
+
+	std::unique_ptr<ResourceProviderPayload> payload = std::make_unique<ResourceProviderPayload>();
+	payload->mime_type = asset.mime_type.utf8();
+	payload->cache_key = asset.path.utf8();
+	payload->bytes = asset.bytes;
+
+	r_response->status = BLINK_STANDALONE_RESOURCE_STATUS_OK;
+	r_response->mime_type = payload->mime_type.ptr();
+	r_response->bytes = payload->bytes.ptr();
+	r_response->byte_count = payload->bytes.size();
+	r_response->resolved_url_or_cache_key = payload->cache_key.ptr();
+
+	resource_provider_payloads.push_back(std::move(payload));
+	return BLINK_STANDALONE_RESOURCE_STATUS_OK;
+}
+
+void HTMLSurfaceExternalCApiBackend::_release_resource(blink_standalone_resource_response_t *p_response) {
+	if (p_response == nullptr || p_response->bytes == nullptr) {
+		return;
+	}
+
+	for (std::vector<std::unique_ptr<ResourceProviderPayload>>::iterator it = resource_provider_payloads.begin(); it != resource_provider_payloads.end(); ++it) {
+		const ResourceProviderPayload *payload = it->get();
+		if (payload != nullptr && payload->bytes.ptr() == p_response->bytes) {
+			resource_provider_payloads.erase(it);
+			return;
+		}
+	}
+}
+
+blink_standalone_resource_status_t HTMLSurfaceExternalCApiBackend::_load_resource_callback(void *p_user_data, const blink_standalone_resource_request_t *p_request, blink_standalone_resource_response_t *r_response) {
+	HTMLSurfaceExternalCApiBackend *backend = static_cast<HTMLSurfaceExternalCApiBackend *>(p_user_data);
+	if (backend == nullptr) {
+		return BLINK_STANDALONE_RESOURCE_STATUS_ERROR;
+	}
+
+	return backend->_load_resource(p_request, r_response);
+}
+
+void HTMLSurfaceExternalCApiBackend::_release_resource_callback(void *p_user_data, blink_standalone_resource_response_t *p_response) {
+	HTMLSurfaceExternalCApiBackend *backend = static_cast<HTMLSurfaceExternalCApiBackend *>(p_user_data);
+	if (backend == nullptr) {
+		return;
+	}
+
+	backend->_release_resource(p_response);
 }
 
 bool HTMLSurfaceExternalCApiBackend::_sync_document() {
@@ -444,6 +655,18 @@ void HTMLSurfaceExternalCApiBackend::_read_frame_metadata() {
 		HTMLElementHit element_hit;
 		blink_standalone_hit_to_element_hit(hit, element_hit);
 		frame_metadata.hits.push_back(element_hit);
+	}
+
+	const size_t backdrop_count = blink_standalone_renderer_backdrop_filter_region_count(renderer);
+	for (size_t i = 0; i < backdrop_count; i++) {
+		blink_standalone_backdrop_filter_region_t backdrop = {};
+		if (blink_standalone_renderer_get_backdrop_filter_region(renderer, i, &backdrop) != BLINK_STANDALONE_STATUS_OK) {
+			continue;
+		}
+
+		HTMLBackdropFilterRegion region;
+		blink_standalone_backdrop_filter_to_region(backdrop, region);
+		frame_metadata.backdrop_filter_regions.push_back(region);
 	}
 }
 

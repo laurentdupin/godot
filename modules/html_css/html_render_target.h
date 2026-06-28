@@ -34,6 +34,7 @@
 #include "html_render_surface.h"
 #include "html_view.h"
 
+#include "core/variant/array.h"
 #include "scene/main/node.h"
 
 class HTMLRenderTarget : public Node {
@@ -60,6 +61,7 @@ public:
 
 	Ref<Texture2D> get_texture() const;
 	Ref<Image> get_image() const;
+	Array get_backdrop_filter_regions() const;
 	void render_now();
 	Error set_element_text(const StringName &p_id, const String &p_text);
 	Error set_element_inner_html(const StringName &p_id, const String &p_html_fragment);

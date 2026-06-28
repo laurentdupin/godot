@@ -34,15 +34,26 @@
 
 #include "html_css_renderer/renderer_c_api.h"
 
+#include <memory>
+#include <vector>
+
 class HTMLSurfaceExternalCApiBackend : public HTMLSurfaceCPUBackend {
+	struct ResourceProviderPayload {
+		CharString mime_type;
+		CharString cache_key;
+		Vector<uint8_t> bytes;
+	};
+
 	blink_standalone_renderer_t *renderer = nullptr;
 	Ref<HTMLDocument> document;
 	HTMLFrameMetadata frame_metadata;
+	std::vector<std::unique_ptr<ResourceProviderPayload>> resource_provider_payloads;
 	bool document_dirty = true;
 	bool viewport_dirty = true;
 	float device_scale_factor = 1.0f;
 
 	bool _ensure_renderer();
+	bool _install_resource_provider();
 	bool _sync_document();
 	bool _sync_viewport();
 	bool _prepare_for_input();
@@ -52,8 +63,13 @@ class HTMLSurfaceExternalCApiBackend : public HTMLSurfaceCPUBackend {
 	bool _load_document_css(String &r_css) const;
 	String _get_document_resource_root() const;
 	String _get_document_base_path() const;
+	blink_standalone_resource_status_t _load_resource(const blink_standalone_resource_request_t *p_request, blink_standalone_resource_response_t *r_response);
+	void _release_resource(blink_standalone_resource_response_t *p_response);
 	Error _status_to_error(blink_standalone_status_code_t p_status, const char *p_operation) const;
 	void _clear_output();
+
+	static blink_standalone_resource_status_t _load_resource_callback(void *p_user_data, const blink_standalone_resource_request_t *p_request, blink_standalone_resource_response_t *r_response);
+	static void _release_resource_callback(void *p_user_data, blink_standalone_resource_response_t *p_response);
 
 public:
 	virtual void mark_document_dirty() override;

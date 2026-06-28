@@ -77,6 +77,7 @@ public:
 	void render_now(const String &p_marker);
 	Error submit_cpu_frame(const HTMLCPUFrame &p_frame, const HTMLFrameMetadata &p_metadata = HTMLFrameMetadata());
 	const HTMLFrameMetadata &get_frame_metadata() const;
+	const Vector<HTMLBackdropFilterRegion> &get_backdrop_filter_regions() const;
 	const HTMLElementHit *find_hit_at(const Point2i &p_position) const;
 	bool hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const;
 	Error mouse_move(const Point2 &p_position, int p_modifiers);

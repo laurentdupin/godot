@@ -50,6 +50,29 @@ static Dictionary html_render_target_form_control_state_to_dictionary(const HTML
 	return state;
 }
 
+static Dictionary html_render_target_backdrop_filter_region_to_dictionary(const HTMLBackdropFilterRegion &p_region) {
+	Dictionary region;
+	region[SNAME("element_id")] = p_region.element_id;
+	region[SNAME("bounds")] = p_region.bounds;
+	region[SNAME("blur_radius_css_px")] = p_region.blur_radius_css_px;
+	region[SNAME("border_radius_top_left")] = p_region.border_radius_top_left;
+	region[SNAME("border_radius_top_right")] = p_region.border_radius_top_right;
+	region[SNAME("border_radius_bottom_right")] = p_region.border_radius_bottom_right;
+	region[SNAME("border_radius_bottom_left")] = p_region.border_radius_bottom_left;
+	region[SNAME("opacity")] = p_region.opacity;
+	region[SNAME("flags")] = (int64_t)p_region.flags;
+	region[SNAME("supported")] = !p_region.has_unsupported_flags();
+	Array operations;
+	for (const HTMLBackdropFilterOperation &operation : p_region.filter_operations) {
+		Dictionary operation_data;
+		operation_data[SNAME("type")] = operation.type;
+		operation_data[SNAME("amount")] = operation.amount;
+		operations.push_back(operation_data);
+	}
+	region[SNAME("filter_operations")] = operations;
+	return region;
+}
+
 void HTMLRenderTarget::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_document", "document"), &HTMLRenderTarget::set_document);
 	ClassDB::bind_method(D_METHOD("get_document"), &HTMLRenderTarget::get_document);
@@ -59,6 +82,7 @@ void HTMLRenderTarget::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_backend_preference"), &HTMLRenderTarget::get_backend_preference);
 	ClassDB::bind_method(D_METHOD("get_texture"), &HTMLRenderTarget::get_texture);
 	ClassDB::bind_method(D_METHOD("get_image"), &HTMLRenderTarget::get_image);
+	ClassDB::bind_method(D_METHOD("get_backdrop_filter_regions"), &HTMLRenderTarget::get_backdrop_filter_regions);
 	ClassDB::bind_method(D_METHOD("render_now"), &HTMLRenderTarget::render_now);
 	ClassDB::bind_method(D_METHOD("set_element_text", "id", "text"), &HTMLRenderTarget::set_element_text);
 	ClassDB::bind_method(D_METHOD("set_element_inner_html", "id", "html_fragment"), &HTMLRenderTarget::set_element_inner_html);
@@ -124,6 +148,14 @@ Ref<Texture2D> HTMLRenderTarget::get_texture() const {
 Ref<Image> HTMLRenderTarget::get_image() const {
 	Ref<HTMLTexture2D> texture = surface->get_html_texture();
 	return texture.is_valid() ? texture->get_latest_image() : Ref<Image>();
+}
+
+Array HTMLRenderTarget::get_backdrop_filter_regions() const {
+	Array regions;
+	for (const HTMLBackdropFilterRegion &region : surface->get_backdrop_filter_regions()) {
+		regions.push_back(html_render_target_backdrop_filter_region_to_dictionary(region));
+	}
+	return regions;
 }
 
 void HTMLRenderTarget::render_now() {

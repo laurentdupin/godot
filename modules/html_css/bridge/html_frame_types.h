@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "core/math/rect2.h"
 #include "core/math/rect2i.h"
 #include "core/string/string_name.h"
 #include "core/string/ustring.h"
@@ -114,8 +115,60 @@ struct HTMLFormControlState {
 	uint32_t selection_end = 0;
 };
 
+enum HTMLBackdropFilterFlag {
+	HTML_BACKDROP_FILTER_ROUNDED_RECT = 1 << 0,
+	HTML_BACKDROP_FILTER_UNSUPPORTED_COMPLEX_CLIP = 1 << 1,
+	HTML_BACKDROP_FILTER_UNSUPPORTED_TRANSFORM = 1 << 2,
+	HTML_BACKDROP_FILTER_UNSUPPORTED_FILTER_OP = 1 << 3,
+	HTML_BACKDROP_FILTER_UNSUPPORTED_MASK_OR_BLEND = 1 << 4,
+};
+
+enum HTMLBackdropFilterOperationType {
+	HTML_BACKDROP_FILTER_OPERATION_BLUR = 0,
+	HTML_BACKDROP_FILTER_OPERATION_BRIGHTNESS = 1,
+	HTML_BACKDROP_FILTER_OPERATION_CONTRAST = 2,
+	HTML_BACKDROP_FILTER_OPERATION_SATURATE = 3,
+	HTML_BACKDROP_FILTER_OPERATION_GRAYSCALE = 4,
+	HTML_BACKDROP_FILTER_OPERATION_SEPIA = 5,
+	HTML_BACKDROP_FILTER_OPERATION_INVERT = 6,
+	HTML_BACKDROP_FILTER_OPERATION_HUE_ROTATE = 7,
+	HTML_BACKDROP_FILTER_OPERATION_OPACITY = 8,
+};
+
+struct HTMLBackdropFilterOperation {
+	HTMLBackdropFilterOperationType type = HTML_BACKDROP_FILTER_OPERATION_BLUR;
+	float amount = 0.0f;
+};
+
+struct HTMLBackdropFilterRegion {
+	StringName element_id;
+	Rect2 bounds;
+	float blur_radius_css_px = 0.0f;
+	float border_radius_top_left = 0.0f;
+	float border_radius_top_right = 0.0f;
+	float border_radius_bottom_right = 0.0f;
+	float border_radius_bottom_left = 0.0f;
+	float opacity = 1.0f;
+	uint32_t flags = 0;
+	Vector<HTMLBackdropFilterOperation> filter_operations;
+
+	bool has_unsupported_flags() const {
+		static const uint32_t unsupported_flags =
+				HTML_BACKDROP_FILTER_UNSUPPORTED_COMPLEX_CLIP |
+				HTML_BACKDROP_FILTER_UNSUPPORTED_TRANSFORM |
+				HTML_BACKDROP_FILTER_UNSUPPORTED_FILTER_OP |
+				HTML_BACKDROP_FILTER_UNSUPPORTED_MASK_OR_BLEND;
+		return (flags & unsupported_flags) != 0;
+	}
+
+	bool has_filter_operations() const {
+		return !filter_operations.is_empty() || blur_radius_css_px > 0.0f;
+	}
+};
+
 struct HTMLFrameMetadata {
 	Vector<HTMLElementHit> hits;
+	Vector<HTMLBackdropFilterRegion> backdrop_filter_regions;
 
 	const HTMLElementHit *find_hit_at(const Point2i &p_position) const {
 		for (int i = hits.size() - 1; i >= 0; i--) {

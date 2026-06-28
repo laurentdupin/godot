@@ -190,6 +190,10 @@ const HTMLFrameMetadata &HTMLRenderSurface::get_frame_metadata() const {
 	return frame_metadata;
 }
 
+const Vector<HTMLBackdropFilterRegion> &HTMLRenderSurface::get_backdrop_filter_regions() const {
+	return frame_metadata.backdrop_filter_regions;
+}
+
 const HTMLElementHit *HTMLRenderSurface::find_hit_at(const Point2i &p_position) const {
 	return frame_metadata.find_hit_at(p_position);
 }

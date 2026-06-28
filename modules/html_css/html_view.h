@@ -34,7 +34,12 @@
 #include "html_render_surface.h"
 
 #include "core/templates/hash_map.h"
+#include "core/variant/array.h"
 #include "scene/gui/control.h"
+
+class ColorRect;
+class Shader;
+class ShaderMaterial;
 
 class HTMLView : public Control {
 	GDCLASS(HTMLView, Control);
@@ -60,6 +65,7 @@ private:
 	ViewportSizeMode viewport_size_mode = VIEWPORT_SIZE_SCREEN_PIXELS;
 	Size2i fixed_viewport_size;
 	bool use_document_minimum_size = false;
+	bool backdrop_filter_enabled = false;
 	StringName accept_action = "ui_accept";
 	StringName focus_next_action = "ui_focus_next";
 	StringName focus_previous_action = "ui_focus_prev";
@@ -71,9 +77,14 @@ private:
 	HTMLElementHit pointer_press_hit;
 	bool frame_render_pending = false;
 	int frame_render_delay = 0;
+	ColorRect *backdrop_filter_rect = nullptr;
+	Ref<Shader> backdrop_filter_shader;
+	Ref<ShaderMaterial> backdrop_filter_material;
 
 	void _surface_changed();
 	void _ensure_document();
+	void _ensure_backdrop_filter_canvas();
+	void _update_backdrop_filter_canvas();
 	Vector2 _get_screen_pixel_scale() const;
 	Size2i _get_target_viewport_size() const;
 	float _get_target_device_scale_factor() const;
@@ -148,6 +159,10 @@ public:
 
 	void set_use_document_minimum_size(bool p_use_document_minimum_size);
 	bool is_using_document_minimum_size() const;
+
+	void set_backdrop_filter_enabled(bool p_backdrop_filter_enabled);
+	bool is_backdrop_filter_enabled() const;
+	Array get_backdrop_filter_regions() const;
 
 	Ref<Texture2D> get_texture() const;
 	Vector2 local_to_html_position(const Vector2 &p_position) const;

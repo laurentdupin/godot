@@ -38,6 +38,12 @@
 				Returns the output texture.
 			</description>
 		</method>
+		<method name="get_backdrop_filter_regions">
+			<return type="Array" />
+			<description>
+				Returns dictionaries describing CSS backdrop-filter regions reported by the latest frame. [HTMLRenderTarget] does not composite these regions against a screen backbuffer by itself; callers can use the metadata when drawing the returned texture elsewhere. Each dictionary includes [code]filter_operations[/code], an ordered array of operation dictionaries with [code]type[/code] and [code]amount[/code].
+			</description>
+		</method>
 		<method name="get_form_control_state">
 			<return type="Dictionary" />
 			<param index="0" name="id" type="StringName" />

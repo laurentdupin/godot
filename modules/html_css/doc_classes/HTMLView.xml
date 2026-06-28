@@ -12,6 +12,9 @@
 		<member name="backend_preference" type="int" setter="set_backend_preference" getter="get_backend_preference" enum="HTMLView.BackendPreference" default="0">
 			Preferred render backend. The current checkpoint supports [constant BACKEND_AUTO] and [constant BACKEND_CPU].
 		</member>
+		<member name="backdrop_filter_enabled" type="bool" setter="set_backdrop_filter_enabled" getter="is_backdrop_filter_enabled" default="false">
+			If [code]true[/code], supported simple CSS [code]backdrop-filter[/code] regions are composited by Godot using the screen backbuffer behind this control. The initial supported path handles blur and is prepared for ordered color-filter operations reported by the renderer. Unsupported backdrop regions remain available through [method get_backdrop_filter_regions] but are not drawn by this MVP path.
+		</member>
 		<member name="css" type="String" setter="set_css" getter="get_css" default="&quot;&quot;">
 			Convenience access to the assigned document's inline CSS source.
 		</member>
@@ -103,6 +106,12 @@
 			<return type="Texture2D" />
 			<description>
 				Returns the current render texture.
+			</description>
+		</method>
+		<method name="get_backdrop_filter_regions">
+			<return type="Array" />
+			<description>
+				Returns dictionaries describing CSS backdrop-filter regions reported by the latest frame. Each dictionary contains [code]element_id[/code], [code]bounds[/code], [code]blur_radius_css_px[/code], four border radius fields, [code]opacity[/code], [code]flags[/code], [code]supported[/code], and [code]filter_operations[/code]. Bounds and radii are in logical HTML coordinates. Each filter operation dictionary contains [code]type[/code] and [code]amount[/code].
 			</description>
 		</method>
 		<method name="get_form_control_state">
@@ -256,6 +265,48 @@
 		</constant>
 		<constant name="VIEWPORT_SIZE_FIXED" value="2" enum="ViewportSizeMode">
 			The HTML viewport uses [member fixed_viewport_size], or the document default size when unset, and Godot scales the resulting texture into the Control.
+		</constant>
+		<constant name="HTML_BACKDROP_FILTER_ROUNDED_RECT" value="1">
+			Backdrop filter metadata flag indicating a simple rounded-rectangle clip.
+		</constant>
+		<constant name="HTML_BACKDROP_FILTER_UNSUPPORTED_COMPLEX_CLIP" value="2">
+			Backdrop filter metadata flag indicating that the region has a complex clip unsupported by the current Godot compositor path.
+		</constant>
+		<constant name="HTML_BACKDROP_FILTER_UNSUPPORTED_TRANSFORM" value="4">
+			Backdrop filter metadata flag indicating that the region has a transform unsupported by the current Godot compositor path.
+		</constant>
+		<constant name="HTML_BACKDROP_FILTER_UNSUPPORTED_FILTER_OP" value="8">
+			Backdrop filter metadata flag indicating that the CSS backdrop filter contains an operation other than the simple blur supported by the current Godot compositor path.
+		</constant>
+		<constant name="HTML_BACKDROP_FILTER_UNSUPPORTED_MASK_OR_BLEND" value="16">
+			Backdrop filter metadata flag indicating that the region uses a mask or blend mode unsupported by the current Godot compositor path.
+		</constant>
+		<constant name="HTML_BACKDROP_FILTER_OPERATION_BLUR" value="0">
+			Backdrop filter operation type for [code]blur()[/code]. Amount is CSS pixels before local view scaling.
+		</constant>
+		<constant name="HTML_BACKDROP_FILTER_OPERATION_BRIGHTNESS" value="1">
+			Backdrop filter operation type for [code]brightness()[/code]. Amount is a multiplier where [code]1.0[/code] is unchanged.
+		</constant>
+		<constant name="HTML_BACKDROP_FILTER_OPERATION_CONTRAST" value="2">
+			Backdrop filter operation type for [code]contrast()[/code]. Amount is a multiplier where [code]1.0[/code] is unchanged.
+		</constant>
+		<constant name="HTML_BACKDROP_FILTER_OPERATION_SATURATE" value="3">
+			Backdrop filter operation type for [code]saturate()[/code]. Amount is a multiplier where [code]1.0[/code] is unchanged.
+		</constant>
+		<constant name="HTML_BACKDROP_FILTER_OPERATION_GRAYSCALE" value="4">
+			Backdrop filter operation type for [code]grayscale()[/code]. Amount is a fraction where [code]0.0[/code] is unchanged and [code]1.0[/code] is fully applied.
+		</constant>
+		<constant name="HTML_BACKDROP_FILTER_OPERATION_SEPIA" value="5">
+			Backdrop filter operation type for [code]sepia()[/code]. Amount is a fraction where [code]0.0[/code] is unchanged and [code]1.0[/code] is fully applied.
+		</constant>
+		<constant name="HTML_BACKDROP_FILTER_OPERATION_INVERT" value="6">
+			Backdrop filter operation type for [code]invert()[/code]. Amount is a fraction where [code]0.0[/code] is unchanged and [code]1.0[/code] is fully applied.
+		</constant>
+		<constant name="HTML_BACKDROP_FILTER_OPERATION_HUE_ROTATE" value="7">
+			Backdrop filter operation type for [code]hue-rotate()[/code]. Amount is degrees.
+		</constant>
+		<constant name="HTML_BACKDROP_FILTER_OPERATION_OPACITY" value="8">
+			Backdrop filter operation type for [code]opacity()[/code]. Amount is a multiplier where [code]1.0[/code] is unchanged.
 		</constant>
 	</constants>
 </class>
