@@ -9,7 +9,9 @@
 	<tutorials>
 	</tutorials>
 	<members>
-		<member name="backend_preference" type="int" setter="set_backend_preference" getter="get_backend_preference" enum="HTMLView.BackendPreference" default="0" />
+		<member name="backend_preference" type="int" setter="set_backend_preference" getter="get_backend_preference" enum="HTMLView.BackendPreference" default="0">
+			Preferred render backend. [constant HTMLView.BACKEND_AUTO] prefers a GPU target backend on supported D3D12/Vulkan renderers and falls back to the CPU/raw output path with a warning when no GPU target is available.
+		</member>
 		<member name="document" type="HTMLDocument" setter="set_document" getter="get_document" />
 		<member name="input_enabled" type="bool" setter="set_input_enabled" getter="is_input_enabled" default="true" />
 		<member name="physical_size" type="Vector2" setter="set_physical_size" getter="get_physical_size" default="Vector2(1, 1)" />

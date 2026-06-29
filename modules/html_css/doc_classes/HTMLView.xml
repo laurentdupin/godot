@@ -10,7 +10,7 @@
 	</tutorials>
 	<members>
 		<member name="backend_preference" type="int" setter="set_backend_preference" getter="get_backend_preference" enum="HTMLView.BackendPreference" default="0">
-			Preferred render backend. [constant BACKEND_AUTO] keeps the portable output path. Explicit GPU values report unsupported when the required native target handoff is unavailable and do not fall back to CPU output.
+			Preferred render backend. [constant BACKEND_AUTO] prefers a GPU target backend on supported D3D12/Vulkan renderers and falls back to the CPU/raw output path with a warning when no GPU target is available. Explicit GPU values report unsupported when the required native target handoff is unavailable and do not fall back to CPU output.
 		</member>
 		<member name="backdrop_filter_enabled" type="bool" setter="set_backdrop_filter_enabled" getter="is_backdrop_filter_enabled" default="false">
 			If [code]true[/code], supported simple CSS [code]backdrop-filter[/code] regions are composited by Godot using the screen backbuffer behind this control. The initial supported path handles blur and is prepared for ordered color-filter operations reported by the renderer. Unsupported backdrop regions remain available through [method get_backdrop_filter_regions] but are not drawn by this MVP path.
@@ -252,13 +252,13 @@
 	</methods>
 	<constants>
 		<constant name="BACKEND_AUTO" value="0" enum="BackendPreference">
-			Automatically chooses the best available backend.
+			Automatically chooses the best available backend. GPU target rendering is preferred on supported D3D12/Vulkan renderers; CPU/raw output is used as a warned fallback.
 		</constant>
 		<constant name="BACKEND_CPU" value="1" enum="BackendPreference">
 			Uses the portable CPU texture backend.
 		</constant>
 		<constant name="BACKEND_GPU_AUTO" value="2" enum="BackendPreference">
-			Requests an available GPU backend explicitly.
+			Requests an available GPU backend explicitly. This mode does not fall back to CPU output.
 		</constant>
 		<constant name="BACKEND_VULKAN" value="3" enum="BackendPreference">
 			Requests the Vulkan GPU backend explicitly.

@@ -39,13 +39,39 @@
 
 #include "core/math/math_funcs.h"
 #include "core/object/callable_mp.h"
+#include "core/os/os.h"
+
+static bool html_surface_auto_can_use_gpu_backend() {
+#ifdef HTML_CSS_USE_BLINK_C_API
+	const String rendering_driver = OS::get_singleton() != nullptr ? OS::get_singleton()->get_current_rendering_driver_name().to_lower() : String();
+	return rendering_driver == "vulkan" || rendering_driver == "d3d12";
+#else
+	return false;
+#endif
+}
+
+static void html_surface_warn_auto_cpu_fallback(const String &p_reason) {
+	WARN_PRINT_ONCE(vformat("HTML/CSS Auto backend is using the CPU/raw renderer instead of a GPU target: %s", p_reason));
+}
 
 void HTMLRenderSurface::_ensure_backend() {
 	if (backend != nullptr) {
 		return;
 	}
 
-	if (backend_preference == HTML_SURFACE_BACKEND_GPU_AUTO) {
+	if (backend_preference == HTML_SURFACE_BACKEND_AUTO) {
+#ifdef HTML_CSS_USE_BLINK_C_API
+		if (html_surface_auto_can_use_gpu_backend()) {
+			backend = memnew(HTMLSurfaceBlinkGPUBackend(BLINK_STANDALONE_GPU_BACKEND_NONE));
+		} else {
+			html_surface_warn_auto_cpu_fallback(vformat("Godot rendering driver '%s' has no HTML/CSS GPU target backend.", OS::get_singleton() != nullptr ? OS::get_singleton()->get_current_rendering_driver_name() : String("unknown")));
+			backend = memnew(HTMLSurfaceExternalCApiBackend);
+		}
+#else
+		html_surface_warn_auto_cpu_fallback("the external Blink renderer C API backend is not compiled in");
+		backend = memnew(HTMLSurfaceCPUBackend);
+#endif
+	} else if (backend_preference == HTML_SURFACE_BACKEND_GPU_AUTO) {
 #ifdef HTML_CSS_USE_BLINK_C_API
 		backend = memnew(HTMLSurfaceBlinkGPUBackend(BLINK_STANDALONE_GPU_BACKEND_NONE));
 #else
@@ -70,14 +96,7 @@ void HTMLRenderSurface::_ensure_backend() {
 		return;
 	}
 
-#ifdef HTML_CSS_USE_BLINK_C_API
-	if (backend_preference == HTML_SURFACE_BACKEND_AUTO) {
-		backend = memnew(HTMLSurfaceExternalCApiBackend);
-	} else
-#endif
-	{
-		backend = memnew(HTMLSurfaceCPUBackend);
-	}
+	backend = memnew(HTMLSurfaceCPUBackend);
 	_sync_backend_state();
 }
 
@@ -194,6 +213,23 @@ void HTMLRenderSurface::set_changed_callback(const Callable &p_callback) {
 	changed_callback = p_callback;
 }
 
+Error HTMLRenderSurface::update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame) {
+	_ensure_backend();
+	bool needs_output = true;
+	bool needs_begin_frame = false;
+	Error err = backend->update_compositor(p_timeline_time_seconds, &needs_output, &needs_begin_frame);
+	ERR_FAIL_COND_V(err != OK, err);
+
+	backend->get_frame_metadata(frame_metadata);
+	if (r_needs_output != nullptr) {
+		*r_needs_output = needs_output;
+	}
+	if (r_needs_begin_frame != nullptr) {
+		*r_needs_begin_frame = needs_begin_frame;
+	}
+	return OK;
+}
+
 void HTMLRenderSurface::render_now(const String &p_marker) {
 	marker = p_marker;
 	_ensure_backend();
@@ -272,122 +308,62 @@ Error HTMLRenderSurface::text_input(const String &p_text) {
 
 Error HTMLRenderSurface::set_element_text(const StringName &p_id, const String &p_text) {
 	_ensure_backend();
-	Error err = backend->set_element_text(p_id, p_text);
-	if (err != OK) {
-		return err;
-	}
-	render_now(marker);
-	return OK;
+	return backend->set_element_text(p_id, p_text);
 }
 
 Error HTMLRenderSurface::set_element_inner_html(const StringName &p_id, const String &p_html_fragment) {
 	_ensure_backend();
-	Error err = backend->set_element_inner_html(p_id, p_html_fragment);
-	if (err != OK) {
-		return err;
-	}
-	render_now(marker);
-	return OK;
+	return backend->set_element_inner_html(p_id, p_html_fragment);
 }
 
 Error HTMLRenderSurface::set_body_inner_html(const String &p_html_fragment) {
 	_ensure_backend();
-	Error err = backend->set_body_inner_html(p_html_fragment);
-	if (err != OK) {
-		return err;
-	}
-	render_now(marker);
-	return OK;
+	return backend->set_body_inner_html(p_html_fragment);
 }
 
 Error HTMLRenderSurface::set_element_attribute(const StringName &p_id, const StringName &p_name, const String &p_value) {
 	_ensure_backend();
-	Error err = backend->set_element_attribute(p_id, p_name, p_value);
-	if (err != OK) {
-		return err;
-	}
-	render_now(marker);
-	return OK;
+	return backend->set_element_attribute(p_id, p_name, p_value);
 }
 
 Error HTMLRenderSurface::remove_element_attribute(const StringName &p_id, const StringName &p_name) {
 	_ensure_backend();
-	Error err = backend->remove_element_attribute(p_id, p_name);
-	if (err != OK) {
-		return err;
-	}
-	render_now(marker);
-	return OK;
+	return backend->remove_element_attribute(p_id, p_name);
 }
 
 Error HTMLRenderSurface::set_element_style(const StringName &p_id, const String &p_css_text) {
 	_ensure_backend();
-	Error err = backend->set_element_style(p_id, p_css_text);
-	if (err != OK) {
-		return err;
-	}
-	render_now(marker);
-	return OK;
+	return backend->set_element_style(p_id, p_css_text);
 }
 
 Error HTMLRenderSurface::replace_stylesheet_text(const StringName &p_style_id, const String &p_css_text) {
 	_ensure_backend();
-	Error err = backend->replace_stylesheet_text(p_style_id, p_css_text);
-	if (err != OK) {
-		return err;
-	}
-	render_now(marker);
-	return OK;
+	return backend->replace_stylesheet_text(p_style_id, p_css_text);
 }
 
 Error HTMLRenderSurface::set_form_control_value(const StringName &p_id, const String &p_value) {
 	_ensure_backend();
-	Error err = backend->set_form_control_value(p_id, p_value);
-	if (err != OK) {
-		return err;
-	}
-	render_now(marker);
-	return OK;
+	return backend->set_form_control_value(p_id, p_value);
 }
 
 Error HTMLRenderSurface::set_form_control_checked(const StringName &p_id, bool p_checked) {
 	_ensure_backend();
-	Error err = backend->set_form_control_checked(p_id, p_checked);
-	if (err != OK) {
-		return err;
-	}
-	render_now(marker);
-	return OK;
+	return backend->set_form_control_checked(p_id, p_checked);
 }
 
 Error HTMLRenderSurface::focus_element(const StringName &p_id) {
 	_ensure_backend();
-	Error err = backend->focus_element(p_id);
-	if (err != OK) {
-		return err;
-	}
-	render_now(marker);
-	return OK;
+	return backend->focus_element(p_id);
 }
 
 Error HTMLRenderSurface::blur_focused_element() {
 	_ensure_backend();
-	Error err = backend->blur_focused_element();
-	if (err != OK) {
-		return err;
-	}
-	render_now(marker);
-	return OK;
+	return backend->blur_focused_element();
 }
 
 Error HTMLRenderSurface::set_text_selection(const StringName &p_id, int p_start, int p_end) {
 	_ensure_backend();
-	Error err = backend->set_text_selection(p_id, p_start, p_end);
-	if (err != OK) {
-		return err;
-	}
-	render_now(marker);
-	return OK;
+	return backend->set_text_selection(p_id, p_start, p_end);
 }
 
 bool HTMLRenderSurface::get_form_control_state(const StringName &p_id, HTMLFormControlState &r_state) {

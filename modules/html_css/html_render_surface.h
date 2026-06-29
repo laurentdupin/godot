@@ -77,6 +77,7 @@ public:
 	HTMLSurfaceBackendPreference get_backend_preference() const;
 
 	void set_changed_callback(const Callable &p_callback);
+	Error update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame = nullptr);
 	void render_now(const String &p_marker);
 	Error submit_cpu_frame(const HTMLCPUFrame &p_frame, const HTMLFrameMetadata &p_metadata = HTMLFrameMetadata());
 	const HTMLFrameMetadata &get_frame_metadata() const;

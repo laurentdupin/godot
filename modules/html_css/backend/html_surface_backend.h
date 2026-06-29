@@ -70,6 +70,15 @@ public:
 	virtual void set_transparent_background(bool p_transparent_background) = 0;
 	virtual void set_background_color(const Color &p_background_color) = 0;
 	virtual void set_placeholder_background(const Color &p_color) = 0;
+	virtual Error update_compositor(double, bool *r_needs_output, bool *r_needs_begin_frame) {
+		if (r_needs_output != nullptr) {
+			*r_needs_output = true;
+		}
+		if (r_needs_begin_frame != nullptr) {
+			*r_needs_begin_frame = false;
+		}
+		return OK;
+	}
 	virtual void render_placeholder(const String &p_marker) = 0;
 	virtual Error submit_cpu_frame(const HTMLCPUFrame &p_frame) = 0;
 	virtual void get_frame_metadata(HTMLFrameMetadata &r_metadata) const = 0;

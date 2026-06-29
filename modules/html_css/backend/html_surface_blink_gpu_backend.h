@@ -82,12 +82,15 @@ class HTMLSurfaceBlinkGPUBackend : public HTMLSurfaceExternalCApiBackend {
 	void _clear_gpu_output();
 	bool _ensure_target(blink_standalone_gpu_backend_t p_backend);
 	bool _ensure_texture_imported();
+	void _detach_texture_import();
 	void _destroy_target();
 	void _ensure_texture_imported_on_render_thread();
 	void _ensure_target_on_render_thread(int p_backend);
+	void _detach_texture_import_on_render_thread();
 	void _destroy_target_on_render_thread();
 	static void _ensure_texture_imported_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _ensure_target_on_render_thread_callback(uint64_t p_backend_ptr, int p_backend);
+	static void _detach_texture_import_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _destroy_target_on_render_thread_callback(uint64_t p_backend_ptr);
 	bool _configure_vulkan_device();
 	bool _configure_d3d12_device();

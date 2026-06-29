@@ -79,6 +79,7 @@ public:
 	virtual void set_size(const Size2i &p_size) override;
 	virtual void set_device_scale_factor(float p_device_scale_factor) override;
 	virtual void set_document(const Ref<HTMLDocument> &p_document) override;
+	virtual Error update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame) override;
 	virtual void render_placeholder(const String &p_marker) override;
 	virtual void get_frame_metadata(HTMLFrameMetadata &r_metadata) const override;
 	virtual Error mouse_move(const Point2 &p_position, int p_modifiers) override;

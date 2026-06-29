@@ -36,6 +36,7 @@
 #include "core/math/math_funcs.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
+#include "core/os/os.h"
 #include "scene/gui/color_rect.h"
 #include "scene/main/viewport.h"
 #include "scene/resources/material.h"
@@ -388,8 +389,20 @@ void HTMLView::_notification(int p_what) {
 			}
 
 			frame_render_pending = false;
-			set_process_internal(false);
-			surface->render_now("HTMLView");
+			bool needs_output = true;
+			bool needs_begin_frame = false;
+			const double timeline_time_seconds = OS::get_singleton() != nullptr ? (double)OS::get_singleton()->get_ticks_usec() / 1000000.0 : 0.0;
+			if (surface->update_compositor(timeline_time_seconds, &needs_output, &needs_begin_frame) != OK) {
+				needs_output = true;
+				needs_begin_frame = false;
+			}
+
+			if (needs_output) {
+				surface->render_now("HTMLView");
+			}
+
+			frame_render_pending = needs_begin_frame;
+			set_process_internal(frame_render_pending);
 		} break;
 
 		case NOTIFICATION_RESIZED: {
@@ -627,7 +640,7 @@ float HTMLView::_get_target_device_scale_factor() const {
 }
 
 void HTMLView::_update_surface_size(bool p_force_render) {
-	if (!surface->set_viewport(_get_target_viewport_size(), _get_target_device_scale_factor()) && p_force_render) {
+	if (!surface->set_viewport(_get_target_viewport_size(), _get_target_device_scale_factor()) && p_force_render && surface->get_texture().is_null()) {
 		surface->render_now("HTMLView");
 	}
 	queue_redraw();
@@ -1059,51 +1072,99 @@ Vector2 HTMLView::local_to_html_position(const Vector2 &p_position) const {
 }
 
 Error HTMLView::set_element_text(const StringName &p_id, const String &p_text) {
-	return surface->set_element_text(p_id, p_text);
+	Error err = surface->set_element_text(p_id, p_text);
+	if (err == OK) {
+		_queue_frame_render();
+	}
+	return err;
 }
 
 Error HTMLView::set_element_inner_html(const StringName &p_id, const String &p_html_fragment) {
-	return surface->set_element_inner_html(p_id, p_html_fragment);
+	Error err = surface->set_element_inner_html(p_id, p_html_fragment);
+	if (err == OK) {
+		_queue_frame_render();
+	}
+	return err;
 }
 
 Error HTMLView::set_body_inner_html(const String &p_html_fragment) {
-	return surface->set_body_inner_html(p_html_fragment);
+	Error err = surface->set_body_inner_html(p_html_fragment);
+	if (err == OK) {
+		_queue_frame_render();
+	}
+	return err;
 }
 
 Error HTMLView::set_element_attribute(const StringName &p_id, const StringName &p_name, const String &p_value) {
-	return surface->set_element_attribute(p_id, p_name, p_value);
+	Error err = surface->set_element_attribute(p_id, p_name, p_value);
+	if (err == OK) {
+		_queue_frame_render();
+	}
+	return err;
 }
 
 Error HTMLView::remove_element_attribute(const StringName &p_id, const StringName &p_name) {
-	return surface->remove_element_attribute(p_id, p_name);
+	Error err = surface->remove_element_attribute(p_id, p_name);
+	if (err == OK) {
+		_queue_frame_render();
+	}
+	return err;
 }
 
 Error HTMLView::set_element_style(const StringName &p_id, const String &p_css_text) {
-	return surface->set_element_style(p_id, p_css_text);
+	Error err = surface->set_element_style(p_id, p_css_text);
+	if (err == OK) {
+		_queue_frame_render();
+	}
+	return err;
 }
 
 Error HTMLView::replace_stylesheet_text(const StringName &p_style_id, const String &p_css_text) {
-	return surface->replace_stylesheet_text(p_style_id, p_css_text);
+	Error err = surface->replace_stylesheet_text(p_style_id, p_css_text);
+	if (err == OK) {
+		_queue_frame_render();
+	}
+	return err;
 }
 
 Error HTMLView::set_form_control_value(const StringName &p_id, const String &p_value) {
-	return surface->set_form_control_value(p_id, p_value);
+	Error err = surface->set_form_control_value(p_id, p_value);
+	if (err == OK) {
+		_queue_frame_render();
+	}
+	return err;
 }
 
 Error HTMLView::set_form_control_checked(const StringName &p_id, bool p_checked) {
-	return surface->set_form_control_checked(p_id, p_checked);
+	Error err = surface->set_form_control_checked(p_id, p_checked);
+	if (err == OK) {
+		_queue_frame_render();
+	}
+	return err;
 }
 
 Error HTMLView::focus_element(const StringName &p_id) {
-	return surface->focus_element(p_id);
+	Error err = surface->focus_element(p_id);
+	if (err == OK) {
+		_queue_frame_render();
+	}
+	return err;
 }
 
 Error HTMLView::blur_focused_element() {
-	return surface->blur_focused_element();
+	Error err = surface->blur_focused_element();
+	if (err == OK) {
+		_queue_frame_render();
+	}
+	return err;
 }
 
 Error HTMLView::set_text_selection(const StringName &p_id, int p_start, int p_end) {
-	return surface->set_text_selection(p_id, p_start, p_end);
+	Error err = surface->set_text_selection(p_id, p_start, p_end);
+	if (err == OK) {
+		_queue_frame_render();
+	}
+	return err;
 }
 
 Dictionary HTMLView::get_form_control_state(const StringName &p_id) {

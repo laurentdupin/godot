@@ -216,6 +216,21 @@ bool HTMLSurfaceBlinkGPUBackend::_ensure_texture_imported() {
 	return rs_texture_rid.is_valid();
 }
 
+void HTMLSurfaceBlinkGPUBackend::_detach_texture_import() {
+	if (!rs_texture_rid.is_valid()) {
+		return;
+	}
+
+	RenderingServer *rs = RenderingServer::get_singleton();
+	ERR_FAIL_NULL(rs);
+	if (rs->is_on_render_thread()) {
+		_detach_texture_import_on_render_thread();
+	} else {
+		rs->call_on_render_thread(callable_mp_static(&HTMLSurfaceBlinkGPUBackend::_detach_texture_import_on_render_thread_callback).bind((uint64_t)this));
+		rs->sync();
+	}
+}
+
 void HTMLSurfaceBlinkGPUBackend::_destroy_target() {
 	if (!target_ready && !rs_texture_rid.is_valid() && vk_image == nullptr && d3d12_resource == nullptr) {
 		return;
@@ -517,8 +532,8 @@ void HTMLSurfaceBlinkGPUBackend::_ensure_texture_imported_on_render_thread() {
 	}
 }
 
-void HTMLSurfaceBlinkGPUBackend::_destroy_target_on_render_thread() {
-	html_css_gpu_trace(vformat("destroy_target_rt: begin rid_valid=%s vk_image=%s vk_memory=%s d3d12_resource=%s", rs_texture_rid.is_valid() ? "true" : "false", html_css_gpu_ptr_string(vk_image), html_css_gpu_ptr_string(vk_device_memory), html_css_gpu_ptr_string(d3d12_resource)));
+void HTMLSurfaceBlinkGPUBackend::_detach_texture_import_on_render_thread() {
+	html_css_gpu_trace(vformat("detach_texture_import_rt: rid_valid=%s", rs_texture_rid.is_valid() ? "true" : "false"));
 	if (gpu_texture.is_valid()) {
 		gpu_texture->clear_external_texture();
 	}
@@ -526,6 +541,11 @@ void HTMLSurfaceBlinkGPUBackend::_destroy_target_on_render_thread() {
 		RenderingServer::get_singleton()->free_rid(rs_texture_rid);
 	}
 	rs_texture_rid = RID();
+}
+
+void HTMLSurfaceBlinkGPUBackend::_destroy_target_on_render_thread() {
+	html_css_gpu_trace(vformat("destroy_target_rt: begin rid_valid=%s vk_image=%s vk_memory=%s d3d12_resource=%s", rs_texture_rid.is_valid() ? "true" : "false", html_css_gpu_ptr_string(vk_image), html_css_gpu_ptr_string(vk_device_memory), html_css_gpu_ptr_string(d3d12_resource)));
+	_detach_texture_import_on_render_thread();
 
 #if defined(VULKAN_ENABLED)
 	if (vk_device != nullptr) {
@@ -579,6 +599,13 @@ void HTMLSurfaceBlinkGPUBackend::_ensure_texture_imported_on_render_thread_callb
 	HTMLSurfaceBlinkGPUBackend *backend = reinterpret_cast<HTMLSurfaceBlinkGPUBackend *>(p_backend_ptr);
 	if (backend != nullptr) {
 		backend->_ensure_texture_imported_on_render_thread();
+	}
+}
+
+void HTMLSurfaceBlinkGPUBackend::_detach_texture_import_on_render_thread_callback(uint64_t p_backend_ptr) {
+	HTMLSurfaceBlinkGPUBackend *backend = reinterpret_cast<HTMLSurfaceBlinkGPUBackend *>(p_backend_ptr);
+	if (backend != nullptr) {
+		backend->_detach_texture_import_on_render_thread();
 	}
 }
 
@@ -775,6 +802,10 @@ void HTMLSurfaceBlinkGPUBackend::render_placeholder(const String &p_marker) {
 		return;
 	}
 	html_css_gpu_trace("render_placeholder: sync viewport/document OK");
+
+	if (backend == BLINK_STANDALONE_GPU_BACKEND_D3D12) {
+		_detach_texture_import();
+	}
 
 	blink_standalone_external_gpu_target_t target = {};
 	_fill_common_target(target);

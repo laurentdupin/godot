@@ -34,6 +34,18 @@
 
 #include "core/config/project_settings.h"
 #include "core/math/math_funcs.h"
+#include "core/os/os.h"
+#include "core/string/print_string.h"
+
+static bool html_css_update_trace_enabled() {
+	return OS::get_singleton() != nullptr && OS::get_singleton()->get_environment("HTML_CSS_GPU_TRACE") == "1";
+}
+
+static void html_css_update_trace(const String &p_message) {
+	if (html_css_update_trace_enabled()) {
+		print_line(vformat("HTML/CSS update trace: %s", p_message));
+	}
+}
 
 static Rect2i blink_standalone_rect_to_rect2i(const blink_standalone_rect_t &p_rect) {
 	const int x = Math::floor(p_rect.x);
@@ -717,6 +729,45 @@ void HTMLSurfaceExternalCApiBackend::set_document(const Ref<HTMLDocument> &p_doc
 	document = p_document;
 	document_dirty = true;
 	frame_metadata = HTMLFrameMetadata();
+}
+
+Error HTMLSurfaceExternalCApiBackend::update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame) {
+	if (r_needs_output != nullptr) {
+		*r_needs_output = true;
+	}
+	if (r_needs_begin_frame != nullptr) {
+		*r_needs_begin_frame = false;
+	}
+
+	if (document.is_null()) {
+		return ERR_UNAVAILABLE;
+	}
+	if (!_ensure_renderer() || !_sync_viewport() || !_sync_document()) {
+		return ERR_UNAVAILABLE;
+	}
+
+	blink_standalone_update_result_t result = {};
+	const blink_standalone_status_code_t status = blink_standalone_renderer_update(renderer, p_timeline_time_seconds, &result);
+	if (status != BLINK_STANDALONE_STATUS_OK) {
+		return _status_to_error(status, "update");
+	}
+	html_css_update_trace(vformat("update: status=%d frame_advanced=%d skipped=%d needs_output=%d needs_begin_frame=%d damage_rects=%d full_damage=%d",
+			(int)status,
+			result.frame_advanced,
+			result.frame_skipped_due_to_no_demand,
+			result.needs_output,
+			result.needs_begin_frame,
+			result.damage_rect_count,
+			result.full_frame_damage));
+
+	if (r_needs_output != nullptr) {
+		*r_needs_output = result.needs_output != 0;
+	}
+	if (r_needs_begin_frame != nullptr) {
+		*r_needs_begin_frame = result.needs_begin_frame != 0;
+	}
+	_read_frame_metadata();
+	return OK;
 }
 
 void HTMLSurfaceExternalCApiBackend::render_placeholder(const String &p_marker) {
