@@ -378,7 +378,24 @@ void EditorNode::_update_title() {
 		// Display the "modified" mark before anything else so that it can always be seen in the OS task bar.
 		title = vformat("(*) %s", title);
 	}
-	DisplayServer::get_singleton()->window_set_title(title + String(" - ") + GODOT_VERSION_NAME);
+
+	String rendering_driver = OS::get_singleton()->get_current_rendering_driver_name().to_lower();
+	if (rendering_driver == "d3d12") {
+		rendering_driver = "DX12";
+	} else if (rendering_driver == "vulkan") {
+		rendering_driver = "Vulkan";
+	} else if (rendering_driver == "opengl3_angle") {
+		rendering_driver = "OpenGL3/ANGLE";
+	} else if (rendering_driver == "opengl3_es") {
+		rendering_driver = "OpenGL ES 3";
+	} else if (rendering_driver == "opengl3") {
+		rendering_driver = OS::get_singleton()->get_gles_over_gl() ? "OpenGL 3" : "OpenGL ES 3";
+	} else if (rendering_driver == "metal") {
+		rendering_driver = "Metal";
+	} else {
+		rendering_driver = rendering_driver.capitalize();
+	}
+	DisplayServer::get_singleton()->window_set_title(vformat("%s - %s (%s)", title, GODOT_VERSION_NAME, rendering_driver));
 	if (project_title) {
 		project_title->set_text(title);
 	}

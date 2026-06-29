@@ -37,6 +37,7 @@
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 #include "scene/gui/color_rect.h"
+#include "scene/main/viewport.h"
 #include "scene/resources/material.h"
 #include "servers/rendering/rendering_server.h"
 
@@ -355,11 +356,16 @@ void HTMLView::_bind_methods() {
 void HTMLView::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_ENTER_TREE: {
+			_connect_viewport_size_changed();
 			if (frame_render_pending) {
 				set_process_internal(true);
 			}
 			_update_surface_size();
 			_update_backdrop_filter_canvas();
+		} break;
+
+		case NOTIFICATION_EXIT_TREE: {
+			_disconnect_viewport_size_changed();
 		} break;
 
 		case NOTIFICATION_DRAW: {
@@ -403,6 +409,40 @@ void HTMLView::_surface_changed() {
 	update_minimum_size();
 	_update_backdrop_filter_canvas();
 	queue_redraw();
+}
+
+void HTMLView::_connect_viewport_size_changed() {
+	Viewport *viewport = get_viewport();
+	if (viewport_size_changed_viewport == viewport) {
+		return;
+	}
+
+	_disconnect_viewport_size_changed();
+	if (viewport == nullptr) {
+		return;
+	}
+
+	viewport->connect(SNAME("size_changed"), callable_mp(this, &HTMLView::_viewport_size_changed));
+	viewport_size_changed_viewport = viewport;
+}
+
+void HTMLView::_disconnect_viewport_size_changed() {
+	if (viewport_size_changed_viewport == nullptr) {
+		return;
+	}
+
+	Callable callback = callable_mp(this, &HTMLView::_viewport_size_changed);
+	if (viewport_size_changed_viewport->is_connected(SNAME("size_changed"), callback)) {
+		viewport_size_changed_viewport->disconnect(SNAME("size_changed"), callback);
+	}
+	viewport_size_changed_viewport = nullptr;
+}
+
+void HTMLView::_viewport_size_changed() {
+	if (viewport_size_mode == VIEWPORT_SIZE_SCREEN_PIXELS) {
+		_update_surface_size();
+	}
+	_update_backdrop_filter_canvas();
 }
 
 void HTMLView::_ensure_document() {

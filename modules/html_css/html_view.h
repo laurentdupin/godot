@@ -40,6 +40,7 @@
 class ColorRect;
 class Shader;
 class ShaderMaterial;
+class Viewport;
 
 class HTMLView : public Control {
 	GDCLASS(HTMLView, Control);
@@ -81,10 +82,14 @@ private:
 	bool frame_render_pending = false;
 	int frame_render_delay = 0;
 	ColorRect *backdrop_filter_rect = nullptr;
+	Viewport *viewport_size_changed_viewport = nullptr;
 	Ref<Shader> backdrop_filter_shader;
 	Ref<ShaderMaterial> backdrop_filter_material;
 
 	void _surface_changed();
+	void _connect_viewport_size_changed();
+	void _disconnect_viewport_size_changed();
+	void _viewport_size_changed();
 	void _ensure_document();
 	void _ensure_backdrop_filter_canvas();
 	void _update_backdrop_filter_canvas();

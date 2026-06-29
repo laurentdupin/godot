@@ -99,21 +99,42 @@ blink_standalone_gpu_backend_t HTMLSurfaceBlinkGPUBackend::_choose_backend() con
 		return supported ? requested_backend : BLINK_STANDALONE_GPU_BACKEND_NONE;
 	}
 
+	const String rendering_driver = OS::get_singleton() != nullptr ? OS::get_singleton()->get_current_rendering_driver_name().to_lower() : String();
+	if (rendering_driver == "d3d12") {
 #if defined(WINDOWS_ENABLED) && defined(D3D12_ENABLED)
-	if (_backend_is_supported(BLINK_STANDALONE_GPU_BACKEND_D3D12)) {
-		return BLINK_STANDALONE_GPU_BACKEND_D3D12;
-	}
+		if (_backend_is_supported(BLINK_STANDALONE_GPU_BACKEND_D3D12)) {
+			return BLINK_STANDALONE_GPU_BACKEND_D3D12;
+		}
 #endif
+	} else if (rendering_driver == "vulkan") {
 #if defined(VULKAN_ENABLED)
-	if (_backend_is_supported(BLINK_STANDALONE_GPU_BACKEND_VULKAN)) {
-		return BLINK_STANDALONE_GPU_BACKEND_VULKAN;
-	}
+		if (_backend_is_supported(BLINK_STANDALONE_GPU_BACKEND_VULKAN)) {
+			return BLINK_STANDALONE_GPU_BACKEND_VULKAN;
+		}
 #endif
+	}
+	html_css_gpu_trace(vformat("choose_backend: no GPU backend matches Godot rendering driver '%s'", rendering_driver));
 	return BLINK_STANDALONE_GPU_BACKEND_NONE;
+}
+
+bool HTMLSurfaceBlinkGPUBackend::_godot_driver_supports_backend(blink_standalone_gpu_backend_t p_backend) const {
+	const String rendering_driver = OS::get_singleton() != nullptr ? OS::get_singleton()->get_current_rendering_driver_name().to_lower() : String();
+	switch (p_backend) {
+		case BLINK_STANDALONE_GPU_BACKEND_VULKAN:
+			return rendering_driver == "vulkan";
+		case BLINK_STANDALONE_GPU_BACKEND_D3D12:
+			return rendering_driver == "d3d12";
+		default:
+			return false;
+	}
 }
 
 bool HTMLSurfaceBlinkGPUBackend::_backend_is_supported(blink_standalone_gpu_backend_t p_backend) const {
 	if (renderer == nullptr) {
+		return false;
+	}
+	if (!_godot_driver_supports_backend(p_backend)) {
+		html_css_gpu_trace(vformat("backend_is_supported: backend=%d incompatible with Godot rendering driver '%s'", (int)p_backend, OS::get_singleton() != nullptr ? OS::get_singleton()->get_current_rendering_driver_name() : String()));
 		return false;
 	}
 	const uint32_t capabilities = blink_standalone_renderer_gpu_backend_capabilities(renderer, p_backend);
@@ -797,14 +818,14 @@ Ref<Texture2D> HTMLSurfaceBlinkGPUBackend::get_texture() const {
 	if (target_ready && gpu_texture.is_valid()) {
 		return gpu_texture;
 	}
-	return HTMLSurfaceCPUBackend::get_texture();
+	return Ref<Texture2D>();
 }
 
 Ref<HTMLTexture2D> HTMLSurfaceBlinkGPUBackend::get_html_texture() const {
-	if (target_ready) {
+	if (target_ready && gpu_texture.is_valid()) {
 		return gpu_texture;
 	}
-	return HTMLSurfaceCPUBackend::get_html_texture();
+	return Ref<HTMLTexture2D>();
 }
 
 HTMLSurfaceBlinkGPUBackend::HTMLSurfaceBlinkGPUBackend(blink_standalone_gpu_backend_t p_requested_backend) {

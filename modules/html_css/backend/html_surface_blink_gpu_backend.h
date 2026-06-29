@@ -76,6 +76,7 @@ class HTMLSurfaceBlinkGPUBackend : public HTMLSurfaceExternalCApiBackend {
 	String _get_unsupported_message() const;
 	Size2i _get_physical_size() const;
 	blink_standalone_gpu_backend_t _choose_backend() const;
+	bool _godot_driver_supports_backend(blink_standalone_gpu_backend_t p_backend) const;
 	bool _backend_is_supported(blink_standalone_gpu_backend_t p_backend) const;
 	void _report_error_once(const String &p_error);
 	void _clear_gpu_output();
