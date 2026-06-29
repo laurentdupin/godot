@@ -193,7 +193,19 @@ void fragment() {
 )";
 
 static HTMLSurfaceBackendPreference html_view_to_surface_backend_preference(HTMLView::BackendPreference p_backend_preference) {
-	return p_backend_preference == HTMLView::BACKEND_CPU ? HTML_SURFACE_BACKEND_CPU : HTML_SURFACE_BACKEND_AUTO;
+	switch (p_backend_preference) {
+		case HTMLView::BACKEND_CPU:
+			return HTML_SURFACE_BACKEND_CPU;
+		case HTMLView::BACKEND_GPU_AUTO:
+			return HTML_SURFACE_BACKEND_GPU_AUTO;
+		case HTMLView::BACKEND_VULKAN:
+			return HTML_SURFACE_BACKEND_VULKAN;
+		case HTMLView::BACKEND_D3D12:
+			return HTML_SURFACE_BACKEND_D3D12;
+		case HTMLView::BACKEND_AUTO:
+		default:
+			return HTML_SURFACE_BACKEND_AUTO;
+	}
 }
 
 static Dictionary html_form_control_state_to_dictionary(const HTMLFormControlState &p_state) {
@@ -305,7 +317,7 @@ void HTMLView::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::STRING_NAME, "text_submit_action"), "set_text_submit_action", "get_text_submit_action");
 	ADD_PROPERTY(PropertyInfo(Variant::STRING_NAME, "text_backspace_action"), "set_text_backspace_action", "get_text_backspace_action");
 	ADD_PROPERTY(PropertyInfo(Variant::STRING_NAME, "text_delete_action"), "set_text_delete_action", "get_text_delete_action");
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "backend_preference", PROPERTY_HINT_ENUM, "Auto,CPU"), "set_backend_preference", "get_backend_preference");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "backend_preference", PROPERTY_HINT_ENUM, "Auto,CPU,GPU Auto,Vulkan,D3D12"), "set_backend_preference", "get_backend_preference");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "viewport_size_mode", PROPERTY_HINT_ENUM, "Control Size,Screen Pixels,Fixed"), "set_viewport_size_mode", "get_viewport_size_mode");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2I, "fixed_viewport_size", PROPERTY_HINT_RANGE, "0,16384,1,or_greater,suffix:px"), "set_fixed_viewport_size", "get_fixed_viewport_size");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "use_document_minimum_size"), "set_use_document_minimum_size", "is_using_document_minimum_size");
@@ -317,6 +329,9 @@ void HTMLView::_bind_methods() {
 
 	BIND_ENUM_CONSTANT(BACKEND_AUTO);
 	BIND_ENUM_CONSTANT(BACKEND_CPU);
+	BIND_ENUM_CONSTANT(BACKEND_GPU_AUTO);
+	BIND_ENUM_CONSTANT(BACKEND_VULKAN);
+	BIND_ENUM_CONSTANT(BACKEND_D3D12);
 	BIND_ENUM_CONSTANT(VIEWPORT_SIZE_CONTROL);
 	BIND_ENUM_CONSTANT(VIEWPORT_SIZE_SCREEN_PIXELS);
 	BIND_ENUM_CONSTANT(VIEWPORT_SIZE_FIXED);
@@ -925,7 +940,7 @@ StringName HTMLView::get_text_delete_action() const {
 }
 
 void HTMLView::set_backend_preference(BackendPreference p_backend_preference) {
-	ERR_FAIL_INDEX((int)p_backend_preference, 2);
+	ERR_FAIL_INDEX((int)p_backend_preference, 5);
 	backend_preference = p_backend_preference;
 	surface->set_backend_preference(html_view_to_surface_backend_preference(p_backend_preference));
 }

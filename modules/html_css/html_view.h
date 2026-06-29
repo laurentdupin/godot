@@ -48,6 +48,9 @@ public:
 	enum BackendPreference {
 		BACKEND_AUTO,
 		BACKEND_CPU,
+		BACKEND_GPU_AUTO,
+		BACKEND_VULKAN,
+		BACKEND_D3D12,
 	};
 
 	enum ViewportSizeMode {

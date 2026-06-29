@@ -38,6 +38,7 @@
 #include <vector>
 
 class HTMLSurfaceExternalCApiBackend : public HTMLSurfaceCPUBackend {
+protected:
 	struct ResourceProviderPayload {
 		CharString mime_type;
 		CharString cache_key;
@@ -67,6 +68,8 @@ class HTMLSurfaceExternalCApiBackend : public HTMLSurfaceCPUBackend {
 	void _release_resource(blink_standalone_resource_response_t *p_response);
 	Error _status_to_error(blink_standalone_status_code_t p_status, const char *p_operation) const;
 	void _clear_output();
+
+	virtual bool _after_renderer_created() { return true; }
 
 	static blink_standalone_resource_status_t _load_resource_callback(void *p_user_data, const blink_standalone_resource_request_t *p_request, blink_standalone_resource_response_t *r_response);
 	static void _release_resource_callback(void *p_user_data, blink_standalone_resource_response_t *p_response);

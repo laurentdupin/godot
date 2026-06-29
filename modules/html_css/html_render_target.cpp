@@ -34,7 +34,19 @@
 #include "core/object/class_db.h"
 
 static HTMLSurfaceBackendPreference html_render_target_to_surface_backend_preference(HTMLView::BackendPreference p_backend_preference) {
-	return p_backend_preference == HTMLView::BACKEND_CPU ? HTML_SURFACE_BACKEND_CPU : HTML_SURFACE_BACKEND_AUTO;
+	switch (p_backend_preference) {
+		case HTMLView::BACKEND_CPU:
+			return HTML_SURFACE_BACKEND_CPU;
+		case HTMLView::BACKEND_GPU_AUTO:
+			return HTML_SURFACE_BACKEND_GPU_AUTO;
+		case HTMLView::BACKEND_VULKAN:
+			return HTML_SURFACE_BACKEND_VULKAN;
+		case HTMLView::BACKEND_D3D12:
+			return HTML_SURFACE_BACKEND_D3D12;
+		case HTMLView::BACKEND_AUTO:
+		default:
+			return HTML_SURFACE_BACKEND_AUTO;
+	}
 }
 
 static Dictionary html_render_target_form_control_state_to_dictionary(const HTMLFormControlState &p_state) {
@@ -100,7 +112,7 @@ void HTMLRenderTarget::_bind_methods() {
 
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "document", PROPERTY_HINT_RESOURCE_TYPE, HTMLDocument::get_class_static()), "set_document", "get_document");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2I, "size", PROPERTY_HINT_RANGE, "1,16384,1,or_greater,suffix:px"), "set_size", "get_size");
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "backend_preference", PROPERTY_HINT_ENUM, "Auto,CPU"), "set_backend_preference", "get_backend_preference");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "backend_preference", PROPERTY_HINT_ENUM, "Auto,CPU,GPU Auto,Vulkan,D3D12"), "set_backend_preference", "get_backend_preference");
 
 	ADD_SIGNAL(MethodInfo("rendered"));
 	ADD_SIGNAL(MethodInfo("texture_changed"));
@@ -132,7 +144,7 @@ Size2i HTMLRenderTarget::get_size() const {
 }
 
 void HTMLRenderTarget::set_backend_preference(HTMLView::BackendPreference p_backend_preference) {
-	ERR_FAIL_INDEX((int)p_backend_preference, 2);
+	ERR_FAIL_INDEX((int)p_backend_preference, 5);
 	backend_preference = p_backend_preference;
 	surface->set_backend_preference(html_render_target_to_surface_backend_preference(p_backend_preference));
 }

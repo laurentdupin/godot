@@ -304,6 +304,11 @@ bool HTMLSurfaceExternalCApiBackend::_ensure_renderer() {
 		renderer = nullptr;
 		return false;
 	}
+	if (!_after_renderer_created()) {
+		blink_standalone_renderer_destroy(renderer);
+		renderer = nullptr;
+		return false;
+	}
 
 	document_dirty = true;
 	viewport_dirty = false;

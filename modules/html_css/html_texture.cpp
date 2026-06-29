@@ -31,6 +31,19 @@
 #include "html_texture.h"
 
 #include "core/object/class_db.h"
+#include "core/os/os.h"
+#include "core/string/print_string.h"
+#include "servers/rendering/rendering_server.h"
+
+static bool html_css_texture_trace_enabled() {
+	return OS::get_singleton() != nullptr && OS::get_singleton()->get_environment("HTML_CSS_GPU_TRACE") == "1";
+}
+
+static void html_css_texture_trace(const String &p_message) {
+	if (html_css_texture_trace_enabled()) {
+		print_line(vformat("HTML/CSS texture trace: %s", p_message));
+	}
+}
 
 void HTMLTexture2D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("update_placeholder", "size", "background", "marker"), &HTMLTexture2D::update_placeholder, DEFVAL(String()));
@@ -53,6 +66,7 @@ void HTMLTexture2D::update_from_image(const Ref<Image> &p_image) {
 	ERR_FAIL_COND(p_image->is_empty());
 
 	latest_image = p_image;
+	external_texture_rid = RID();
 
 	if (texture.is_null()) {
 		texture.instantiate();
@@ -69,6 +83,25 @@ void HTMLTexture2D::update_from_image(const Ref<Image> &p_image) {
 	emit_changed();
 }
 
+void HTMLTexture2D::set_external_texture(const RID &p_texture_rid, const Size2i &p_size, bool p_alpha) {
+	html_css_texture_trace(vformat("set_external_texture: rid_valid=%s size=%dx%d alpha=%s", p_texture_rid.is_valid() ? "true" : "false", p_size.x, p_size.y, p_alpha ? "true" : "false"));
+	external_texture_rid = p_texture_rid;
+	latest_image.unref();
+	size = Size2i(MAX(1, p_size.x), MAX(1, p_size.y));
+	alpha = p_alpha;
+	emit_changed();
+}
+
+void HTMLTexture2D::clear_external_texture() {
+	if (!external_texture_rid.is_valid()) {
+		return;
+	}
+	html_css_texture_trace("clear_external_texture");
+	external_texture_rid = RID();
+	size = Size2i();
+	emit_changed();
+}
+
 int HTMLTexture2D::get_width() const {
 	return size.x;
 }
@@ -78,6 +111,10 @@ int HTMLTexture2D::get_height() const {
 }
 
 RID HTMLTexture2D::get_rid() const {
+	if (external_texture_rid.is_valid()) {
+		html_css_texture_trace(vformat("get_rid: external rid valid size=%dx%d", size.x, size.y));
+		return external_texture_rid;
+	}
 	if (texture.is_null()) {
 		return RID();
 	}
@@ -89,6 +126,9 @@ bool HTMLTexture2D::has_alpha() const {
 }
 
 Ref<Image> HTMLTexture2D::get_image() const {
+	if (external_texture_rid.is_valid()) {
+		return Ref<Image>();
+	}
 	return latest_image;
 }
 
@@ -97,24 +137,42 @@ Ref<Image> HTMLTexture2D::get_latest_image() const {
 }
 
 void HTMLTexture2D::draw(RID p_canvas_item, const Point2 &p_pos, const Color &p_modulate, bool p_transpose) const {
+	if (external_texture_rid.is_valid()) {
+		html_css_texture_trace(vformat("draw: external rid size=%dx%d", size.x, size.y));
+		RenderingServer::get_singleton()->canvas_item_add_texture_rect(p_canvas_item, Rect2(p_pos, Size2(size)), external_texture_rid, false, p_modulate, p_transpose);
+		return;
+	}
 	if (texture.is_valid()) {
 		texture->draw(p_canvas_item, p_pos, p_modulate, p_transpose);
 	}
 }
 
 void HTMLTexture2D::draw_rect(RID p_canvas_item, const Rect2 &p_rect, bool p_tile, const Color &p_modulate, bool p_transpose) const {
+	if (external_texture_rid.is_valid()) {
+		html_css_texture_trace(vformat("draw_rect: external rid rect=%s", p_rect));
+		RenderingServer::get_singleton()->canvas_item_add_texture_rect(p_canvas_item, p_rect, external_texture_rid, p_tile, p_modulate, p_transpose);
+		return;
+	}
 	if (texture.is_valid()) {
 		texture->draw_rect(p_canvas_item, p_rect, p_tile, p_modulate, p_transpose);
 	}
 }
 
 void HTMLTexture2D::draw_rect_region(RID p_canvas_item, const Rect2 &p_rect, const Rect2 &p_src_rect, const Color &p_modulate, bool p_transpose, bool p_clip_uv) const {
+	if (external_texture_rid.is_valid()) {
+		html_css_texture_trace(vformat("draw_rect_region: external rid rect=%s src=%s", p_rect, p_src_rect));
+		RenderingServer::get_singleton()->canvas_item_add_texture_rect_region(p_canvas_item, p_rect, external_texture_rid, p_src_rect, p_modulate, p_transpose, p_clip_uv);
+		return;
+	}
 	if (texture.is_valid()) {
 		texture->draw_rect_region(p_canvas_item, p_rect, p_src_rect, p_modulate, p_transpose, p_clip_uv);
 	}
 }
 
 bool HTMLTexture2D::is_pixel_opaque(int p_x, int p_y) const {
+	if (external_texture_rid.is_valid()) {
+		return true;
+	}
 	if (texture.is_null()) {
 		return false;
 	}

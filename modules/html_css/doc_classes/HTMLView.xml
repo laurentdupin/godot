@@ -10,7 +10,7 @@
 	</tutorials>
 	<members>
 		<member name="backend_preference" type="int" setter="set_backend_preference" getter="get_backend_preference" enum="HTMLView.BackendPreference" default="0">
-			Preferred render backend. The current checkpoint supports [constant BACKEND_AUTO] and [constant BACKEND_CPU].
+			Preferred render backend. [constant BACKEND_AUTO] keeps the portable output path. Explicit GPU values report unsupported when the required native target handoff is unavailable and do not fall back to CPU output.
 		</member>
 		<member name="backdrop_filter_enabled" type="bool" setter="set_backdrop_filter_enabled" getter="is_backdrop_filter_enabled" default="false">
 			If [code]true[/code], supported simple CSS [code]backdrop-filter[/code] regions are composited by Godot using the screen backbuffer behind this control. The initial supported path handles blur and is prepared for ordered color-filter operations reported by the renderer. Unsupported backdrop regions remain available through [method get_backdrop_filter_regions] but are not drawn by this MVP path.
@@ -256,6 +256,15 @@
 		</constant>
 		<constant name="BACKEND_CPU" value="1" enum="BackendPreference">
 			Uses the portable CPU texture backend.
+		</constant>
+		<constant name="BACKEND_GPU_AUTO" value="2" enum="BackendPreference">
+			Requests an available GPU backend explicitly.
+		</constant>
+		<constant name="BACKEND_VULKAN" value="3" enum="BackendPreference">
+			Requests the Vulkan GPU backend explicitly.
+		</constant>
+		<constant name="BACKEND_D3D12" value="4" enum="BackendPreference">
+			Requests the D3D12 GPU backend explicitly.
 		</constant>
 		<constant name="VIEWPORT_SIZE_CONTROL" value="0" enum="ViewportSizeMode">
 			The HTML viewport follows the Control's local size. The renderer receives the effective screen scale as device scale factor for sharper output.

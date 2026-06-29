@@ -12,6 +12,7 @@ env_html_css.add_source_files(env.modules_sources, "bridge/html_activation_engin
 env_html_css.add_source_files(env.modules_sources, "bridge/html_asset_provider.cpp")
 env_html_css.add_source_files(env.modules_sources, "bridge/html_source_validator.cpp")
 env_html_css.add_source_files(env.modules_sources, "backend/html_surface_cpu_backend.cpp")
+env_html_css.add_source_files(env.modules_sources, "backend/html_surface_unsupported_backend.cpp")
 if env["module_html_css_blink_enabled"]:
     env_html_css.Append(CPPDEFINES=["HTML_CSS_USE_BLINK_C_API"])
     env_html_css.Append(
@@ -20,6 +21,7 @@ if env["module_html_css_blink_enabled"]:
         ]
     )
     env_html_css.add_source_files(env.modules_sources, "backend/html_surface_blink_c_api_backend.cpp")
+    env_html_css.add_source_files(env.modules_sources, "backend/html_surface_blink_gpu_backend.cpp")
     external_renderer_lib = env["module_html_css_blink_lib"]
     if env["module_html_css_blink_lib_path"]:
         external_renderer_lib = os.path.join(env["module_html_css_blink_lib_path"], external_renderer_lib)

@@ -34,7 +34,19 @@
 #include "core/object/class_db.h"
 
 static HTMLSurfaceBackendPreference html_surface_3d_to_surface_backend_preference(HTMLView::BackendPreference p_backend_preference) {
-	return p_backend_preference == HTMLView::BACKEND_CPU ? HTML_SURFACE_BACKEND_CPU : HTML_SURFACE_BACKEND_AUTO;
+	switch (p_backend_preference) {
+		case HTMLView::BACKEND_CPU:
+			return HTML_SURFACE_BACKEND_CPU;
+		case HTMLView::BACKEND_GPU_AUTO:
+			return HTML_SURFACE_BACKEND_GPU_AUTO;
+		case HTMLView::BACKEND_VULKAN:
+			return HTML_SURFACE_BACKEND_VULKAN;
+		case HTMLView::BACKEND_D3D12:
+			return HTML_SURFACE_BACKEND_D3D12;
+		case HTMLView::BACKEND_AUTO:
+		default:
+			return HTML_SURFACE_BACKEND_AUTO;
+	}
 }
 
 void HTMLSurface3D::_bind_methods() {
@@ -54,7 +66,7 @@ void HTMLSurface3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2I, "texture_size", PROPERTY_HINT_RANGE, "1,16384,1,or_greater,suffix:px"), "set_texture_size", "get_texture_size");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2, "physical_size", PROPERTY_HINT_RANGE, "0.001,1024,0.001,or_greater,suffix:m"), "set_physical_size", "get_physical_size");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "input_enabled"), "set_input_enabled", "is_input_enabled");
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "backend_preference", PROPERTY_HINT_ENUM, "Auto,CPU"), "set_backend_preference", "get_backend_preference");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "backend_preference", PROPERTY_HINT_ENUM, "Auto,CPU,GPU Auto,Vulkan,D3D12"), "set_backend_preference", "get_backend_preference");
 
 	ADD_SIGNAL(MethodInfo("texture_changed"));
 }
@@ -101,7 +113,7 @@ bool HTMLSurface3D::is_input_enabled() const {
 }
 
 void HTMLSurface3D::set_backend_preference(HTMLView::BackendPreference p_backend_preference) {
-	ERR_FAIL_INDEX((int)p_backend_preference, 2);
+	ERR_FAIL_INDEX((int)p_backend_preference, 5);
 	backend_preference = p_backend_preference;
 	surface->set_backend_preference(html_surface_3d_to_surface_backend_preference(p_backend_preference));
 }

@@ -1580,9 +1580,74 @@ RID TextureStorage::texture_create_from_native_handle(RSE::TextureType p_type, I
 	uint64_t usage_flags = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT;
 
 	RID rd_texture = RD::get_singleton()->texture_create_from_extension(type, format, RD::TEXTURE_SAMPLES_1, usage_flags, p_native_handle, p_width, p_height, p_depth, p_layers, 1);
+	ERR_FAIL_COND_V(rd_texture.is_null(), RID());
+
+	TextureFromRDFormat imfmt;
+	_texture_format_from_rd(format, imfmt);
+	if (imfmt.image_format == Image::FORMAT_MAX) {
+		RD::get_singleton()->free_rid(rd_texture);
+		ERR_FAIL_COND_V(imfmt.image_format == Image::FORMAT_MAX, RID());
+	}
+
+	Texture tex;
+	switch (type) {
+		case RD::TEXTURE_TYPE_2D: {
+			if (p_layers != 1) {
+				RD::get_singleton()->free_rid(rd_texture);
+				ERR_FAIL_COND_V(p_layers != 1, RID());
+			}
+			tex.type = TextureStorage::TYPE_2D;
+		} break;
+		case RD::TEXTURE_TYPE_2D_ARRAY:
+		case RD::TEXTURE_TYPE_CUBE:
+		case RD::TEXTURE_TYPE_CUBE_ARRAY: {
+			if (p_layers == 1) {
+				RD::get_singleton()->free_rid(rd_texture);
+				ERR_FAIL_COND_V(p_layers == 1, RID());
+			}
+			tex.type = TextureStorage::TYPE_LAYERED;
+			tex.layered_type = p_layered_type;
+		} break;
+		case RD::TEXTURE_TYPE_3D: {
+			if (p_layers != 1) {
+				RD::get_singleton()->free_rid(rd_texture);
+				ERR_FAIL_COND_V(p_layers != 1, RID());
+			}
+			tex.type = TextureStorage::TYPE_3D;
+		} break;
+		default: {
+			RD::get_singleton()->free_rid(rd_texture);
+			ERR_FAIL_V_MSG(RID(), "This native texture handle can't be used as a render texture.");
+		} break;
+	}
+
+	tex.width = p_width;
+	tex.height = p_height;
+	tex.depth = p_depth;
+	tex.layers = p_layers;
+	tex.mipmaps = 1;
+	tex.format = imfmt.image_format;
+	tex.validated_format = tex.format;
+
+	RD::TextureView rd_view;
+	rd_view.format_override = imfmt.rd_format == format ? RD::DATA_FORMAT_MAX : imfmt.rd_format;
+	rd_view.swizzle_r = imfmt.swizzle_r;
+	rd_view.swizzle_g = imfmt.swizzle_g;
+	rd_view.swizzle_b = imfmt.swizzle_b;
+	rd_view.swizzle_a = imfmt.swizzle_a;
+
+	tex.rd_type = type;
+	tex.rd_format = imfmt.rd_format;
+	tex.rd_format_srgb = RD::DATA_FORMAT_MAX;
+	tex.rd_view = rd_view;
+	tex.rd_texture = rd_texture;
+	tex.width_2d = tex.width;
+	tex.height_2d = tex.height;
+	tex.is_render_target = false;
+	tex.is_proxy = false;
 
 	RID texture = texture_allocate();
-	texture_rd_initialize(texture, rd_texture, p_layered_type);
+	texture_owner.initialize_rid(texture, tex);
 
 	return texture;
 }

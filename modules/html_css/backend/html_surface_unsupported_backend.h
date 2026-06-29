@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  html_texture.h                                                        */
+/*  html_surface_unsupported_backend.h                                    */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -30,36 +30,14 @@
 
 #pragma once
 
-#include "scene/resources/image_texture.h"
+#include "html_surface_cpu_backend.h"
 
-class HTMLTexture2D : public Texture2D {
-	GDCLASS(HTMLTexture2D, Texture2D);
-
-	Ref<ImageTexture> texture;
-	Ref<Image> latest_image;
-	RID external_texture_rid;
-	Size2i size;
-	bool alpha = true;
-
-protected:
-	static void _bind_methods();
+class HTMLSurfaceUnsupportedBackend : public HTMLSurfaceCPUBackend {
+	String message;
+	bool error_reported = false;
 
 public:
-	void update_placeholder(const Size2i &p_size, const Color &p_background, const String &p_marker = String());
-	void update_from_image(const Ref<Image> &p_image);
-	void set_external_texture(const RID &p_texture_rid, const Size2i &p_size, bool p_alpha);
-	void clear_external_texture();
+	virtual void render_placeholder(const String &p_marker) override;
 
-	int get_width() const override;
-	int get_height() const override;
-	RID get_rid() const override;
-	bool has_alpha() const override;
-	Ref<Image> get_image() const override;
-	Ref<Image> get_latest_image() const;
-	void draw(RID p_canvas_item, const Point2 &p_pos, const Color &p_modulate = Color(1, 1, 1), bool p_transpose = false) const override;
-	void draw_rect(RID p_canvas_item, const Rect2 &p_rect, bool p_tile = false, const Color &p_modulate = Color(1, 1, 1), bool p_transpose = false) const override;
-	void draw_rect_region(RID p_canvas_item, const Rect2 &p_rect, const Rect2 &p_src_rect, const Color &p_modulate = Color(1, 1, 1), bool p_transpose = false, bool p_clip_uv = true) const override;
-	bool is_pixel_opaque(int p_x, int p_y) const override;
-
-	HTMLTexture2D();
+	HTMLSurfaceUnsupportedBackend(const String &p_message);
 };

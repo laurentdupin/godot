@@ -32,14 +32,41 @@
 
 #ifdef HTML_CSS_USE_BLINK_C_API
 #include "backend/html_surface_blink_c_api_backend.h"
+#include "backend/html_surface_blink_gpu_backend.h"
 #endif
 #include "backend/html_surface_cpu_backend.h"
+#include "backend/html_surface_unsupported_backend.h"
 
 #include "core/math/math_funcs.h"
 #include "core/object/callable_mp.h"
 
 void HTMLRenderSurface::_ensure_backend() {
 	if (backend != nullptr) {
+		return;
+	}
+
+	if (backend_preference == HTML_SURFACE_BACKEND_GPU_AUTO) {
+#ifdef HTML_CSS_USE_BLINK_C_API
+		backend = memnew(HTMLSurfaceBlinkGPUBackend(BLINK_STANDALONE_GPU_BACKEND_NONE));
+#else
+		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS GPU backend requested, but the external renderer C API backend is not compiled in. Explicit GPU requests do not fall back to CPU output."));
+#endif
+	} else if (backend_preference == HTML_SURFACE_BACKEND_VULKAN) {
+#ifdef HTML_CSS_USE_BLINK_C_API
+		backend = memnew(HTMLSurfaceBlinkGPUBackend(BLINK_STANDALONE_GPU_BACKEND_VULKAN));
+#else
+		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS Vulkan GPU backend requested, but the external renderer C API backend is not compiled in. Explicit GPU requests do not fall back to CPU output."));
+#endif
+	} else if (backend_preference == HTML_SURFACE_BACKEND_D3D12) {
+#ifdef HTML_CSS_USE_BLINK_C_API
+		backend = memnew(HTMLSurfaceBlinkGPUBackend(BLINK_STANDALONE_GPU_BACKEND_D3D12));
+#else
+		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS D3D12 GPU backend requested, but the external renderer C API backend is not compiled in. Explicit GPU requests do not fall back to CPU output."));
+#endif
+	}
+
+	if (backend != nullptr) {
+		_sync_backend_state();
 		return;
 	}
 
@@ -147,7 +174,7 @@ void HTMLRenderSurface::set_placeholder_background(const Color &p_color) {
 }
 
 void HTMLRenderSurface::set_backend_preference(HTMLSurfaceBackendPreference p_backend_preference) {
-	ERR_FAIL_INDEX((int)p_backend_preference, 2);
+	ERR_FAIL_INDEX((int)p_backend_preference, 5);
 	if (backend_preference == p_backend_preference) {
 		return;
 	}
