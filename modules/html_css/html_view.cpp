@@ -210,6 +210,13 @@ static HTMLSurfaceBackendPreference html_view_to_surface_backend_preference(HTML
 	}
 }
 
+static bool html_view_backend_preference_can_use_gpu(HTMLView::BackendPreference p_backend_preference) {
+	return p_backend_preference == HTMLView::BACKEND_AUTO ||
+			p_backend_preference == HTMLView::BACKEND_GPU_AUTO ||
+			p_backend_preference == HTMLView::BACKEND_VULKAN ||
+			p_backend_preference == HTMLView::BACKEND_D3D12;
+}
+
 static Dictionary html_form_control_state_to_dictionary(const HTMLFormControlState &p_state) {
 	Dictionary state;
 	state[SNAME("element_id")] = p_state.element_id;
@@ -358,10 +365,11 @@ void HTMLView::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_ENTER_TREE: {
 			_connect_viewport_size_changed();
+			_update_surface_size(false);
+			_apply_surface_backend_preference();
 			if (frame_render_pending) {
 				set_process_internal(true);
 			}
-			_update_surface_size();
 			_update_backdrop_filter_canvas();
 		} break;
 
@@ -407,15 +415,39 @@ void HTMLView::_notification(int p_what) {
 
 		case NOTIFICATION_RESIZED: {
 			_update_surface_size();
+			_apply_surface_backend_preference();
 			_update_backdrop_filter_canvas();
 			update_minimum_size();
 		} break;
 
 		case NOTIFICATION_TRANSFORM_CHANGED: {
 			_update_surface_size(false);
+			_apply_surface_backend_preference();
 			_update_backdrop_filter_canvas();
 		} break;
 	}
+}
+
+bool HTMLView::_has_current_viewport_size() const {
+	if (!is_inside_tree()) {
+		return false;
+	}
+
+	if (viewport_size_mode == VIEWPORT_SIZE_FIXED && fixed_viewport_size.x > 0 && fixed_viewport_size.y > 0) {
+		return true;
+	}
+
+	const Size2 control_size = get_size();
+	return control_size.x > 0.0 && control_size.y > 0.0;
+}
+
+bool HTMLView::_should_defer_backend_activation() const {
+	return html_view_backend_preference_can_use_gpu(backend_preference) && !_has_current_viewport_size();
+}
+
+void HTMLView::_apply_surface_backend_preference() {
+	const HTMLSurfaceBackendPreference surface_backend_preference = _should_defer_backend_activation() ? HTML_SURFACE_BACKEND_CPU : html_view_to_surface_backend_preference(backend_preference);
+	surface->set_backend_preference(surface_backend_preference);
 }
 
 void HTMLView::_surface_changed() {
@@ -995,7 +1027,7 @@ StringName HTMLView::get_text_delete_action() const {
 void HTMLView::set_backend_preference(BackendPreference p_backend_preference) {
 	ERR_FAIL_INDEX((int)p_backend_preference, 5);
 	backend_preference = p_backend_preference;
-	surface->set_backend_preference(html_view_to_surface_backend_preference(p_backend_preference));
+	_apply_surface_backend_preference();
 }
 
 HTMLView::BackendPreference HTMLView::get_backend_preference() const {
@@ -1064,6 +1096,9 @@ Array HTMLView::get_backdrop_filter_regions() const {
 }
 
 Ref<Texture2D> HTMLView::get_texture() const {
+	if (_should_defer_backend_activation()) {
+		return Ref<Texture2D>();
+	}
 	return surface->get_texture();
 }
 
@@ -1301,8 +1336,7 @@ HTMLView::HTMLView() {
 	surface.instantiate();
 	surface->set_changed_callback(callable_mp(this, &HTMLView::_surface_changed));
 	surface->set_placeholder_background(Color(0.08, 0.09, 0.1, 1.0));
-	surface->set_backend_preference(html_view_to_surface_backend_preference(backend_preference));
-	surface->render_now("HTMLView");
+	surface->set_backend_preference(HTML_SURFACE_BACKEND_CPU);
 	_ensure_backdrop_filter_canvas();
 	set_focus_mode(FOCUS_CLICK);
 	set_texture_filter(CanvasItem::TEXTURE_FILTER_NEAREST);

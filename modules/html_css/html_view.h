@@ -86,6 +86,9 @@ private:
 	Ref<Shader> backdrop_filter_shader;
 	Ref<ShaderMaterial> backdrop_filter_material;
 
+	bool _has_current_viewport_size() const;
+	bool _should_defer_backend_activation() const;
+	void _apply_surface_backend_preference();
 	void _surface_changed();
 	void _connect_viewport_size_changed();
 	void _disconnect_viewport_size_changed();
