@@ -1,5 +1,5 @@
 def get_opts(platform):
-    from SCons.Variables import BoolVariable, PathVariable
+    from SCons.Variables import BoolVariable, EnumVariable, PathVariable
 
     default_external_lib = "blink_standalone_renderer_c_api.lib" if platform == "windows" else "libblink_standalone_renderer_c_api.a"
 
@@ -15,10 +15,21 @@ def get_opts(platform):
             "",
             PathVariable.PathAccept,
         ),
+        EnumVariable(
+            "module_html_css_blink_link_mode",
+            "How to consume the external HTML/CSS renderer C API package: dynamic links an import/shared library and requires runtime sidecars; static links the provided static archive(s) but may still require package data/sidecars",
+            "dynamic",
+            allowed_values=("dynamic", "static"),
+        ),
         (
             "module_html_css_blink_lib",
             "External HTML/CSS renderer C API library file name or linker input",
             default_external_lib,
+        ),
+        (
+            "module_html_css_blink_static_libs",
+            "Additional semicolon-separated linker inputs required by a static Blink C API package. Leave empty until the Blink static package manifest provides the transitive list.",
+            "",
         ),
     ]
 

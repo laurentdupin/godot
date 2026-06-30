@@ -8,6 +8,16 @@ Import("env_modules")
 
 env_html_css = env_modules.Clone()
 
+def _html_css_link_input(p_link_input):
+    if not env["module_html_css_blink_lib_path"] or os.path.isabs(p_link_input) or os.path.dirname(p_link_input):
+        return p_link_input
+    return os.path.join(env["module_html_css_blink_lib_path"], p_link_input)
+
+
+def _html_css_split_link_inputs(p_link_inputs):
+    return [link_input.strip() for link_input in p_link_inputs.split(";") if link_input.strip()]
+
+
 env_html_css.add_source_files(env.modules_sources, "bridge/html_activation_engine.cpp")
 env_html_css.add_source_files(env.modules_sources, "bridge/html_asset_provider.cpp")
 env_html_css.add_source_files(env.modules_sources, "bridge/html_source_validator.cpp")
@@ -22,10 +32,13 @@ if env["module_html_css_blink_enabled"]:
     )
     env_html_css.add_source_files(env.modules_sources, "backend/html_surface_blink_c_api_backend.cpp")
     env_html_css.add_source_files(env.modules_sources, "backend/html_surface_blink_gpu_backend.cpp")
-    external_renderer_lib = env["module_html_css_blink_lib"]
-    if env["module_html_css_blink_lib_path"]:
-        external_renderer_lib = os.path.join(env["module_html_css_blink_lib_path"], external_renderer_lib)
-    env.Append(LINKFLAGS=[external_renderer_lib])
+    external_renderer_link_inputs = [_html_css_link_input(env["module_html_css_blink_lib"])]
+    if env["module_html_css_blink_link_mode"] == "static":
+        env_html_css.Append(CPPDEFINES=["HTML_CSS_BLINK_STATIC_LINK"])
+        external_renderer_link_inputs += [
+            _html_css_link_input(link_input) for link_input in _html_css_split_link_inputs(env["module_html_css_blink_static_libs"])
+        ]
+    env.Append(LINKFLAGS=external_renderer_link_inputs)
 env_html_css.add_source_files(env.modules_sources, "html_document.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_render_target.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_render_surface.cpp")
