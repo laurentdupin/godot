@@ -28,8 +28,18 @@ def get_opts(platform):
         ),
         (
             "module_html_css_blink_static_libs",
-            "Additional semicolon-separated linker inputs required by a static Blink C API package. Leave empty until the Blink static package manifest provides the transitive list.",
+            "Fallback semicolon-separated linker inputs required by a static Blink C API package when no static link manifest is used.",
             "",
+        ),
+        (
+            "module_html_css_blink_static_manifest",
+            "Path to a Blink static C API package link manifest. If empty in static mode, SCsub looks for blink_standalone_renderer_c_api_static_link_manifest.json in module_html_css_blink_lib_path.",
+            "",
+        ),
+        BoolVariable(
+            "module_html_css_blink_static_whole_archive",
+            "Force whole-archive linking for Blink static archives listed as manifest candidates. Off by default because Godot may already provide libraries such as libpng, ICU, VMA, or Embree.",
+            False,
         ),
     ]
 

@@ -33,11 +33,14 @@ Static mode is a build-time staging hook for a future Blink static package:
 ```text
 module_html_css_blink_link_mode=static
 module_html_css_blink_lib_path=<Blink static package directory>
-module_html_css_blink_lib=<primary static C API archive>
-module_html_css_blink_static_libs=<extra linker input>;...
+module_html_css_blink_static_manifest=<optional explicit manifest path>
 ```
 
-Godot does not hardcode Blink's static transitive libraries. The Blink static package must provide the archive list, system-library requirements, and any whole-archive requirements. Static mode may still require data or compiler sidecars such as ICU data or shader compiler DLLs depending on how Blink packages those resources.
+If no explicit manifest path is supplied, static mode looks for `blink_standalone_renderer_c_api_static_link_manifest.json` inside `module_html_css_blink_lib_path`. The manifest is expected to provide the C API static archive, transitive static archives, import libraries, system libraries, compile definitions, and any whole-archive requirements.
+
+Whole-archive linking is disabled by default. Enable `module_html_css_blink_static_whole_archive=yes` only for packages that require it and do not duplicate symbols already provided by Godot, such as libpng, ICU, Vulkan Memory Allocator, Embree, or other third-party libraries.
+
+`module_html_css_blink_lib` and `module_html_css_blink_static_libs` remain as a manual fallback for experiments with packages that do not provide a manifest. Godot should not hardcode Blink's static transitive libraries. Static mode may still require data or compiler sidecars such as ICU data or shader compiler DLLs depending on how Blink packages those resources.
 
 Export templates must be built with the same module and link-mode flags as the editor. Dynamic exports must package the C API runtime files with the exported executable. Static exports remove only the C API runtime library if Blink is truly statically linked; they do not automatically embed runtime data or compiler sidecars.
 
