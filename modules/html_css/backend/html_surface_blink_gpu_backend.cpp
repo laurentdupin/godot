@@ -56,6 +56,13 @@ static void html_css_gpu_trace(const String &p_message) {
 	}
 }
 
+static double html_css_gpu_elapsed_ms(uint64_t p_start_usec) {
+	if (OS::get_singleton() == nullptr || p_start_usec == 0) {
+		return 0.0;
+	}
+	return (double)(OS::get_singleton()->get_ticks_usec() - p_start_usec) / 1000.0;
+}
+
 static String html_css_gpu_ptr_string(const void *p_ptr) {
 	return "0x" + String::num_uint64((uint64_t)p_ptr, 16);
 }
@@ -160,6 +167,7 @@ void HTMLSurfaceBlinkGPUBackend::_report_error_once(const String &p_error) {
 }
 
 void HTMLSurfaceBlinkGPUBackend::_clear_gpu_output() {
+	pending_output = false;
 	frame_metadata = HTMLFrameMetadata();
 	_destroy_target();
 	clear_to_background();
@@ -167,9 +175,10 @@ void HTMLSurfaceBlinkGPUBackend::_clear_gpu_output() {
 
 bool HTMLSurfaceBlinkGPUBackend::_ensure_target(blink_standalone_gpu_backend_t p_backend) {
 	const Size2i physical_size = _get_physical_size();
-	html_css_gpu_trace(vformat("ensure_target: backend=%d physical_size=%dx%d target_ready=%s active=%d native_size=%dx%d", (int)p_backend, physical_size.x, physical_size.y, target_ready ? "true" : "false", (int)active_backend, native_target_size.x, native_target_size.y));
+	const uint64_t start_usec = html_css_gpu_trace_enabled() && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
+	html_css_gpu_trace(vformat("ensure_target: backend=%d logical_size=%dx%d dsf=%.3f physical_size=%dx%d target_ready=%s active=%d native_size=%dx%d generation=%d pending_output=%s", (int)p_backend, size.x, size.y, device_scale_factor, physical_size.x, physical_size.y, target_ready ? "true" : "false", (int)active_backend, native_target_size.x, native_target_size.y, (int64_t)generation, pending_output ? "true" : "false"));
 	if (target_ready && active_backend == p_backend && native_target_size == physical_size) {
-		html_css_gpu_trace("ensure_target: reusing existing target");
+		html_css_gpu_trace(vformat("ensure_target: reusing existing target elapsed_ms=%.3f", html_css_gpu_elapsed_ms(start_usec)));
 		return true;
 	}
 
@@ -189,9 +198,10 @@ bool HTMLSurfaceBlinkGPUBackend::_ensure_target(blink_standalone_gpu_backend_t p
 		html_css_gpu_trace("ensure_target: dispatching to render thread");
 		rs->call_on_render_thread(callable_mp_static(&HTMLSurfaceBlinkGPUBackend::_ensure_target_on_render_thread_callback).bind((uint64_t)this, (int)p_backend));
 		rs->sync();
-		html_css_gpu_trace(vformat("ensure_target: render thread sync complete target_ready=%s error='%s'", target_ready ? "true" : "false", last_native_error));
+		html_css_gpu_trace(vformat("ensure_target: render thread sync complete target_ready=%s error='%s' elapsed_ms=%.3f", target_ready ? "true" : "false", last_native_error, html_css_gpu_elapsed_ms(start_usec)));
 	}
 
+	html_css_gpu_trace(vformat("ensure_target: complete target_ready=%s active=%d native_size=%dx%d elapsed_ms=%.3f", target_ready ? "true" : "false", (int)active_backend, native_target_size.x, native_target_size.y, html_css_gpu_elapsed_ms(start_usec)));
 	return target_ready;
 }
 
@@ -742,22 +752,30 @@ bool HTMLSurfaceBlinkGPUBackend::_after_renderer_created() {
 void HTMLSurfaceBlinkGPUBackend::set_size(const Size2i &p_size) {
 	const Size2i old_physical_size = _get_physical_size();
 	HTMLSurfaceExternalCApiBackend::set_size(p_size);
-	if (target_ready && old_physical_size != _get_physical_size()) {
+	const Size2i new_physical_size = _get_physical_size();
+	html_css_gpu_trace(vformat("set_size: logical=%dx%d old_physical=%dx%d new_physical=%dx%d dsf=%.3f target_ready=%s native_size=%dx%d", size.x, size.y, old_physical_size.x, old_physical_size.y, new_physical_size.x, new_physical_size.y, device_scale_factor, target_ready ? "true" : "false", native_target_size.x, native_target_size.y));
+	if (target_ready && old_physical_size != new_physical_size) {
+		html_css_gpu_trace("set_size: physical size changed, destroying target");
 		_destroy_target();
 	}
 }
 
 void HTMLSurfaceBlinkGPUBackend::set_device_scale_factor(float p_device_scale_factor) {
 	const Size2i old_physical_size = _get_physical_size();
+	const float old_device_scale_factor = device_scale_factor;
 	HTMLSurfaceExternalCApiBackend::set_device_scale_factor(p_device_scale_factor);
-	if (target_ready && old_physical_size != _get_physical_size()) {
+	const Size2i new_physical_size = _get_physical_size();
+	html_css_gpu_trace(vformat("set_device_scale_factor: old_dsf=%.3f new_dsf=%.3f logical=%dx%d old_physical=%dx%d new_physical=%dx%d target_ready=%s native_size=%dx%d", old_device_scale_factor, device_scale_factor, size.x, size.y, old_physical_size.x, old_physical_size.y, new_physical_size.x, new_physical_size.y, target_ready ? "true" : "false", native_target_size.x, native_target_size.y));
+	if (target_ready && old_physical_size != new_physical_size) {
+		html_css_gpu_trace("set_device_scale_factor: physical size changed, destroying target");
 		_destroy_target();
 	}
 }
 
 void HTMLSurfaceBlinkGPUBackend::render_placeholder(const String &p_marker) {
 	(void)p_marker;
-	html_css_gpu_trace(vformat("render_placeholder: begin requested=%d size=%dx%d", (int)requested_backend, size.x, size.y));
+	const uint64_t render_start_usec = html_css_gpu_trace_enabled() && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
+	html_css_gpu_trace(vformat("render_placeholder: begin requested=%d logical_size=%dx%d dsf=%.3f physical_size=%dx%d target_ready=%s active=%d native_size=%dx%d generation=%d pending_output=%s", (int)requested_backend, size.x, size.y, device_scale_factor, _get_physical_size().x, _get_physical_size().y, target_ready ? "true" : "false", (int)active_backend, native_target_size.x, native_target_size.y, (int64_t)generation, pending_output ? "true" : "false"));
 	if (document.is_null()) {
 		html_css_gpu_trace("render_placeholder: document null");
 		_clear_gpu_output();
@@ -776,11 +794,13 @@ void HTMLSurfaceBlinkGPUBackend::render_placeholder(const String &p_marker) {
 		_report_error_once(_get_unsupported_message());
 		return;
 	}
+	const uint64_t ensure_target_start_usec = html_css_gpu_trace_enabled() && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 	if (!_ensure_target(backend)) {
 		_clear_gpu_output();
 		_report_error_once(last_native_error.is_empty() ? "Could not create or import the native GPU target." : last_native_error);
 		return;
 	}
+	html_css_gpu_trace(vformat("render_placeholder: ensure_target OK elapsed_ms=%.3f native_size=%dx%d target_ready=%s active=%d", html_css_gpu_elapsed_ms(ensure_target_start_usec), native_target_size.x, native_target_size.y, target_ready ? "true" : "false", (int)active_backend));
 	if (backend == BLINK_STANDALONE_GPU_BACKEND_VULKAN && !_configure_vulkan_device()) {
 		_clear_gpu_output();
 		_report_error_once(last_native_error);
@@ -796,16 +816,13 @@ void HTMLSurfaceBlinkGPUBackend::render_placeholder(const String &p_marker) {
 		_report_error_once(_get_unsupported_message());
 		return;
 	}
+	const uint64_t sync_start_usec = html_css_gpu_trace_enabled() && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 	if (!_sync_viewport() || !_sync_document()) {
 		html_css_gpu_trace("render_placeholder: sync viewport/document failed");
 		_clear_gpu_output();
 		return;
 	}
-	html_css_gpu_trace("render_placeholder: sync viewport/document OK");
-
-	if (backend == BLINK_STANDALONE_GPU_BACKEND_D3D12) {
-		_detach_texture_import();
-	}
+	html_css_gpu_trace(vformat("render_placeholder: sync viewport/document OK elapsed_ms=%.3f", html_css_gpu_elapsed_ms(sync_start_usec)));
 
 	blink_standalone_external_gpu_target_t target = {};
 	_fill_common_target(target);
@@ -820,9 +837,16 @@ void HTMLSurfaceBlinkGPUBackend::render_placeholder(const String &p_marker) {
 	}
 
 	blink_standalone_gpu_render_result_t result = {};
+	html_css_gpu_trace(vformat("render_placeholder: target_metadata backend=%d logical=%dx%d physical=%dx%d dsf=%.3f generation=%d format=%d vk_image=%s vk_memory=%s vk_layout=0x%s vk_usage=0x%s d3d12_resource=%s d3d12_handle=%s d3d12_state=0x%s", (int)target.common.backend, (int)target.common.logical_width, (int)target.common.logical_height, (int)target.common.physical_width, (int)target.common.physical_height, target.common.device_scale_factor, (int64_t)target.common.generation, (int)target.common.pixel_format, html_css_gpu_ptr_string(vk_image), html_css_gpu_ptr_string(vk_device_memory), String::num_uint64(vk_current_layout, 16), String::num_uint64(vk_image_usage_flags, 16), html_css_gpu_ptr_string(d3d12_resource), html_css_gpu_ptr_string(d3d12_shared_handle), String::num_uint64(d3d12_current_state, 16)));
+	const uint64_t gpu_render_start_usec = html_css_gpu_trace_enabled() && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 	html_css_gpu_trace("render_placeholder: render_to_gpu_target enter");
 	const blink_standalone_status_code_t status = blink_standalone_renderer_render_to_gpu_target(renderer, &target, &result);
-	html_css_gpu_trace(vformat("render_placeholder: render_to_gpu_target exit status=%d target_written=%d", (int)status, result.target_written));
+	html_css_gpu_trace(vformat("render_placeholder: render_to_gpu_target exit status=%d target_written=%d elapsed_ms=%.3f", (int)status, result.target_written, html_css_gpu_elapsed_ms(gpu_render_start_usec)));
+	if (status == BLINK_STANDALONE_STATUS_PENDING && result.target_written == 0) {
+		pending_output = true;
+		html_css_gpu_trace("render_placeholder: render_to_gpu_target pending");
+		return;
+	}
 	if (status != BLINK_STANDALONE_STATUS_OK || result.target_written == 0) {
 		const char *last_error = blink_standalone_renderer_last_error(renderer);
 		const String error = last_error != nullptr && last_error[0] != '\0' ? String::utf8(last_error) : vformat("render_to_gpu_target failed with status %d.", (int)status);
@@ -835,14 +859,24 @@ void HTMLSurfaceBlinkGPUBackend::render_placeholder(const String &p_marker) {
 	if (backend == BLINK_STANDALONE_GPU_BACKEND_VULKAN) {
 		vk_current_layout = vk_final_layout;
 	}
+	if (backend == BLINK_STANDALONE_GPU_BACKEND_D3D12) {
+		d3d12_current_state = d3d12_final_state;
+	}
+	const uint64_t import_start_usec = html_css_gpu_trace_enabled() && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 	if ((backend == BLINK_STANDALONE_GPU_BACKEND_VULKAN || backend == BLINK_STANDALONE_GPU_BACKEND_D3D12) && !_ensure_texture_imported()) {
 		_clear_gpu_output();
 		_report_error_once(last_native_error.is_empty() ? "Could not import the rendered GPU texture into Godot." : last_native_error);
 		return;
 	}
+	html_css_gpu_trace(vformat("render_placeholder: texture_import OK elapsed_ms=%.3f", html_css_gpu_elapsed_ms(import_start_usec)));
+	pending_output = false;
 	generation++;
 	_read_frame_metadata();
-	html_css_gpu_trace("render_placeholder: complete");
+	html_css_gpu_trace(vformat("render_placeholder: complete elapsed_ms=%.3f generation=%d", html_css_gpu_elapsed_ms(render_start_usec), (int64_t)generation));
+}
+
+bool HTMLSurfaceBlinkGPUBackend::has_pending_output() const {
+	return pending_output;
 }
 
 Ref<Texture2D> HTMLSurfaceBlinkGPUBackend::get_texture() const {

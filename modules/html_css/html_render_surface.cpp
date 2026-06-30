@@ -167,7 +167,7 @@ float HTMLRenderSurface::get_device_scale_factor() const {
 	return device_scale_factor;
 }
 
-bool HTMLRenderSurface::set_viewport(const Size2i &p_size, float p_device_scale_factor) {
+bool HTMLRenderSurface::set_viewport(const Size2i &p_size, float p_device_scale_factor, bool p_render) {
 	Size2i new_size = Size2i(MAX(1, p_size.x), MAX(1, p_size.y));
 	float new_device_scale_factor = p_device_scale_factor;
 	if (!Math::is_finite(new_device_scale_factor) || new_device_scale_factor <= 0.0f) {
@@ -179,7 +179,12 @@ bool HTMLRenderSurface::set_viewport(const Size2i &p_size, float p_device_scale_
 	}
 	size = new_size;
 	device_scale_factor = new_device_scale_factor;
-	render_now(marker);
+	if (backend != nullptr) {
+		_sync_backend_state();
+	}
+	if (p_render) {
+		render_now(marker);
+	}
 	return true;
 }
 
@@ -237,6 +242,10 @@ void HTMLRenderSurface::render_now(const String &p_marker) {
 	backend->render_placeholder(marker);
 	backend->get_frame_metadata(frame_metadata);
 	_notify_changed();
+}
+
+bool HTMLRenderSurface::has_pending_output() const {
+	return backend != nullptr && backend->has_pending_output();
 }
 
 Error HTMLRenderSurface::submit_cpu_frame(const HTMLCPUFrame &p_frame, const HTMLFrameMetadata &p_metadata) {

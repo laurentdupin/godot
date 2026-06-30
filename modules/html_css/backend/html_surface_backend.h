@@ -80,6 +80,7 @@ public:
 		return OK;
 	}
 	virtual void render_placeholder(const String &p_marker) = 0;
+	virtual bool has_pending_output() const { return false; }
 	virtual Error submit_cpu_frame(const HTMLCPUFrame &p_frame) = 0;
 	virtual void get_frame_metadata(HTMLFrameMetadata &r_metadata) const = 0;
 	virtual Error mouse_move(const Point2 &, int) { return ERR_UNAVAILABLE; }

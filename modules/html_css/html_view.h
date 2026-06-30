@@ -81,6 +81,8 @@ private:
 	HTMLElementHit pointer_press_hit;
 	bool frame_render_pending = false;
 	int frame_render_delay = 0;
+	uint64_t input_trace_sequence = 0;
+	uint64_t pending_input_trace_sequence = 0;
 	ColorRect *backdrop_filter_rect = nullptr;
 	Viewport *viewport_size_changed_viewport = nullptr;
 	Ref<Shader> backdrop_filter_shader;

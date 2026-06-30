@@ -69,7 +69,7 @@ public:
 	Size2i get_size() const;
 	bool set_device_scale_factor(float p_device_scale_factor);
 	float get_device_scale_factor() const;
-	bool set_viewport(const Size2i &p_size, float p_device_scale_factor);
+	bool set_viewport(const Size2i &p_size, float p_device_scale_factor, bool p_render = true);
 
 	void set_placeholder_background(const Color &p_color);
 
@@ -79,6 +79,7 @@ public:
 	void set_changed_callback(const Callable &p_callback);
 	Error update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame = nullptr);
 	void render_now(const String &p_marker);
+	bool has_pending_output() const;
 	Error submit_cpu_frame(const HTMLCPUFrame &p_frame, const HTMLFrameMetadata &p_metadata = HTMLFrameMetadata());
 	const HTMLFrameMetadata &get_frame_metadata() const;
 	const Vector<HTMLBackdropFilterRegion> &get_backdrop_filter_regions() const;

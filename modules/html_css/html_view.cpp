@@ -45,6 +45,23 @@
 static constexpr int HTML_VIEW_MAX_BACKDROP_FILTER_REGIONS = 8;
 static constexpr int HTML_VIEW_MAX_BACKDROP_FILTER_OPERATIONS = 64;
 
+static bool html_view_input_trace_enabled() {
+	return OS::get_singleton() != nullptr && OS::get_singleton()->get_environment("HTML_CSS_GPU_TRACE") == "1";
+}
+
+static void html_view_input_trace(const String &p_message) {
+	if (html_view_input_trace_enabled()) {
+		print_line(vformat("HTMLView input trace: %s", p_message));
+	}
+}
+
+static double html_view_elapsed_ms(uint64_t p_start_usec) {
+	if (OS::get_singleton() == nullptr || p_start_usec == 0) {
+		return 0.0;
+	}
+	return (double)(OS::get_singleton()->get_ticks_usec() - p_start_usec) / 1000.0;
+}
+
 static const char *html_view_backdrop_filter_shader_code = R"(
 shader_type canvas_item;
 render_mode blend_mix, unshaded;
@@ -399,16 +416,46 @@ void HTMLView::_notification(int p_what) {
 			frame_render_pending = false;
 			bool needs_output = true;
 			bool needs_begin_frame = false;
+			const uint64_t trace_sequence = pending_input_trace_sequence;
+			if (trace_sequence != 0) {
+				pending_input_trace_sequence = 0;
+				html_view_input_trace(vformat("seq=%d internal_process begin", (int64_t)trace_sequence));
+			}
 			const double timeline_time_seconds = OS::get_singleton() != nullptr ? (double)OS::get_singleton()->get_ticks_usec() / 1000000.0 : 0.0;
-			if (surface->update_compositor(timeline_time_seconds, &needs_output, &needs_begin_frame) != OK) {
+			const uint64_t update_start_usec = trace_sequence != 0 && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
+			const Error update_err = surface->update_compositor(timeline_time_seconds, &needs_output, &needs_begin_frame);
+			if (trace_sequence != 0) {
+				html_view_input_trace(vformat("seq=%d update_compositor exit err=%d needs_output=%s needs_begin_frame=%s elapsed_ms=%.3f",
+						(int64_t)trace_sequence,
+						(int)update_err,
+						needs_output ? "true" : "false",
+						needs_begin_frame ? "true" : "false",
+						html_view_elapsed_ms(update_start_usec)));
+			}
+			if (update_err != OK) {
 				needs_output = true;
 				needs_begin_frame = false;
 			}
 
 			if (needs_output) {
+				if (trace_sequence != 0) {
+					html_view_input_trace(vformat("seq=%d render_now begin", (int64_t)trace_sequence));
+				}
+				const uint64_t render_start_usec = trace_sequence != 0 && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 				surface->render_now("HTMLView");
+				if (surface->has_pending_output()) {
+					needs_begin_frame = true;
+				}
+				if (trace_sequence != 0) {
+					html_view_input_trace(vformat("seq=%d render_now end pending_output=%s elapsed_ms=%.3f", (int64_t)trace_sequence, surface->has_pending_output() ? "true" : "false", html_view_elapsed_ms(render_start_usec)));
+				}
+			} else if (trace_sequence != 0) {
+				html_view_input_trace(vformat("seq=%d render_now skipped reason=no_output", (int64_t)trace_sequence));
 			}
 
+			if (trace_sequence != 0 && needs_begin_frame) {
+				pending_input_trace_sequence = trace_sequence;
+			}
 			frame_render_pending = needs_begin_frame;
 			set_process_internal(frame_render_pending);
 		} break;
@@ -672,8 +719,9 @@ float HTMLView::_get_target_device_scale_factor() const {
 }
 
 void HTMLView::_update_surface_size(bool p_force_render) {
-	if (!surface->set_viewport(_get_target_viewport_size(), _get_target_device_scale_factor()) && p_force_render && surface->get_texture().is_null()) {
-		surface->render_now("HTMLView");
+	const bool changed = surface->set_viewport(_get_target_viewport_size(), _get_target_device_scale_factor(), false);
+	if (changed || (p_force_render && surface->get_texture().is_null())) {
+		_queue_frame_render();
 	}
 	queue_redraw();
 }
@@ -772,7 +820,16 @@ HTMLSurfaceInputKey HTMLView::_to_html_input_key(Key p_key) const {
 }
 
 bool HTMLView::_hit_test(const Vector2 &p_html_position, HTMLElementHit &r_hit) const {
-	return surface->hit_test(Point2(p_html_position.x, p_html_position.y), r_hit);
+	const bool hit = surface->hit_test(Point2(p_html_position.x, p_html_position.y), r_hit);
+	if (html_view_input_trace_enabled()) {
+		const HTMLFrameMetadata &frame_metadata = surface->get_frame_metadata();
+		html_view_input_trace(vformat("hit_test position=%s result=%s hit_count=%d element_id=%s",
+				p_html_position,
+				hit ? "true" : "false",
+				frame_metadata.hits.size(),
+				hit ? String(r_hit.element_id) : String()));
+	}
+	return hit;
 }
 
 bool HTMLView::_same_activation_target(const HTMLElementHit &p_pressed, const HTMLElementHit &p_released) const {
@@ -1269,6 +1326,9 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 			if (mb->is_pressed()) {
 				if (surface->wheel(html_position, wheel_delta) == OK) {
 					_queue_frame_render();
+					html_view_input_trace(vformat("wheel accepted local=%s html=%s delta=%s button=%d", mb->get_position(), html_position, wheel_delta, (int)button_index));
+				} else {
+					html_view_input_trace(vformat("wheel rejected local=%s html=%s delta=%s button=%d", mb->get_position(), html_position, wheel_delta, (int)button_index));
 				}
 				accept_event();
 			}
@@ -1277,6 +1337,7 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 
 		const HTMLSurfaceMouseButton html_button = _to_html_mouse_button(button_index);
 		if (html_button == HTML_SURFACE_MOUSE_BUTTON_NONE) {
+			html_view_input_trace(vformat("mouse_button ignored local=%s html=%s button=%d pressed=%s reason=unsupported_button", mb->get_position(), html_position, (int)button_index, mb->is_pressed() ? "true" : "false"));
 			return;
 		}
 
@@ -1285,30 +1346,61 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 		}
 
 		if (mb->is_pressed()) {
+			const uint64_t trace_sequence = ++input_trace_sequence;
+			const uint64_t input_start_usec = html_view_input_trace_enabled() && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 			pointer_press_active = false;
 			pointer_press_button = button_index;
-			surface->mouse_down(html_position, html_button, _modifiers_from_event(mb, button_index, true), mb->is_double_click() ? 2 : 1);
-			if (_hit_test(html_position, pointer_press_hit)) {
+			const Error down_err = surface->mouse_down(html_position, html_button, _modifiers_from_event(mb, button_index, true), mb->is_double_click() ? 2 : 1);
+			const bool has_press_hit = _hit_test(html_position, pointer_press_hit);
+			if (has_press_hit) {
 				pointer_press_active = true;
 			}
+			html_view_input_trace(vformat("seq=%d mouse_down accepted local=%s html=%s button=%d err=%d press_hit=%s element_id=%s elapsed_ms=%.3f",
+					(int64_t)trace_sequence,
+					mb->get_position(),
+					html_position,
+					(int)button_index,
+					(int)down_err,
+					has_press_hit ? "true" : "false",
+					has_press_hit ? String(pointer_press_hit.element_id) : String(),
+					html_view_elapsed_ms(input_start_usec)));
 			_queue_frame_render();
+			pending_input_trace_sequence = trace_sequence;
+			html_view_input_trace(vformat("seq=%d queued_frame after=mouse_down frame_render_pending=%s", (int64_t)trace_sequence, frame_render_pending ? "true" : "false"));
 			accept_event();
 			return;
 		}
 
-		surface->mouse_up(html_position, html_button, _modifiers_from_event(mb, button_index, false), mb->is_double_click() ? 2 : 1);
+		const uint64_t trace_sequence = ++input_trace_sequence;
+		const uint64_t input_start_usec = html_view_input_trace_enabled() && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
+		const Error up_err = surface->mouse_up(html_position, html_button, _modifiers_from_event(mb, button_index, false), mb->is_double_click() ? 2 : 1);
 		HTMLElementHit release_hit;
 		const bool has_release_hit = _hit_test(html_position, release_hit);
+		bool activation_emitted = false;
 		if (button_index == MouseButton::LEFT && pointer_press_active && pointer_press_button == button_index && has_release_hit && _same_activation_target(pointer_press_hit, release_hit)) {
 			_emit_activation(release_hit, html_position, button_index);
+			activation_emitted = true;
 		}
+		html_view_input_trace(vformat("seq=%d mouse_up accepted local=%s html=%s button=%d err=%d release_hit=%s element_id=%s activation_emitted=%s elapsed_ms=%.3f",
+				(int64_t)trace_sequence,
+				mb->get_position(),
+				html_position,
+				(int)button_index,
+				(int)up_err,
+				has_release_hit ? "true" : "false",
+				has_release_hit ? String(release_hit.element_id) : String(),
+				activation_emitted ? "true" : "false",
+				html_view_elapsed_ms(input_start_usec)));
 		pointer_press_active = false;
 		_queue_frame_render();
+		pending_input_trace_sequence = trace_sequence;
+		html_view_input_trace(vformat("seq=%d queued_frame after=mouse_up frame_render_pending=%s", (int64_t)trace_sequence, frame_render_pending ? "true" : "false"));
 		accept_event();
 		return;
 	}
 
 	if (_send_action_key_event(p_event)) {
+		html_view_input_trace("key_action accepted");
 		_queue_frame_render();
 		accept_event();
 		return;
