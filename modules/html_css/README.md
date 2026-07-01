@@ -23,7 +23,7 @@ If `module_html_css_blink_lib_path` is not supplied, Godot uses the nested packa
 thirdparty/blink-standalone-ui/build/cmake-msvc-release/package/c_api_runtime
 ```
 
-With `module_html_css_blink_package_profile=auto`, Godot first uses an existing nested dynamic package if one is present. On Windows it checks the MSVC package first, then the generated-V8 ChromiumLLVM package, and falls back to the MSVC auto-build command when no nested dynamic package exists. Set `module_html_css_blink_package_profile=generated_v8_chromium_llvm` to force:
+With `module_html_css_blink_package_profile=auto`, Godot first uses an existing nested dynamic package if one is present. On Windows it checks the MSVC package first, then the generated-V8 ChromiumLLVM package. If no existing package is present, `auto` selects the default expected package path for the platform; it runs package commands only when `module_html_css_blink_auto_build=yes` is set. Set `module_html_css_blink_package_profile=generated_v8_chromium_llvm` to force:
 
 ```text
 thirdparty/blink-standalone-ui/build/cmake-generated-v8-chromium-llvm/package/c_api_runtime

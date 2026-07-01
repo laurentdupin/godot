@@ -43,7 +43,7 @@ def get_opts(platform):
         ),
         EnumVariable(
             "module_html_css_blink_package_profile",
-            "Nested Blink package profile used when module_html_css_blink_lib_path is empty. auto selects MSVC on Windows and generated_v8_chromium_llvm elsewhere.",
+            "Nested Blink package profile used when module_html_css_blink_lib_path is empty. auto prefers an existing nested package, then selects the default expected package path for the platform.",
             "auto",
             allowed_values=("auto", "msvc", "generated_v8_chromium_llvm"),
         ),
