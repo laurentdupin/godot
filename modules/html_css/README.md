@@ -81,7 +81,7 @@ On Windows, dynamic mode links the import library and requires the package runti
 - `d3dcompiler_47.dll`
 - optional Dawn/DirectX compiler sidecars such as `dxcompiler.dll` and `dxil.dll`
 
-When `module_html_css_blink_copy_runtime_sidecars=yes` (the default), dynamic mode copies package-local runtime files from the selected `c_api_runtime` directory into `bin` during the editor/template build, excluding `.lib` link libraries. Export packaging still needs to include the same runtime files beside the exported executable.
+When `module_html_css_blink_copy_runtime_sidecars=yes` (the default), dynamic mode copies package-local runtime files from the selected `c_api_runtime` directory into `bin` during the editor/template build, excluding `.lib` link libraries and public headers. Newer Blink packages provide package-relative file lists and metadata in `blink_standalone_renderer_c_api_link_manifest.json`; Godot uses those package-relative entries when available and falls back to enumerating files in `c_api_runtime` for older packages. Export packaging still needs to include the same runtime files beside the exported executable.
 
 Static mode is a build-time staging hook for a future Blink static package:
 

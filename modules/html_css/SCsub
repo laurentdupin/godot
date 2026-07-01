@@ -139,7 +139,19 @@ def _html_css_load_static_manifest():
     manifest_path = _html_css_static_manifest_path()
     if not manifest_path or not os.path.isfile(manifest_path):
         return None
-    with open(manifest_path, "r", encoding="utf-8") as manifest_file:
+    with open(manifest_path, "r", encoding="utf-8-sig") as manifest_file:
+        return json.load(manifest_file)
+
+
+def _html_css_runtime_manifest_path():
+    return os.path.join(_html_css_blink_package_path(), "blink_standalone_renderer_c_api_link_manifest.json")
+
+
+def _html_css_load_runtime_manifest():
+    manifest_path = _html_css_runtime_manifest_path()
+    if not manifest_path or not os.path.isfile(manifest_path):
+        return None
+    with open(manifest_path, "r", encoding="utf-8-sig") as manifest_file:
         return json.load(manifest_file)
 
 
@@ -238,16 +250,48 @@ def _html_css_copy_runtime_sidecars():
     if not os.path.isdir(package_path):
         return
 
+    runtime_manifest = _html_css_load_runtime_manifest()
+    if runtime_manifest and runtime_manifest.get("package_schema_version"):
+        metadata = []
+        if runtime_manifest.get("blink_commit"):
+            metadata.append("commit=" + runtime_manifest["blink_commit"])
+        build_metadata = runtime_manifest.get("build", {})
+        if build_metadata.get("profile"):
+            metadata.append("profile=" + build_metadata["profile"])
+        if metadata:
+            print("HTML/CSS Blink package metadata: " + " ".join(metadata))
+
     bin_dir = env.Dir("#bin").abspath
+    package_root = os.path.normcase(os.path.abspath(package_path))
     os.makedirs(bin_dir, exist_ok=True)
     copied_count = 0
-    for entry in os.listdir(package_path):
-        source_path = os.path.join(package_path, entry)
+
+    copy_entries = []
+    if runtime_manifest and runtime_manifest.get("package_files"):
+        copy_entries = runtime_manifest.get("package_files", [])
+    elif runtime_manifest and runtime_manifest.get("runtime_sidecars_package_relative"):
+        artifacts = runtime_manifest.get("artifacts", {})
+        if artifacts.get("dll"):
+            copy_entries.append(artifacts["dll"])
+        copy_entries += runtime_manifest.get("runtime_sidecars_package_relative", [])
+        copy_entries.append("blink_standalone_renderer_c_api_link_manifest.json")
+    else:
+        copy_entries = os.listdir(package_path)
+
+    for entry in copy_entries:
+        source_path = os.path.normpath(os.path.join(package_path, entry))
+        if os.path.isabs(entry):
+            continue
+        source_root = os.path.normcase(os.path.abspath(source_path))
+        if os.path.commonpath([package_root, source_root]) != package_root:
+            continue
         if not os.path.isfile(source_path):
             continue
-        if os.path.splitext(entry)[1].lower() == ".lib":
+        extension = os.path.splitext(entry)[1].lower()
+        if extension in (".lib", ".h", ".hpp"):
             continue
-        target_path = os.path.join(bin_dir, entry)
+        target_path = os.path.normpath(os.path.join(bin_dir, entry))
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
         if os.path.exists(target_path):
             source_stat = os.stat(source_path)
             target_stat = os.stat(target_path)
