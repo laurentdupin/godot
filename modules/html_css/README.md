@@ -20,10 +20,24 @@ module_html_css_blink_lib=blink_standalone_renderer_c_api.lib
 If `module_html_css_blink_lib_path` is not supplied, Godot uses the nested package under:
 
 ```text
+thirdparty/blink-standalone-ui/prebuilt/windows-x86_64-msvc/c_api_runtime
+```
+
+The prebuilt package root defaults to:
+
+```text
+thirdparty/blink-standalone-ui/prebuilt
+```
+
+Use `module_html_css_blink_package_root=<path>` to point at another repo-owned artifact root without overriding the final package path. With `module_html_css_blink_package_profile=auto`, Godot first uses an existing nested dynamic package if one is present. On Windows it checks the MSVC prebuilt package first, then the generated-V8 ChromiumLLVM prebuilt package, and then the matching developer build-output packages. If no existing package is present, `auto` selects the default expected package path for the platform; it runs package commands only when `module_html_css_blink_auto_build=yes` is set.
+
+Developer build-output fallback paths are:
+
+```text
 thirdparty/blink-standalone-ui/build/cmake-msvc-release/package/c_api_runtime
 ```
 
-With `module_html_css_blink_package_profile=auto`, Godot first uses an existing nested dynamic package if one is present. On Windows it checks the MSVC package first, then the generated-V8 ChromiumLLVM package. If no existing package is present, `auto` selects the default expected package path for the platform; it runs package commands only when `module_html_css_blink_auto_build=yes` is set. Set `module_html_css_blink_package_profile=generated_v8_chromium_llvm` to force:
+and, when `module_html_css_blink_package_profile=generated_v8_chromium_llvm` is selected:
 
 ```text
 thirdparty/blink-standalone-ui/build/cmake-generated-v8-chromium-llvm/package/c_api_runtime
@@ -66,6 +80,8 @@ On Windows, dynamic mode links the import library and requires the package runti
 - `libGLESv2.dll`
 - `d3dcompiler_47.dll`
 - optional Dawn/DirectX compiler sidecars such as `dxcompiler.dll` and `dxil.dll`
+
+When `module_html_css_blink_copy_runtime_sidecars=yes` (the default), dynamic mode copies package-local runtime files from the selected `c_api_runtime` directory into `bin` during the editor/template build, excluding `.lib` link libraries. Export packaging still needs to include the same runtime files beside the exported executable.
 
 Static mode is a build-time staging hook for a future Blink static package:
 
