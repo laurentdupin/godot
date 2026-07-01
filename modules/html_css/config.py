@@ -11,7 +11,7 @@ def get_opts(platform):
         ),
         PathVariable(
             "module_html_css_blink_lib_path",
-            "Path to the prebuilt external HTML/CSS renderer C API package directory, such as thirdparty/blink-standalone-ui/build/cmake-generated-v8-chromium-llvm/package/c_api_runtime",
+            "Path to the prebuilt external HTML/CSS renderer C API package directory. Defaults to the nested thirdparty Blink package directory for the selected link mode.",
             "",
             PathVariable.PathAccept,
         ),
@@ -35,6 +35,17 @@ def get_opts(platform):
             "module_html_css_blink_static_manifest",
             "Path to a Blink static C API package link manifest. If empty in static mode, SCsub looks for blink_standalone_renderer_c_api_static_link_manifest.json in module_html_css_blink_lib_path.",
             "",
+        ),
+        BoolVariable(
+            "module_html_css_blink_auto_build",
+            "Opt in to building the nested Blink C API package when the expected artifact is missing. This may perform networked V8/depot_tools/CIPD bootstrap work.",
+            False,
+        ),
+        EnumVariable(
+            "module_html_css_blink_package_profile",
+            "Nested Blink package profile used when module_html_css_blink_lib_path is empty. auto selects MSVC on Windows and generated_v8_chromium_llvm elsewhere.",
+            "auto",
+            allowed_values=("auto", "msvc", "generated_v8_chromium_llvm"),
         ),
         BoolVariable(
             "module_html_css_blink_static_whole_archive",

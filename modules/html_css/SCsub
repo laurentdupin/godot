@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 import json
 import os
+import subprocess
 
+from SCons.Script import Exit
 from misc.utility.scons_hints import *
 
 Import("env")
@@ -9,10 +11,80 @@ Import("env_modules")
 
 env_html_css = env_modules.Clone()
 
+_html_css_blink_package_path_override = bool(env["module_html_css_blink_lib_path"])
+
+
+def _html_css_resolve_repo_path(p_path):
+    if not p_path:
+        return ""
+    if os.path.isabs(p_path):
+        return os.path.normpath(p_path)
+    if p_path.startswith("#"):
+        return env.Dir(p_path).abspath
+    return env.Dir("#" + p_path).abspath
+
+
+def _html_css_default_blink_package_path():
+    package_kind = "c_api_static" if env["module_html_css_blink_link_mode"] == "static" else "c_api_runtime"
+    build_dir = _html_css_blink_build_dir(_html_css_blink_package_profile())
+    return os.path.join(
+        "thirdparty",
+        "blink-standalone-ui",
+        "build",
+        build_dir,
+        "package",
+        package_kind,
+    )
+
+
+def _html_css_blink_build_dir(p_profile):
+    if env["platform"] == "windows" and p_profile == "msvc":
+        return "cmake-msvc-release"
+    return "cmake-generated-v8-chromium-llvm"
+
+
+def _html_css_default_blink_package_path_for_profile(p_profile):
+    package_kind = "c_api_static" if env["module_html_css_blink_link_mode"] == "static" else "c_api_runtime"
+    return _html_css_resolve_repo_path(
+        os.path.join(
+            "thirdparty",
+            "blink-standalone-ui",
+            "build",
+            _html_css_blink_build_dir(p_profile),
+            "package",
+            package_kind,
+        )
+    )
+
+
+def _html_css_dynamic_artifact_for_profile(p_profile):
+    return os.path.join(_html_css_default_blink_package_path_for_profile(p_profile), env["module_html_css_blink_lib"])
+
+
+def _html_css_blink_package_profile():
+    profile = env["module_html_css_blink_package_profile"]
+    if profile != "auto":
+        return profile
+    if env["module_html_css_blink_link_mode"] == "dynamic":
+        for candidate in ("msvc", "generated_v8_chromium_llvm"):
+            if os.path.exists(_html_css_dynamic_artifact_for_profile(candidate)):
+                return candidate
+    if env["platform"] == "windows":
+        return "msvc"
+    return "generated_v8_chromium_llvm"
+
+
+def _html_css_blink_package_path():
+    package_path = env["module_html_css_blink_lib_path"] or _html_css_default_blink_package_path()
+    return _html_css_resolve_repo_path(package_path)
+
+
 def _html_css_link_input(p_link_input):
-    if not env["module_html_css_blink_lib_path"] or os.path.isabs(p_link_input) or os.path.dirname(p_link_input):
+    if os.path.isabs(p_link_input):
         return p_link_input
-    return os.path.join(env["module_html_css_blink_lib_path"], p_link_input)
+    if os.path.dirname(p_link_input):
+        return _html_css_resolve_repo_path(p_link_input)
+    return os.path.join(_html_css_blink_package_path(), p_link_input)
 
 
 def _html_css_split_link_inputs(p_link_inputs):
@@ -28,10 +100,8 @@ def _html_css_append_unique(r_link_inputs, p_link_inputs):
 def _html_css_static_manifest_path():
     manifest_path = env["module_html_css_blink_static_manifest"]
     if manifest_path:
-        return manifest_path
-    if env["module_html_css_blink_lib_path"]:
-        return os.path.join(env["module_html_css_blink_lib_path"], "blink_standalone_renderer_c_api_static_link_manifest.json")
-    return ""
+        return _html_css_resolve_repo_path(manifest_path)
+    return os.path.join(_html_css_blink_package_path(), "blink_standalone_renderer_c_api_static_link_manifest.json")
 
 
 def _html_css_load_static_manifest():
@@ -40,6 +110,90 @@ def _html_css_load_static_manifest():
         return None
     with open(manifest_path, "r", encoding="utf-8") as manifest_file:
         return json.load(manifest_file)
+
+
+def _html_css_expected_package_artifact():
+    if env["module_html_css_blink_link_mode"] == "static":
+        return _html_css_static_manifest_path()
+    return _html_css_link_input(env["module_html_css_blink_lib"])
+
+
+def _html_css_blink_auto_build_commands():
+    if env["module_html_css_blink_link_mode"] == "static":
+        return []
+
+    profile = _html_css_blink_package_profile()
+    if profile == "msvc":
+        return [
+            ["cmake", "--preset", "x64-Release-MSVC"],
+            ["cmake", "--build", "--preset", "x64-Release-MSVC-c-api-package", "--parallel", "8"],
+        ]
+    if profile == "generated_v8_chromium_llvm":
+        return [
+            ["cmake", "--preset", "x64-Release-GeneratedV8"],
+            ["cmake", "--build", "--preset", "x64-Release-GeneratedV8-v8-compat", "--parallel", "8"],
+            ["cmake", "--preset", "x64-Release-GeneratedV8-ChromiumLLVM"],
+            ["cmake", "--build", "--preset", "x64-Release-GeneratedV8-ChromiumLLVM-c-api-package", "--parallel", "8"],
+        ]
+    return []
+
+
+def _html_css_command_text(p_command):
+    return " ".join(p_command)
+
+
+def _html_css_print_package_build_help():
+    print("HTML/CSS Blink package artifact is missing:")
+    print("  " + _html_css_expected_package_artifact())
+    print("Build it from the nested checkout:")
+    commands = _html_css_blink_auto_build_commands()
+    if env["module_html_css_blink_link_mode"] == "static":
+        print("  Static package auto-build is unavailable at this Blink pin because blink_standalone_renderer_c_api_static_package is not defined.")
+        print("  Provide module_html_css_blink_lib_path/module_html_css_blink_static_manifest after creating a compatible static package.")
+        return
+    print("  cd thirdparty\\blink-standalone-ui")
+    for command in commands:
+        print("  " + _html_css_command_text(command))
+
+
+def _html_css_ensure_blink_package():
+    if not env["module_html_css_blink_enabled"] or _html_css_blink_package_path_override:
+        return
+
+    expected_artifact = _html_css_expected_package_artifact()
+    if os.path.exists(expected_artifact):
+        return
+
+    if env["module_html_css_blink_link_mode"] == "static":
+        _html_css_print_package_build_help()
+        Exit(1)
+
+    if not env["module_html_css_blink_auto_build"]:
+        _html_css_print_package_build_help()
+        Exit(1)
+
+    commands = _html_css_blink_auto_build_commands()
+    if not commands:
+        _html_css_print_package_build_help()
+        Exit(1)
+
+    nested_blink_dir = env.Dir("#thirdparty/blink-standalone-ui").abspath
+    print("HTML/CSS Blink package artifact is missing; building nested Blink package:")
+    print("  " + expected_artifact)
+    child_env = os.environ.copy()
+    child_env.setdefault("DEPOT_TOOLS_WIN_TOOLCHAIN", "0")
+    for command in commands:
+        print("  " + _html_css_command_text(command))
+        completed = subprocess.run(command, cwd=nested_blink_dir, env=child_env)
+        if completed.returncode != 0:
+            print("HTML/CSS Blink package auto-build failed with exit code %d." % completed.returncode)
+            print("Run the nested package command manually, or retry with module_html_css_blink_auto_build=yes after preparing network/depot_tools/CIPD prerequisites.")
+            Exit(completed.returncode)
+
+    if not os.path.exists(expected_artifact):
+        print("HTML/CSS Blink package auto-build completed, but the expected artifact is still missing:")
+        print("  " + expected_artifact)
+        Exit(1)
 
 
 def _html_css_manifest_link_inputs(p_manifest):
@@ -64,8 +218,9 @@ env_html_css.add_source_files(env.modules_sources, "bridge/html_source_validator
 env_html_css.add_source_files(env.modules_sources, "backend/html_surface_cpu_backend.cpp")
 env_html_css.add_source_files(env.modules_sources, "backend/html_surface_unsupported_backend.cpp")
 if env["module_html_css_blink_enabled"]:
+    _html_css_ensure_blink_package()
     env_html_css.Append(CPPDEFINES=["HTML_CSS_USE_BLINK_C_API"])
-    package_include_path = os.path.join(env["module_html_css_blink_lib_path"], "include") if env["module_html_css_blink_lib_path"] else ""
+    package_include_path = os.path.join(_html_css_blink_package_path(), "include")
     if package_include_path and os.path.isdir(package_include_path):
         env_html_css.Append(CPPPATH=[package_include_path])
     env_html_css.Append(

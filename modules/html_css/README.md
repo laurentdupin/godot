@@ -13,8 +13,47 @@ The default Blink consumption mode is dynamic:
 
 ```text
 module_html_css_blink_link_mode=dynamic
-module_html_css_blink_lib_path=<Blink package directory>
+module_html_css_blink_lib_path=<optional Blink dynamic package directory>
 module_html_css_blink_lib=blink_standalone_renderer_c_api.lib
+```
+
+If `module_html_css_blink_lib_path` is not supplied, Godot uses the nested package under:
+
+```text
+thirdparty/blink-standalone-ui/build/cmake-msvc-release/package/c_api_runtime
+```
+
+With `module_html_css_blink_package_profile=auto`, Godot first uses an existing nested dynamic package if one is present. On Windows it checks the MSVC package first, then the generated-V8 ChromiumLLVM package, and falls back to the MSVC auto-build command when no nested dynamic package exists. Set `module_html_css_blink_package_profile=generated_v8_chromium_llvm` to force:
+
+```text
+thirdparty/blink-standalone-ui/build/cmake-generated-v8-chromium-llvm/package/c_api_runtime
+```
+
+Normal Godot builds consume an existing nested dynamic package. They do not bootstrap Blink from source by default. If the expected nested artifact is missing, SCons fails with a repo-local package command.
+
+Developers who intentionally want SCons to invoke the nested Blink package build can opt in with:
+
+```text
+module_html_css_blink_auto_build=yes
+```
+
+This source bootstrap runs only from `thirdparty/blink-standalone-ui`; it never falls back to an external sibling checkout. First-run package builds may require V8/depot_tools/CIPD network access or pre-populated build artifacts. The default Windows/MSVC commands are:
+
+```powershell
+cd thirdparty\blink-standalone-ui
+cmake --preset x64-Release-MSVC
+cmake --build --preset x64-Release-MSVC-c-api-package --parallel 8
+```
+
+The generated-V8 ChromiumLLVM profile uses:
+
+```powershell
+cd thirdparty\blink-standalone-ui
+$env:DEPOT_TOOLS_WIN_TOOLCHAIN='0'
+cmake --preset x64-Release-GeneratedV8
+cmake --build --preset x64-Release-GeneratedV8-v8-compat --parallel 8
+cmake --preset x64-Release-GeneratedV8-ChromiumLLVM
+cmake --build --preset x64-Release-GeneratedV8-ChromiumLLVM-c-api-package --parallel 8
 ```
 
 On Windows, dynamic mode links the import library and requires the package runtime files next to the Godot binary or otherwise discoverable by the loader. The current package may include:
@@ -32,11 +71,19 @@ Static mode is a build-time staging hook for a future Blink static package:
 
 ```text
 module_html_css_blink_link_mode=static
-module_html_css_blink_lib_path=<Blink static package directory>
+module_html_css_blink_lib_path=<optional Blink static package directory>
 module_html_css_blink_static_manifest=<optional explicit manifest path>
 ```
 
+If `module_html_css_blink_lib_path` is not supplied in static mode, Godot uses:
+
+```text
+thirdparty/blink-standalone-ui/build/cmake-generated-v8-chromium-llvm/package/c_api_static
+```
+
 If no explicit manifest path is supplied, static mode looks for `blink_standalone_renderer_c_api_static_link_manifest.json` inside `module_html_css_blink_lib_path`. The manifest is expected to provide the C API static archive, transitive static archives, import libraries, system libraries, compile definitions, and any whole-archive requirements.
+
+Static package auto-build is intentionally disabled at the current nested Blink pin because the documented `blink_standalone_renderer_c_api_static_package` target is not defined there. Create or provide a compatible static package explicitly before using static mode.
 
 Whole-archive linking is disabled by default. Enable `module_html_css_blink_static_whole_archive=yes` only for packages that require it and do not duplicate symbols already provided by Godot, such as libpng, ICU, Vulkan Memory Allocator, Embree, or other third-party libraries.
 
