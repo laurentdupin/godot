@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import subprocess
+import zipfile
 
 from SCons.Script import Exit
 from misc.utility.scons_hints import *
@@ -65,6 +66,55 @@ def _html_css_prebuilt_package_path_for_profile(p_profile):
     )
 
 
+def _html_css_prebuilt_profile_dir_for_profile(p_profile):
+    return _html_css_resolve_repo_path(
+        os.path.join(
+            env["module_html_css_blink_package_root"],
+            _html_css_blink_prebuilt_key(p_profile),
+        )
+    )
+
+
+def _html_css_prebuilt_archive_for_profile(p_profile):
+    if env["module_html_css_blink_link_mode"] != "dynamic":
+        return ""
+    profile_dir = _html_css_prebuilt_profile_dir_for_profile(p_profile)
+    if not os.path.isdir(profile_dir):
+        return ""
+    archives = [
+        os.path.join(profile_dir, entry)
+        for entry in os.listdir(profile_dir)
+        if os.path.isfile(os.path.join(profile_dir, entry)) and os.path.splitext(entry)[1].lower() == ".zip"
+    ]
+    if len(archives) > 1:
+        print("HTML/CSS Blink found multiple prebuilt runtime archives; specify module_html_css_blink_lib_path or keep exactly one archive:")
+        for archive in sorted(archives):
+            print("  " + archive)
+        Exit(1)
+    if len(archives) == 1:
+        return archives[0]
+    return ""
+
+
+def _html_css_archive_extract_root(p_archive_path, p_profile):
+    archive_stem = os.path.splitext(os.path.basename(p_archive_path))[0]
+    return _html_css_resolve_repo_path(
+        os.path.join(
+            "bin",
+            ".html_css_blink_runtime",
+            _html_css_blink_prebuilt_key(p_profile),
+            archive_stem,
+        )
+    )
+
+
+def _html_css_archive_package_path_for_profile(p_profile):
+    archive_path = _html_css_prebuilt_archive_for_profile(p_profile)
+    if not archive_path:
+        return ""
+    return _html_css_extracted_package_path(_html_css_archive_extract_root(archive_path, p_profile))
+
+
 def _html_css_default_blink_package_path_for_profile(p_profile):
     package_kind = "c_api_static" if env["module_html_css_blink_link_mode"] == "static" else "c_api_runtime"
     return _html_css_resolve_repo_path(
@@ -83,7 +133,18 @@ def _html_css_dynamic_artifact_for_profile(p_profile):
     prebuilt_artifact = _html_css_package_artifact(_html_css_prebuilt_package_path_for_profile(p_profile))
     if os.path.exists(prebuilt_artifact):
         return prebuilt_artifact
+    archive_package_path = _html_css_archive_package_path_for_profile(p_profile)
+    if archive_package_path:
+        return _html_css_package_artifact(archive_package_path)
     return _html_css_package_artifact(_html_css_default_blink_package_path_for_profile(p_profile))
+
+
+def _html_css_profile_has_dynamic_package(p_profile):
+    if os.path.exists(_html_css_package_artifact(_html_css_prebuilt_package_path_for_profile(p_profile))):
+        return True
+    if _html_css_prebuilt_archive_for_profile(p_profile):
+        return True
+    return os.path.exists(_html_css_package_artifact(_html_css_default_blink_package_path_for_profile(p_profile)))
 
 
 def _html_css_blink_package_profile():
@@ -92,7 +153,7 @@ def _html_css_blink_package_profile():
         return profile
     if env["module_html_css_blink_link_mode"] == "dynamic":
         for candidate in ("msvc", "generated_v8_chromium_llvm"):
-            if os.path.exists(_html_css_dynamic_artifact_for_profile(candidate)):
+            if _html_css_profile_has_dynamic_package(candidate):
                 return candidate
     if env["platform"] == "windows":
         return "msvc"
@@ -107,6 +168,9 @@ def _html_css_blink_package_path():
         prebuilt_path = _html_css_prebuilt_package_path_for_profile(profile)
         if os.path.exists(_html_css_package_artifact(prebuilt_path)):
             return prebuilt_path
+        archive_package_path = _html_css_archive_package_path_for_profile(profile)
+        if archive_package_path:
+            return archive_package_path
     return _html_css_resolve_repo_path(_html_css_default_blink_package_path())
 
 
@@ -190,6 +254,7 @@ def _html_css_print_package_build_help():
         profile = _html_css_blink_package_profile()
         print("Checked nested package paths:")
         print("  prebuilt: " + _html_css_prebuilt_package_path_for_profile(profile))
+        print("  prebuilt archive dir: " + _html_css_prebuilt_profile_dir_for_profile(profile))
         print("  build output: " + _html_css_default_blink_package_path_for_profile(profile))
     print("Build it from the nested checkout:")
     commands = _html_css_blink_auto_build_commands()
@@ -206,6 +271,7 @@ def _html_css_ensure_blink_package():
     if not env["module_html_css_blink_enabled"] or _html_css_blink_package_path_override:
         return
 
+    _html_css_extract_prebuilt_archive_if_needed()
     expected_artifact = _html_css_expected_package_artifact()
     if os.path.exists(expected_artifact):
         return
@@ -240,6 +306,83 @@ def _html_css_ensure_blink_package():
         print("HTML/CSS Blink package auto-build completed, but the expected artifact is still missing:")
         print("  " + expected_artifact)
         Exit(1)
+
+
+def _html_css_archive_marker_path(p_extract_root):
+    return os.path.join(p_extract_root, ".archive_state.json")
+
+
+def _html_css_archive_state(p_archive_path):
+    archive_stat = os.stat(p_archive_path)
+    return {
+        "archive": os.path.abspath(p_archive_path),
+        "size": archive_stat.st_size,
+        "mtime": int(archive_stat.st_mtime),
+    }
+
+
+def _html_css_archive_state_matches(p_marker_path, p_archive_path):
+    if not os.path.isfile(p_marker_path):
+        return False
+    try:
+        with open(p_marker_path, "r", encoding="utf-8-sig") as marker_file:
+            marker_state = json.load(marker_file)
+    except Exception:
+        return False
+    return marker_state == _html_css_archive_state(p_archive_path)
+
+
+def _html_css_safe_extract_archive(p_archive_path, p_extract_root):
+    extract_root = os.path.abspath(p_extract_root)
+    with zipfile.ZipFile(p_archive_path, "r") as archive:
+        for member in archive.infolist():
+            member_path = os.path.normpath(os.path.join(extract_root, member.filename))
+            member_root = os.path.normcase(os.path.abspath(member_path))
+            if os.path.commonpath([os.path.normcase(extract_root), member_root]) != os.path.normcase(extract_root):
+                print("HTML/CSS Blink archive contains an unsafe path and will not be extracted: " + member.filename)
+                Exit(1)
+        archive.extractall(extract_root)
+
+
+def _html_css_extracted_package_path(p_extract_root):
+    direct_package_path = os.path.join(p_extract_root, "c_api_runtime")
+    if os.path.exists(_html_css_package_artifact(direct_package_path)):
+        return direct_package_path
+    if os.path.exists(_html_css_package_artifact(p_extract_root)):
+        return p_extract_root
+    return direct_package_path
+
+
+def _html_css_extract_prebuilt_archive_if_needed():
+    if _html_css_blink_package_path_override or env["module_html_css_blink_link_mode"] != "dynamic":
+        return
+    profile = _html_css_blink_package_profile()
+    prebuilt_path = _html_css_prebuilt_package_path_for_profile(profile)
+    if os.path.exists(_html_css_package_artifact(prebuilt_path)):
+        return
+    archive_path = _html_css_prebuilt_archive_for_profile(profile)
+    if not archive_path:
+        return
+
+    extract_root = _html_css_archive_extract_root(archive_path, profile)
+    package_path = _html_css_extracted_package_path(extract_root)
+    marker_path = _html_css_archive_marker_path(extract_root)
+    if os.path.exists(_html_css_package_artifact(package_path)) and _html_css_archive_state_matches(marker_path, archive_path):
+        return
+
+    if os.path.isdir(extract_root):
+        shutil.rmtree(extract_root)
+    os.makedirs(extract_root, exist_ok=True)
+    _html_css_safe_extract_archive(archive_path, extract_root)
+    package_path = _html_css_extracted_package_path(extract_root)
+    if not os.path.exists(_html_css_package_artifact(package_path)):
+        print("HTML/CSS Blink archive extraction did not produce the expected C API runtime package:")
+        print("  archive: " + archive_path)
+        print("  expected: " + _html_css_package_artifact(package_path))
+        Exit(1)
+    with open(marker_path, "w", encoding="utf-8") as marker_file:
+        json.dump(_html_css_archive_state(archive_path), marker_file, indent=2, sort_keys=True)
+    print("HTML/CSS Blink extracted runtime archive to " + package_path)
 
 
 def _html_css_copy_runtime_sidecars():

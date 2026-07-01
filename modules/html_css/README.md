@@ -31,6 +31,20 @@ thirdparty/blink-standalone-ui/prebuilt
 
 Use `module_html_css_blink_package_root=<path>` to point at another repo-owned artifact root without overriding the final package path. With `module_html_css_blink_package_profile=auto`, Godot first uses an existing nested dynamic package if one is present. On Windows it checks the MSVC prebuilt package first, then the generated-V8 ChromiumLLVM prebuilt package, and then the matching developer build-output packages. If no existing package is present, `auto` selects the default expected package path for the platform; it runs package commands only when `module_html_css_blink_auto_build=yes` is set.
 
+The prebuilt package can be either an unpacked package directory:
+
+```text
+thirdparty/blink-standalone-ui/prebuilt/windows-x86_64-msvc/c_api_runtime
+```
+
+or a single runtime `.zip` archive in the profile directory:
+
+```text
+thirdparty/blink-standalone-ui/prebuilt/windows-x86_64-msvc/*.zip
+```
+
+Archives are extracted into generated output under `bin/.html_css_blink_runtime/<platform>-<arch>-<profile>/<archive-stem>/`, so normal builds do not dirty `thirdparty`. If more than one archive is present for a profile, SCons fails and asks for a single artifact or an explicit `module_html_css_blink_lib_path`.
+
 Developer build-output fallback paths are:
 
 ```text
