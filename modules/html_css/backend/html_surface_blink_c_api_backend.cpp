@@ -624,10 +624,12 @@ bool HTMLSurfaceExternalCApiBackend::_copy_latest_output() {
 	blink_standalone_frame_output_t output = {};
 	blink_standalone_status_code_t status = blink_standalone_renderer_get_latest_output(renderer, &output);
 	if (status != BLINK_STANDALONE_STATUS_OK) {
+		html_css_update_trace(vformat("copy_latest_output: get_latest_output failed status=%d", (int)status));
 		return false;
 	}
 
 	if (output.pixels == nullptr || output.pixel_count == 0 || output.width <= 0 || output.height <= 0 || output.stride <= 0 || output.pixel_format == BLINK_STANDALONE_PIXEL_FORMAT_NONE) {
+		html_css_update_trace(vformat("copy_latest_output: empty output width=%d height=%d stride=%d pixels=%d format=%d", output.width, output.height, output.stride, (int64_t)output.pixel_count, (int)output.pixel_format));
 		blink_standalone_renderer_release_latest_output(renderer);
 		return false;
 	}
@@ -645,10 +647,19 @@ bool HTMLSurfaceExternalCApiBackend::_copy_latest_output() {
 	}
 
 	uint8_t *frame_pixels = frame.pixels.ptrw();
+	const bool trace_output_pixels = html_css_update_trace_enabled();
+	int64_t nontransparent_pixels = 0;
 	for (int y = 0; y < output.height; y++) {
 		const uint8_t *src_row = output.pixels + (int64_t)output.stride * (output.height - 1 - y);
 		uint8_t *dst_row = frame_pixels + (int64_t)output.stride * y;
 		memcpy(dst_row, src_row, output.stride);
+		if (trace_output_pixels) {
+			for (int x = 0; x < output.width; x++) {
+				if (src_row[x * 4 + 3] != 0) {
+					nontransparent_pixels++;
+				}
+			}
+		}
 	}
 	frame.damage.full_frame = output.dirty_rect_count == 0;
 	for (size_t i = 0; i < output.dirty_rect_count; i++) {
@@ -656,7 +667,9 @@ bool HTMLSurfaceExternalCApiBackend::_copy_latest_output() {
 	}
 
 	blink_standalone_renderer_release_latest_output(renderer);
-	return submit_cpu_frame(frame) == OK;
+	const Error submit_err = submit_cpu_frame(frame);
+	html_css_update_trace(vformat("copy_latest_output: copied width=%d height=%d stride=%d format=%d nontransparent=%d dirty_rects=%d submit_err=%d", output.width, output.height, output.stride, (int)output.pixel_format, nontransparent_pixels, (int)output.dirty_rect_count, (int)submit_err));
+	return submit_err == OK;
 }
 
 void HTMLSurfaceExternalCApiBackend::_read_frame_metadata() {
@@ -685,6 +698,7 @@ void HTMLSurfaceExternalCApiBackend::_read_frame_metadata() {
 		blink_standalone_backdrop_filter_to_region(backdrop, region);
 		frame_metadata.backdrop_filter_regions.push_back(region);
 	}
+	html_css_update_trace(vformat("metadata: hits=%d backdrop_regions=%d", frame_metadata.hits.size(), frame_metadata.backdrop_filter_regions.size()));
 }
 
 void HTMLSurfaceExternalCApiBackend::_clear_output() {
@@ -781,7 +795,17 @@ void HTMLSurfaceExternalCApiBackend::render_placeholder(const String &p_marker) 
 		return;
 	}
 
-	if (blink_standalone_renderer_advance_frame(renderer, 0.0) != BLINK_STANDALONE_STATUS_OK) {
+	blink_standalone_status_code_t advance_status = BLINK_STANDALONE_STATUS_OK;
+	for (int attempt = 0; attempt < 3; attempt++) {
+		advance_status = blink_standalone_renderer_advance_frame(renderer, 0.0);
+		if (advance_status == BLINK_STANDALONE_STATUS_OK) {
+			break;
+		}
+
+		blink_standalone_update_result_t update_result = {};
+		blink_standalone_renderer_update(renderer, 0.0, &update_result);
+	}
+	if (advance_status != BLINK_STANDALONE_STATUS_OK) {
 		const char *last_error = blink_standalone_renderer_last_error(renderer);
 		if (last_error != nullptr && last_error[0] != '\0') {
 			ERR_PRINT(vformat("External HTML/CSS renderer could not produce a frame: %s", String::utf8(last_error)));

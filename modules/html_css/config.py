@@ -11,13 +11,13 @@ def get_opts(platform):
         ),
         PathVariable(
             "module_html_css_blink_lib_path",
-            "Path to the prebuilt external HTML/CSS renderer C API package directory. Defaults to the nested thirdparty Blink package directory for the selected link mode.",
+            "Path to an external HTML/CSS renderer C API package directory. Defaults to the nested thirdparty Blink generated package directory for the selected link mode.",
             "",
             PathVariable.PathAccept,
         ),
         PathVariable(
             "module_html_css_blink_package_root",
-            "Root directory for repo-owned nested Blink packages, used when module_html_css_blink_lib_path is empty.",
+            "Optional root directory for local/release Blink package artifacts, used only after generated nested package output when module_html_css_blink_lib_path is empty.",
             "thirdparty/blink-standalone-ui/prebuilt",
             PathVariable.PathAccept,
         ),
@@ -49,7 +49,7 @@ def get_opts(platform):
         ),
         BoolVariable(
             "module_html_css_blink_copy_runtime_sidecars",
-            "Copy dynamic Blink C API runtime package sidecars from the selected package directory to the Godot bin directory.",
+            "Copy Blink C API runtime sidecars from the selected dynamic or static package directory to the Godot bin directory.",
             True,
         ),
         EnumVariable(

@@ -58,6 +58,7 @@ class HTMLRenderSurface : public RefCounted {
 
 	void _ensure_backend();
 	void _sync_backend_state();
+	bool _fallback_auto_gpu_to_cpu(const String &p_reason);
 	void _document_changed();
 	void _notify_changed() const;
 

@@ -111,6 +111,23 @@ void HTMLRenderSurface::_sync_backend_state() {
 	backend->set_placeholder_background(placeholder_background);
 }
 
+bool HTMLRenderSurface::_fallback_auto_gpu_to_cpu(const String &p_reason) {
+	if (backend_preference != HTML_SURFACE_BACKEND_AUTO || backend == nullptr || !backend->has_terminal_render_failure()) {
+		return false;
+	}
+
+#ifdef HTML_CSS_USE_BLINK_C_API
+	HTMLSurfaceBackend *fallback_backend = memnew(HTMLSurfaceExternalCApiBackend);
+#else
+	HTMLSurfaceBackend *fallback_backend = memnew(HTMLSurfaceCPUBackend);
+#endif
+	memdelete(backend);
+	backend = fallback_backend;
+	_sync_backend_state();
+	html_surface_warn_auto_cpu_fallback(p_reason.is_empty() ? String("GPU target rendering failed.") : p_reason);
+	return true;
+}
+
 void HTMLRenderSurface::_document_changed() {
 	if (backend != nullptr) {
 		backend->mark_document_dirty();
@@ -240,6 +257,11 @@ void HTMLRenderSurface::render_now(const String &p_marker) {
 	_ensure_backend();
 	_sync_backend_state();
 	backend->render_placeholder(marker);
+	if (_fallback_auto_gpu_to_cpu(backend->get_terminal_render_failure_reason())) {
+		bool fallback_needs_output = true;
+		backend->update_compositor(0.0, &fallback_needs_output, nullptr);
+		backend->render_placeholder(marker);
+	}
 	backend->get_frame_metadata(frame_metadata);
 	_notify_changed();
 }

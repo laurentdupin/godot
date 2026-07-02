@@ -41,10 +41,12 @@ class HTMLSurfaceBlinkGPUBackend : public HTMLSurfaceExternalCApiBackend {
 	Ref<HTMLTexture2D> gpu_texture;
 	RID rs_texture_rid;
 	String last_native_error;
+	String terminal_render_failure_reason;
 	uint64_t generation = 0;
 	bool error_reported = false;
 	bool target_ready = false;
 	bool pending_output = false;
+	bool terminal_render_failure = false;
 	bool vulkan_device_configured = false;
 	bool d3d12_device_configured = false;
 
@@ -106,6 +108,8 @@ public:
 	virtual void set_device_scale_factor(float p_device_scale_factor) override;
 	virtual void render_placeholder(const String &p_marker) override;
 	virtual bool has_pending_output() const override;
+	virtual bool has_terminal_render_failure() const override;
+	virtual String get_terminal_render_failure_reason() const override;
 	virtual Ref<Texture2D> get_texture() const override;
 	virtual Ref<HTMLTexture2D> get_html_texture() const override;
 

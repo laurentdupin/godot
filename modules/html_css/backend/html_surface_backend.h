@@ -81,6 +81,8 @@ public:
 	}
 	virtual void render_placeholder(const String &p_marker) = 0;
 	virtual bool has_pending_output() const { return false; }
+	virtual bool has_terminal_render_failure() const { return false; }
+	virtual String get_terminal_render_failure_reason() const { return String(); }
 	virtual Error submit_cpu_frame(const HTMLCPUFrame &p_frame) = 0;
 	virtual void get_frame_metadata(HTMLFrameMetadata &r_metadata) const = 0;
 	virtual Error mouse_move(const Point2 &, int) { return ERR_UNAVAILABLE; }

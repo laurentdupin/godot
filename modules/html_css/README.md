@@ -20,18 +20,26 @@ module_html_css_blink_lib=blink_standalone_renderer_c_api.lib
 If `module_html_css_blink_lib_path` is not supplied, Godot uses the nested package under:
 
 ```text
-thirdparty/blink-standalone-ui/prebuilt/windows-x86_64-msvc/c_api_runtime
+thirdparty/blink-standalone-ui/build/cmake-msvc-release/package/c_api_runtime
 ```
 
-The prebuilt package root defaults to:
+and, when `module_html_css_blink_package_profile=generated_v8_chromium_llvm` is selected:
+
+```text
+thirdparty/blink-standalone-ui/build/cmake-generated-v8-chromium-llvm/package/c_api_runtime
+```
+
+With `module_html_css_blink_package_profile=auto`, Godot first uses an existing nested generated dynamic package if one is present. On Windows it checks the MSVC generated package first, then the generated-V8 ChromiumLLVM package. If no generated package is present, `auto` selects the default expected package path for the platform; it runs package commands only when `module_html_css_blink_auto_build=yes` is set.
+
+An optional local or release artifact cache can also be used when generated package output is absent. The cache root defaults to:
 
 ```text
 thirdparty/blink-standalone-ui/prebuilt
 ```
 
-Use `module_html_css_blink_package_root=<path>` to point at another repo-owned artifact root without overriding the final package path. With `module_html_css_blink_package_profile=auto`, Godot first uses an existing nested dynamic package if one is present. On Windows it checks the MSVC prebuilt package first, then the generated-V8 ChromiumLLVM prebuilt package, and then the matching developer build-output packages. If no existing package is present, `auto` selects the default expected package path for the platform; it runs package commands only when `module_html_css_blink_auto_build=yes` is set.
+Use `module_html_css_blink_package_root=<path>` to point at another local artifact cache without overriding the final package path. This path is not the normal source-controlled dependency path and should not be used to justify checking generated package ZIPs into the Godot source tree.
 
-The prebuilt package can be either an unpacked package directory:
+The optional cache can be either an unpacked package directory:
 
 ```text
 thirdparty/blink-standalone-ui/prebuilt/windows-x86_64-msvc/c_api_runtime
@@ -44,18 +52,6 @@ thirdparty/blink-standalone-ui/prebuilt/windows-x86_64-msvc/*.zip
 ```
 
 Archives are extracted into generated output under `bin/.html_css_blink_runtime/<platform>-<arch>-<profile>/<archive-stem>/`, so normal builds do not dirty `thirdparty`. If more than one archive is present for a profile, SCons fails and asks for a single artifact or an explicit `module_html_css_blink_lib_path`.
-
-Developer build-output fallback paths are:
-
-```text
-thirdparty/blink-standalone-ui/build/cmake-msvc-release/package/c_api_runtime
-```
-
-and, when `module_html_css_blink_package_profile=generated_v8_chromium_llvm` is selected:
-
-```text
-thirdparty/blink-standalone-ui/build/cmake-generated-v8-chromium-llvm/package/c_api_runtime
-```
 
 Normal Godot builds consume an existing nested dynamic package. They do not bootstrap Blink from source by default. If the expected nested artifact is missing, SCons fails with a repo-local package command.
 
@@ -95,7 +91,7 @@ On Windows, dynamic mode links the import library and requires the package runti
 - `d3dcompiler_47.dll`
 - optional Dawn/DirectX compiler sidecars such as `dxcompiler.dll` and `dxil.dll`
 
-When `module_html_css_blink_copy_runtime_sidecars=yes` (the default), dynamic mode copies package-local runtime files from the selected `c_api_runtime` directory into `bin` during the editor/template build, excluding `.lib` link libraries and public headers. Newer Blink packages provide package-relative file lists and metadata in `blink_standalone_renderer_c_api_link_manifest.json`; Godot uses those package-relative entries when available and falls back to enumerating files in `c_api_runtime` for older packages. Export packaging still needs to include the same runtime files beside the exported executable.
+When `module_html_css_blink_copy_runtime_sidecars=yes` (the default), dynamic mode copies package-local runtime files from the selected `c_api_runtime` directory into `bin` during the editor/template build, excluding `.lib` link libraries and public headers. Newer Blink packages provide package-relative file lists and metadata in `blink_standalone_renderer_c_api_link_manifest.json`; Godot uses those package-relative entries when available and falls back to enumerating files in `c_api_runtime` for older packages. Static mode copies manifest-declared `remaining_runtime_sidecars` from the selected `c_api_static` package, such as `bin/icudtl.dat`, `bin/libEGL.dll`, and `bin/libGLESv2.dll`, into the Godot `bin` directory while still excluding link libraries, headers, static archives, debug files, and generated archives. Export packaging still needs to include the same runtime files beside the exported executable.
 
 Static mode is a build-time staging hook for a future Blink static package:
 
@@ -105,15 +101,29 @@ module_html_css_blink_lib_path=<optional Blink static package directory>
 module_html_css_blink_static_manifest=<optional explicit manifest path>
 ```
 
-If `module_html_css_blink_lib_path` is not supplied in static mode, Godot uses:
+If `module_html_css_blink_lib_path` is not supplied in static mode, Godot first looks for the nested generated static package directory:
 
 ```text
-thirdparty/blink-standalone-ui/build/cmake-generated-v8-chromium-llvm/package/c_api_static
+thirdparty/blink-standalone-ui/build/cmake-msvc-release/package/c_api_static
 ```
+
+An optional local/release artifact cache may also provide an unpacked static package directory:
+
+```text
+thirdparty/blink-standalone-ui/prebuilt/windows-x86_64-msvc-static/c_api_static
+```
+
+or a single static package `.zip` archive in the static cache profile directory:
+
+```text
+thirdparty/blink-standalone-ui/prebuilt/windows-x86_64-msvc-static/*.zip
+```
+
+Static archives are extracted into generated output under `bin/.html_css_blink_runtime/<platform>-<arch>-<profile>-static/<archive-stem>/`, and the extracted `c_api_static` package is consumed from there. Do not treat this optional cache as source repository content; the normal path is a source-built nested package output or an explicit package path.
 
 If no explicit manifest path is supplied, static mode looks for `blink_standalone_renderer_c_api_static_link_manifest.json` inside `module_html_css_blink_lib_path`. The manifest is expected to provide the C API static archive, transitive static archives, import libraries, system libraries, compile definitions, and any whole-archive requirements.
 
-Static package auto-build is intentionally disabled at the current nested Blink pin because the documented `blink_standalone_renderer_c_api_static_package` target is not defined there. Create or provide a compatible static package explicitly before using static mode.
+Static package auto-build is intentionally not wired into Godot SCons. The Blink static package can require a large V8 compatibility archive or bootstrap step; build the nested static package output first, or pass a compatible explicit package path before using static mode.
 
 Whole-archive linking is disabled by default. Enable `module_html_css_blink_static_whole_archive=yes` only for packages that require it and do not duplicate symbols already provided by Godot, such as libpng, ICU, Vulkan Memory Allocator, Embree, or other third-party libraries.
 

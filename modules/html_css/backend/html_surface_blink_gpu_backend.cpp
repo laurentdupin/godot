@@ -159,6 +159,8 @@ bool HTMLSurfaceBlinkGPUBackend::_backend_is_supported(blink_standalone_gpu_back
 }
 
 void HTMLSurfaceBlinkGPUBackend::_report_error_once(const String &p_error) {
+	terminal_render_failure = true;
+	terminal_render_failure_reason = p_error;
 	if (error_reported) {
 		return;
 	}
@@ -774,6 +776,8 @@ void HTMLSurfaceBlinkGPUBackend::set_device_scale_factor(float p_device_scale_fa
 
 void HTMLSurfaceBlinkGPUBackend::render_placeholder(const String &p_marker) {
 	(void)p_marker;
+	terminal_render_failure = false;
+	terminal_render_failure_reason = String();
 	const uint64_t render_start_usec = html_css_gpu_trace_enabled() && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 	html_css_gpu_trace(vformat("render_placeholder: begin requested=%d logical_size=%dx%d dsf=%.3f physical_size=%dx%d target_ready=%s active=%d native_size=%dx%d generation=%d pending_output=%s", (int)requested_backend, size.x, size.y, device_scale_factor, _get_physical_size().x, _get_physical_size().y, target_ready ? "true" : "false", (int)active_backend, native_target_size.x, native_target_size.y, (int64_t)generation, pending_output ? "true" : "false"));
 	if (document.is_null()) {
@@ -877,6 +881,14 @@ void HTMLSurfaceBlinkGPUBackend::render_placeholder(const String &p_marker) {
 
 bool HTMLSurfaceBlinkGPUBackend::has_pending_output() const {
 	return pending_output;
+}
+
+bool HTMLSurfaceBlinkGPUBackend::has_terminal_render_failure() const {
+	return terminal_render_failure;
+}
+
+String HTMLSurfaceBlinkGPUBackend::get_terminal_render_failure_reason() const {
+	return terminal_render_failure_reason;
 }
 
 Ref<Texture2D> HTMLSurfaceBlinkGPUBackend::get_texture() const {
