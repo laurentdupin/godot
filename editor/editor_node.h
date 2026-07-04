@@ -290,6 +290,7 @@ private:
 	Control *gui_base = nullptr;
 	VBoxContainer *main_vbox = nullptr;
 	OptionButton *renderer = nullptr;
+	OptionButton *renderer_driver = nullptr;
 
 #ifdef ANDROID_ENABLED
 	VBoxContainer *base_vbox = nullptr; // It only contains the title_bar and main_hbox.
@@ -625,9 +626,15 @@ private:
 	void _propagate_translation_notification();
 
 	void _renderer_selected(int p_index);
+	void _renderer_driver_selected(int p_index);
 	void _update_renderer_color();
+	void _update_renderer_driver_options();
+	void _update_renderer_driver_visibility();
+	String _get_rendering_device_driver_setting_name() const;
+	String _to_rendering_device_driver_display_name(const String &p_rendering_driver) const;
 	String _to_rendering_method_display_name(const String &p_rendering_method) const;
 	void _set_renderer_name_save_and_restart(const String &p_rendering_method);
+	void _set_renderer_driver_name_save_and_restart(const String &p_rendering_driver);
 
 	void _exit_editor(int p_exit_code);
 

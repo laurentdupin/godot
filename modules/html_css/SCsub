@@ -215,6 +215,60 @@ def _html_css_load_static_manifest():
         return json.load(manifest_file)
 
 
+def _html_css_static_manifest_allows_host_link(p_manifest):
+    if not p_manifest:
+        return True
+    if p_manifest.get("full_host_static_link_supported") is False:
+        return False
+    symbol_ownership = p_manifest.get("symbol_ownership", {})
+    if symbol_ownership.get("product_supported") is False:
+        return False
+    return True
+
+
+def _html_css_validate_static_manifest_host_link(p_manifest):
+    if env["module_html_css_blink_static_allow_unsupported_host"]:
+        return
+    if _html_css_static_manifest_allows_host_link(p_manifest):
+        return
+
+    print("HTML/CSS Blink static package declares full host/editor static linking unsupported:")
+    print("  manifest: " + _html_css_static_manifest_path())
+    if p_manifest.get("full_host_static_link_blocker"):
+        print("  blocker: " + p_manifest["full_host_static_link_blocker"])
+    symbol_ownership = p_manifest.get("symbol_ownership", {})
+    if symbol_ownership.get("required_resolution"):
+        print("  required resolution: " + symbol_ownership["required_resolution"])
+    print("Set module_html_css_blink_static_allow_unsupported_host=yes only for local experimental diagnostics.")
+    Exit(1)
+
+
+def _html_css_static_manifest_code_sidecars(p_manifest):
+    if not p_manifest:
+        return []
+
+    code_sidecar_extensions = (".dll", ".so", ".dylib")
+    blocked_sidecars = []
+    for key in ("remaining_runtime_sidecars", "package_files"):
+        for entry in p_manifest.get(key, []):
+            if os.path.splitext(entry)[1].lower() in code_sidecar_extensions:
+                blocked_sidecars.append(entry)
+    return sorted(set(blocked_sidecars))
+
+
+def _html_css_validate_static_manifest_runtime_sidecars(p_manifest):
+    blocked_sidecars = _html_css_static_manifest_code_sidecars(p_manifest)
+    if not blocked_sidecars:
+        return
+
+    print("HTML/CSS Blink static package requires code shared-library runtime sidecars:")
+    print("  manifest: " + _html_css_static_manifest_path())
+    for sidecar in blocked_sidecars:
+        print("  sidecar: " + sidecar)
+    print("Static mode must not require Blink/ANGLE code DLL/SO/DYLIB sidecars. Use a full-static Blink package or dynamic link mode.")
+    Exit(1)
+
+
 def _html_css_runtime_manifest_path():
     return os.path.join(_html_css_blink_package_path(), "blink_standalone_renderer_c_api_link_manifest.json")
 
@@ -523,6 +577,12 @@ env_html_css.add_source_files(env.modules_sources, "backend/html_surface_unsuppo
 if env["module_html_css_blink_enabled"]:
     _html_css_ensure_blink_package()
     print("HTML/CSS Blink package path: " + _html_css_blink_package_path())
+    static_manifest = None
+    if env["module_html_css_blink_link_mode"] == "static":
+        static_manifest = _html_css_load_static_manifest()
+        if static_manifest:
+            _html_css_validate_static_manifest_host_link(static_manifest)
+            _html_css_validate_static_manifest_runtime_sidecars(static_manifest)
     _html_css_copy_runtime_sidecars()
     env_html_css.Append(CPPDEFINES=["HTML_CSS_USE_BLINK_C_API"])
     package_include_path = os.path.join(_html_css_blink_package_path(), "include")
@@ -538,7 +598,6 @@ if env["module_html_css_blink_enabled"]:
     external_renderer_link_inputs = []
     if env["module_html_css_blink_link_mode"] == "static":
         env_html_css.Append(CPPDEFINES=["HTML_CSS_BLINK_STATIC_LINK"])
-        static_manifest = _html_css_load_static_manifest()
         if static_manifest:
             env_html_css.Append(CPPDEFINES=static_manifest.get("consumer_compile_definitions", []))
             external_renderer_link_inputs = _html_css_manifest_link_inputs(static_manifest)

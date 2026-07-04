@@ -91,7 +91,7 @@ On Windows, dynamic mode links the import library and requires the package runti
 - `d3dcompiler_47.dll`
 - optional Dawn/DirectX compiler sidecars such as `dxcompiler.dll` and `dxil.dll`
 
-When `module_html_css_blink_copy_runtime_sidecars=yes` (the default), dynamic mode copies package-local runtime files from the selected `c_api_runtime` directory into `bin` during the editor/template build, excluding `.lib` link libraries and public headers. Newer Blink packages provide package-relative file lists and metadata in `blink_standalone_renderer_c_api_link_manifest.json`; Godot uses those package-relative entries when available and falls back to enumerating files in `c_api_runtime` for older packages. Static mode copies manifest-declared `remaining_runtime_sidecars` from the selected `c_api_static` package, such as `bin/icudtl.dat`, `bin/libEGL.dll`, and `bin/libGLESv2.dll`, into the Godot `bin` directory while still excluding link libraries, headers, static archives, debug files, and generated archives. Export packaging still needs to include the same runtime files beside the exported executable.
+When `module_html_css_blink_copy_runtime_sidecars=yes` (the default), dynamic mode copies package-local runtime files from the selected `c_api_runtime` directory into `bin` during the editor/template build, excluding `.lib` link libraries and public headers. Newer Blink packages provide package-relative file lists and metadata in `blink_standalone_renderer_c_api_link_manifest.json`; Godot uses those package-relative entries when available and falls back to enumerating files in `c_api_runtime` for older packages. Static mode may copy manifest-declared data sidecars such as `bin/icudtl.dat`, but it rejects packages that still require Blink or ANGLE code shared-library sidecars such as `blink_standalone_renderer_c_api.dll`, `libEGL.dll`, or `libGLESv2.dll`. Export packaging still needs to include the same runtime files beside the exported executable.
 
 Static mode is a build-time staging hook for a future Blink static package:
 
@@ -123,11 +123,19 @@ Static archives are extracted into generated output under `bin/.html_css_blink_r
 
 If no explicit manifest path is supplied, static mode looks for `blink_standalone_renderer_c_api_static_link_manifest.json` inside `module_html_css_blink_lib_path`. The manifest is expected to provide the C API static archive, transitive static archives, import libraries, system libraries, compile definitions, and any whole-archive requirements.
 
+Static packages that declare `full_host_static_link_supported=false` or `symbol_ownership.product_supported=false` are rejected by default because they are not safe for full editor/export-template host linking. They can be forced only for local diagnostics with:
+
+```text
+module_html_css_blink_static_allow_unsupported_host=yes
+```
+
+Do not use that override for production editor or template builds; it may produce binaries that link but crash in unrelated renderer startup paths.
+
 Static package auto-build is intentionally not wired into Godot SCons. The Blink static package can require a large V8 compatibility archive or bootstrap step; build the nested static package output first, or pass a compatible explicit package path before using static mode.
 
 Whole-archive linking is disabled by default. Enable `module_html_css_blink_static_whole_archive=yes` only for packages that require it and do not duplicate symbols already provided by Godot, such as libpng, ICU, Vulkan Memory Allocator, Embree, or other third-party libraries.
 
-`module_html_css_blink_lib` and `module_html_css_blink_static_libs` remain as a manual fallback for experiments with packages that do not provide a manifest. Godot should not hardcode Blink's static transitive libraries. Static mode may still require data or compiler sidecars such as ICU data or shader compiler DLLs depending on how Blink packages those resources.
+`module_html_css_blink_lib` and `module_html_css_blink_static_libs` remain as a manual fallback for experiments with packages that do not provide a manifest. Godot should not hardcode Blink's static transitive libraries. Static mode may still require data sidecars such as ICU data depending on how Blink packages those resources, but it must not require Blink, ANGLE, or compiler code DLL/SO/DYLIB sidecars.
 
 Export templates must be built with the same module and link-mode flags as the editor. Dynamic exports must package the C API runtime files with the exported executable. Static exports remove only the C API runtime library if Blink is truly statically linked; they do not automatically embed runtime data or compiler sidecars.
 

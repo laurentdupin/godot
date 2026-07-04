@@ -67,6 +67,8 @@ shader_type canvas_item;
 render_mode blend_mix, unshaded;
 
 uniform sampler2D screen_texture : hint_screen_texture, repeat_disable, filter_linear_mipmap;
+uniform sampler2D backdrop_mask_texture : repeat_disable, filter_nearest;
+uniform bool use_mask_texture = false;
 uniform vec2 view_size = vec2(1.0, 1.0);
 uniform int region_count = 0;
 uniform vec4 region_rects[8];
@@ -177,17 +179,40 @@ void fragment() {
 	int op_start = 0;
 	int op_count = 0;
 
-	for (int i = 0; i < 8; i++) {
-		if (i >= region_count) {
-			break;
+	if (use_mask_texture) {
+		vec4 mask_sample = texture(backdrop_mask_texture, UV);
+		int effect_id = int(mask_sample.r * 255.0 + 0.5);
+		mask = mask_sample.g;
+		bool effect_found = false;
+		for (int i = 0; i < 8; i++) {
+			if (i >= region_count) {
+				break;
+			}
+			if (int(region_rects[i].x + 0.5) == effect_id) {
+				blur_radius = region_params[i].x;
+				opacity = region_params[i].y;
+				op_start = int(region_params[i].z + 0.5);
+				op_count = int(region_params[i].w + 0.5);
+				effect_found = true;
+				break;
+			}
 		}
-		float region_mask = rounded_rect_mask(local_pos, region_rects[i], region_radii[i]);
-		if (region_mask > mask) {
-			mask = region_mask;
-			blur_radius = region_params[i].x;
-			opacity = region_params[i].y;
-			op_start = int(region_params[i].z + 0.5);
-			op_count = int(region_params[i].w + 0.5);
+		if (!effect_found) {
+			mask = 0.0;
+		}
+	} else {
+		for (int i = 0; i < 8; i++) {
+			if (i >= region_count) {
+				break;
+			}
+			float region_mask = rounded_rect_mask(local_pos, region_rects[i], region_radii[i]);
+			if (region_mask > mask) {
+				mask = region_mask;
+				blur_radius = region_params[i].x;
+				opacity = region_params[i].y;
+				op_start = int(region_params[i].z + 0.5);
+				op_count = int(region_params[i].w + 0.5);
+			}
 		}
 	}
 
@@ -414,8 +439,21 @@ void HTMLView::_notification(int p_what) {
 			}
 
 			frame_render_pending = false;
+			bool waiting_for_async_completion = false;
+			const bool poll_changed = surface->poll_pending_output(&waiting_for_async_completion);
+			if (poll_changed) {
+				_update_backdrop_filter_canvas();
+				queue_redraw();
+			}
+			if (waiting_for_async_completion) {
+				frame_render_pending = true;
+				set_process_internal(true);
+				break;
+			}
+
 			bool needs_output = true;
 			bool needs_begin_frame = false;
+			const bool had_pending_output = surface->has_pending_output();
 			const uint64_t trace_sequence = pending_input_trace_sequence;
 			if (trace_sequence != 0) {
 				pending_input_trace_sequence = 0;
@@ -437,9 +475,10 @@ void HTMLView::_notification(int p_what) {
 				needs_begin_frame = false;
 			}
 
-			if (needs_output) {
+			const bool should_render = needs_output || had_pending_output;
+			if (should_render) {
 				if (trace_sequence != 0) {
-					html_view_input_trace(vformat("seq=%d render_now begin", (int64_t)trace_sequence));
+					html_view_input_trace(vformat("seq=%d render_now begin reason=%s", (int64_t)trace_sequence, needs_output ? "needs_output" : "pending_output"));
 				}
 				const uint64_t render_start_usec = trace_sequence != 0 && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 				surface->render_now("HTMLView");
@@ -592,52 +631,88 @@ void HTMLView::_update_backdrop_filter_canvas() {
 	params.resize(HTML_VIEW_MAX_BACKDROP_FILTER_REGIONS);
 	filter_ops.resize(HTML_VIEW_MAX_BACKDROP_FILTER_OPERATIONS);
 
-	const Vector<HTMLBackdropFilterRegion> &regions = surface->get_backdrop_filter_regions();
 	const float scale_x = control_size.x / (float)html_size.x;
 	const float scale_y = control_size.y / (float)html_size.y;
 	const float radius_scale = MAX(scale_x, scale_y);
 	int supported_count = 0;
 	int supported_op_count = 0;
 	float max_blur_radius = 0.0f;
+	bool use_gpu_mask = false;
 
-	for (const HTMLBackdropFilterRegion &region : regions) {
-		if (supported_count >= HTML_VIEW_MAX_BACKDROP_FILTER_REGIONS) {
-			break;
-		}
-		if (region.has_unsupported_flags() || region.bounds.size.x <= 0.0f || region.bounds.size.y <= 0.0f || !region.has_filter_operations()) {
-			continue;
-		}
-
-		const Rect2 local_rect(
-				Point2(region.bounds.position.x * scale_x, region.bounds.position.y * scale_y),
-				Size2(region.bounds.size.x * scale_x, region.bounds.size.y * scale_y));
-		rects.set(supported_count, Vector4(local_rect.position.x, local_rect.position.y, local_rect.size.x, local_rect.size.y));
-		radii.set(supported_count, Vector4(
-										 region.border_radius_top_left * radius_scale,
-										 region.border_radius_top_right * radius_scale,
-										 region.border_radius_bottom_right * radius_scale,
-										 region.border_radius_bottom_left * radius_scale));
-		const int op_start = supported_op_count;
-		float local_blur_radius = region.blur_radius_css_px * radius_scale;
-		for (const HTMLBackdropFilterOperation &operation : region.filter_operations) {
-			if (supported_op_count >= HTML_VIEW_MAX_BACKDROP_FILTER_OPERATIONS) {
+	const HTMLGPUBackdropFrame &gpu_backdrop_frame = surface->get_gpu_backdrop_frame();
+	if (gpu_backdrop_frame.is_valid()) {
+		use_gpu_mask = true;
+		for (const HTMLGPUBackdropEffect &effect : gpu_backdrop_frame.effects) {
+			if (supported_count >= HTML_VIEW_MAX_BACKDROP_FILTER_REGIONS) {
 				break;
 			}
-			float amount = operation.amount;
-			if (operation.type == HTML_BACKDROP_FILTER_OPERATION_BLUR) {
-				amount = MAX(0.0f, amount * radius_scale);
-				local_blur_radius = MAX(local_blur_radius, amount);
+			if (effect.has_unsupported_flags() || effect.id == 0 || !effect.has_filter_operations()) {
+				continue;
 			}
-			filter_ops.set(supported_op_count, Vector4(operation.type, amount, 0.0f, 0.0f));
-			supported_op_count++;
+			rects.set(supported_count, Vector4(effect.id, 0.0f, 0.0f, 0.0f));
+			const int op_start = supported_op_count;
+			float local_blur_radius = effect.blur_radius_css_px * radius_scale;
+			for (const HTMLBackdropFilterOperation &operation : effect.filter_operations) {
+				if (supported_op_count >= HTML_VIEW_MAX_BACKDROP_FILTER_OPERATIONS) {
+					break;
+				}
+				float amount = operation.amount;
+				if (operation.type == HTML_BACKDROP_FILTER_OPERATION_BLUR) {
+					amount = MAX(0.0f, amount * radius_scale);
+					local_blur_radius = MAX(local_blur_radius, amount);
+				}
+				filter_ops.set(supported_op_count, Vector4(operation.type, amount, 0.0f, 0.0f));
+				supported_op_count++;
+			}
+			const int op_count = supported_op_count - op_start;
+			if (op_count == 0 && local_blur_radius <= 0.0f) {
+				continue;
+			}
+			params.set(supported_count, Vector4(local_blur_radius, effect.opacity, op_start, op_count));
+			max_blur_radius = MAX(max_blur_radius, local_blur_radius);
+			supported_count++;
 		}
-		const int op_count = supported_op_count - op_start;
-		if (op_count == 0 && local_blur_radius <= 0.0f) {
-			continue;
+	} else {
+		const Vector<HTMLBackdropFilterRegion> &regions = surface->get_backdrop_filter_regions();
+		for (const HTMLBackdropFilterRegion &region : regions) {
+			if (supported_count >= HTML_VIEW_MAX_BACKDROP_FILTER_REGIONS) {
+				break;
+			}
+			if (region.has_unsupported_flags() || region.bounds.size.x <= 0.0f || region.bounds.size.y <= 0.0f || !region.has_filter_operations()) {
+				continue;
+			}
+
+			const Rect2 local_rect(
+					Point2(region.bounds.position.x * scale_x, region.bounds.position.y * scale_y),
+					Size2(region.bounds.size.x * scale_x, region.bounds.size.y * scale_y));
+			rects.set(supported_count, Vector4(local_rect.position.x, local_rect.position.y, local_rect.size.x, local_rect.size.y));
+			radii.set(supported_count, Vector4(
+											 region.border_radius_top_left * radius_scale,
+											 region.border_radius_top_right * radius_scale,
+											 region.border_radius_bottom_right * radius_scale,
+											 region.border_radius_bottom_left * radius_scale));
+			const int op_start = supported_op_count;
+			float local_blur_radius = region.blur_radius_css_px * radius_scale;
+			for (const HTMLBackdropFilterOperation &operation : region.filter_operations) {
+				if (supported_op_count >= HTML_VIEW_MAX_BACKDROP_FILTER_OPERATIONS) {
+					break;
+				}
+				float amount = operation.amount;
+				if (operation.type == HTML_BACKDROP_FILTER_OPERATION_BLUR) {
+					amount = MAX(0.0f, amount * radius_scale);
+					local_blur_radius = MAX(local_blur_radius, amount);
+				}
+				filter_ops.set(supported_op_count, Vector4(operation.type, amount, 0.0f, 0.0f));
+				supported_op_count++;
+			}
+			const int op_count = supported_op_count - op_start;
+			if (op_count == 0 && local_blur_radius <= 0.0f) {
+				continue;
+			}
+			params.set(supported_count, Vector4(local_blur_radius, region.opacity, op_start, op_count));
+			max_blur_radius = MAX(max_blur_radius, local_blur_radius);
+			supported_count++;
 		}
-		params.set(supported_count, Vector4(local_blur_radius, region.opacity, op_start, op_count));
-		max_blur_radius = MAX(max_blur_radius, local_blur_radius);
-		supported_count++;
 	}
 
 	if (supported_count == 0) {
@@ -649,6 +724,10 @@ void HTMLView::_update_backdrop_filter_canvas() {
 	backdrop_filter_rect->show();
 	backdrop_filter_rect->set_position(Point2());
 	backdrop_filter_rect->set_size(control_size);
+	backdrop_filter_material->set_shader_parameter(SNAME("use_mask_texture"), use_gpu_mask);
+	if (use_gpu_mask) {
+		backdrop_filter_material->set_shader_parameter(SNAME("backdrop_mask_texture"), gpu_backdrop_frame.mask_texture);
+	}
 	backdrop_filter_material->set_shader_parameter(SNAME("view_size"), control_size);
 	backdrop_filter_material->set_shader_parameter(SNAME("region_count"), supported_count);
 	backdrop_filter_material->set_shader_parameter(SNAME("region_rects"), rects);
@@ -683,11 +762,6 @@ Size2i HTMLView::_get_target_viewport_size() const {
 	Size2i target_size;
 
 	switch (viewport_size_mode) {
-		case VIEWPORT_SIZE_SCREEN_PIXELS: {
-			const Vector2 screen_scale = _get_screen_pixel_scale();
-			target_size = Size2i(Math::ceil(control_size.x * screen_scale.x), Math::ceil(control_size.y * screen_scale.y));
-		} break;
-
 		case VIEWPORT_SIZE_FIXED: {
 			target_size = fixed_viewport_size;
 			if (target_size.x <= 0 || target_size.y <= 0) {
@@ -696,6 +770,7 @@ Size2i HTMLView::_get_target_viewport_size() const {
 			}
 		} break;
 
+		case VIEWPORT_SIZE_SCREEN_PIXELS:
 		case VIEWPORT_SIZE_CONTROL:
 		default: {
 			target_size = Size2i(Math::ceil(control_size.x), Math::ceil(control_size.y));
@@ -710,7 +785,7 @@ Size2i HTMLView::_get_target_viewport_size() const {
 }
 
 float HTMLView::_get_target_device_scale_factor() const {
-	if (viewport_size_mode != VIEWPORT_SIZE_CONTROL) {
+	if (viewport_size_mode == VIEWPORT_SIZE_FIXED) {
 		return 1.0f;
 	}
 
@@ -1136,6 +1211,7 @@ void HTMLView::set_backdrop_filter_enabled(bool p_backdrop_filter_enabled) {
 		return;
 	}
 	backdrop_filter_enabled = p_backdrop_filter_enabled;
+	surface->set_backdrop_filter_enabled(backdrop_filter_enabled);
 	_update_backdrop_filter_canvas();
 	queue_redraw();
 }

@@ -890,6 +890,7 @@ void EditorNode::_notification(int p_what) {
 				// TRANSLATORS: The placeholder is the rendering method that has overridden the default one.
 				renderer->set_item_text(0, vformat(TTR("%s (Overridden)"), _to_rendering_method_display_name(current_renderer_os)));
 			}
+			_update_renderer_driver_options();
 		} break;
 
 		case NOTIFICATION_POSTINITIALIZE: {
@@ -1177,6 +1178,7 @@ void EditorNode::_notification(int p_what) {
 				_update_update_spinner();
 				_update_main_menu_type();
 				renderer->set_visible(EDITOR_GET("interface/editor/appearance/show_renderer_selector"));
+				_update_renderer_driver_visibility();
 			}
 			if (EditorSettings::get_singleton()->check_changed_settings_in_group("interface/editor/display")) {
 				_update_vsync_mode();
@@ -7790,6 +7792,100 @@ void EditorNode::_update_renderer_color() {
 	renderer->add_theme_color_override("font_hover_pressed_color", renderer_normal_color.lerp(mono_color, 0.5));
 }
 
+String EditorNode::_get_rendering_device_driver_setting_name() const {
+	const String base_setting = "rendering/rendering_device/driver";
+	const HashMap<StringName, PropertyInfo> &custom_property_info = ProjectSettings::get_singleton()->get_custom_property_info();
+	const char *platform_features[] = {
+		"windows",
+		"linuxbsd",
+		"android",
+		"ios",
+		"visionos",
+		"macos",
+	};
+
+	for (const char *feature : platform_features) {
+		if (!OS::get_singleton()->has_feature(feature)) {
+			continue;
+		}
+		const String platform_setting = base_setting + "." + feature;
+		if (custom_property_info.has(StringName(platform_setting))) {
+			return platform_setting;
+		}
+	}
+
+	return base_setting;
+}
+
+String EditorNode::_to_rendering_device_driver_display_name(const String &p_rendering_driver) const {
+	if (p_rendering_driver == "d3d12") {
+		return TTR("D3D12");
+	}
+	if (p_rendering_driver == "vulkan") {
+		return TTR("Vulkan");
+	}
+	if (p_rendering_driver == "metal") {
+		return TTR("Metal");
+	}
+	return p_rendering_driver.capitalize();
+}
+
+void EditorNode::_update_renderer_driver_options() {
+	ERR_FAIL_NULL(renderer_driver);
+
+	renderer_driver->clear();
+
+	const String current_renderer_os = OS::get_singleton()->get_current_rendering_method().to_lower();
+	if (current_renderer_os != "forward_plus" && current_renderer_os != "mobile") {
+		_update_renderer_driver_visibility();
+		return;
+	}
+
+	const String setting_name = _get_rendering_device_driver_setting_name();
+	const HashMap<StringName, PropertyInfo> &custom_property_info = ProjectSettings::get_singleton()->get_custom_property_info();
+	const PropertyInfo *property_info = custom_property_info.getptr(StringName(setting_name));
+	if (property_info == nullptr || property_info->hint_string.is_empty()) {
+		_update_renderer_driver_visibility();
+		return;
+	}
+
+	const String current_driver_ps = String(GLOBAL_GET("rendering/rendering_device/driver")).to_lower();
+	const String current_driver_os = OS::get_singleton()->get_current_rendering_driver_name().to_lower();
+	const bool driver_overridden = current_driver_ps != current_driver_os;
+
+	if (driver_overridden) {
+		renderer_driver->add_item(vformat(TTR("%s (Overridden)"), _to_rendering_device_driver_display_name(current_driver_os)));
+		renderer_driver->set_item_metadata(-1, current_driver_os);
+		renderer_driver->select(0);
+		renderer_driver->set_disabled(true);
+		_update_renderer_driver_visibility();
+		return;
+	}
+
+	PackedStringArray drivers = property_info->hint_string.split(",", false);
+	for (int i = 0; i < drivers.size(); i++) {
+		const String driver = drivers[i].to_lower();
+		renderer_driver->add_item(_to_rendering_device_driver_display_name(driver));
+		renderer_driver->set_item_metadata(-1, driver);
+		if (current_driver_ps == driver) {
+			renderer_driver->select(i);
+		}
+	}
+
+	renderer_driver->set_disabled(renderer_driver->get_item_count() <= 1);
+	_update_renderer_driver_visibility();
+}
+
+void EditorNode::_update_renderer_driver_visibility() {
+	if (renderer_driver == nullptr) {
+		return;
+	}
+
+	const String current_renderer_os = OS::get_singleton()->get_current_rendering_method().to_lower();
+	const bool rd_renderer = current_renderer_os == "forward_plus" || current_renderer_os == "mobile";
+	renderer_driver->set_visible(rd_renderer && renderer_driver->get_item_count() > 0 && bool(EDITOR_GET("interface/editor/appearance/show_renderer_selector")));
+}
+
 void EditorNode::_renderer_selected(int p_index) {
 	const String rendering_method = renderer->get_item_metadata(p_index);
 	const String current_renderer = GLOBAL_GET("rendering/renderer/rendering_method");
@@ -7810,8 +7906,12 @@ void EditorNode::_renderer_selected(int p_index) {
 		video_restart_dialog->set_ok_button_text(TTRC("Save & Restart"));
 		video_restart_dialog->get_label()->set_auto_translate_mode(AUTO_TRANSLATE_MODE_DISABLED);
 		gui_base->add_child(video_restart_dialog);
-	} else {
+	}
+	if (video_restart_dialog->is_connected(SceneStringName(confirmed), callable_mp(this, &EditorNode::_set_renderer_name_save_and_restart))) {
 		video_restart_dialog->disconnect(SceneStringName(confirmed), callable_mp(this, &EditorNode::_set_renderer_name_save_and_restart));
+	}
+	if (video_restart_dialog->is_connected(SceneStringName(confirmed), callable_mp(this, &EditorNode::_set_renderer_driver_name_save_and_restart))) {
+		video_restart_dialog->disconnect(SceneStringName(confirmed), callable_mp(this, &EditorNode::_set_renderer_driver_name_save_and_restart));
 	}
 
 	const String mobile_rendering_method = rendering_method == "forward_plus" ? "mobile" : rendering_method;
@@ -7823,6 +7923,40 @@ void EditorNode::_renderer_selected(int p_index) {
 	video_restart_dialog->popup_centered();
 
 	_update_renderer_color();
+	_update_renderer_driver_visibility();
+}
+
+void EditorNode::_renderer_driver_selected(int p_index) {
+	const String rendering_driver = renderer_driver->get_item_metadata(p_index);
+	const String driver_setting_name = _get_rendering_device_driver_setting_name();
+	const String current_driver = String(ProjectSettings::get_singleton()->get_setting(driver_setting_name)).to_lower();
+	if (rendering_driver == current_driver) {
+		return;
+	}
+
+	for (int i = 0; i < renderer_driver->get_item_count(); i++) {
+		if (renderer_driver->get_item_metadata(i) == current_driver) {
+			renderer_driver->select(i);
+			break;
+		}
+	}
+
+	if (video_restart_dialog == nullptr) {
+		video_restart_dialog = memnew(ConfirmationDialog);
+		video_restart_dialog->set_ok_button_text(TTRC("Save & Restart"));
+		video_restart_dialog->get_label()->set_auto_translate_mode(AUTO_TRANSLATE_MODE_DISABLED);
+		gui_base->add_child(video_restart_dialog);
+	}
+	if (video_restart_dialog->is_connected(SceneStringName(confirmed), callable_mp(this, &EditorNode::_set_renderer_name_save_and_restart))) {
+		video_restart_dialog->disconnect(SceneStringName(confirmed), callable_mp(this, &EditorNode::_set_renderer_name_save_and_restart));
+	}
+	if (video_restart_dialog->is_connected(SceneStringName(confirmed), callable_mp(this, &EditorNode::_set_renderer_driver_name_save_and_restart))) {
+		video_restart_dialog->disconnect(SceneStringName(confirmed), callable_mp(this, &EditorNode::_set_renderer_driver_name_save_and_restart));
+	}
+
+	video_restart_dialog->connect(SceneStringName(confirmed), callable_mp(this, &EditorNode::_set_renderer_driver_name_save_and_restart).bind(rendering_driver));
+	video_restart_dialog->set_text(vformat(TTR("Changing the RenderingDevice driver requires restarting the editor.\n\nChoosing Save & Restart will change this platform's RenderingDevice driver to: %s"), _to_rendering_device_driver_display_name(rendering_driver)));
+	video_restart_dialog->popup_centered();
 }
 
 String EditorNode::_to_rendering_method_display_name(const String &p_rendering_method) const {
@@ -7851,6 +7985,14 @@ void EditorNode::_set_renderer_name_save_and_restart(const String &p_rendering_m
 		ProjectSettings::get_singleton()->set("rendering/renderer/rendering_method.mobile", "mobile");
 	}
 
+	ProjectSettings::get_singleton()->save();
+
+	save_all_scenes();
+	restart_editor();
+}
+
+void EditorNode::_set_renderer_driver_name_save_and_restart(const String &p_rendering_driver) {
+	ProjectSettings::get_singleton()->set(_get_rendering_device_driver_setting_name(), p_rendering_driver);
 	ProjectSettings::get_singleton()->save();
 
 	save_all_scenes();
@@ -9134,6 +9276,19 @@ EditorNode::EditorNode() {
 
 	right_menu_hb->add_child(renderer);
 
+	renderer_driver = memnew(OptionButton);
+	renderer_driver->set_flat(true);
+	renderer_driver->set_theme_type_variation("TopBarOptionButton");
+	renderer_driver->set_fit_to_longest_item(false);
+	renderer_driver->set_focus_mode(Control::FOCUS_ACCESSIBILITY);
+	renderer_driver->set_auto_translate_mode(AUTO_TRANSLATE_MODE_DISABLED);
+	renderer_driver->set_tooltip_auto_translate_mode(AUTO_TRANSLATE_MODE_ALWAYS);
+	renderer_driver->set_tooltip_text(TTRC("Choose the RenderingDevice driver for this platform.\n\nChanging this setting requires restarting the editor."));
+	renderer_driver->set_accessibility_name(TTRC("RenderingDevice Driver"));
+	renderer_driver->connect(SceneStringName(item_selected), callable_mp(this, &EditorNode::_renderer_driver_selected));
+
+	right_menu_hb->add_child(renderer_driver);
+
 	if (can_expand) {
 		// Add spacer to avoid other controls under the window minimize/maximize/close buttons (right side).
 		right_menu_spacer = memnew(Control);
@@ -9167,8 +9322,10 @@ EditorNode::EditorNode() {
 		renderer->set_item_metadata(-1, current_renderer_os);
 	}
 	_update_renderer_color();
+	_update_renderer_driver_options();
 
 	renderer->set_visible(EDITOR_GET("interface/editor/appearance/show_renderer_selector"));
+	_update_renderer_driver_visibility();
 
 	progress_hb = memnew(BackgroundProgress);
 

@@ -305,7 +305,7 @@ bool HTMLSurfaceExternalCApiBackend::_ensure_renderer() {
 	config.device_scale_factor = device_scale_factor;
 	config.no_script_profile = 1;
 
-	blink_standalone_status_code_t status = blink_standalone_renderer_create(&config, &renderer);
+	blink_standalone_status_code_t status = _create_renderer(&config, &renderer);
 	if (status != BLINK_STANDALONE_STATUS_OK || renderer == nullptr) {
 		ERR_PRINT("Could not create the external HTML/CSS renderer.");
 		return false;
@@ -325,6 +325,10 @@ bool HTMLSurfaceExternalCApiBackend::_ensure_renderer() {
 	document_dirty = true;
 	viewport_dirty = false;
 	return true;
+}
+
+blink_standalone_status_code_t HTMLSurfaceExternalCApiBackend::_create_renderer(const blink_standalone_renderer_config_t *p_config, blink_standalone_renderer_t **r_renderer) {
+	return blink_standalone_renderer_create(p_config, r_renderer);
 }
 
 bool HTMLSurfaceExternalCApiBackend::_install_resource_provider() {

@@ -35,6 +35,7 @@
 #include "core/string/string_name.h"
 #include "core/string/ustring.h"
 #include "core/templates/vector.h"
+#include "scene/resources/texture.h"
 
 enum HTMLFramePixelFormat {
 	HTML_FRAME_PIXEL_FORMAT_RGBA8,
@@ -186,5 +187,79 @@ struct HTMLFrameMetadata {
 			}
 		}
 		return nullptr;
+	}
+};
+
+enum HTMLGPUBackdropMaskEncoding {
+	HTML_GPU_BACKDROP_MASK_ENCODING_NONE = 0,
+	HTML_GPU_BACKDROP_MASK_ENCODING_RGBA8_ID_COVERAGE = 1,
+};
+
+struct HTMLGPUBackdropEffect {
+	uint32_t id = 0;
+	uint64_t generation = 0;
+	Rect2 bounds;
+	float blur_radius_css_px = 0.0f;
+	float border_radius_top_left = 0.0f;
+	float border_radius_top_right = 0.0f;
+	float border_radius_bottom_right = 0.0f;
+	float border_radius_bottom_left = 0.0f;
+	float opacity = 1.0f;
+	uint32_t flags = 0;
+	Vector<HTMLBackdropFilterOperation> filter_operations;
+
+	bool has_unsupported_flags() const {
+		static const uint32_t unsupported_flags =
+				HTML_BACKDROP_FILTER_UNSUPPORTED_COMPLEX_CLIP |
+				HTML_BACKDROP_FILTER_UNSUPPORTED_TRANSFORM |
+				HTML_BACKDROP_FILTER_UNSUPPORTED_FILTER_OP |
+				HTML_BACKDROP_FILTER_UNSUPPORTED_MASK_OR_BLEND;
+		return (flags & unsupported_flags) != 0;
+	}
+
+	bool has_filter_operations() const {
+		return !filter_operations.is_empty() || blur_radius_css_px > 0.0f;
+	}
+};
+
+struct HTMLGPUBackdropFrame {
+	Ref<Texture2D> mask_texture;
+	Vector<HTMLGPUBackdropEffect> effects;
+	Size2i logical_size;
+	Size2i physical_size;
+	float device_scale_factor = 1.0f;
+	uint32_t backend = 0;
+	uint32_t mask_encoding = HTML_GPU_BACKDROP_MASK_ENCODING_NONE;
+	uint32_t max_effect_id = 0;
+	uint64_t frame_generation = 0;
+	uint64_t main_target_generation = 0;
+	uint64_t backdrop_mask_generation = 0;
+
+	bool is_valid() const {
+		return mask_texture.is_valid() &&
+				mask_encoding == HTML_GPU_BACKDROP_MASK_ENCODING_RGBA8_ID_COVERAGE &&
+				logical_size.x > 0 &&
+				logical_size.y > 0 &&
+				physical_size.x > 0 &&
+				physical_size.y > 0 &&
+				max_effect_id > 0 &&
+				frame_generation > 0 &&
+				main_target_generation > 0 &&
+				backdrop_mask_generation > 0 &&
+				!effects.is_empty();
+	}
+
+	void clear() {
+		mask_texture.unref();
+		effects.clear();
+		logical_size = Size2i();
+		physical_size = Size2i();
+		device_scale_factor = 1.0f;
+		backend = 0;
+		mask_encoding = HTML_GPU_BACKDROP_MASK_ENCODING_NONE;
+		max_effect_id = 0;
+		frame_generation = 0;
+		main_target_generation = 0;
+		backdrop_mask_generation = 0;
 	}
 };

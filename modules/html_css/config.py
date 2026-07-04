@@ -63,6 +63,11 @@ def get_opts(platform):
             "Force whole-archive linking for Blink static archives listed as manifest candidates. Off by default because Godot may already provide libraries such as libpng, ICU, VMA, or Embree.",
             False,
         ),
+        BoolVariable(
+            "module_html_css_blink_static_allow_unsupported_host",
+            "Allow linking a Blink static package whose manifest declares full host/editor static linking unsupported. Experimental and unsafe; off by default.",
+            False,
+        ),
     ]
 
 

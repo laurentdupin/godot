@@ -109,6 +109,7 @@ void HTMLRenderSurface::_sync_backend_state() {
 	backend->set_transparent_background(background_color.a < 1.0);
 	backend->set_background_color(background_color);
 	backend->set_placeholder_background(placeholder_background);
+	backend->set_backdrop_filter_enabled(backdrop_filter_enabled);
 }
 
 bool HTMLRenderSurface::_fallback_auto_gpu_to_cpu(const String &p_reason) {
@@ -196,6 +197,7 @@ bool HTMLRenderSurface::set_viewport(const Size2i &p_size, float p_device_scale_
 	}
 	size = new_size;
 	device_scale_factor = new_device_scale_factor;
+	gpu_backdrop_frame.clear();
 	if (backend != nullptr) {
 		_sync_backend_state();
 	}
@@ -212,6 +214,22 @@ void HTMLRenderSurface::set_placeholder_background(const Color &p_color) {
 	placeholder_background = p_color;
 	_sync_backend_state();
 	render_now(marker);
+}
+
+void HTMLRenderSurface::set_backdrop_filter_enabled(bool p_enabled) {
+	if (backdrop_filter_enabled == p_enabled) {
+		return;
+	}
+	backdrop_filter_enabled = p_enabled;
+	gpu_backdrop_frame.clear();
+	if (backend != nullptr) {
+		_sync_backend_state();
+	}
+	render_now(marker);
+}
+
+bool HTMLRenderSurface::is_backdrop_filter_enabled() const {
+	return backdrop_filter_enabled;
 }
 
 void HTMLRenderSurface::set_backend_preference(HTMLSurfaceBackendPreference p_backend_preference) {
@@ -243,6 +261,7 @@ Error HTMLRenderSurface::update_compositor(double p_timeline_time_seconds, bool 
 	ERR_FAIL_COND_V(err != OK, err);
 
 	backend->get_frame_metadata(frame_metadata);
+	backend->get_gpu_backdrop_frame(gpu_backdrop_frame);
 	if (r_needs_output != nullptr) {
 		*r_needs_output = needs_output;
 	}
@@ -263,7 +282,19 @@ void HTMLRenderSurface::render_now(const String &p_marker) {
 		backend->render_placeholder(marker);
 	}
 	backend->get_frame_metadata(frame_metadata);
+	backend->get_gpu_backdrop_frame(gpu_backdrop_frame);
 	_notify_changed();
+}
+
+bool HTMLRenderSurface::poll_pending_output(bool *r_waiting_for_completion) {
+	_ensure_backend();
+	const bool changed = backend->poll_pending_output(r_waiting_for_completion);
+	if (changed) {
+		backend->get_frame_metadata(frame_metadata);
+		backend->get_gpu_backdrop_frame(gpu_backdrop_frame);
+		_notify_changed();
+	}
+	return changed;
 }
 
 bool HTMLRenderSurface::has_pending_output() const {
@@ -276,12 +307,17 @@ Error HTMLRenderSurface::submit_cpu_frame(const HTMLCPUFrame &p_frame, const HTM
 	ERR_FAIL_COND_V(err != OK, err);
 
 	frame_metadata = p_metadata;
+	gpu_backdrop_frame.clear();
 	_notify_changed();
 	return OK;
 }
 
 const HTMLFrameMetadata &HTMLRenderSurface::get_frame_metadata() const {
 	return frame_metadata;
+}
+
+const HTMLGPUBackdropFrame &HTMLRenderSurface::get_gpu_backdrop_frame() const {
+	return gpu_backdrop_frame;
 }
 
 const Vector<HTMLBackdropFilterRegion> &HTMLRenderSurface::get_backdrop_filter_regions() const {

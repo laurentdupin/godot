@@ -51,8 +51,10 @@ class HTMLRenderSurface : public RefCounted {
 	Size2i size = Size2i(512, 512);
 	float device_scale_factor = 1.0f;
 	Color placeholder_background = Color(0.08, 0.09, 0.1, 1.0);
+	bool backdrop_filter_enabled = false;
 	String marker = "HTML";
 	HTMLFrameMetadata frame_metadata;
+	HTMLGPUBackdropFrame gpu_backdrop_frame;
 	HTMLSurfaceBackendPreference backend_preference = HTML_SURFACE_BACKEND_AUTO;
 	Callable changed_callback;
 
@@ -73,6 +75,8 @@ public:
 	bool set_viewport(const Size2i &p_size, float p_device_scale_factor, bool p_render = true);
 
 	void set_placeholder_background(const Color &p_color);
+	void set_backdrop_filter_enabled(bool p_enabled);
+	bool is_backdrop_filter_enabled() const;
 
 	void set_backend_preference(HTMLSurfaceBackendPreference p_backend_preference);
 	HTMLSurfaceBackendPreference get_backend_preference() const;
@@ -80,9 +84,11 @@ public:
 	void set_changed_callback(const Callable &p_callback);
 	Error update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame = nullptr);
 	void render_now(const String &p_marker);
+	bool poll_pending_output(bool *r_waiting_for_completion = nullptr);
 	bool has_pending_output() const;
 	Error submit_cpu_frame(const HTMLCPUFrame &p_frame, const HTMLFrameMetadata &p_metadata = HTMLFrameMetadata());
 	const HTMLFrameMetadata &get_frame_metadata() const;
+	const HTMLGPUBackdropFrame &get_gpu_backdrop_frame() const;
 	const Vector<HTMLBackdropFilterRegion> &get_backdrop_filter_regions() const;
 	const HTMLElementHit *find_hit_at(const Point2i &p_position) const;
 	bool hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const;

@@ -203,6 +203,33 @@ Error EditorExportPlatformWindows::modify_template(const Ref<EditorExportPreset>
 	return OK;
 }
 
+static void copy_blink_runtime_sidecars(const Ref<DirAccess> &p_da, const String &p_template_dir, const String &p_export_dir, int p_chmod_flags) {
+	const String blink_dll = "blink_standalone_renderer_c_api.dll";
+	if (!p_da->file_exists(p_template_dir.path_join(blink_dll))) {
+		return;
+	}
+
+	const char *sidecars[] = {
+		"blink_standalone_renderer_c_api.dll",
+		"blink_standalone_renderer_c_api_link_manifest.json",
+		"icudtl.dat",
+		"libEGL.dll",
+		"libGLESv2.dll",
+		"d3dcompiler_47.dll",
+		"dxcompiler.dll",
+		"dxil.dll",
+	};
+
+	for (const char *sidecar : sidecars) {
+		const String sidecar_name = sidecar;
+		const String source_path = p_template_dir.path_join(sidecar_name);
+		if (!p_da->file_exists(source_path)) {
+			continue;
+		}
+		p_da->copy(source_path, p_export_dir.path_join(sidecar_name), p_chmod_flags);
+	}
+}
+
 Error EditorExportPlatformWindows::export_project(const Ref<EditorExportPreset> &p_preset, bool p_debug, const String &p_path, BitField<EditorExportPlatform::DebugFlags> p_flags, bool p_notify) {
 	String custom_debug = p_preset->get("custom_template/debug");
 	String custom_release = p_preset->get("custom_template/release");
@@ -251,6 +278,8 @@ Error EditorExportPlatformWindows::export_project(const Ref<EditorExportPreset> 
 	}
 
 	Ref<DirAccess> da = DirAccess::create(DirAccess::ACCESS_FILESYSTEM);
+	copy_blink_runtime_sidecars(da, template_path.get_base_dir(), path.get_base_dir(), get_chmod_flags());
+
 	int export_angle = p_preset->get("application/export_angle");
 	bool include_angle_libs = false;
 	if (export_angle == 0) {

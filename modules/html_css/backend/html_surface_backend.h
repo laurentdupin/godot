@@ -70,6 +70,7 @@ public:
 	virtual void set_transparent_background(bool p_transparent_background) = 0;
 	virtual void set_background_color(const Color &p_background_color) = 0;
 	virtual void set_placeholder_background(const Color &p_color) = 0;
+	virtual void set_backdrop_filter_enabled(bool p_enabled) {}
 	virtual Error update_compositor(double, bool *r_needs_output, bool *r_needs_begin_frame) {
 		if (r_needs_output != nullptr) {
 			*r_needs_output = true;
@@ -80,11 +81,18 @@ public:
 		return OK;
 	}
 	virtual void render_placeholder(const String &p_marker) = 0;
+	virtual bool poll_pending_output(bool *r_waiting_for_completion = nullptr) {
+		if (r_waiting_for_completion != nullptr) {
+			*r_waiting_for_completion = false;
+		}
+		return false;
+	}
 	virtual bool has_pending_output() const { return false; }
 	virtual bool has_terminal_render_failure() const { return false; }
 	virtual String get_terminal_render_failure_reason() const { return String(); }
 	virtual Error submit_cpu_frame(const HTMLCPUFrame &p_frame) = 0;
 	virtual void get_frame_metadata(HTMLFrameMetadata &r_metadata) const = 0;
+	virtual void get_gpu_backdrop_frame(HTMLGPUBackdropFrame &r_frame) const { r_frame.clear(); }
 	virtual Error mouse_move(const Point2 &, int) { return ERR_UNAVAILABLE; }
 	virtual Error mouse_down(const Point2 &, HTMLSurfaceMouseButton, int, int) { return ERR_UNAVAILABLE; }
 	virtual Error mouse_up(const Point2 &, HTMLSurfaceMouseButton, int, int) { return ERR_UNAVAILABLE; }

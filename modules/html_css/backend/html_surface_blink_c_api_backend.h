@@ -57,7 +57,6 @@ protected:
 	bool _install_resource_provider();
 	bool _sync_document();
 	bool _sync_viewport();
-	bool _prepare_for_input();
 	bool _copy_latest_output();
 	void _read_frame_metadata();
 	String _load_document_html() const;
@@ -69,7 +68,9 @@ protected:
 	Error _status_to_error(blink_standalone_status_code_t p_status, const char *p_operation) const;
 	void _clear_output();
 
+	virtual blink_standalone_status_code_t _create_renderer(const blink_standalone_renderer_config_t *p_config, blink_standalone_renderer_t **r_renderer);
 	virtual bool _after_renderer_created() { return true; }
+	virtual bool _prepare_for_input();
 
 	static blink_standalone_resource_status_t _load_resource_callback(void *p_user_data, const blink_standalone_resource_request_t *p_request, blink_standalone_resource_response_t *r_response);
 	static void _release_resource_callback(void *p_user_data, blink_standalone_resource_response_t *p_response);
