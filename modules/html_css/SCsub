@@ -46,6 +46,8 @@ def _html_css_package_artifact(p_package_path):
 
 
 def _html_css_blink_build_dir(p_profile):
+    if env["platform"] == "windows" and p_profile == "msvc" and env["module_html_css_blink_link_mode"] == "static":
+        return "cmake-msvc-static-proof"
     if env["platform"] == "windows" and p_profile == "msvc":
         return "cmake-msvc-release"
     return "cmake-generated-v8-chromium-llvm"
@@ -265,7 +267,7 @@ def _html_css_validate_static_manifest_runtime_sidecars(p_manifest):
     print("  manifest: " + _html_css_static_manifest_path())
     for sidecar in blocked_sidecars:
         print("  sidecar: " + sidecar)
-    print("Static mode must not require Blink/ANGLE code DLL/SO/DYLIB sidecars. Use a full-static Blink package or dynamic link mode.")
+    print("Static mode must not require Blink/ANGLE code DLL/SO/DYLIB sidecars. Use a full-static Blink package, or explicitly opt into dynamic diagnostic mode.")
     Exit(1)
 
 
@@ -301,10 +303,25 @@ def _html_css_expected_package_artifact():
 
 
 def _html_css_blink_auto_build_commands():
+    profile = _html_css_blink_package_profile()
     if env["module_html_css_blink_link_mode"] == "static":
+        if profile == "msvc" and env["platform"] == "windows":
+            return [
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    "upstream\\chromium\\standalone_renderer\\tools\\build_msvc_static_package.ps1",
+                    "-SkipV8Build",
+                    "-SkipDawnBuild",
+                    "-Jobs",
+                    "8",
+                ],
+            ]
         return []
 
-    profile = _html_css_blink_package_profile()
     if profile == "msvc":
         return [
             ["cmake", "--preset", "x64-Release-MSVC"],
@@ -336,8 +353,12 @@ def _html_css_print_package_build_help():
     print("Build it from the nested checkout:")
     commands = _html_css_blink_auto_build_commands()
     if env["module_html_css_blink_link_mode"] == "static":
-        print("  Static package auto-build is intentionally not wired into Godot SCons.")
-        print("  Build the nested static package output first, or pass module_html_css_blink_lib_path/module_html_css_blink_static_manifest explicitly.")
+        print("  cd thirdparty\\blink-standalone-ui")
+        if commands:
+            for command in commands:
+                print("  " + _html_css_command_text(command))
+        else:
+            print("  Build the nested static package output for this platform first, or pass module_html_css_blink_lib_path/module_html_css_blink_static_manifest explicitly.")
         return
     print("  cd thirdparty\\blink-standalone-ui")
     for command in commands:
@@ -352,10 +373,6 @@ def _html_css_ensure_blink_package():
     expected_artifact = _html_css_expected_package_artifact()
     if os.path.exists(expected_artifact):
         return
-
-    if env["module_html_css_blink_link_mode"] == "static":
-        _html_css_print_package_build_help()
-        Exit(1)
 
     if not env["module_html_css_blink_auto_build"]:
         _html_css_print_package_build_help()

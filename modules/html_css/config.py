@@ -23,8 +23,8 @@ def get_opts(platform):
         ),
         EnumVariable(
             "module_html_css_blink_link_mode",
-            "How to consume the external HTML/CSS renderer C API package: dynamic links an import/shared library and requires runtime sidecars; static links the provided static archive(s) but may still require package data/sidecars",
-            "dynamic",
+            "How to consume the external HTML/CSS renderer C API package: static links the provided static archive(s) and is the default; dynamic links an import/shared library and is an explicit diagnostic/development override",
+            "static",
             allowed_values=("dynamic", "static"),
         ),
         (
