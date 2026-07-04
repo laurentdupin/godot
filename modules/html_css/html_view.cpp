@@ -71,6 +71,7 @@ uniform sampler2D backdrop_mask_texture : repeat_disable, filter_nearest;
 uniform bool use_mask_texture = false;
 uniform vec2 view_size = vec2(1.0, 1.0);
 uniform int region_count = 0;
+uniform vec4 region_ids[8];
 uniform vec4 region_rects[8];
 uniform vec4 region_radii[8];
 uniform vec4 region_params[8];
@@ -182,13 +183,14 @@ void fragment() {
 	if (use_mask_texture) {
 		vec4 mask_sample = texture(backdrop_mask_texture, UV);
 		int effect_id = int(mask_sample.r * 255.0 + 0.5);
-		mask = mask_sample.g;
+		mask = clamp(mask_sample.g, 0.0, 1.0);
 		bool effect_found = false;
 		for (int i = 0; i < 8; i++) {
 			if (i >= region_count) {
 				break;
 			}
-			if (int(region_rects[i].x + 0.5) == effect_id) {
+			if (effect_id > 0 && int(region_ids[i].x + 0.5) == effect_id) {
+				mask *= rounded_rect_mask(local_pos, region_rects[i], region_radii[i]);
 				blur_radius = region_params[i].x;
 				opacity = region_params[i].y;
 				op_start = int(region_params[i].z + 0.5);
@@ -623,10 +625,12 @@ void HTMLView::_update_backdrop_filter_canvas() {
 	}
 
 	PackedVector4Array rects;
+	PackedVector4Array ids;
 	PackedVector4Array radii;
 	PackedVector4Array params;
 	PackedVector4Array filter_ops;
 	rects.resize(HTML_VIEW_MAX_BACKDROP_FILTER_REGIONS);
+	ids.resize(HTML_VIEW_MAX_BACKDROP_FILTER_REGIONS);
 	radii.resize(HTML_VIEW_MAX_BACKDROP_FILTER_REGIONS);
 	params.resize(HTML_VIEW_MAX_BACKDROP_FILTER_REGIONS);
 	filter_ops.resize(HTML_VIEW_MAX_BACKDROP_FILTER_OPERATIONS);
@@ -649,7 +653,16 @@ void HTMLView::_update_backdrop_filter_canvas() {
 			if (effect.has_unsupported_flags() || effect.id == 0 || !effect.has_filter_operations()) {
 				continue;
 			}
-			rects.set(supported_count, Vector4(effect.id, 0.0f, 0.0f, 0.0f));
+			const Rect2 local_rect(
+					Point2(effect.bounds.position.x * scale_x, effect.bounds.position.y * scale_y),
+					Size2(effect.bounds.size.x * scale_x, effect.bounds.size.y * scale_y));
+			ids.set(supported_count, Vector4(effect.id, 0.0f, 0.0f, 0.0f));
+			rects.set(supported_count, Vector4(local_rect.position.x, local_rect.position.y, local_rect.size.x, local_rect.size.y));
+			radii.set(supported_count, Vector4(
+											 effect.border_radius_top_left * radius_scale,
+											 effect.border_radius_top_right * radius_scale,
+											 effect.border_radius_bottom_right * radius_scale,
+											 effect.border_radius_bottom_left * radius_scale));
 			const int op_start = supported_op_count;
 			float local_blur_radius = effect.blur_radius_css_px * radius_scale;
 			for (const HTMLBackdropFilterOperation &operation : effect.filter_operations) {
@@ -730,6 +743,7 @@ void HTMLView::_update_backdrop_filter_canvas() {
 	}
 	backdrop_filter_material->set_shader_parameter(SNAME("view_size"), control_size);
 	backdrop_filter_material->set_shader_parameter(SNAME("region_count"), supported_count);
+	backdrop_filter_material->set_shader_parameter(SNAME("region_ids"), ids);
 	backdrop_filter_material->set_shader_parameter(SNAME("region_rects"), rects);
 	backdrop_filter_material->set_shader_parameter(SNAME("region_radii"), radii);
 	backdrop_filter_material->set_shader_parameter(SNAME("region_params"), params);
