@@ -56,8 +56,9 @@ public:
 
 	enum ViewportSizeMode {
 		VIEWPORT_SIZE_CONTROL,
-		VIEWPORT_SIZE_SCREEN_PIXELS,
+		VIEWPORT_SIZE_CONTROL_PHYSICAL_ADJUSTED,
 		VIEWPORT_SIZE_FIXED,
+		VIEWPORT_SIZE_PHYSICAL_SIZE,
 	};
 
 private:
@@ -66,7 +67,7 @@ private:
 	bool input_enabled = true;
 	bool focus_on_click = true;
 	BackendPreference backend_preference = BACKEND_AUTO;
-	ViewportSizeMode viewport_size_mode = VIEWPORT_SIZE_SCREEN_PIXELS;
+	ViewportSizeMode viewport_size_mode = VIEWPORT_SIZE_CONTROL_PHYSICAL_ADJUSTED;
 	Size2i fixed_viewport_size;
 	bool use_document_minimum_size = false;
 	bool backdrop_filter_enabled = false;

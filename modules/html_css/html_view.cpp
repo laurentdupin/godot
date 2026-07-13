@@ -371,7 +371,7 @@ void HTMLView::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::STRING_NAME, "text_backspace_action"), "set_text_backspace_action", "get_text_backspace_action");
 	ADD_PROPERTY(PropertyInfo(Variant::STRING_NAME, "text_delete_action"), "set_text_delete_action", "get_text_delete_action");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "backend_preference", PROPERTY_HINT_ENUM, "Auto,CPU,GPU Auto,Vulkan,D3D12"), "set_backend_preference", "get_backend_preference");
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "viewport_size_mode", PROPERTY_HINT_ENUM, "Control Size,Screen Pixels,Fixed"), "set_viewport_size_mode", "get_viewport_size_mode");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "viewport_size_mode", PROPERTY_HINT_ENUM, "Control Size,Control Physical Adjusted,Fixed,Physical Size"), "set_viewport_size_mode", "get_viewport_size_mode");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2I, "fixed_viewport_size", PROPERTY_HINT_RANGE, "0,16384,1,or_greater,suffix:px"), "set_fixed_viewport_size", "get_fixed_viewport_size");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "use_document_minimum_size"), "set_use_document_minimum_size", "is_using_document_minimum_size");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "backdrop_filter_enabled"), "set_backdrop_filter_enabled", "is_backdrop_filter_enabled");
@@ -386,8 +386,9 @@ void HTMLView::_bind_methods() {
 	BIND_ENUM_CONSTANT(BACKEND_VULKAN);
 	BIND_ENUM_CONSTANT(BACKEND_D3D12);
 	BIND_ENUM_CONSTANT(VIEWPORT_SIZE_CONTROL);
-	BIND_ENUM_CONSTANT(VIEWPORT_SIZE_SCREEN_PIXELS);
+	BIND_ENUM_CONSTANT(VIEWPORT_SIZE_CONTROL_PHYSICAL_ADJUSTED);
 	BIND_ENUM_CONSTANT(VIEWPORT_SIZE_FIXED);
+	BIND_ENUM_CONSTANT(VIEWPORT_SIZE_PHYSICAL_SIZE);
 
 	BIND_CONSTANT(HTML_BACKDROP_FILTER_ROUNDED_RECT);
 	BIND_CONSTANT(HTML_BACKDROP_FILTER_UNSUPPORTED_COMPLEX_CLIP);
@@ -572,7 +573,7 @@ void HTMLView::_disconnect_viewport_size_changed() {
 }
 
 void HTMLView::_viewport_size_changed() {
-	if (viewport_size_mode == VIEWPORT_SIZE_SCREEN_PIXELS) {
+	if (viewport_size_mode == VIEWPORT_SIZE_CONTROL_PHYSICAL_ADJUSTED || viewport_size_mode == VIEWPORT_SIZE_PHYSICAL_SIZE) {
 		_update_surface_size();
 	}
 	_update_backdrop_filter_canvas();
@@ -784,10 +785,15 @@ Size2i HTMLView::_get_target_viewport_size() const {
 			}
 		} break;
 
-		case VIEWPORT_SIZE_SCREEN_PIXELS:
+		case VIEWPORT_SIZE_CONTROL_PHYSICAL_ADJUSTED:
 		case VIEWPORT_SIZE_CONTROL:
 		default: {
 			target_size = Size2i(Math::ceil(control_size.x), Math::ceil(control_size.y));
+		} break;
+
+		case VIEWPORT_SIZE_PHYSICAL_SIZE: {
+			const Vector2 scale = _get_screen_pixel_scale();
+			target_size = Size2i(Math::ceil(control_size.x * scale.x), Math::ceil(control_size.y * scale.y));
 		} break;
 	}
 
@@ -799,7 +805,7 @@ Size2i HTMLView::_get_target_viewport_size() const {
 }
 
 float HTMLView::_get_target_device_scale_factor() const {
-	if (viewport_size_mode == VIEWPORT_SIZE_FIXED) {
+	if (viewport_size_mode == VIEWPORT_SIZE_CONTROL || viewport_size_mode == VIEWPORT_SIZE_FIXED || viewport_size_mode == VIEWPORT_SIZE_PHYSICAL_SIZE) {
 		return 1.0f;
 	}
 
@@ -1181,7 +1187,7 @@ HTMLView::BackendPreference HTMLView::get_backend_preference() const {
 }
 
 void HTMLView::set_viewport_size_mode(ViewportSizeMode p_viewport_size_mode) {
-	ERR_FAIL_INDEX((int)p_viewport_size_mode, 3);
+	ERR_FAIL_INDEX((int)p_viewport_size_mode, 4);
 	if (viewport_size_mode == p_viewport_size_mode) {
 		return;
 	}
