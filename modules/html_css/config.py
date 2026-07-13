@@ -23,7 +23,7 @@ def get_opts(platform):
         ),
         BoolVariable(
             "module_html_css_hcsr_auto_build",
-            "Build the nested HCSR static NativeAOT library with dotnet publish when its archive is missing.",
+            "Build the nested platform-specific HCSR static NativeAOT package when its archive is missing.",
             True,
         ),
         PathVariable(

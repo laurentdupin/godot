@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import zipfile
 
 from SCons.Script import Exit
@@ -46,7 +47,8 @@ def _html_css_resolve_repo_file(p_path):
 def _html_css_hcsr_static_library_path():
     if env["module_html_css_hcsr_lib_path"]:
         return _html_css_resolve_repo_file(env["module_html_css_hcsr_lib_path"])
-    if env["platform"] == "android" and env["arch"] == "arm64":
+    if env["platform"] == "android":
+        android_rid = "linux-bionic-arm64" if env["arch"] == "arm64" else "linux-bionic-x64"
         return _html_css_resolve_repo_file(
             os.path.join(
                 "thirdparty",
@@ -56,11 +58,44 @@ def _html_css_hcsr_static_library_path():
                 "bin",
                 "Release",
                 "net10.0",
-                "linux-bionic-arm64",
+                android_rid,
                 "publish",
                 "hcsr_renderer_android_combined.a",
             )
         )
+    if env["platform"] == "linuxbsd":
+        linux_rid = "linux-arm64" if env["arch"] == "arm64" else "linux-x64"
+        return _html_css_resolve_repo_file(
+            os.path.join(
+                "thirdparty",
+                "hcsr",
+                "src",
+                "Renderer.NativeBridge",
+                "bin",
+                "Release",
+                "net10.0",
+                linux_rid,
+                "publish",
+                "hcsr_renderer_combined.a",
+            )
+        )
+    if env["platform"] == "macos":
+        macos_rid = "osx-arm64" if env["arch"] == "arm64" else "osx-x64"
+        return _html_css_resolve_repo_file(
+            os.path.join(
+                "thirdparty",
+                "hcsr",
+                "src",
+                "Renderer.NativeBridge",
+                "bin",
+                "Release",
+                "net10.0",
+                macos_rid,
+                "publish",
+                "hcsr_renderer_combined.a",
+            )
+        )
+    windows_rid = "win-arm64" if env["arch"] == "arm64" else "win-x64"
     return _html_css_resolve_repo_file(
         os.path.join(
             "thirdparty",
@@ -70,7 +105,7 @@ def _html_css_hcsr_static_library_path():
             "bin",
             "Release",
             "net10.0",
-            "win-x64",
+            windows_rid,
             "publish",
             "hcsr_renderer_combined.lib",
         )
@@ -78,18 +113,20 @@ def _html_css_hcsr_static_library_path():
 
 
 def _html_css_ensure_hcsr_static_library():
-    supported_target = (env["platform"] == "windows" and env["arch"] == "x86_64") or (
-        env["platform"] == "android" and env["arch"] == "arm64"
-    )
+    supported_arch = env["arch"] in ("x86_64", "arm64")
+    supported_target = supported_arch and env["platform"] in ("windows", "android", "linuxbsd", "macos")
+    if env["platform"] == "linuxbsd" and not sys.platform.startswith("linux"):
+        supported_target = False
     if not supported_target:
-        print("HTML/CSS HCSR currently supports Windows x86_64 and Android ARM64 Godot targets.")
+        print("HTML/CSS HCSR supports Windows, Linux, and macOS x86_64/ARM64 plus Android x86_64/ARM64 targets. BSD is not supported.")
         Exit(1)
 
     library_path = _html_css_hcsr_static_library_path()
     hcsr_root = _html_css_resolve_repo_path(os.path.join("thirdparty", "hcsr"))
-    android_initializer_path = os.path.join(os.path.dirname(library_path), "hcsr_renderer_android_initializer.o")
+    initializer_name = "hcsr_renderer_android_initializer.o" if env["platform"] == "android" else "hcsr_renderer_initializer.o"
+    initializer_path = os.path.join(os.path.dirname(library_path), initializer_name)
     package_is_current = os.path.isfile(library_path) and (
-        env["platform"] != "android" or os.path.isfile(android_initializer_path)
+        env["platform"] == "windows" or os.path.isfile(initializer_path)
     )
     if package_is_current and not env["module_html_css_hcsr_lib_path"]:
         marker_name = "hcsr_renderer_android.commit" if env["platform"] == "android" else "hcsr_renderer_combined.commit"
@@ -112,7 +149,8 @@ def _html_css_ensure_hcsr_static_library():
 
     if env["platform"] == "android":
         build_script = _html_css_resolve_repo_file(os.path.join("thirdparty", "hcsr", "tools", "build-android-native.ps1"))
-        print("HTML/CSS HCSR Android archive is missing or stale; building nested ARM64 NativeAOT bridge:")
+        android_abi = "arm64-v8a" if env["arch"] == "arm64" else "x86_64"
+        print("HTML/CSS HCSR Android archive is missing or stale; building nested %s NativeAOT bridge:" % android_abi)
         print("  " + build_script)
         completed = subprocess.run(
             [
@@ -126,17 +164,28 @@ def _html_css_ensure_hcsr_static_library():
                 env["ANDROID_HOME"],
                 "-AndroidNdkRoot",
                 env["ANDROID_NDK_ROOT"],
+                "-AndroidAbi",
+                android_abi,
             ],
             cwd=hcsr_root,
         )
-    else:
-        project_path = _html_css_resolve_repo_file(
-            os.path.join("thirdparty", "hcsr", "src", "Renderer.NativeBridge", "Renderer.NativeBridge.csproj")
-        )
-        print("HTML/CSS HCSR static library is missing; publishing nested NativeAOT bridge:")
-        print("  " + project_path)
+    elif env["platform"] in ("linuxbsd", "macos"):
+        build_script = _html_css_resolve_repo_file(os.path.join("thirdparty", "hcsr", "tools", "build-unix-native.sh"))
+        target_platform = "linux" if env["platform"] == "linuxbsd" else "macos"
+        target_architecture = "arm64" if env["arch"] == "arm64" else "x86_64"
+        print("HTML/CSS HCSR %s archive is missing or stale; building nested %s NativeAOT bridge:" % (target_platform, target_architecture))
+        print("  " + build_script)
         completed = subprocess.run(
-            ["dotnet", "publish", project_path, "-c", "Release", "-r", "win-x64", "--nologo"],
+            ["bash", build_script, "--platform", target_platform, "--architecture", target_architecture],
+            cwd=hcsr_root,
+        )
+    else:
+        build_script = _html_css_resolve_repo_file(os.path.join("thirdparty", "hcsr", "tools", "build-windows-native.ps1"))
+        target_architecture = "arm64" if env["arch"] == "arm64" else "x86_64"
+        print("HTML/CSS HCSR Windows archive is missing or stale; building nested %s NativeAOT bridge:" % target_architecture)
+        print("  " + build_script)
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", build_script, "-Architecture", target_architecture],
             cwd=hcsr_root,
         )
     if completed.returncode != 0 or not os.path.isfile(library_path):
@@ -144,8 +193,8 @@ def _html_css_ensure_hcsr_static_library():
         print("  " + library_path)
         Exit(1)
 
-    if env["platform"] == "android" and not os.path.isfile(android_initializer_path):
-        print("HTML/CSS HCSR NativeAOT initializer object is missing: " + android_initializer_path)
+    if env["platform"] != "windows" and not os.path.isfile(initializer_path):
+        print("HTML/CSS HCSR NativeAOT initializer object is missing: " + initializer_path)
         Exit(1)
 
 
@@ -760,12 +809,41 @@ elif _html_css_renderer == "hcsr":
         env_html_css.add_source_files(env.modules_sources, "editor/html_package_export_plugin.cpp")
     if env["platform"] == "android":
         hcsr_initializer_path = os.path.join(os.path.dirname(hcsr_library_path), "hcsr_renderer_android_initializer.o")
+        hcsr_local_symbols_flag = "-Wl,--exclude-libs," + os.path.basename(hcsr_library_path)
+        env.Append(
+            LINKFLAGS=[
+                "-Wl,-z,nostart-stop-gc",
+                hcsr_local_symbols_flag,
+                hcsr_initializer_path,
+                hcsr_library_path,
+                "-lm",
+                "-lz",
+            ]
+        )
+    elif env["platform"] == "linuxbsd":
+        hcsr_initializer_path = os.path.join(os.path.dirname(hcsr_library_path), "hcsr_renderer_initializer.o")
         env.Append(
             LINKFLAGS=[
                 "-Wl,-z,nostart-stop-gc",
                 hcsr_initializer_path,
                 hcsr_library_path,
+                "-ldl",
+                "-lpthread",
                 "-lm",
+                "-lz",
+                "-lrt",
+            ]
+        )
+    elif env["platform"] == "macos":
+        hcsr_initializer_path = os.path.join(os.path.dirname(hcsr_library_path), "hcsr_renderer_initializer.o")
+        env.Append(
+            LINKFLAGS=[
+                hcsr_initializer_path,
+                hcsr_library_path,
+                "-framework",
+                "CoreFoundation",
+                "-framework",
+                "Security",
                 "-lz",
             ]
         )

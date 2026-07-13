@@ -5,6 +5,9 @@ param(
     [ValidateRange(1, 64)]
     [int]$Jobs = 6,
 
+    [ValidateSet("arm64", "x86_64")]
+    [string]$Architecture = "arm64",
+
     [string]$AndroidSdkRoot = $env:ANDROID_HOME,
 
     [string]$JavaHome = $env:JAVA_HOME,
@@ -70,7 +73,7 @@ $sconsArguments = @(
     "-m",
     "SCons",
     "platform=android",
-    "arch=arm64",
+    "arch=$Architecture",
     "target=$Target",
     "generate_android_binaries=yes",
     "swappy=no",

@@ -13,8 +13,8 @@ module_html_css_renderer=none|blink|hcsr
 uses the nested `thirdparty/hcsr` dependency and statically links its NativeAOT
 bridge, so an HCSR build does not ship an HCSR DLL.
 
-The current HCSR integration supports Windows x86_64 and Android ARM64. A
-Windows editor can be built with:
+The HCSR integration supports x86_64 and ARM64 builds on Windows, Linux, and
+macOS, plus Android ARM64 and x86_64. A Windows editor can be built with:
 
 ```text
 python -m SCons platform=windows target=editor module_html_css_renderer=hcsr
@@ -28,7 +28,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File modules\html_css\tools\build
 ```
 
 The script builds the HCSR NativeAOT/codecs archive, statically links it into
-the ARM64 Godot template, and optionally exports the backdrop APK. Add
+the ARM64 Godot template, and optionally exports the backdrop APK. Pass
+`-Architecture x86_64` when producing an emulator template. Add
 `-Install -Launch -DeviceSerial <serial>` to deploy it through ADB. The APK
 contains HCSR inside `libgodot_android.so`; it does not ship an HCSR DLL or
 sidecar shared library. The initial Android profile disables Swappy because it
@@ -63,13 +64,40 @@ Add `-ExportBackdrop` to also create a runnable backdrop gallery under
 backdrop export currently requires HCSR so the editor package compiler and
 release runtime are guaranteed to match.
 
-By default, a missing HCSR archive is produced with `dotnet publish` from
-`thirdparty/hcsr/src/Renderer.NativeBridge`. Set
+By default, a missing HCSR archive is produced by the matching platform build
+script under `thirdparty/hcsr/tools`. Windows and Android packages can be built
+from Windows. Linux packages must be built on the matching Linux architecture;
+macOS can produce either architecture from a macOS host. Set
 `module_html_css_hcsr_auto_build=no` to require an existing archive, or pass
 `module_html_css_hcsr_lib_path=<path>` to use an explicit one. HCSR currently
 supports CPU, Vulkan, and D3D12 presentation. `BACKEND_GPU_AUTO` selects the
 active Vulkan or D3D12 renderer; explicit GPU requests never silently upload a
-CPU frame while claiming GPU mode.
+CPU frame while claiming GPU mode. Windows supports CPU, Vulkan, and D3D12;
+Linux and Android support CPU and Vulkan; macOS currently uses CPU because HCSR
+does not yet have a Metal backend.
+
+Current platform packages:
+
+| Godot target | Architectures | HCSR backends |
+| --- | --- | --- |
+| Windows | x86_64, ARM64 | CPU, Vulkan, D3D12 |
+| Linux | x86_64, ARM64 | CPU, Vulkan |
+| Android API 24+ | ARM64, x86_64 | CPU, Vulkan |
+| macOS | x86_64, ARM64 | CPU |
+
+BSD, iOS, visionOS, and Web remain rejected by the HCSR build selection.
+To prepare Unix packages explicitly before invoking SCons, run one of:
+
+```bash
+bash thirdparty/hcsr/tools/build-unix-native.sh --platform linux --architecture x86_64
+bash thirdparty/hcsr/tools/build-unix-native.sh --platform linux --architecture arm64
+bash thirdparty/hcsr/tools/build-unix-native.sh --platform macos --architecture x86_64
+bash thirdparty/hcsr/tools/build-unix-native.sh --platform macos --architecture arm64
+```
+
+Linux ARM64 currently requires an ARM64 Linux build host. macOS packaging
+requires CMake, Ninja, .NET 10, and `llvm-objcopy`; it can build either
+architecture from a macOS host.
 
 ## HCSR source and release packages
 
