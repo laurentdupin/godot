@@ -43,6 +43,7 @@ class HTMLRenderTarget : public Node {
 	Ref<HTMLRenderSurface> surface;
 	Size2i size = Size2i(512, 512);
 	HTMLView::BackendPreference backend_preference = HTMLView::BACKEND_AUTO;
+	bool backdrop_filter_enabled = false;
 
 	void _surface_changed();
 
@@ -58,6 +59,8 @@ public:
 
 	void set_backend_preference(HTMLView::BackendPreference p_backend_preference);
 	HTMLView::BackendPreference get_backend_preference() const;
+	void set_backdrop_filter_enabled(bool p_enabled);
+	bool is_backdrop_filter_enabled() const;
 
 	Ref<Texture2D> get_texture() const;
 	Ref<Image> get_image() const;
