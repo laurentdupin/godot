@@ -56,6 +56,12 @@ bool HTMLSurfaceHCSRBackend::_ensure_renderer() {
 
 	viewport_dirty = true;
 	document_dirty = true;
+	if (hcsr_renderer_set_backdrop_metadata_enabled(renderer, backdrop_filter_enabled ? 1 : 0) != HCSR_STATUS_OK) {
+		_record_error("HCSR rejected backdrop metadata configuration");
+		hcsr_renderer_destroy(renderer);
+		renderer = nullptr;
+		return false;
+	}
 	const bool configured = render_backend == HCSR_RENDER_BACKEND_D3D12
 			? _configure_d3d12_device()
 			: render_backend == HCSR_RENDER_BACKEND_VULKAN ? _configure_vulkan_device() : true;
@@ -403,7 +409,11 @@ bool HTMLSurfaceHCSRBackend::_render_frame() {
 		return false;
 	}
 	if (render_backend != HCSR_RENDER_BACKEND_CPU) {
-		return _render_gpu_frame();
+		const bool rendered = _render_gpu_frame();
+		if (rendered) {
+			_read_backdrop_filter_regions();
+		}
+		return rendered;
 	}
 	hcsr_frame_t output = {};
 	output.struct_size = sizeof(output);
@@ -426,7 +436,50 @@ bool HTMLSurfaceHCSRBackend::_render_frame() {
 	frame.pixels.resize(output.stride * output.height);
 	memcpy(frame.pixels.ptrw(), output.pixels, frame.pixels.size());
 	hcsr_renderer_release_frame(renderer, &output);
-	return submit_cpu_frame(frame) == OK;
+	const bool rendered = submit_cpu_frame(frame) == OK;
+	if (rendered) {
+		_read_backdrop_filter_regions();
+	}
+	return rendered;
+}
+
+void HTMLSurfaceHCSRBackend::_read_backdrop_filter_regions() {
+	frame_metadata.backdrop_filter_regions.clear();
+	if (!backdrop_filter_enabled || renderer == nullptr) {
+		return;
+	}
+
+	const uint32_t region_count = hcsr_renderer_backdrop_filter_region_count(renderer);
+	for (uint32_t region_index = 0; region_index < region_count; region_index++) {
+		hcsr_backdrop_filter_region_t source = {};
+		source.struct_size = sizeof(source);
+		if (hcsr_renderer_get_backdrop_filter_region(renderer, region_index, &source) != HCSR_STATUS_OK || source.right <= source.left || source.bottom <= source.top) {
+			continue;
+		}
+
+		HTMLBackdropFilterRegion region;
+		region.bounds = Rect2(source.left, source.top, source.right - source.left, source.bottom - source.top);
+		region.blur_radius_css_px = source.blur_radius_css_px;
+		region.border_radius_top_left = source.border_radius_top_left;
+		region.border_radius_top_right = source.border_radius_top_right;
+		region.border_radius_bottom_right = source.border_radius_bottom_right;
+		region.border_radius_bottom_left = source.border_radius_bottom_left;
+		region.opacity = source.opacity;
+		region.flags = source.flags;
+		const uint32_t operation_count = MIN(source.filter_operation_count, (uint32_t)HCSR_MAX_BACKDROP_FILTER_OPERATIONS);
+		for (uint32_t operation_index = 0; operation_index < operation_count; operation_index++) {
+			const int32_t operation_type = source.filter_operation_types[operation_index];
+			if (operation_type < HTML_BACKDROP_FILTER_OPERATION_BLUR || operation_type > HTML_BACKDROP_FILTER_OPERATION_OPACITY) {
+				region.flags |= HTML_BACKDROP_FILTER_UNSUPPORTED_FILTER_OP;
+				continue;
+			}
+			HTMLBackdropFilterOperation operation;
+			operation.type = (HTMLBackdropFilterOperationType)operation_type;
+			operation.amount = source.filter_operation_amounts[operation_index];
+			region.filter_operations.push_back(operation);
+		}
+		frame_metadata.backdrop_filter_regions.push_back(region);
+	}
 }
 
 void HTMLSurfaceHCSRBackend::mark_document_dirty() {
@@ -467,6 +520,17 @@ void HTMLSurfaceHCSRBackend::set_background_color(const Color &p_background_colo
 	if (background_color != p_background_color) {
 		HTMLSurfaceCPUBackend::set_background_color(p_background_color);
 		document_dirty = true;
+	}
+}
+
+void HTMLSurfaceHCSRBackend::set_backdrop_filter_enabled(bool p_enabled) {
+	if (backdrop_filter_enabled == p_enabled) {
+		return;
+	}
+	backdrop_filter_enabled = p_enabled;
+	frame_metadata.backdrop_filter_regions.clear();
+	if (renderer != nullptr && hcsr_renderer_set_backdrop_metadata_enabled(renderer, p_enabled ? 1 : 0) != HCSR_STATUS_OK) {
+		_record_error("HCSR rejected backdrop metadata configuration");
 	}
 }
 
@@ -527,6 +591,10 @@ Error HTMLSurfaceHCSRBackend::wheel(const Point2 &p_position, const Vector2 &p_d
 	scroll_offset.x = MAX(0, scroll_offset.x - Math::round(p_delta.x * 40.0f));
 	scroll_offset.y = MAX(0, scroll_offset.y - Math::round(p_delta.y * 40.0f));
 	return _set_input();
+}
+
+void HTMLSurfaceHCSRBackend::get_frame_metadata(HTMLFrameMetadata &r_metadata) const {
+	r_metadata = frame_metadata;
 }
 
 Ref<Texture2D> HTMLSurfaceHCSRBackend::get_texture() const {

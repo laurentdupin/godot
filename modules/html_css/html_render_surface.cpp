@@ -120,6 +120,14 @@ void HTMLRenderSurface::_ensure_backend() {
 #else
 		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS D3D12 GPU backend requested, but the external renderer C API backend is not compiled in. Explicit GPU requests do not fall back to CPU output."));
 #endif
+	} else if (backend_preference == HTML_SURFACE_BACKEND_CPU) {
+#ifdef HTML_CSS_USE_BLINK_C_API
+		backend = memnew(HTMLSurfaceExternalCApiBackend);
+#elif defined(HTML_CSS_USE_HCSR)
+		backend = memnew(HTMLSurfaceHCSRBackend);
+#else
+		backend = memnew(HTMLSurfaceCPUBackend);
+#endif
 	}
 
 	if (backend != nullptr) {
@@ -230,6 +238,7 @@ bool HTMLRenderSurface::set_viewport(const Size2i &p_size, float p_device_scale_
 	}
 	size = new_size;
 	device_scale_factor = new_device_scale_factor;
+	frame_metadata = HTMLFrameMetadata();
 	gpu_backdrop_frame.clear();
 	if (backend != nullptr) {
 		_sync_backend_state();

@@ -13,6 +13,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	hcsr_render_backend_t render_backend = HCSR_RENDER_BACKEND_CPU;
 	Ref<HTMLDocument> document;
 	Ref<HTMLTexture2D> gpu_texture;
+	HTMLFrameMetadata frame_metadata;
 	RID gpu_texture_rid;
 	void *native_gpu_texture = nullptr;
 	uint64_t native_gpu_generation = 0;
@@ -27,6 +28,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool terminal_failure = false;
 	bool gpu_device_configured = false;
 	bool gpu_render_succeeded = false;
+	bool backdrop_filter_enabled = false;
 	String terminal_failure_reason;
 
 	bool _ensure_renderer();
@@ -34,6 +36,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool _sync_document();
 	bool _load_document_source(String &r_html, String &r_document_path, String &r_asset_root) const;
 	bool _render_frame();
+	void _read_backdrop_filter_regions();
 	bool _configure_d3d12_device();
 	void _configure_d3d12_device_on_render_thread();
 	bool _configure_vulkan_device();
@@ -58,6 +61,7 @@ public:
 	virtual void set_device_scale_factor(float p_device_scale_factor) override;
 	virtual void set_document(const Ref<HTMLDocument> &p_document) override;
 	virtual void set_background_color(const Color &p_background_color) override;
+	virtual void set_backdrop_filter_enabled(bool p_enabled) override;
 	virtual Error update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame) override;
 	virtual void render_placeholder(const String &p_marker) override;
 	virtual bool has_terminal_render_failure() const override;
@@ -66,6 +70,7 @@ public:
 	virtual Error mouse_down(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) override;
 	virtual Error mouse_up(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) override;
 	virtual Error wheel(const Point2 &p_position, const Vector2 &p_delta) override;
+	virtual void get_frame_metadata(HTMLFrameMetadata &r_metadata) const override;
 	virtual Ref<Texture2D> get_texture() const override;
 	virtual Ref<HTMLTexture2D> get_html_texture() const override;
 

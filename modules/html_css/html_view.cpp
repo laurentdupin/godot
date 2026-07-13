@@ -1226,6 +1226,7 @@ void HTMLView::set_backdrop_filter_enabled(bool p_backdrop_filter_enabled) {
 	}
 	backdrop_filter_enabled = p_backdrop_filter_enabled;
 	surface->set_backdrop_filter_enabled(backdrop_filter_enabled);
+	_queue_frame_render();
 	_update_backdrop_filter_canvas();
 	queue_redraw();
 }
@@ -1517,8 +1518,8 @@ Size2 HTMLView::get_minimum_size() const {
 HTMLView::HTMLView() {
 	surface.instantiate();
 	surface->set_changed_callback(callable_mp(this, &HTMLView::_surface_changed));
-	surface->set_placeholder_background(Color(0.08, 0.09, 0.1, 1.0));
 	surface->set_backend_preference(HTML_SURFACE_BACKEND_CPU);
+	surface->set_placeholder_background(Color(0.08, 0.09, 0.1, 1.0));
 	_ensure_backdrop_filter_canvas();
 	set_focus_mode(FOCUS_CLICK);
 	set_texture_filter(CanvasItem::TEXTURE_FILTER_NEAREST);

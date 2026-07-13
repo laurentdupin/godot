@@ -92,6 +92,8 @@ void HTMLRenderTarget::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_size"), &HTMLRenderTarget::get_size);
 	ClassDB::bind_method(D_METHOD("set_backend_preference", "backend_preference"), &HTMLRenderTarget::set_backend_preference);
 	ClassDB::bind_method(D_METHOD("get_backend_preference"), &HTMLRenderTarget::get_backend_preference);
+	ClassDB::bind_method(D_METHOD("set_backdrop_filter_enabled", "enabled"), &HTMLRenderTarget::set_backdrop_filter_enabled);
+	ClassDB::bind_method(D_METHOD("is_backdrop_filter_enabled"), &HTMLRenderTarget::is_backdrop_filter_enabled);
 	ClassDB::bind_method(D_METHOD("get_texture"), &HTMLRenderTarget::get_texture);
 	ClassDB::bind_method(D_METHOD("get_image"), &HTMLRenderTarget::get_image);
 	ClassDB::bind_method(D_METHOD("get_backdrop_filter_regions"), &HTMLRenderTarget::get_backdrop_filter_regions);
@@ -113,6 +115,7 @@ void HTMLRenderTarget::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "document", PROPERTY_HINT_RESOURCE_TYPE, HTMLDocument::get_class_static()), "set_document", "get_document");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2I, "size", PROPERTY_HINT_RANGE, "1,16384,1,or_greater,suffix:px"), "set_size", "get_size");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "backend_preference", PROPERTY_HINT_ENUM, "Auto,CPU,GPU Auto,Vulkan,D3D12"), "set_backend_preference", "get_backend_preference");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "backdrop_filter_enabled"), "set_backdrop_filter_enabled", "is_backdrop_filter_enabled");
 
 	ADD_SIGNAL(MethodInfo("rendered"));
 	ADD_SIGNAL(MethodInfo("texture_changed"));
@@ -151,6 +154,18 @@ void HTMLRenderTarget::set_backend_preference(HTMLView::BackendPreference p_back
 
 HTMLView::BackendPreference HTMLRenderTarget::get_backend_preference() const {
 	return backend_preference;
+}
+
+void HTMLRenderTarget::set_backdrop_filter_enabled(bool p_enabled) {
+	if (backdrop_filter_enabled == p_enabled) {
+		return;
+	}
+	backdrop_filter_enabled = p_enabled;
+	surface->set_backdrop_filter_enabled(p_enabled);
+}
+
+bool HTMLRenderTarget::is_backdrop_filter_enabled() const {
+	return backdrop_filter_enabled;
 }
 
 Ref<Texture2D> HTMLRenderTarget::get_texture() const {
