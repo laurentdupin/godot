@@ -19,6 +19,11 @@ The current HCSR integration supports Windows x86_64 and can be built with:
 python -m SCons platform=windows target=editor module_html_css_renderer=hcsr
 ```
 
+An animated 2D backdrop-filter gallery is available under
+`modules/html_css/examples/backdrop_2d`. It demonstrates eight simultaneous
+rounded regions over live Godot canvas content and is intended as the visual
+smoke example for backdrop resize behavior.
+
 By default, a missing HCSR archive is produced with `dotnet publish` from
 `thirdparty/hcsr/src/Renderer.NativeBridge`. Set
 `module_html_css_hcsr_auto_build=no` to require an existing archive, or pass
