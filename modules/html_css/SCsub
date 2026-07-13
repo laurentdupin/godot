@@ -838,6 +838,7 @@ elif _html_css_renderer == "hcsr":
         hcsr_initializer_path = os.path.join(os.path.dirname(hcsr_library_path), "hcsr_renderer_initializer.o")
         env.Append(
             LINKFLAGS=[
+                "-mmacosx-version-min=12.0",
                 hcsr_initializer_path,
                 hcsr_library_path,
                 "-framework",

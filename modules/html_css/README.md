@@ -101,7 +101,9 @@ the default CMake generator is supported otherwise. Homebrew's keg-only LLVM
 installation is detected in its standard Apple Silicon and Intel prefixes.
 macOS can build either architecture from one host when the corresponding .NET
 SDK architecture and Rosetta (for executing x86_64 tests on Apple Silicon) are
-available.
+available. HCSR macOS packages and HCSR-enabled Godot binaries target macOS 12
+or newer, matching the .NET 10 NativeAOT runtime requirement. Set
+`HCSR_MACOS_DEPLOYMENT_TARGET` only when deliberately targeting a newer macOS.
 
 After packaging, validate the static C ABI, system-font path, and raster-image
 codec without Godot:
