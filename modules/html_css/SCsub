@@ -57,7 +57,7 @@ def _html_css_hcsr_static_library_path():
             "net10.0",
             "win-x64",
             "publish",
-            "Renderer.NativeBridge.lib",
+            "hcsr_renderer_combined.lib",
         )
     )
 
@@ -84,7 +84,8 @@ def _html_css_ensure_hcsr_static_library():
         cwd=_html_css_resolve_repo_path(os.path.join("thirdparty", "hcsr")),
     )
     if completed.returncode != 0 or not os.path.isfile(library_path):
-        print("HTML/CSS HCSR NativeAOT publish failed or did not produce: " + library_path)
+        print("HTML/CSS HCSR NativeAOT publish failed or did not produce its combined static library.")
+        print("  " + library_path)
         Exit(1)
 
 
@@ -698,22 +699,26 @@ elif _html_css_renderer == "hcsr":
     env.Append(
         LINKFLAGS=[
             hcsr_library_path,
+            "/INCLUDE:?__managedcode_a@@YAPEAXXZ",
             "advapi32.lib",
             "bcrypt.lib",
             "crypt32.lib",
+            "comdlg32.lib",
             "d3d12.lib",
             "d3dcompiler.lib",
             "dxgi.lib",
             "iphlpapi.lib",
+            "mswsock.lib",
             "ncrypt.lib",
             "normaliz.lib",
+            "ntdll.lib",
             "ole32.lib",
             "oleaut32.lib",
             "secur32.lib",
             "shell32.lib",
             "user32.lib",
+            "userenv.lib",
             "version.lib",
-            "vulkan-1.lib",
             "ws2_32.lib",
         ]
     )
