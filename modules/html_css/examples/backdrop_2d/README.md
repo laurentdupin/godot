@@ -31,3 +31,13 @@ surface recreation and backdrop-region scaling. The example uses
 `VIEWPORT_SIZE_PHYSICAL_SIZE` with stretch disabled, so HCSR renders at the
 window's current physical pixel dimensions instead of the 1280x720 startup
 size.
+
+To build and deploy the ARM64 Android version, configure `ANDROID_HOME` and
+`JAVA_HOME`, then run from the Godot root:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File modules\html_css\tools\build_html_ui_android.ps1 -ExportBackdrop -Install -Launch -DeviceSerial <serial>
+```
+
+Android uses Godot's mobile Vulkan renderer. HCSR and its native text/image
+codecs are linked into the Godot shared library; no HCSR DLL is packaged.

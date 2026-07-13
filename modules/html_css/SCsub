@@ -46,6 +46,21 @@ def _html_css_resolve_repo_file(p_path):
 def _html_css_hcsr_static_library_path():
     if env["module_html_css_hcsr_lib_path"]:
         return _html_css_resolve_repo_file(env["module_html_css_hcsr_lib_path"])
+    if env["platform"] == "android" and env["arch"] == "arm64":
+        return _html_css_resolve_repo_file(
+            os.path.join(
+                "thirdparty",
+                "hcsr",
+                "src",
+                "Renderer.NativeBridge",
+                "bin",
+                "Release",
+                "net10.0",
+                "linux-bionic-arm64",
+                "publish",
+                "hcsr_renderer_android_combined.a",
+            )
+        )
     return _html_css_resolve_repo_file(
         os.path.join(
             "thirdparty",
@@ -63,15 +78,19 @@ def _html_css_hcsr_static_library_path():
 
 
 def _html_css_ensure_hcsr_static_library():
-    if env["platform"] != "windows" or env["arch"] != "x86_64":
-        print("HTML/CSS HCSR currently supports only Windows x86_64 Godot hosts.")
+    supported_target = (env["platform"] == "windows" and env["arch"] == "x86_64") or (
+        env["platform"] == "android" and env["arch"] == "arm64"
+    )
+    if not supported_target:
+        print("HTML/CSS HCSR currently supports Windows x86_64 and Android ARM64 Godot targets.")
         Exit(1)
 
     library_path = _html_css_hcsr_static_library_path()
     hcsr_root = _html_css_resolve_repo_path(os.path.join("thirdparty", "hcsr"))
     package_is_current = os.path.isfile(library_path)
     if package_is_current and not env["module_html_css_hcsr_lib_path"]:
-        marker_path = os.path.join(os.path.dirname(library_path), "hcsr_renderer_combined.commit")
+        marker_name = "hcsr_renderer_android.commit" if env["platform"] == "android" else "hcsr_renderer_combined.commit"
+        marker_path = os.path.join(os.path.dirname(library_path), marker_name)
         source_commit = subprocess.run(
             ["git", "-C", hcsr_root, "rev-parse", "HEAD"],
             capture_output=True,
@@ -88,15 +107,35 @@ def _html_css_ensure_hcsr_static_library():
         print("HTML/CSS HCSR static library is missing: " + library_path)
         Exit(1)
 
-    project_path = _html_css_resolve_repo_file(
-        os.path.join("thirdparty", "hcsr", "src", "Renderer.NativeBridge", "Renderer.NativeBridge.csproj")
-    )
-    print("HTML/CSS HCSR static library is missing; publishing nested NativeAOT bridge:")
-    print("  " + project_path)
-    completed = subprocess.run(
-        ["dotnet", "publish", project_path, "-c", "Release", "-r", "win-x64", "--nologo"],
-        cwd=hcsr_root,
-    )
+    if env["platform"] == "android":
+        build_script = _html_css_resolve_repo_file(os.path.join("thirdparty", "hcsr", "tools", "build-android-native.ps1"))
+        print("HTML/CSS HCSR Android archive is missing or stale; building nested ARM64 NativeAOT bridge:")
+        print("  " + build_script)
+        completed = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                build_script,
+                "-AndroidSdkRoot",
+                env["ANDROID_HOME"],
+                "-AndroidNdkRoot",
+                env["ANDROID_NDK_ROOT"],
+            ],
+            cwd=hcsr_root,
+        )
+    else:
+        project_path = _html_css_resolve_repo_file(
+            os.path.join("thirdparty", "hcsr", "src", "Renderer.NativeBridge", "Renderer.NativeBridge.csproj")
+        )
+        print("HTML/CSS HCSR static library is missing; publishing nested NativeAOT bridge:")
+        print("  " + project_path)
+        completed = subprocess.run(
+            ["dotnet", "publish", project_path, "-c", "Release", "-r", "win-x64", "--nologo"],
+            cwd=hcsr_root,
+        )
     if completed.returncode != 0 or not os.path.isfile(library_path):
         print("HTML/CSS HCSR NativeAOT publish failed or did not produce its combined static library.")
         print("  " + library_path)
@@ -710,33 +749,43 @@ elif _html_css_renderer == "hcsr":
     env_html_css.Append(CPPDEFINES=["HTML_CSS_USE_HCSR"])
     env_html_css.Append(CPPPATH=["#thirdparty/hcsr/native/include"])
     env_html_css.add_source_files(env.modules_sources, "backend/html_surface_hcsr_backend.cpp")
-    env_html_css.add_source_files(env.modules_sources, "editor/html_package_export_plugin.cpp")
-    env.Append(
-        LINKFLAGS=[
-            hcsr_library_path,
-            "/INCLUDE:?__managedcode_a@@YAPEAXXZ",
-            "advapi32.lib",
-            "bcrypt.lib",
-            "crypt32.lib",
-            "comdlg32.lib",
-            "d3d12.lib",
-            "d3dcompiler.lib",
-            "dxgi.lib",
-            "iphlpapi.lib",
-            "mswsock.lib",
-            "ncrypt.lib",
-            "normaliz.lib",
-            "ntdll.lib",
-            "ole32.lib",
-            "oleaut32.lib",
-            "secur32.lib",
-            "shell32.lib",
-            "user32.lib",
-            "userenv.lib",
-            "version.lib",
-            "ws2_32.lib",
-        ]
-    )
+    if env.editor_build:
+        env_html_css.add_source_files(env.modules_sources, "editor/html_package_export_plugin.cpp")
+    if env["platform"] == "android":
+        env.Append(
+            LINKFLAGS=[
+                hcsr_library_path,
+                "-lm",
+                "-lz",
+            ]
+        )
+    else:
+        env.Append(
+            LINKFLAGS=[
+                hcsr_library_path,
+                "/INCLUDE:?__managedcode_a@@YAPEAXXZ",
+                "advapi32.lib",
+                "bcrypt.lib",
+                "crypt32.lib",
+                "comdlg32.lib",
+                "d3d12.lib",
+                "d3dcompiler.lib",
+                "dxgi.lib",
+                "iphlpapi.lib",
+                "mswsock.lib",
+                "ncrypt.lib",
+                "normaliz.lib",
+                "ntdll.lib",
+                "ole32.lib",
+                "oleaut32.lib",
+                "secur32.lib",
+                "shell32.lib",
+                "user32.lib",
+                "userenv.lib",
+                "version.lib",
+                "ws2_32.lib",
+            ]
+        )
 env_html_css.add_source_files(env.modules_sources, "html_document.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_render_target.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_render_surface.cpp")

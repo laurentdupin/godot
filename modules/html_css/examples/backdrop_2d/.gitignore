@@ -2,3 +2,4 @@
 *.hcsrpkg
 build/
 build-size-optimized/
+/build-android/

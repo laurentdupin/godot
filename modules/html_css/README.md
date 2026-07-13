@@ -13,11 +13,27 @@ module_html_css_renderer=none|blink|hcsr
 uses the nested `thirdparty/hcsr` dependency and statically links its NativeAOT
 bridge, so an HCSR build does not ship an HCSR DLL.
 
-The current HCSR integration supports Windows x86_64 and can be built with:
+The current HCSR integration supports Windows x86_64 and Android ARM64. A
+Windows editor can be built with:
 
 ```text
 python -m SCons platform=windows target=editor module_html_css_renderer=hcsr
 ```
+
+For Android, set `ANDROID_HOME` to an SDK containing Godot's pinned NDK
+`29.0.14206865`, set `JAVA_HOME`, and run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File modules\html_css\tools\build_html_ui_android.ps1 -ExportBackdrop
+```
+
+The script builds the HCSR NativeAOT/codecs archive, statically links it into
+the ARM64 Godot template, and optionally exports the backdrop APK. Add
+`-Install -Launch -DeviceSerial <serial>` to deploy it through ADB. The APK
+contains HCSR inside `libgodot_android.so`; it does not ship an HCSR DLL or
+sidecar shared library. The initial Android profile disables Swappy because it
+is not vendored in this checkout; add Swappy before doing final frame-pacing
+performance work.
 
 An animated 2D backdrop-filter gallery is available under
 `modules/html_css/examples/backdrop_2d`. It demonstrates eight simultaneous
