@@ -2091,6 +2091,17 @@ void EditorAssetLibrary::_set_library_message(const String &p_message) {
 	library_message_button->hide();
 
 	library_message_box->show();
+
+	// Remove pagination, as an error message is being shown and there are no assets to list.
+	// Pagination is recreated when the next search is performed.
+	if (asset_top_page) {
+		memdelete(asset_top_page);
+		asset_top_page = nullptr;
+	}
+	if (asset_bottom_page) {
+		memdelete(asset_bottom_page);
+		asset_bottom_page = nullptr;
+	}
 }
 
 void EditorAssetLibrary::_set_library_message_with_action(const String &p_message, const String &p_action_text, const Callable &p_action) {
@@ -2176,6 +2187,9 @@ EditorAssetLibrary::EditorAssetLibrary(bool p_templates_only) {
 	for (int i = 0; i < SORT_MAX; i++) {
 		sort->add_item(sort_text[i]);
 	}
+
+	// TODO: Remove this once "Relevance" sorting is fixed.
+	sort->select(SORT_REVIEWS);
 
 	search_hb2->add_child(sort);
 

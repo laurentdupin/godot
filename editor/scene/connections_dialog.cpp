@@ -1243,7 +1243,7 @@ void ConnectionsDock::_open_connection_dialog(TreeItem &p_item) {
 	cd.method = ConnectDialog::generate_method_callback_name(cd.source, signal_name, cd.target);
 	connect_dialog->init(cd, signal_args);
 	connect_dialog->set_title(TTR("Connect a Signal to a Method"));
-	connect_dialog->popup_dialog(signal_name.operator String() + "(" + String(", ").join(signal_args) + ")");
+	connect_dialog->popup_dialog(signal_name.string() + "(" + String(", ").join(signal_args) + ")");
 }
 
 /*
@@ -1265,7 +1265,7 @@ void ConnectionsDock::_open_edit_connection_dialog(TreeItem &p_item) {
 
 		connect_dialog->init(cd, signal_args, true);
 		connect_dialog->set_title(vformat(TTR("Edit Connection: '%s'"), cd.signal));
-		connect_dialog->popup_dialog(signal_name.operator String() + "(" + String(", ").join(signal_args) + ")");
+		connect_dialog->popup_dialog(signal_name.string() + "(" + String(", ").join(signal_args) + ")");
 	}
 }
 
@@ -1758,7 +1758,7 @@ ConnectionsDock::ConnectionsDock() {
 	holder->add_child(search_box);
 
 	MarginContainer *mc = memnew(MarginContainer);
-	mc->set_theme_type_variation("NoBorderHorizontal");
+	mc->set_theme_type_variation("NoBorderPanel");
 	mc->set_v_size_flags(SIZE_EXPAND_FILL);
 	holder->add_child(mc);
 

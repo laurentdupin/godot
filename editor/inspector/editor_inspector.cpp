@@ -1744,8 +1744,10 @@ void EditorProperty::_update_popup() {
 		menu->add_icon_item(theme_cache.help_icon, TTR("Open Documentation"), MENU_OPEN_DOCUMENTATION);
 	}
 
-	Vector<String> property_paths = { String::num_int64(get_edited_object()->get_instance_id()), property_path };
-	EditorContextMenuPluginManager::get_singleton()->add_options_from_plugins(menu, EditorContextMenuPlugin::CONTEXT_SLOT_INSPECTOR_PROPERTY, property_paths);
+	if (EditorContextMenuPluginManager::get_singleton()) {
+		Vector<String> property_paths = { String::num_int64(get_edited_object()->get_instance_id()), property_path };
+		EditorContextMenuPluginManager::get_singleton()->add_options_from_plugins(menu, EditorContextMenuPlugin::CONTEXT_SLOT_INSPECTOR_PROPERTY, property_paths);
+	}
 }
 
 ////////////////////////////////////////////////
@@ -1874,7 +1876,14 @@ void EditorInspectorCategory::_notification(int p_what) {
 		} break;
 
 		case NOTIFICATION_DRAW: {
-			const Ref<StyleBox> &sb = theme_cache.background;
+			Ref<StyleBox> sb;
+			if (color_level == -1) {
+				sb = theme_cache.background;
+			} else if (color_level == 0) {
+				sb = theme_cache.sub_inspector_background;
+			} else {
+				sb = theme_cache.sub_inspector_color_background[color_level];
+			}
 
 			draw_style_box(sb, Rect2(Vector2(), get_size()));
 
@@ -1963,6 +1972,13 @@ void EditorInspectorCategory::set_doc_class_name(const String &p_name) {
 	doc_class_name = p_name;
 }
 
+void EditorInspectorCategory::set_color_level(int p_color_level) {
+	ERR_FAIL_COND(p_color_level < -1 || p_color_level > 16);
+	color_level = p_color_level;
+	update_minimum_size();
+	queue_redraw();
+}
+
 Size2 EditorInspectorCategory::get_minimum_size() const {
 	Size2 ms;
 	if (theme_cache.bold_font.is_valid()) {
@@ -1973,8 +1989,17 @@ Size2 EditorInspectorCategory::get_minimum_size() const {
 	}
 	ms.height += theme_cache.vertical_separation;
 
-	if (theme_cache.background.is_valid()) {
-		ms.height += theme_cache.background->get_content_margin(SIDE_TOP) + theme_cache.background->get_content_margin(SIDE_BOTTOM);
+	Ref<StyleBox> bg;
+	if (color_level == -1) {
+		bg = theme_cache.background;
+	} else if (color_level == 0) {
+		bg = theme_cache.sub_inspector_background;
+	} else {
+		bg = theme_cache.sub_inspector_color_background[color_level];
+	}
+
+	if (bg.is_valid()) {
+		ms.height += bg->get_content_margin(SIDE_TOP) + bg->get_content_margin(SIDE_BOTTOM);
 	}
 
 	return ms;
@@ -3806,7 +3831,7 @@ EditorPaginator::EditorPaginator() {
 	add_child(page_count_label);
 
 	next_page_button = memnew(Button);
-	prev_page_button->set_accessibility_name(TTRC("Next Page"));
+	next_page_button->set_accessibility_name(TTRC("Next Page"));
 	next_page_button->set_flat(true);
 	next_page_button->connect(SceneStringName(pressed), callable_mp(this, &EditorPaginator::_next_page_button_pressed));
 	add_child(next_page_button);
@@ -3916,6 +3941,14 @@ void EditorInspector::initialize_category_theme(EditorInspectorCategory::ThemeCa
 	p_cache.icon_help = p_control->get_editor_theme_icon(SNAME("Help"));
 
 	p_cache.background = p_control->get_theme_stylebox(SNAME("bg"), SNAME("EditorInspectorCategory"));
+
+	if (p_control == parent_inspector) {
+		// Only initialize for the inspector, as stand-alone categories won't need it.
+		p_cache.sub_inspector_background = p_control->get_theme_stylebox("sub_inspector_category_bg", EditorStringName(EditorStyles));
+		for (int i = 0; i <= 16; i++) {
+			p_cache.sub_inspector_color_background[i] = p_control->get_theme_stylebox("sub_inspector_color_category_bg" + itos(i), EditorStringName(EditorStyles));
+		}
+	}
 }
 
 void EditorInspector::initialize_property_theme(EditorProperty::ThemeCache &p_cache, Control *p_control) {
@@ -4383,6 +4416,7 @@ void EditorInspector::update_tree() {
 			// Create an EditorInspectorCategory and add it to the inspector.
 			EditorInspectorCategory *category = memnew(EditorInspectorCategory);
 			category->set_property_info(p);
+			category->set_color_level(category_color_level);
 			main_vbox->add_child(category);
 			category_vbox = nullptr; // Reset.
 
@@ -4781,7 +4815,7 @@ void EditorInspector::update_tree() {
 
 				HashMap<String, DocData::ClassDoc>::ConstIterator F = dd->class_list.find(classname);
 				while (F) {
-					Vector<String> slices = propname.operator String().split("/");
+					Vector<String> slices = propname.string().split("/");
 					// Check if it's a theme item first.
 					if (slices.size() == 2 && slices[0].begins_with("theme_override_")) {
 						for (int i = 0; i < F->value.theme_properties.size(); i++) {
@@ -4794,7 +4828,7 @@ void EditorInspector::update_tree() {
 					} else {
 						for (int i = 0; i < F->value.properties.size(); i++) {
 							String doc_path_current = "class_property:" + F->value.name + ":" + F->value.properties[i].name;
-							if (F->value.properties[i].name == propname.operator String()) {
+							if (F->value.properties[i].name == propname.string()) {
 								doc_path = doc_path_current;
 							}
 						}
@@ -5019,22 +5053,20 @@ void EditorInspector::update_tree() {
 
 	if (!current_favorites.is_empty()) {
 		favorites_section->show();
+		favorites_category->set_color_level(category_color_level);
 
 		// Organize the favorited properties in their sections, to keep context and differentiate from others with the same name.
 		bool is_localized = property_name_style == EditorPropertyNameProcessor::STYLE_LOCALIZED;
 		for (const KeyValue<String, HashMap<String, LocalVector<EditorProperty *>>> &KV : favorites_to_add) {
 			String section_name = KV.key;
-			String label;
 			String tooltip;
 			VBoxContainer *parent_vbox = favorites_vbox;
 			if (!section_name.is_empty()) {
 				favorites_groups_vbox->show();
 
 				if (is_localized) {
-					label = EditorPropertyNameProcessor::get_singleton()->translate_group_name(section_name);
 					tooltip = section_name;
 				} else {
-					label = section_name;
 					tooltip = EditorPropertyNameProcessor::get_singleton()->translate_group_name(section_name);
 				}
 
@@ -5071,10 +5103,8 @@ void EditorInspector::update_tree() {
 				VBoxContainer *vbox = parent_vbox;
 				if (!section_name.is_empty()) {
 					if (is_localized) {
-						label = EditorPropertyNameProcessor::get_singleton()->translate_group_name(section_name);
 						tooltip = section_name;
 					} else {
-						label = section_name;
 						tooltip = EditorPropertyNameProcessor::get_singleton()->translate_group_name(section_name);
 					}
 
@@ -5346,6 +5376,13 @@ void EditorInspector::set_show_categories(bool p_show_standard, bool p_show_cust
 	show_standard_categories = p_show_standard;
 	show_custom_categories = p_show_custom;
 	update_tree();
+}
+
+void EditorInspector::set_category_color_level(int p_color_level) {
+	if (category_color_level != p_color_level) {
+		category_color_level = p_color_level;
+		update_tree();
+	}
 }
 
 void EditorInspector::set_use_doc_hints(bool p_enable) {
@@ -6257,7 +6294,7 @@ EditorInspector::EditorInspector() {
 	base_vbox->add_child(favorites_section);
 	favorites_section->hide();
 
-	EditorInspectorCategory *favorites_category = memnew(EditorInspectorCategory);
+	favorites_category = memnew(EditorInspectorCategory);
 	favorites_category->set_as_favorite();
 	favorites_category->connect("unfavorite_all", callable_mp(this, &EditorInspector::_clear_current_favorites));
 	favorites_section->add_child(favorites_category);
