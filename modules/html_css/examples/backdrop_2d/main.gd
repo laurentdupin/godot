@@ -1,5 +1,13 @@
 extends Node
 
+func _requested_backend() -> int:
+	for argument in OS.get_cmdline_user_args():
+		if argument == "--html-backend=cpu":
+			return HTMLView.BACKEND_CPU
+		if argument == "--html-backend=metal":
+			return HTMLView.BACKEND_METAL
+	return HTMLView.BACKEND_GPU_AUTO
+
 class AnimatedBackdrop:
 	extends Control
 
@@ -68,7 +76,7 @@ func _ready() -> void:
 	var html_view := HTMLView.new()
 	html_view.name = "BackdropHTML"
 	html_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	html_view.backend_preference = HTMLView.BACKEND_GPU_AUTO
+	html_view.backend_preference = _requested_backend()
 	html_view.viewport_size_mode = HTMLView.VIEWPORT_SIZE_PHYSICAL_SIZE
 	html_view.backdrop_filter_enabled = true
 	html_view.document = document

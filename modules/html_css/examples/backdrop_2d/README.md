@@ -22,8 +22,8 @@ python -m SCons platform=windows target=editor dev_build=yes module_html_css_ren
 .\bin\godot.windows.editor.dev.x86_64.exe --path modules\html_css\examples\backdrop_2d res://main.tscn
 ```
 
-The example selects `HTMLView.BACKEND_GPU_AUTO`, which uses the active Vulkan or
-D3D12 renderer and reports an unsupported backend instead of silently uploading
+The example selects `HTMLView.BACKEND_GPU_AUTO`, which uses the active Vulkan,
+D3D12, or Metal renderer and reports an unsupported backend instead of silently uploading
 CPU pixels when no host-device GPU path is available. The backdrop itself is
 composited by Godot's canvas shader from the live screen texture; no scene
 pixels are read back into HCSR. Resize or maximize the window to exercise
@@ -31,6 +31,9 @@ surface recreation and backdrop-region scaling. The example uses
 `VIEWPORT_SIZE_PHYSICAL_SIZE` with stretch disabled, so HCSR renders at the
 window's current physical pixel dimensions instead of the 1280x720 startup
 size.
+
+For CPU/Metal comparison captures on macOS, append
+`-- --html-backend=cpu` or `-- --html-backend=metal` to the Godot command line.
 
 To build and deploy the ARM64 Android version, configure `ANDROID_HOME` and
 `JAVA_HOME`, then run from the Godot root:

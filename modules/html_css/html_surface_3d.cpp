@@ -43,6 +43,8 @@ static HTMLSurfaceBackendPreference html_surface_3d_to_surface_backend_preferenc
 			return HTML_SURFACE_BACKEND_VULKAN;
 		case HTMLView::BACKEND_D3D12:
 			return HTML_SURFACE_BACKEND_D3D12;
+		case HTMLView::BACKEND_METAL:
+			return HTML_SURFACE_BACKEND_METAL;
 		case HTMLView::BACKEND_AUTO:
 		default:
 			return HTML_SURFACE_BACKEND_AUTO;
@@ -113,7 +115,7 @@ bool HTMLSurface3D::is_input_enabled() const {
 }
 
 void HTMLSurface3D::set_backend_preference(HTMLView::BackendPreference p_backend_preference) {
-	ERR_FAIL_INDEX((int)p_backend_preference, 5);
+	ERR_FAIL_INDEX((int)p_backend_preference, 6);
 	backend_preference = p_backend_preference;
 	surface->set_backend_preference(html_surface_3d_to_surface_backend_preference(p_backend_preference));
 }

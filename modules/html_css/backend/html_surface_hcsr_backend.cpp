@@ -12,6 +12,10 @@
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/rendering_server.h"
 
+#if defined(MACOS_ENABLED) && defined(METAL_ENABLED)
+#include <Metal/Metal.hpp>
+#endif
+
 static String hcsr_color_to_css_rgba(const Color &p_color) {
 	return vformat("rgba(%d, %d, %d, %.6f)",
 			Math::round(p_color.r * 255.0f),
@@ -136,9 +140,20 @@ bool HTMLSurfaceHCSRBackend::_ensure_renderer() {
 		renderer = nullptr;
 		return false;
 	}
-	const bool configured = render_backend == HCSR_RENDER_BACKEND_D3D12
-			? _configure_d3d12_device()
-			: render_backend == HCSR_RENDER_BACKEND_VULKAN ? _configure_vulkan_device() : true;
+	bool configured = true;
+	switch (render_backend) {
+		case HCSR_RENDER_BACKEND_D3D12:
+			configured = _configure_d3d12_device();
+			break;
+		case HCSR_RENDER_BACKEND_VULKAN:
+			configured = _configure_vulkan_device();
+			break;
+		case HCSR_RENDER_BACKEND_METAL:
+			configured = _configure_metal_device();
+			break;
+		case HCSR_RENDER_BACKEND_CPU:
+			break;
+	}
 	if (!configured) {
 		hcsr_renderer_destroy(renderer);
 		renderer = nullptr;
@@ -243,6 +258,55 @@ bool HTMLSurfaceHCSRBackend::_configure_vulkan_device() {
 		_configure_vulkan_device_on_render_thread();
 	} else {
 		rendering_server->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRBackend::_configure_vulkan_device_on_render_thread_callback).bind((uint64_t)this));
+		rendering_server->sync();
+	}
+	return gpu_device_configured;
+}
+
+void HTMLSurfaceHCSRBackend::_configure_metal_device_on_render_thread() {
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	RenderingDevice *rendering_device = rendering_server != nullptr ? rendering_server->get_rendering_device() : nullptr;
+	if (renderer == nullptr || rendering_device == nullptr) {
+		terminal_failure_reason = "Godot did not expose a RenderingDevice for HCSR Metal.";
+		return;
+	}
+
+	hcsr_metal_device_t device = {};
+	device.struct_size = sizeof(device);
+	device.device = (void *)rendering_device->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_LOGICAL_DEVICE);
+	device.command_queue = (void *)rendering_device->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_COMMAND_QUEUE);
+	if (device.device == nullptr || device.command_queue == nullptr) {
+		terminal_failure_reason = "Godot's Metal driver did not expose its MTLDevice and MTLCommandQueue.";
+		return;
+	}
+
+	if (hcsr_renderer_set_metal_device(renderer, &device) != HCSR_STATUS_OK) {
+		_record_error("HCSR could not borrow Godot's Metal device");
+		return;
+	}
+	gpu_device_configured = true;
+}
+
+void HTMLSurfaceHCSRBackend::_configure_metal_device_on_render_thread_callback(uint64_t p_backend_ptr) {
+	HTMLSurfaceHCSRBackend *backend = (HTMLSurfaceHCSRBackend *)p_backend_ptr;
+	if (backend != nullptr) {
+		backend->_configure_metal_device_on_render_thread();
+	}
+}
+
+bool HTMLSurfaceHCSRBackend::_configure_metal_device() {
+	if (gpu_device_configured) {
+		return true;
+	}
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	if (rendering_server == nullptr) {
+		terminal_failure_reason = "RenderingServer is unavailable for HCSR Metal configuration.";
+		return false;
+	}
+	if (rendering_server->is_on_render_thread()) {
+		_configure_metal_device_on_render_thread();
+	} else {
+		rendering_server->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRBackend::_configure_metal_device_on_render_thread_callback).bind((uint64_t)this));
 		rendering_server->sync();
 	}
 	return gpu_device_configured;
@@ -412,6 +476,15 @@ void HTMLSurfaceHCSRBackend::_ensure_gpu_texture_imported_on_render_thread() {
 		terminal_failure_reason = "RenderingServer is unavailable for HCSR GPU texture import.";
 		return;
 	}
+#if defined(MACOS_ENABLED) && defined(METAL_ENABLED)
+	MTL::Texture *retained_metal_texture = nullptr;
+	if (render_backend == HCSR_RENDER_BACKEND_METAL) {
+		// Godot's Metal extension-texture path adopts one reference. Preserve HCSR's
+		// ownership by transferring a separate retain to the imported RID.
+		retained_metal_texture = reinterpret_cast<MTL::Texture *>(native_gpu_texture);
+		retained_metal_texture->retain();
+	}
+#endif
 	gpu_texture_rid = rendering_server->texture_create_from_native_handle(
 			RenderingServerEnums::TEXTURE_TYPE_2D,
 			Image::FORMAT_RGBA8,
@@ -421,6 +494,11 @@ void HTMLSurfaceHCSRBackend::_ensure_gpu_texture_imported_on_render_thread() {
 			1,
 			1);
 	if (!gpu_texture_rid.is_valid()) {
+#if defined(MACOS_ENABLED) && defined(METAL_ENABLED)
+		if (retained_metal_texture != nullptr) {
+			retained_metal_texture->release();
+		}
+#endif
 		terminal_failure_reason = "Godot could not import HCSR's host-device GPU texture.";
 		return;
 	}

@@ -248,6 +248,8 @@ static HTMLSurfaceBackendPreference html_view_to_surface_backend_preference(HTML
 			return HTML_SURFACE_BACKEND_VULKAN;
 		case HTMLView::BACKEND_D3D12:
 			return HTML_SURFACE_BACKEND_D3D12;
+		case HTMLView::BACKEND_METAL:
+			return HTML_SURFACE_BACKEND_METAL;
 		case HTMLView::BACKEND_AUTO:
 		default:
 			return HTML_SURFACE_BACKEND_AUTO;
@@ -258,7 +260,8 @@ static bool html_view_backend_preference_can_use_gpu(HTMLView::BackendPreference
 	return p_backend_preference == HTMLView::BACKEND_AUTO ||
 			p_backend_preference == HTMLView::BACKEND_GPU_AUTO ||
 			p_backend_preference == HTMLView::BACKEND_VULKAN ||
-			p_backend_preference == HTMLView::BACKEND_D3D12;
+			p_backend_preference == HTMLView::BACKEND_D3D12 ||
+			p_backend_preference == HTMLView::BACKEND_METAL;
 }
 
 static Dictionary html_form_control_state_to_dictionary(const HTMLFormControlState &p_state) {
@@ -385,6 +388,7 @@ void HTMLView::_bind_methods() {
 	BIND_ENUM_CONSTANT(BACKEND_GPU_AUTO);
 	BIND_ENUM_CONSTANT(BACKEND_VULKAN);
 	BIND_ENUM_CONSTANT(BACKEND_D3D12);
+	BIND_ENUM_CONSTANT(BACKEND_METAL);
 	BIND_ENUM_CONSTANT(VIEWPORT_SIZE_CONTROL);
 	BIND_ENUM_CONSTANT(VIEWPORT_SIZE_CONTROL_PHYSICAL_ADJUSTED);
 	BIND_ENUM_CONSTANT(VIEWPORT_SIZE_FIXED);
@@ -1177,7 +1181,7 @@ StringName HTMLView::get_text_delete_action() const {
 }
 
 void HTMLView::set_backend_preference(BackendPreference p_backend_preference) {
-	ERR_FAIL_INDEX((int)p_backend_preference, 5);
+	ERR_FAIL_INDEX((int)p_backend_preference, 6);
 	backend_preference = p_backend_preference;
 	_apply_surface_backend_preference();
 }

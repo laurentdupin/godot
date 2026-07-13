@@ -266,6 +266,9 @@
 		<constant name="BACKEND_D3D12" value="4" enum="BackendPreference">
 			Requests the D3D12 GPU backend explicitly.
 		</constant>
+		<constant name="BACKEND_METAL" value="5" enum="BackendPreference">
+			Requests the Metal GPU backend explicitly. This requires Godot's Metal rendering driver and an HCSR build with Metal support.
+		</constant>
 		<constant name="VIEWPORT_SIZE_CONTROL" value="0" enum="ViewportSizeMode">
 			The HTML viewport follows the Control's local size and uses a device scale factor of [code]1.0[/code].
 		</constant>

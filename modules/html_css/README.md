@@ -70,11 +70,11 @@ from Windows. Linux packages must be built on the matching Linux architecture;
 macOS can produce either architecture from a macOS host. Set
 `module_html_css_hcsr_auto_build=no` to require an existing archive, or pass
 `module_html_css_hcsr_lib_path=<path>` to use an explicit one. HCSR currently
-supports CPU, Vulkan, and D3D12 presentation. `BACKEND_GPU_AUTO` selects the
-active Vulkan or D3D12 renderer; explicit GPU requests never silently upload a
-CPU frame while claiming GPU mode. Windows supports CPU, Vulkan, and D3D12;
-Linux and Android support CPU and Vulkan; macOS currently uses CPU because HCSR
-does not yet have a Metal backend.
+supports CPU, Vulkan, D3D12, and Metal presentation. `BACKEND_GPU_AUTO` selects
+the backend matching Godot's active Vulkan, D3D12, or Metal renderer; explicit
+GPU requests never silently upload a CPU frame while claiming GPU mode. Windows
+supports CPU, Vulkan, and D3D12; Linux and Android support CPU and Vulkan; macOS
+supports CPU and Metal.
 
 Current platform packages:
 
@@ -83,7 +83,7 @@ Current platform packages:
 | Windows | x86_64, ARM64 | CPU, Vulkan, D3D12 |
 | Linux | x86_64, ARM64 | CPU, Vulkan |
 | Android API 24+ | ARM64, x86_64 | CPU, Vulkan |
-| macOS | x86_64, ARM64 | CPU |
+| macOS | x86_64, ARM64 | CPU, Metal |
 
 BSD, iOS, visionOS, and Web remain rejected by the HCSR build selection.
 To prepare Unix packages explicitly before invoking SCons, run one of:
@@ -96,8 +96,10 @@ bash thirdparty/hcsr/tools/build-unix-native.sh --platform macos --architecture 
 ```
 
 Linux ARM64 currently requires an ARM64 Linux build host. macOS packaging
-requires CMake, .NET 10, and `llvm-objcopy`; Ninja is used when available and
-the default CMake generator is supported otherwise. Homebrew's keg-only LLVM
+requires CMake, .NET 10, `llvm-objcopy`, and Xcode's Metal Toolchain; install
+the latter with `xcodebuild -downloadComponent MetalToolchain`. Ninja is used
+when available and the default CMake generator is supported otherwise.
+Homebrew's keg-only LLVM
 installation is detected in its standard Apple Silicon and Intel prefixes.
 macOS can build either architecture from one host when the corresponding .NET
 SDK architecture and Rosetta (for executing x86_64 tests on Apple Silicon) are
@@ -111,11 +113,15 @@ codec without Godot:
 ```bash
 bash thirdparty/hcsr/tools/run-macos-static-smoke.sh --architecture arm64
 bash thirdparty/hcsr/tools/run-macos-static-smoke.sh --architecture x86_64
+bash thirdparty/hcsr/tools/run-macos-metal-static-smoke.sh --architecture arm64
+bash thirdparty/hcsr/tools/run-macos-metal-static-smoke.sh --architecture x86_64
 ```
 
-The smoke executable links only the public `hcsr_renderer.h`, the combined
-archive, its NativeAOT initializer, and Apple system frameworks. It also rejects
-an output that has an HCSR dynamic-library dependency.
+The smoke executables link only the public `hcsr_renderer.h`, the combined
+archive, its NativeAOT initializer, and Apple system frameworks. The Metal
+smoke borrows a host `MTLDevice` and `MTLCommandQueue`, validates the returned
+`MTLTexture`, and enables Metal API Validation by default. Both reject an output
+that has an HCSR dynamic-library dependency.
 
 ## HCSR source and release packages
 
@@ -272,7 +278,7 @@ Export templates must be built with the same module and link-mode flags as the e
 
 ## OpenGL3 / Compatibility GPU backend plan
 
-The current explicit GPU backends are Vulkan and D3D12. Compatibility/OpenGL3 must not be advertised as an end-to-end GPU backend until Blink exposes a public GL/ANGLE external-target ABI.
+The current explicit GPU backends are Vulkan, D3D12, and HCSR Metal. Compatibility/OpenGL3 must not be advertised as an end-to-end GPU backend until the selected provider exposes a public GL/ANGLE external-target ABI.
 
 Godot has a GLES3 import surface through `RenderingServer::texture_create_from_native_handle()`, and the GLES3 texture storage wraps a native `GLuint` texture id as a `Texture2D` RID. A future OpenGL3 backend should therefore use this shape:
 

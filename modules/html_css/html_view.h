@@ -52,6 +52,7 @@ public:
 		BACKEND_GPU_AUTO,
 		BACKEND_VULKAN,
 		BACKEND_D3D12,
+		BACKEND_METAL,
 	};
 
 	enum ViewportSizeMode {

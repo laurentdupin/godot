@@ -42,6 +42,8 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	void _configure_d3d12_device_on_render_thread();
 	bool _configure_vulkan_device();
 	void _configure_vulkan_device_on_render_thread();
+	bool _configure_metal_device();
+	void _configure_metal_device_on_render_thread();
 	bool _render_gpu_frame();
 	void _render_gpu_frame_on_render_thread();
 	void _ensure_gpu_texture_imported_on_render_thread();
@@ -50,6 +52,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	void _destroy_renderer_on_render_thread();
 	static void _configure_d3d12_device_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _configure_vulkan_device_on_render_thread_callback(uint64_t p_backend_ptr);
+	static void _configure_metal_device_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _render_gpu_frame_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _detach_gpu_texture_import_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _destroy_renderer_on_render_thread_callback(uint64_t p_backend_ptr);
