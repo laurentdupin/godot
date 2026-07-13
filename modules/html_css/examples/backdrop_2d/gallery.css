@@ -9,24 +9,24 @@ html, body {
 
 .title {
     position: absolute;
-    left: 38px;
-    top: 22px;
+    left: 3vw;
+    top: 3vh;
     font-size: 30px;
     font-weight: 700;
 }
 
 .subtitle {
     position: absolute;
-    left: 40px;
-    top: 61px;
+    left: 3vw;
+    top: 8.5vh;
     color: #dbeafe;
     font-size: 14px;
 }
 
 .card {
     position: absolute;
-    width: 260px;
-    height: 214px;
+    width: calc(23.25vw - 38px);
+    height: calc(35vh - 38px);
     padding: 18px;
     border: 1px solid rgba(255, 255, 255, 0.42);
     border-radius: 22px;
@@ -59,11 +59,11 @@ html, body {
     font-size: 12px;
 }
 
-.blur       { left: 38px;  top: 102px; backdrop-filter: blur(16px); }
-.contrast   { left: 348px; top: 102px; backdrop-filter: contrast(180%); }
-.sepia      { left: 658px; top: 102px; backdrop-filter: sepia(100%); }
-.saturate   { left: 968px; top: 102px; backdrop-filter: saturate(240%); }
-.brightness { left: 38px;  top: 374px; backdrop-filter: brightness(155%); }
-.grayscale  { left: 348px; top: 374px; backdrop-filter: grayscale(100%); }
-.invert     { left: 658px; top: 374px; backdrop-filter: invert(100%); }
-.combined   { left: 968px; top: 374px; backdrop-filter: blur(9px) contrast(135%) saturate(180%) sepia(30%); }
+.blur       { left: 3vw;     top: 14vh; backdrop-filter: blur(16px); }
+.contrast   { left: 27.25vw; top: 14vh; backdrop-filter: contrast(180%); }
+.sepia      { left: 51.5vw;  top: 14vh; backdrop-filter: sepia(100%); }
+.saturate   { left: 75.75vw; top: 14vh; backdrop-filter: saturate(240%); }
+.brightness { left: 3vw;     top: 52vh; backdrop-filter: brightness(155%); }
+.grayscale  { left: 27.25vw; top: 52vh; backdrop-filter: grayscale(100%); }
+.invert     { left: 51.5vw;  top: 52vh; backdrop-filter: invert(100%); }
+.combined   { left: 75.75vw; top: 52vh; backdrop-filter: blur(9px) contrast(135%) saturate(180%) sepia(30%); }

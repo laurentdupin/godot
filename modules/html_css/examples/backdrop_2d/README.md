@@ -27,4 +27,7 @@ D3D12 renderer and reports an unsupported backend instead of silently uploading
 CPU pixels when no host-device GPU path is available. The backdrop itself is
 composited by Godot's canvas shader from the live screen texture; no scene
 pixels are read back into HCSR. Resize or maximize the window to exercise
-surface recreation and backdrop-region scaling.
+surface recreation and backdrop-region scaling. The example uses
+`VIEWPORT_SIZE_PHYSICAL_SIZE` with stretch disabled, so HCSR renders at the
+window's current physical pixel dimensions instead of the 1280x720 startup
+size.

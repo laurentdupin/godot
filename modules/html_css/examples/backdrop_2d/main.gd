@@ -69,6 +69,7 @@ func _ready() -> void:
 	html_view.name = "BackdropHTML"
 	html_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	html_view.backend_preference = HTMLView.BACKEND_GPU_AUTO
+	html_view.viewport_size_mode = HTMLView.VIEWPORT_SIZE_PHYSICAL_SIZE
 	html_view.backdrop_filter_enabled = true
 	html_view.document = document
 	add_child(html_view)
