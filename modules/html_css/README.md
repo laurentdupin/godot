@@ -1,15 +1,44 @@
 # HTML/CSS Renderer Integration Notes
 
+## Renderer selection
+
+The module has one mutually exclusive renderer selector:
+
+```text
+module_html_css_renderer=none|blink|hcsr
+```
+
+`none` keeps the raw CPU-frame receiver without compiling an HTML engine.
+`blink` uses the nested `thirdparty/blink-standalone-ui` dependency. `hcsr`
+uses the nested `thirdparty/hcsr` dependency and statically links its NativeAOT
+bridge, so an HCSR build does not ship an HCSR DLL.
+
+The current HCSR integration supports Windows x86_64 and can be built with:
+
+```text
+python -m SCons platform=windows target=editor module_html_css_renderer=hcsr
+```
+
+By default, a missing HCSR archive is produced with `dotnet publish` from
+`thirdparty/hcsr/src/Renderer.NativeBridge`. Set
+`module_html_css_hcsr_auto_build=no` to require an existing archive, or pass
+`module_html_css_hcsr_lib_path=<path>` to use an explicit one. HCSR currently
+backs `Auto` with its CPU renderer. Explicit Vulkan and D3D12 surface requests
+remain unavailable until the HCSR C ABI accepts Godot-owned GPU devices and
+render targets; they never silently upload CPU output while claiming GPU mode.
+
 ## Blink C API link modes
 
 The `html_css` module can compile the optional Blink C API backend with:
 
 ```text
 module_html_css_enabled=yes
-module_html_css_blink_enabled=yes
+module_html_css_renderer=blink
 ```
 
-`module_html_css_blink_enabled` remains opt-in because the Blink C API backend is an external renderer dependency that is not part of baseline upstream Godot builds. Once Blink is enabled, the default and primary consumption mode is static:
+`module_html_css_blink_enabled=yes` remains a compatibility alias for
+`module_html_css_renderer=blink`. Once Blink is enabled, the default and primary
+consumption mode is static:
 
 ```text
 module_html_css_blink_link_mode=static
@@ -153,3 +182,26 @@ Godot has a GLES3 import surface through `RenderingServer::texture_create_from_n
 The Blink ABI must define context ownership/current-context requirements, same-context versus shared-context behavior, texture format, alpha semantics, resize lifetime, fences or synchronous completion, and that Blink never deletes Godot-owned GL resources.
 
 Until that ABI exists, `BACKEND_AUTO` may use the CPU/raw path on OpenGL3, but explicit GPU requests must report unsupported and must not draw stale CPU output.
+
+## Backdrop input for canvas and world-space HTML
+
+Backdrop filtering must use an explicit Godot render-graph input. The HTML
+renderer must not capture the window or reach back into `RenderingServer` on
+its own. For a canvas `HTMLView`, Godot supplies the resolved canvas or camera
+color immediately before the HTML pass. For an `HTMLSurface3D`, the scene
+supplies a camera, viewport, portal, or application texture representing what
+is behind the panel from the intended viewpoint.
+
+The host-owned GPU request should carry the color image/view or D3D12 resource,
+its generation, physical size, format and color space, UV-to-backdrop transform,
+current layout/resource state, and synchronization token. HCSR/Blink then copy
+only conservative filter regions, apply blur and color operations, clip them to
+the CSS shape, and composite into the same host-owned HTML target. Godot remains
+responsible for capture timing, HDR policy, MSAA resolve, depth/occlusion, mip
+generation, and mapping a 3D ray hit's UV back to HTML pixel coordinates.
+
+This keeps the HTML paint contract identical for 2D and 3D. Only the source of
+the backdrop texture and the coordinate transform differ. If a world-space
+panel has no meaningful scene-color source, backdrop filtering should be
+disabled or use an explicitly assigned texture instead of silently sampling the
+screen-space viewport.

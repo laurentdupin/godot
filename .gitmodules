@@ -1,3 +1,6 @@
 [submodule "thirdparty/blink-standalone-ui"]
 	path = thirdparty/blink-standalone-ui
 	url = https://github.com/laurentdupin/blink-standalone-ui
+[submodule "thirdparty/hcsr"]
+	path = thirdparty/hcsr
+	url = https://github.com/laurentdupin/HTMLCSSSimpleRenderer.git

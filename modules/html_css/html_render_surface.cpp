@@ -34,6 +34,9 @@
 #include "backend/html_surface_blink_c_api_backend.h"
 #include "backend/html_surface_blink_gpu_backend.h"
 #endif
+#ifdef HTML_CSS_USE_HCSR
+#include "backend/html_surface_hcsr_backend.h"
+#endif
 #include "backend/html_surface_cpu_backend.h"
 #include "backend/html_surface_unsupported_backend.h"
 
@@ -68,24 +71,35 @@ void HTMLRenderSurface::_ensure_backend() {
 			backend = memnew(HTMLSurfaceExternalCApiBackend);
 		}
 #else
-		html_surface_warn_auto_cpu_fallback("the external Blink renderer C API backend is not compiled in");
+	#ifdef HTML_CSS_USE_HCSR
+		html_surface_warn_auto_cpu_fallback("the HCSR host-owned GPU target API is not implemented yet");
+		backend = memnew(HTMLSurfaceHCSRBackend);
+	#else
+		html_surface_warn_auto_cpu_fallback("no external HTML/CSS renderer provider is compiled in");
 		backend = memnew(HTMLSurfaceCPUBackend);
+	#endif
 #endif
 	} else if (backend_preference == HTML_SURFACE_BACKEND_GPU_AUTO) {
 #ifdef HTML_CSS_USE_BLINK_C_API
 		backend = memnew(HTMLSurfaceBlinkGPUBackend(BLINK_STANDALONE_GPU_BACKEND_NONE));
+#elif defined(HTML_CSS_USE_HCSR)
+		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS GPU backend requested, but HCSR does not yet expose its Vulkan/D3D12 renderer through Godot's host-owned device and target contract. Explicit GPU requests do not fall back to CPU output."));
 #else
 		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS GPU backend requested, but the external renderer C API backend is not compiled in. Explicit GPU requests do not fall back to CPU output."));
 #endif
 	} else if (backend_preference == HTML_SURFACE_BACKEND_VULKAN) {
 #ifdef HTML_CSS_USE_BLINK_C_API
 		backend = memnew(HTMLSurfaceBlinkGPUBackend(BLINK_STANDALONE_GPU_BACKEND_VULKAN));
+#elif defined(HTML_CSS_USE_HCSR)
+		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS Vulkan GPU backend requested, but HCSR's host-owned Vulkan device/target API is not implemented yet. Explicit GPU requests do not fall back to CPU output."));
 #else
 		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS Vulkan GPU backend requested, but the external renderer C API backend is not compiled in. Explicit GPU requests do not fall back to CPU output."));
 #endif
 	} else if (backend_preference == HTML_SURFACE_BACKEND_D3D12) {
 #ifdef HTML_CSS_USE_BLINK_C_API
 		backend = memnew(HTMLSurfaceBlinkGPUBackend(BLINK_STANDALONE_GPU_BACKEND_D3D12));
+#elif defined(HTML_CSS_USE_HCSR)
+		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS D3D12 GPU backend requested, but HCSR's host-owned D3D12 device/target API is not implemented yet. Explicit GPU requests do not fall back to CPU output."));
 #else
 		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS D3D12 GPU backend requested, but the external renderer C API backend is not compiled in. Explicit GPU requests do not fall back to CPU output."));
 #endif
@@ -119,6 +133,8 @@ bool HTMLRenderSurface::_fallback_auto_gpu_to_cpu(const String &p_reason) {
 
 #ifdef HTML_CSS_USE_BLINK_C_API
 	HTMLSurfaceBackend *fallback_backend = memnew(HTMLSurfaceExternalCApiBackend);
+#elif defined(HTML_CSS_USE_HCSR)
+	HTMLSurfaceBackend *fallback_backend = memnew(HTMLSurfaceHCSRBackend);
 #else
 	HTMLSurfaceBackend *fallback_backend = memnew(HTMLSurfaceCPUBackend);
 #endif

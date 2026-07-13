@@ -13,6 +13,13 @@ Import("env_modules")
 
 env_html_css = env_modules.Clone()
 
+_html_css_renderer = env["module_html_css_renderer"]
+if env["module_html_css_blink_enabled"]:
+    if _html_css_renderer == "hcsr":
+        print("HTML/CSS renderer selection is contradictory: module_html_css_blink_enabled=yes cannot be combined with module_html_css_renderer=hcsr.")
+        Exit(1)
+    _html_css_renderer = "blink"
+
 _html_css_blink_package_path_override = bool(env["module_html_css_blink_lib_path"])
 
 
@@ -24,6 +31,61 @@ def _html_css_resolve_repo_path(p_path):
     if p_path.startswith("#"):
         return env.Dir(p_path).abspath
     return env.Dir("#" + p_path).abspath
+
+
+def _html_css_resolve_repo_file(p_path):
+    if not p_path:
+        return ""
+    if os.path.isabs(p_path):
+        return os.path.normpath(p_path)
+    if p_path.startswith("#"):
+        return env.File(p_path).abspath
+    return env.File("#" + p_path).abspath
+
+
+def _html_css_hcsr_static_library_path():
+    if env["module_html_css_hcsr_lib_path"]:
+        return _html_css_resolve_repo_file(env["module_html_css_hcsr_lib_path"])
+    return _html_css_resolve_repo_file(
+        os.path.join(
+            "thirdparty",
+            "hcsr",
+            "src",
+            "Renderer.NativeBridge",
+            "bin",
+            "Release",
+            "net10.0",
+            "win-x64",
+            "publish",
+            "Renderer.NativeBridge.lib",
+        )
+    )
+
+
+def _html_css_ensure_hcsr_static_library():
+    if env["platform"] != "windows" or env["arch"] != "x86_64":
+        print("HTML/CSS HCSR currently supports only Windows x86_64 Godot hosts.")
+        Exit(1)
+
+    library_path = _html_css_hcsr_static_library_path()
+    if os.path.isfile(library_path):
+        return
+    if not env["module_html_css_hcsr_auto_build"] or env["module_html_css_hcsr_lib_path"]:
+        print("HTML/CSS HCSR static library is missing: " + library_path)
+        Exit(1)
+
+    project_path = _html_css_resolve_repo_file(
+        os.path.join("thirdparty", "hcsr", "src", "Renderer.NativeBridge", "Renderer.NativeBridge.csproj")
+    )
+    print("HTML/CSS HCSR static library is missing; publishing nested NativeAOT bridge:")
+    print("  " + project_path)
+    completed = subprocess.run(
+        ["dotnet", "publish", project_path, "-c", "Release", "-r", "win-x64", "--nologo"],
+        cwd=_html_css_resolve_repo_path(os.path.join("thirdparty", "hcsr")),
+    )
+    if completed.returncode != 0 or not os.path.isfile(library_path):
+        print("HTML/CSS HCSR NativeAOT publish failed or did not produce: " + library_path)
+        Exit(1)
 
 
 def _html_css_default_blink_package_path():
@@ -366,7 +428,7 @@ def _html_css_print_package_build_help():
 
 
 def _html_css_ensure_blink_package():
-    if not env["module_html_css_blink_enabled"] or _html_css_blink_package_path_override:
+    if _html_css_renderer != "blink" or _html_css_blink_package_path_override:
         return
 
     _html_css_extract_prebuilt_archive_if_needed()
@@ -591,7 +653,7 @@ env_html_css.add_source_files(env.modules_sources, "bridge/html_asset_provider.c
 env_html_css.add_source_files(env.modules_sources, "bridge/html_source_validator.cpp")
 env_html_css.add_source_files(env.modules_sources, "backend/html_surface_cpu_backend.cpp")
 env_html_css.add_source_files(env.modules_sources, "backend/html_surface_unsupported_backend.cpp")
-if env["module_html_css_blink_enabled"]:
+if _html_css_renderer == "blink":
     _html_css_ensure_blink_package()
     print("HTML/CSS Blink package path: " + _html_css_blink_package_path())
     static_manifest = None
@@ -626,6 +688,35 @@ if env["module_html_css_blink_enabled"]:
     else:
         external_renderer_link_inputs = [_html_css_link_input(env["module_html_css_blink_lib"])]
     env.Append(LINKFLAGS=external_renderer_link_inputs)
+elif _html_css_renderer == "hcsr":
+    _html_css_ensure_hcsr_static_library()
+    hcsr_library_path = _html_css_hcsr_static_library_path()
+    print("HTML/CSS HCSR static library: " + hcsr_library_path)
+    env_html_css.Append(CPPDEFINES=["HTML_CSS_USE_HCSR"])
+    env_html_css.Append(CPPPATH=["#thirdparty/hcsr/native/include"])
+    env_html_css.add_source_files(env.modules_sources, "backend/html_surface_hcsr_backend.cpp")
+    env.Append(
+        LINKFLAGS=[
+            hcsr_library_path,
+            "advapi32.lib",
+            "bcrypt.lib",
+            "crypt32.lib",
+            "d3d12.lib",
+            "d3dcompiler.lib",
+            "dxgi.lib",
+            "iphlpapi.lib",
+            "ncrypt.lib",
+            "normaliz.lib",
+            "ole32.lib",
+            "oleaut32.lib",
+            "secur32.lib",
+            "shell32.lib",
+            "user32.lib",
+            "version.lib",
+            "vulkan-1.lib",
+            "ws2_32.lib",
+        ]
+    )
 env_html_css.add_source_files(env.modules_sources, "html_document.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_render_target.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_render_surface.cpp")

@@ -4,10 +4,27 @@ def get_opts(platform):
     default_external_lib = "blink_standalone_renderer_c_api.lib" if platform == "windows" else "libblink_standalone_renderer_c_api.a"
 
     return [
+        EnumVariable(
+            "module_html_css_renderer",
+            "HTML/CSS renderer implementation compiled into the module. 'none' keeps only the raw CPU frame receiver; 'blink' and 'hcsr' are mutually exclusive providers.",
+            "none",
+            allowed_values=("none", "blink", "hcsr"),
+        ),
         BoolVariable(
             "module_html_css_blink_enabled",
-            "Enable the external HTML/CSS renderer C API backend for the html_css module",
+            "Legacy alias for module_html_css_renderer=blink. Cannot be combined with module_html_css_renderer=hcsr.",
             False,
+        ),
+        PathVariable(
+            "module_html_css_hcsr_lib_path",
+            "Optional path to a prebuilt static HCSR NativeAOT library. Defaults to the nested thirdparty/hcsr publish output.",
+            "",
+            PathVariable.PathAccept,
+        ),
+        BoolVariable(
+            "module_html_css_hcsr_auto_build",
+            "Build the nested HCSR static NativeAOT library with dotnet publish when its archive is missing.",
+            True,
         ),
         PathVariable(
             "module_html_css_blink_lib_path",
