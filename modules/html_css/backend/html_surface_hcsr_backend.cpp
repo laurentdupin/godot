@@ -8,6 +8,9 @@
 
 #include "core/config/project_settings.h"
 #include "core/math/math_funcs.h"
+#include "core/object/callable_mp.h"
+#include "servers/rendering/rendering_device.h"
+#include "servers/rendering/rendering_server.h"
 
 static String hcsr_color_to_css_rgba(const Color &p_color) {
 	return vformat("rgba(%d, %d, %d, %.6f)",
@@ -18,7 +21,7 @@ static String hcsr_color_to_css_rgba(const Color &p_color) {
 }
 
 static String hcsr_inject_document_style(const String &p_html, const Color &p_background, const String &p_css) {
-	String style = "<style data-godot-hcsr=\"true\">:where(html), :where(body) { background-color: " + hcsr_color_to_css_rgba(p_background) + "; }\n";
+	String style = "<style data-godot-hcsr=\"true\">html { background-color: " + hcsr_color_to_css_rgba(p_background) + "; }\n";
 	style += p_css.replace("</style", "<\\/style");
 	style += "\n</style>";
 	const String lower_html = p_html.to_lower();
@@ -42,6 +45,7 @@ bool HTMLSurfaceHCSRBackend::_ensure_renderer() {
 	config.device_scale = device_scale_factor;
 	config.pixel_format = HCSR_PIXEL_FORMAT_BGRA8;
 	config.transparent_background = transparent_background ? 1 : 0;
+	config.render_backend = render_backend;
 	const hcsr_status_t status = hcsr_renderer_create(&config, &renderer);
 	if (status != HCSR_STATUS_OK || renderer == nullptr) {
 		terminal_failure = true;
@@ -52,7 +56,61 @@ bool HTMLSurfaceHCSRBackend::_ensure_renderer() {
 
 	viewport_dirty = true;
 	document_dirty = true;
+	if (render_backend == HCSR_RENDER_BACKEND_D3D12 && !_configure_d3d12_device()) {
+		hcsr_renderer_destroy(renderer);
+		renderer = nullptr;
+		return false;
+	}
 	return true;
+}
+
+void HTMLSurfaceHCSRBackend::_configure_d3d12_device_on_render_thread() {
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	RenderingDevice *rendering_device = rendering_server != nullptr ? rendering_server->get_rendering_device() : nullptr;
+	if (renderer == nullptr || rendering_device == nullptr) {
+		terminal_failure_reason = "Godot did not expose a RenderingDevice for HCSR D3D12.";
+		return;
+	}
+
+	hcsr_d3d12_device_t device = {};
+	device.struct_size = sizeof(device);
+	device.device = (void *)rendering_device->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_LOGICAL_DEVICE);
+	device.command_queue = (void *)rendering_device->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_COMMAND_QUEUE);
+	if (device.device == nullptr || device.command_queue == nullptr) {
+		terminal_failure_reason = "Godot's active renderer did not expose D3D12 device and command-queue handles.";
+		return;
+	}
+
+	if (hcsr_renderer_set_d3d12_device(renderer, &device) != HCSR_STATUS_OK) {
+		_record_error("HCSR could not borrow Godot's D3D12 device");
+		return;
+	}
+	d3d12_device_configured = true;
+}
+
+void HTMLSurfaceHCSRBackend::_configure_d3d12_device_on_render_thread_callback(uint64_t p_backend_ptr) {
+	HTMLSurfaceHCSRBackend *backend = (HTMLSurfaceHCSRBackend *)p_backend_ptr;
+	if (backend != nullptr) {
+		backend->_configure_d3d12_device_on_render_thread();
+	}
+}
+
+bool HTMLSurfaceHCSRBackend::_configure_d3d12_device() {
+	if (d3d12_device_configured) {
+		return true;
+	}
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	if (rendering_server == nullptr) {
+		terminal_failure_reason = "RenderingServer is unavailable for HCSR D3D12 configuration.";
+		return false;
+	}
+	if (rendering_server->is_on_render_thread()) {
+		_configure_d3d12_device_on_render_thread();
+	} else {
+		rendering_server->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRBackend::_configure_d3d12_device_on_render_thread_callback).bind((uint64_t)this));
+		rendering_server->sync();
+	}
+	return d3d12_device_configured;
 }
 
 void HTMLSurfaceHCSRBackend::_record_error(const String &p_context) {
@@ -166,9 +224,113 @@ Error HTMLSurfaceHCSRBackend::_set_input() {
 			: FAILED;
 }
 
+void HTMLSurfaceHCSRBackend::_ensure_gpu_texture_imported_on_render_thread() {
+	if (gpu_texture_rid.is_valid() || native_gpu_texture == nullptr || native_gpu_size.x <= 0 || native_gpu_size.y <= 0) {
+		return;
+	}
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	if (rendering_server == nullptr) {
+		terminal_failure_reason = "RenderingServer is unavailable for HCSR GPU texture import.";
+		return;
+	}
+	gpu_texture_rid = rendering_server->texture_create_from_native_handle(
+			RenderingServerEnums::TEXTURE_TYPE_2D,
+			Image::FORMAT_RGBA8,
+			(uint64_t)native_gpu_texture,
+			native_gpu_size.x,
+			native_gpu_size.y,
+			1,
+			1);
+	if (!gpu_texture_rid.is_valid()) {
+		terminal_failure_reason = "Godot could not import HCSR's host-device GPU texture.";
+		return;
+	}
+	if (gpu_texture.is_null()) {
+		gpu_texture.instantiate();
+	}
+	gpu_texture->set_external_texture(gpu_texture_rid, native_gpu_size, true);
+}
+
+void HTMLSurfaceHCSRBackend::_ensure_gpu_texture_imported_on_render_thread_callback(uint64_t p_backend_ptr) {
+	HTMLSurfaceHCSRBackend *backend = (HTMLSurfaceHCSRBackend *)p_backend_ptr;
+	if (backend != nullptr) {
+		backend->_ensure_gpu_texture_imported_on_render_thread();
+	}
+}
+
+bool HTMLSurfaceHCSRBackend::_ensure_gpu_texture_imported() {
+	if (gpu_texture_rid.is_valid()) {
+		return true;
+	}
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	if (rendering_server == nullptr) {
+		return false;
+	}
+	if (rendering_server->is_on_render_thread()) {
+		_ensure_gpu_texture_imported_on_render_thread();
+	} else {
+		rendering_server->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRBackend::_ensure_gpu_texture_imported_on_render_thread_callback).bind((uint64_t)this));
+		rendering_server->sync();
+	}
+	return gpu_texture_rid.is_valid();
+}
+
+void HTMLSurfaceHCSRBackend::_detach_gpu_texture_import_on_render_thread() {
+	if (gpu_texture.is_valid()) {
+		gpu_texture->clear_external_texture();
+	}
+	if (gpu_texture_rid.is_valid() && RenderingServer::get_singleton() != nullptr) {
+		RenderingServer::get_singleton()->free_rid(gpu_texture_rid);
+	}
+	gpu_texture_rid = RID();
+}
+
+void HTMLSurfaceHCSRBackend::_detach_gpu_texture_import_on_render_thread_callback(uint64_t p_backend_ptr) {
+	HTMLSurfaceHCSRBackend *backend = (HTMLSurfaceHCSRBackend *)p_backend_ptr;
+	if (backend != nullptr) {
+		backend->_detach_gpu_texture_import_on_render_thread();
+	}
+}
+
+void HTMLSurfaceHCSRBackend::_detach_gpu_texture_import() {
+	if (!gpu_texture_rid.is_valid()) {
+		return;
+	}
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	if (rendering_server == nullptr) {
+		gpu_texture_rid = RID();
+		return;
+	}
+	if (rendering_server->is_on_render_thread()) {
+		_detach_gpu_texture_import_on_render_thread();
+	} else {
+		rendering_server->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRBackend::_detach_gpu_texture_import_on_render_thread_callback).bind((uint64_t)this));
+		rendering_server->sync();
+	}
+}
+
 bool HTMLSurfaceHCSRBackend::_render_frame() {
 	if (!_sync_viewport() || !_sync_document() || _set_input() != OK) {
 		return false;
+	}
+	if (render_backend != HCSR_RENDER_BACKEND_CPU) {
+		hcsr_gpu_frame_t output = {};
+		output.struct_size = sizeof(output);
+		if (hcsr_renderer_render_gpu(renderer, timeline_time_seconds, &output) != HCSR_STATUS_OK) {
+			_record_error("HCSR could not render the Godot GPU frame");
+			return false;
+		}
+		if (output.native_texture == nullptr || output.width <= 0 || output.height <= 0 || output.render_backend != render_backend) {
+			_record_error("HCSR returned an invalid Godot GPU frame");
+			return false;
+		}
+		if (native_gpu_texture != output.native_texture || native_gpu_generation != output.resource_generation || native_gpu_size != Size2i(output.width, output.height)) {
+			_detach_gpu_texture_import();
+			native_gpu_texture = output.native_texture;
+			native_gpu_generation = output.resource_generation;
+			native_gpu_size = Size2i(output.width, output.height);
+		}
+		return _ensure_gpu_texture_imported();
 	}
 	hcsr_frame_t output = {};
 	output.struct_size = sizeof(output);
@@ -202,6 +364,12 @@ void HTMLSurfaceHCSRBackend::set_size(const Size2i &p_size) {
 	const Size2i new_size(MAX(1, p_size.x), MAX(1, p_size.y));
 	if (size == new_size) {
 		return;
+	}
+	if (render_backend != HCSR_RENDER_BACKEND_CPU) {
+		_detach_gpu_texture_import();
+		native_gpu_texture = nullptr;
+		native_gpu_generation = 0;
+		native_gpu_size = Size2i();
 	}
 	HTMLSurfaceCPUBackend::set_size(new_size);
 	viewport_dirty = true;
@@ -288,10 +456,23 @@ Error HTMLSurfaceHCSRBackend::wheel(const Point2 &p_position, const Vector2 &p_d
 	return _set_input();
 }
 
-HTMLSurfaceHCSRBackend::HTMLSurfaceHCSRBackend() {
+Ref<Texture2D> HTMLSurfaceHCSRBackend::get_texture() const {
+	if (render_backend == HCSR_RENDER_BACKEND_CPU) {
+		return HTMLSurfaceCPUBackend::get_texture();
+	}
+	return gpu_texture;
+}
+
+Ref<HTMLTexture2D> HTMLSurfaceHCSRBackend::get_html_texture() const {
+	return render_backend == HCSR_RENDER_BACKEND_CPU ? HTMLSurfaceCPUBackend::get_html_texture() : gpu_texture;
+}
+
+HTMLSurfaceHCSRBackend::HTMLSurfaceHCSRBackend(hcsr_render_backend_t p_render_backend) :
+		render_backend(p_render_backend) {
 }
 
 HTMLSurfaceHCSRBackend::~HTMLSurfaceHCSRBackend() {
+	_detach_gpu_texture_import();
 	if (renderer != nullptr) {
 		hcsr_renderer_destroy(renderer);
 		renderer = nullptr;

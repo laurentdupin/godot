@@ -68,7 +68,21 @@ def _html_css_ensure_hcsr_static_library():
         Exit(1)
 
     library_path = _html_css_hcsr_static_library_path()
-    if os.path.isfile(library_path):
+    hcsr_root = _html_css_resolve_repo_path(os.path.join("thirdparty", "hcsr"))
+    package_is_current = os.path.isfile(library_path)
+    if package_is_current and not env["module_html_css_hcsr_lib_path"]:
+        marker_path = os.path.join(os.path.dirname(library_path), "hcsr_renderer_combined.commit")
+        source_commit = subprocess.run(
+            ["git", "-C", hcsr_root, "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+        )
+        packaged_commit = ""
+        if os.path.isfile(marker_path):
+            with open(marker_path, "r", encoding="utf-8") as marker_file:
+                packaged_commit = marker_file.read().strip()
+        package_is_current = source_commit.returncode == 0 and packaged_commit == source_commit.stdout.strip()
+    if package_is_current:
         return
     if not env["module_html_css_hcsr_auto_build"] or env["module_html_css_hcsr_lib_path"]:
         print("HTML/CSS HCSR static library is missing: " + library_path)
@@ -81,7 +95,7 @@ def _html_css_ensure_hcsr_static_library():
     print("  " + project_path)
     completed = subprocess.run(
         ["dotnet", "publish", project_path, "-c", "Release", "-r", "win-x64", "--nologo"],
-        cwd=_html_css_resolve_repo_path(os.path.join("thirdparty", "hcsr")),
+        cwd=hcsr_root,
     )
     if completed.returncode != 0 or not os.path.isfile(library_path):
         print("HTML/CSS HCSR NativeAOT publish failed or did not produce its combined static library.")
