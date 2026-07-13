@@ -205,3 +205,18 @@ the backdrop texture and the coordinate transform differ. If a world-space
 panel has no meaningful scene-color source, backdrop filtering should be
 disabled or use an explicitly assigned texture instead of silently sampling the
 screen-space viewport.
+
+For canvas UI, the default mapping is one scene-color texel per viewport pixel.
+For a flat 3D panel, prefer a panel-local camera/portal texture; alternatively,
+pass a 3x3 projective mapping from HTML pixel coordinates to the active camera
+texture. Curved panels require a host-generated UV map or a panel-local
+reprojection because one projective transform cannot describe them.
+
+The scene-color capture must happen before the HTML panel is drawn, and HCSR
+must copy each conservative filter region before applying blur or color passes.
+Sampling the destination texture in place would create undefined GPU feedback;
+capturing after the panel draw would create a recursive previous-frame image.
+Panels may share a camera-color capture, while portal/reprojected textures are
+normally panel-specific. Pointer interaction remains independent: Godot raycasts
+the panel, converts hit UV to HTML pixels, and sends the same pointer input used
+by a canvas `HTMLView`.
