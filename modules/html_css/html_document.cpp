@@ -41,6 +41,8 @@ void HTMLDocument::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_css"), &HTMLDocument::get_css);
 	ClassDB::bind_method(D_METHOD("set_html_file", "html_file"), &HTMLDocument::set_html_file);
 	ClassDB::bind_method(D_METHOD("get_html_file"), &HTMLDocument::get_html_file);
+	ClassDB::bind_method(D_METHOD("set_package_file", "package_file"), &HTMLDocument::set_package_file);
+	ClassDB::bind_method(D_METHOD("get_package_file"), &HTMLDocument::get_package_file);
 	ClassDB::bind_method(D_METHOD("set_css_files", "css_files"), &HTMLDocument::set_css_files);
 	ClassDB::bind_method(D_METHOD("get_css_files"), &HTMLDocument::get_css_files);
 	ClassDB::bind_method(D_METHOD("add_css_file", "css_file"), &HTMLDocument::add_css_file);
@@ -61,6 +63,7 @@ void HTMLDocument::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::STRING, "html", PROPERTY_HINT_MULTILINE_TEXT), "set_html", "get_html");
 	ADD_PROPERTY(PropertyInfo(Variant::STRING, "css", PROPERTY_HINT_MULTILINE_TEXT), "set_css", "get_css");
 	ADD_PROPERTY(PropertyInfo(Variant::STRING, "html_file", PROPERTY_HINT_FILE, "*.html,*.htm"), "set_html_file", "get_html_file");
+	ADD_PROPERTY(PropertyInfo(Variant::STRING, "package_file", PROPERTY_HINT_FILE, "*.hcsrpkg"), "set_package_file", "get_package_file");
 	ADD_PROPERTY(PropertyInfo(Variant::PACKED_STRING_ARRAY, "css_files"), "set_css_files", "get_css_files");
 	ADD_PROPERTY(PropertyInfo(Variant::STRING, "resource_root", PROPERTY_HINT_DIR), "set_resource_root", "get_resource_root");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2I, "default_size", PROPERTY_HINT_RANGE, "1,16384,1,or_greater,suffix:px"), "set_default_size", "get_default_size");
@@ -79,6 +82,10 @@ bool HTMLDocument::_validate_source() {
 	PackedStringArray path_errors = HTMLSourceValidator::validate_resource_path(html_file);
 	for (const String &error : path_errors) {
 		new_errors.push_back(error);
+	}
+	PackedStringArray package_path_errors = HTMLSourceValidator::validate_resource_path(package_file);
+	for (const String &error : package_path_errors) {
+		new_errors.push_back("Package file: " + error);
 	}
 
 	for (const String &css_file : css_files) {
@@ -138,6 +145,19 @@ void HTMLDocument::set_html_file(const String &p_html_file) {
 
 String HTMLDocument::get_html_file() const {
 	return html_file;
+}
+
+void HTMLDocument::set_package_file(const String &p_package_file) {
+	if (package_file == p_package_file) {
+		return;
+	}
+	package_file = p_package_file;
+	_validate_source();
+	emit_changed();
+}
+
+String HTMLDocument::get_package_file() const {
+	return package_file;
 }
 
 void HTMLDocument::set_css_files(const PackedStringArray &p_css_files) {

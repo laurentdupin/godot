@@ -25,7 +25,10 @@
 			Inline HTML/CSS source.
 		</member>
 		<member name="html_file" type="String" setter="set_html_file" getter="get_html_file" default="&quot;&quot;">
-			Path to an HTML file. File loading is reserved for the renderer backend.
+			Path to an HTML file. HCSR editor and debug builds load this source directly for browser-compatible authoring and hot reload. Release exports compile it to an [code].hcsrpkg[/code] and omit loose HTML/CSS.
+		</member>
+		<member name="package_file" type="String" setter="set_package_file" getter="get_package_file" default="&quot;&quot;">
+			Optional explicit compiled HCSR package. When empty, release exports derive the package path from [member html_file]. Setting this property also allows editor builds to test the packaged path explicitly.
 		</member>
 		<member name="resource_root" type="String" setter="set_resource_root" getter="get_resource_root" default="&quot;res://&quot;">
 			Base resource root used by the renderer backend for local assets.

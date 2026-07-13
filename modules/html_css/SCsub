@@ -710,6 +710,7 @@ elif _html_css_renderer == "hcsr":
     env_html_css.Append(CPPDEFINES=["HTML_CSS_USE_HCSR"])
     env_html_css.Append(CPPPATH=["#thirdparty/hcsr/native/include"])
     env_html_css.add_source_files(env.modules_sources, "backend/html_surface_hcsr_backend.cpp")
+    env_html_css.add_source_files(env.modules_sources, "editor/html_package_export_plugin.cpp")
     env.Append(
         LINKFLAGS=[
             hcsr_library_path,

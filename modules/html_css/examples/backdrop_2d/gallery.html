@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="stylesheet" href="gallery.css">
+</head>
+<body>
+    <div class="title">HCSR 2D Backdrop Gallery</div>
+    <div class="subtitle">Each HTML panel filters the animated Godot canvas underneath it.</div>
+    <section class="card blur"><h2>Gaussian blur</h2><p>Moving shapes and grid lines diffuse while the HTML text remains sharp.</p><div class="value">blur(16px)</div></section>
+    <section class="card contrast"><h2>Contrast</h2><p>Dark and light scene values are pushed farther apart.</p><div class="value">contrast(180%)</div></section>
+    <section class="card sepia"><h2>Sepia</h2><p>The sampled canvas is transformed through a warm photographic matrix.</p><div class="value">sepia(100%)</div></section>
+    <section class="card saturate"><h2>Saturation</h2><p>Scene colors become deliberately intense without changing the HTML foreground.</p><div class="value">saturate(240%)</div></section>
+    <section class="card brightness"><h2>Brightness</h2><p>The background is lifted while preserving its moving geometry.</p><div class="value">brightness(155%)</div></section>
+    <section class="card grayscale"><h2>Grayscale</h2><p>Host canvas color is removed only inside this rounded panel.</p><div class="value">grayscale(100%)</div></section>
+    <section class="card invert"><h2>Invert</h2><p>Every sampled RGB channel is inverted for a high-contrast negative.</p><div class="value">invert(100%)</div></section>
+    <section class="card combined"><h2>Combined stack</h2><p>Operations are evaluated in CSS order on the same captured backdrop.</p><div class="value">blur + contrast + saturate + sepia</div></section>
+</body>
+</html>

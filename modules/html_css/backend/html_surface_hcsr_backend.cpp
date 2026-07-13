@@ -243,12 +243,46 @@ bool HTMLSurfaceHCSRBackend::_load_document_source(String &r_html, String &r_doc
 	return true;
 }
 
+bool HTMLSurfaceHCSRBackend::_load_document_package(PackedByteArray &r_package) const {
+	if (document.is_null()) {
+		return false;
+	}
+	String package_path = document->get_package_file();
+#if !defined(TOOLS_ENABLED) && !defined(DEBUG_ENABLED)
+	if (package_path.is_empty() && !document->get_html_file().is_empty()) {
+		package_path = document->get_html_file().get_basename() + ".hcsrpkg";
+	}
+#endif
+	if (package_path.is_empty()) {
+		return false;
+	}
+	HTMLAssetResource asset;
+	String error;
+	if (HTMLGodotAssetProvider::load_asset(document, package_path, asset, &error) != OK) {
+		ERR_PRINT(error);
+		return false;
+	}
+	r_package = asset.bytes;
+	return !r_package.is_empty();
+}
+
 bool HTMLSurfaceHCSRBackend::_sync_document() {
 	if (!document_dirty) {
 		return true;
 	}
 	if (!_ensure_renderer()) {
 		return false;
+	}
+	PackedByteArray package;
+	if (_load_document_package(package)) {
+		if (hcsr_renderer_set_document_package(renderer, package.ptr(), package.size()) != HCSR_STATUS_OK) {
+			_record_error("HCSR rejected the compiled Godot HTML package");
+			return false;
+		}
+		document_dirty = false;
+		terminal_failure = false;
+		terminal_failure_reason = String();
+		return true;
 	}
 	String html;
 	String document_path;

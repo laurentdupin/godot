@@ -40,6 +40,7 @@ class HTMLDocument : public Resource {
 	String html;
 	String css;
 	String html_file;
+	String package_file;
 	PackedStringArray css_files;
 	String resource_root = "res://";
 	Size2i default_size = Size2i(512, 512);
@@ -60,6 +61,8 @@ public:
 
 	void set_html_file(const String &p_html_file);
 	String get_html_file() const;
+	void set_package_file(const String &p_package_file);
+	String get_package_file() const;
 
 	void set_css_files(const PackedStringArray &p_css_files);
 	PackedStringArray get_css_files() const;

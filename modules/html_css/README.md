@@ -28,9 +28,23 @@ By default, a missing HCSR archive is produced with `dotnet publish` from
 `thirdparty/hcsr/src/Renderer.NativeBridge`. Set
 `module_html_css_hcsr_auto_build=no` to require an existing archive, or pass
 `module_html_css_hcsr_lib_path=<path>` to use an explicit one. HCSR currently
-backs `Auto` with its CPU renderer. Explicit Vulkan and D3D12 surface requests
-remain unavailable until the HCSR C ABI accepts Godot-owned GPU devices and
-render targets; they never silently upload CPU output while claiming GPU mode.
+supports CPU, Vulkan, and D3D12 presentation. `BACKEND_GPU_AUTO` selects the
+active Vulkan or D3D12 renderer; explicit GPU requests never silently upload a
+CPU frame while claiming GPU mode.
+
+## HCSR source and release packages
+
+Author pages as ordinary browser-compatible `.html` and `.css` files. Standard
+`<link rel="stylesheet" href="...">` references work in HCSR, so the same page
+can be opened directly in Chromium while it is being edited. Editor and debug
+builds load those raw files and preserve immediate reload behavior.
+
+During a release export, the HCSR export plugin compiles each HTML entry into a
+versioned `.hcsrpkg`, embeds only the compiled DOM, parsed CSS/animation data,
+and referenced local assets, and skips the original HTML and CSS files. Release
+runtime code derives `res://page.hcsrpkg` from `res://page.html`; no loose HTML
+or CSS is required in the PCK or beside the executable. Set
+`HTMLDocument.package_file` to test a specific package explicitly in the editor.
 
 ## Blink C API link modes
 
