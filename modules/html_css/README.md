@@ -96,8 +96,24 @@ bash thirdparty/hcsr/tools/build-unix-native.sh --platform macos --architecture 
 ```
 
 Linux ARM64 currently requires an ARM64 Linux build host. macOS packaging
-requires CMake, Ninja, .NET 10, and `llvm-objcopy`; it can build either
-architecture from a macOS host.
+requires CMake, .NET 10, and `llvm-objcopy`; Ninja is used when available and
+the default CMake generator is supported otherwise. Homebrew's keg-only LLVM
+installation is detected in its standard Apple Silicon and Intel prefixes.
+macOS can build either architecture from one host when the corresponding .NET
+SDK architecture and Rosetta (for executing x86_64 tests on Apple Silicon) are
+available.
+
+After packaging, validate the static C ABI, system-font path, and raster-image
+codec without Godot:
+
+```bash
+bash thirdparty/hcsr/tools/run-macos-static-smoke.sh --architecture arm64
+bash thirdparty/hcsr/tools/run-macos-static-smoke.sh --architecture x86_64
+```
+
+The smoke executable links only the public `hcsr_renderer.h`, the combined
+archive, its NativeAOT initializer, and Apple system frameworks. It also rejects
+an output that has an HCSR dynamic-library dependency.
 
 ## HCSR source and release packages
 

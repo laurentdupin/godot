@@ -843,6 +843,8 @@ elif _html_css_renderer == "hcsr":
                 "-framework",
                 "CoreFoundation",
                 "-framework",
+                "Foundation",
+                "-framework",
                 "Security",
                 "-lz",
             ]
