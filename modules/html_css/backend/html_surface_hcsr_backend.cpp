@@ -33,6 +33,80 @@ static String hcsr_inject_document_style(const String &p_html, const Color &p_ba
 	return root_end >= 0 ? p_html.insert(root_end + 1, style) : p_html;
 }
 
+static String hcsr_get_tag_attribute(const String &p_tag, const String &p_attribute) {
+	const String lower_tag = p_tag.to_lower();
+	const String attribute = p_attribute.to_lower();
+	int cursor = 0;
+	while ((cursor = lower_tag.find(attribute, cursor)) >= 0) {
+		const bool starts_token = cursor == 0 || lower_tag[cursor - 1] <= 0x20;
+		int value_start = cursor + attribute.length();
+		while (value_start < lower_tag.length() && lower_tag[value_start] <= 0x20) {
+			value_start++;
+		}
+		if (!starts_token || value_start >= lower_tag.length() || lower_tag[value_start] != '=') {
+			cursor += attribute.length();
+			continue;
+		}
+		value_start++;
+		while (value_start < p_tag.length() && p_tag[value_start] <= 0x20) {
+			value_start++;
+		}
+		if (value_start >= p_tag.length()) {
+			return String();
+		}
+		const char32_t quote = p_tag[value_start];
+		if (quote == '\'' || quote == '"') {
+			const int value_end = p_tag.find_char(quote, value_start + 1);
+			return value_end >= 0 ? p_tag.substr(value_start + 1, value_end - value_start - 1) : String();
+		}
+		int value_end = value_start;
+		while (value_end < p_tag.length() && p_tag[value_end] > 0x20 && p_tag[value_end] != '>') {
+			value_end++;
+		}
+		return p_tag.substr(value_start, value_end - value_start);
+	}
+	return String();
+}
+
+static void hcsr_inline_packed_stylesheets(const Ref<HTMLDocument> &p_document, String &r_html, String &r_css) {
+	int cursor = 0;
+	while (true) {
+		const String lower_html = r_html.to_lower();
+		const int link_start = lower_html.find("<link", cursor);
+		if (link_start < 0) {
+			return;
+		}
+		const int link_end = lower_html.find(">", link_start + 5);
+		if (link_end < 0) {
+			return;
+		}
+		const String link_tag = r_html.substr(link_start, link_end - link_start + 1);
+		const String rel = hcsr_get_tag_attribute(link_tag, "rel");
+		const String href = hcsr_get_tag_attribute(link_tag, "href");
+		bool is_stylesheet = false;
+		for (const String &token : rel.split(" ", false)) {
+			if (token.to_lower() == "stylesheet") {
+				is_stylesheet = true;
+				break;
+			}
+		}
+		if (!is_stylesheet || href.is_empty()) {
+			cursor = link_end + 1;
+			continue;
+		}
+		HTMLAssetResource asset;
+		String error;
+		if (HTMLGodotAssetProvider::load_asset(p_document, href, asset, &error) != OK) {
+			ERR_PRINT(error);
+			cursor = link_end + 1;
+			continue;
+		}
+		r_css += "\n" + String::utf8((const char *)asset.bytes.ptr(), asset.bytes.size()) + "\n";
+		r_html = r_html.erase(link_start, link_end - link_start + 1);
+		cursor = link_start;
+	}
+}
+
 bool HTMLSurfaceHCSRBackend::_ensure_renderer() {
 	if (renderer != nullptr) {
 		return true;
@@ -219,7 +293,16 @@ bool HTMLSurfaceHCSRBackend::_load_document_source(String &r_html, String &r_doc
 		return false;
 	}
 
+	String resource_root = document->get_resource_root();
+	if (resource_root.is_empty()) {
+		resource_root = "res://";
+	}
+	r_asset_root = ProjectSettings::get_singleton()->globalize_path(resource_root);
+
 	String css;
+	if (r_asset_root.is_empty()) {
+		hcsr_inline_packed_stylesheets(document, html, css);
+	}
 	for (const String &css_file : document->get_css_files()) {
 		HTMLAssetResource asset;
 		String error;
@@ -231,15 +314,13 @@ bool HTMLSurfaceHCSRBackend::_load_document_source(String &r_html, String &r_doc
 	}
 	css += document->get_css();
 	r_html = hcsr_inject_document_style(html, document->get_background_color(), css);
-	String resource_root = document->get_resource_root();
-	if (resource_root.is_empty()) {
-		resource_root = "res://";
-	}
-	r_asset_root = ProjectSettings::get_singleton()->globalize_path(resource_root);
 	if (document_path.is_empty()) {
 		document_path = resource_root.path_join("hcsr_document.html");
 	}
 	r_document_path = ProjectSettings::get_singleton()->globalize_path(document_path);
+	if (r_document_path.is_empty()) {
+		r_document_path = "/hcsr/" + document_path.get_file();
+	}
 	return true;
 }
 
@@ -293,9 +374,12 @@ bool HTMLSurfaceHCSRBackend::_sync_document() {
 	CharString root_utf8 = asset_root.utf8();
 	CharString path_utf8 = document_path.utf8();
 	CharString html_utf8 = html.utf8();
-	if (hcsr_renderer_set_asset_root(renderer, root_utf8.ptr()) != HCSR_STATUS_OK ||
-			hcsr_renderer_set_document(renderer, path_utf8.ptr(), html_utf8.ptr()) != HCSR_STATUS_OK) {
-		_record_error("HCSR rejected the Godot HTMLDocument");
+	if (!asset_root.is_empty() && hcsr_renderer_set_asset_root(renderer, root_utf8.ptr()) != HCSR_STATUS_OK) {
+		_record_error("HCSR rejected the Godot asset root '" + asset_root + "'");
+		return false;
+	}
+	if (hcsr_renderer_set_document(renderer, path_utf8.ptr(), html_utf8.ptr()) != HCSR_STATUS_OK) {
+		_record_error("HCSR rejected the Godot HTMLDocument at '" + document_path + "'");
 		return false;
 	}
 	document_dirty = false;

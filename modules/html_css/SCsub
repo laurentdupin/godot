@@ -87,7 +87,10 @@ def _html_css_ensure_hcsr_static_library():
 
     library_path = _html_css_hcsr_static_library_path()
     hcsr_root = _html_css_resolve_repo_path(os.path.join("thirdparty", "hcsr"))
-    package_is_current = os.path.isfile(library_path)
+    android_initializer_path = os.path.join(os.path.dirname(library_path), "hcsr_renderer_android_initializer.o")
+    package_is_current = os.path.isfile(library_path) and (
+        env["platform"] != "android" or os.path.isfile(android_initializer_path)
+    )
     if package_is_current and not env["module_html_css_hcsr_lib_path"]:
         marker_name = "hcsr_renderer_android.commit" if env["platform"] == "android" else "hcsr_renderer_combined.commit"
         marker_path = os.path.join(os.path.dirname(library_path), marker_name)
@@ -139,6 +142,10 @@ def _html_css_ensure_hcsr_static_library():
     if completed.returncode != 0 or not os.path.isfile(library_path):
         print("HTML/CSS HCSR NativeAOT publish failed or did not produce its combined static library.")
         print("  " + library_path)
+        Exit(1)
+
+    if env["platform"] == "android" and not os.path.isfile(android_initializer_path):
+        print("HTML/CSS HCSR NativeAOT initializer object is missing: " + android_initializer_path)
         Exit(1)
 
 
@@ -752,8 +759,11 @@ elif _html_css_renderer == "hcsr":
     if env.editor_build:
         env_html_css.add_source_files(env.modules_sources, "editor/html_package_export_plugin.cpp")
     if env["platform"] == "android":
+        hcsr_initializer_path = os.path.join(os.path.dirname(hcsr_library_path), "hcsr_renderer_android_initializer.o")
         env.Append(
             LINKFLAGS=[
+                "-Wl,-z,nostart-stop-gc",
+                hcsr_initializer_path,
                 hcsr_library_path,
                 "-lm",
                 "-lz",
