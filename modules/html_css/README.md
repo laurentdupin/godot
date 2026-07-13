@@ -24,6 +24,29 @@ An animated 2D backdrop-filter gallery is available under
 rounded regions over live Godot canvas content and is intended as the visual
 smoke example for backdrop resize behavior.
 
+## Size-optimized HTML UI release
+
+`build_profiles/html_ui_release.build` keeps the HTML/CSS module, GDScript,
+fallback text rendering, Godot's runtime shader compiler, 2D and 3D rendering,
+while removing unused physics, navigation, XR, deprecated compatibility code,
+and modules that are not explicit dependencies. The build script supplies the
+module-selection flags because SCons resolves modules before applying
+feature-profile options. FreeType, MSDF generation, and SVG font support are
+retained for ordinary Godot UI. Vulkan and D3D12 remain available, while the
+unused OpenGL compatibility backend is disabled.
+
+Build the size-optimized statically linked HCSR template with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File modules\html_css\tools\build_html_ui_release.ps1
+```
+
+Add `-ExportBackdrop` to also create a runnable backdrop gallery under
+`modules/html_css/examples/backdrop_2d/build-size-optimized`. Pass
+`-Renderer blink` to build the same minimized template against Blink; automatic
+backdrop export currently requires HCSR so the editor package compiler and
+release runtime are guaranteed to match.
+
 By default, a missing HCSR archive is produced with `dotnet publish` from
 `thirdparty/hcsr/src/Renderer.NativeBridge`. Set
 `module_html_css_hcsr_auto_build=no` to require an existing archive, or pass

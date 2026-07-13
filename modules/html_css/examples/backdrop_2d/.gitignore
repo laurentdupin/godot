@@ -1,3 +1,4 @@
 .godot/
 *.hcsrpkg
 build/
+build-size-optimized/
