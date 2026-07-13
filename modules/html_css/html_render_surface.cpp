@@ -50,7 +50,7 @@ static bool html_surface_auto_can_use_gpu_backend() {
 	return rendering_driver == "vulkan" || rendering_driver == "d3d12";
 #elif defined(HTML_CSS_USE_HCSR)
 	const String rendering_driver = OS::get_singleton() != nullptr ? OS::get_singleton()->get_current_rendering_driver_name().to_lower() : String();
-	return rendering_driver == "d3d12";
+	return rendering_driver == "d3d12" || rendering_driver == "vulkan";
 #else
 	return false;
 #endif
@@ -76,9 +76,10 @@ void HTMLRenderSurface::_ensure_backend() {
 #else
 	#ifdef HTML_CSS_USE_HCSR
 		if (html_surface_auto_can_use_gpu_backend()) {
-			backend = memnew(HTMLSurfaceHCSRBackend(HCSR_RENDER_BACKEND_D3D12));
+			const String rendering_driver = OS::get_singleton()->get_current_rendering_driver_name().to_lower();
+			backend = memnew(HTMLSurfaceHCSRBackend(rendering_driver == "vulkan" ? HCSR_RENDER_BACKEND_VULKAN : HCSR_RENDER_BACKEND_D3D12));
 		} else {
-			html_surface_warn_auto_cpu_fallback("HCSR host-device GPU mode currently requires Godot's D3D12 rendering driver");
+			html_surface_warn_auto_cpu_fallback("HCSR host-device GPU mode requires Godot's Vulkan or D3D12 rendering driver");
 			backend = memnew(HTMLSurfaceHCSRBackend);
 		}
 	#else
@@ -91,9 +92,10 @@ void HTMLRenderSurface::_ensure_backend() {
 		backend = memnew(HTMLSurfaceBlinkGPUBackend(BLINK_STANDALONE_GPU_BACKEND_NONE));
 #elif defined(HTML_CSS_USE_HCSR)
 		if (html_surface_auto_can_use_gpu_backend()) {
-			backend = memnew(HTMLSurfaceHCSRBackend(HCSR_RENDER_BACKEND_D3D12));
+			const String rendering_driver = OS::get_singleton()->get_current_rendering_driver_name().to_lower();
+			backend = memnew(HTMLSurfaceHCSRBackend(rendering_driver == "vulkan" ? HCSR_RENDER_BACKEND_VULKAN : HCSR_RENDER_BACKEND_D3D12));
 		} else {
-			backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS GPU backend requested, but HCSR host-device mode currently requires Godot's D3D12 rendering driver. Explicit GPU requests do not fall back to CPU output."));
+			backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS GPU backend requested, but HCSR host-device mode requires Godot's Vulkan or D3D12 rendering driver. Explicit GPU requests do not fall back to CPU output."));
 		}
 #else
 		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS GPU backend requested, but the external renderer C API backend is not compiled in. Explicit GPU requests do not fall back to CPU output."));
@@ -102,7 +104,9 @@ void HTMLRenderSurface::_ensure_backend() {
 #ifdef HTML_CSS_USE_BLINK_C_API
 		backend = memnew(HTMLSurfaceBlinkGPUBackend(BLINK_STANDALONE_GPU_BACKEND_VULKAN));
 #elif defined(HTML_CSS_USE_HCSR)
-		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS Vulkan GPU backend requested, but HCSR's host-owned Vulkan device/target API is not implemented yet. Explicit GPU requests do not fall back to CPU output."));
+		backend = OS::get_singleton() != nullptr && OS::get_singleton()->get_current_rendering_driver_name().to_lower() == "vulkan"
+				? (HTMLSurfaceBackend *)memnew(HTMLSurfaceHCSRBackend(HCSR_RENDER_BACKEND_VULKAN))
+				: (HTMLSurfaceBackend *)memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS Vulkan backend requested, but Godot is not running its Vulkan rendering driver."));
 #else
 		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS Vulkan GPU backend requested, but the external renderer C API backend is not compiled in. Explicit GPU requests do not fall back to CPU output."));
 #endif
@@ -110,7 +114,7 @@ void HTMLRenderSurface::_ensure_backend() {
 #ifdef HTML_CSS_USE_BLINK_C_API
 		backend = memnew(HTMLSurfaceBlinkGPUBackend(BLINK_STANDALONE_GPU_BACKEND_D3D12));
 #elif defined(HTML_CSS_USE_HCSR)
-		backend = html_surface_auto_can_use_gpu_backend()
+		backend = OS::get_singleton() != nullptr && OS::get_singleton()->get_current_rendering_driver_name().to_lower() == "d3d12"
 				? (HTMLSurfaceBackend *)memnew(HTMLSurfaceHCSRBackend(HCSR_RENDER_BACKEND_D3D12))
 				: (HTMLSurfaceBackend *)memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS D3D12 backend requested, but Godot is not running its D3D12 rendering driver."));
 #else

@@ -25,7 +25,8 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool document_dirty = true;
 	bool viewport_dirty = true;
 	bool terminal_failure = false;
-	bool d3d12_device_configured = false;
+	bool gpu_device_configured = false;
+	bool gpu_render_succeeded = false;
 	String terminal_failure_reason;
 
 	bool _ensure_renderer();
@@ -35,13 +36,19 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool _render_frame();
 	bool _configure_d3d12_device();
 	void _configure_d3d12_device_on_render_thread();
-	bool _ensure_gpu_texture_imported();
+	bool _configure_vulkan_device();
+	void _configure_vulkan_device_on_render_thread();
+	bool _render_gpu_frame();
+	void _render_gpu_frame_on_render_thread();
 	void _ensure_gpu_texture_imported_on_render_thread();
 	void _detach_gpu_texture_import();
 	void _detach_gpu_texture_import_on_render_thread();
+	void _destroy_renderer_on_render_thread();
 	static void _configure_d3d12_device_on_render_thread_callback(uint64_t p_backend_ptr);
-	static void _ensure_gpu_texture_imported_on_render_thread_callback(uint64_t p_backend_ptr);
+	static void _configure_vulkan_device_on_render_thread_callback(uint64_t p_backend_ptr);
+	static void _render_gpu_frame_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _detach_gpu_texture_import_on_render_thread_callback(uint64_t p_backend_ptr);
+	static void _destroy_renderer_on_render_thread_callback(uint64_t p_backend_ptr);
 	void _record_error(const String &p_context);
 	Error _set_input();
 
