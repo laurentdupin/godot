@@ -57,6 +57,8 @@ static Dictionary html_render_target_form_control_state_to_dictionary(const HTML
 	state[SNAME("tag_name")] = p_state.tag_name;
 	state[SNAME("value")] = p_state.value;
 	state[SNAME("checked")] = p_state.checked;
+	state[SNAME("selected")] = p_state.selected;
+	state[SNAME("selected_index")] = p_state.selected_index;
 	state[SNAME("focused")] = p_state.focused;
 	state[SNAME("selection_offsets_present")] = p_state.selection_offsets_present;
 	state[SNAME("selection_start")] = p_state.selection_start;

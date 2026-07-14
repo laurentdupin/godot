@@ -110,6 +110,8 @@ struct HTMLFormControlState {
 	StringName tag_name;
 	String value;
 	bool checked = false;
+	bool selected = false;
+	int selected_index = -1;
 	bool focused = false;
 	bool selection_offsets_present = false;
 	uint32_t selection_start = 0;

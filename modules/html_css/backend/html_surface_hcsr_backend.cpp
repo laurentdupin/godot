@@ -981,6 +981,52 @@ Error HTMLSurfaceHCSRBackend::replace_stylesheet_text(const StringName &p_style_
 	return _apply_dom_mutation(HCSR_DOM_MUTATION_SET_TEXT, HCSR_DOM_TARGET_ID, String(p_style_id), String(), p_css_text);
 }
 
+Error HTMLSurfaceHCSRBackend::set_form_control_value(const StringName &p_id, const String &p_value) {
+	if (!_sync_document()) {
+		return ERR_UNAVAILABLE;
+	}
+	const CharString id_utf8 = String(p_id).utf8();
+	const CharString value_utf8 = p_value.utf8();
+	if (hcsr_renderer_set_form_control_value(renderer, id_utf8.ptr(), value_utf8.ptr()) != HCSR_STATUS_OK) {
+		_record_error("HCSR rejected a form-control value update");
+		return ERR_INVALID_PARAMETER;
+	}
+	return OK;
+}
+
+Error HTMLSurfaceHCSRBackend::set_form_control_checked(const StringName &p_id, bool p_checked) {
+	if (!_sync_document()) {
+		return ERR_UNAVAILABLE;
+	}
+	const CharString id_utf8 = String(p_id).utf8();
+	if (hcsr_renderer_set_form_control_checked(renderer, id_utf8.ptr(), p_checked ? 1 : 0) != HCSR_STATUS_OK) {
+		_record_error("HCSR rejected a form-control checked update");
+		return ERR_INVALID_PARAMETER;
+	}
+	return OK;
+}
+
+bool HTMLSurfaceHCSRBackend::get_form_control_state(const StringName &p_id, HTMLFormControlState &r_state) {
+	if (!_sync_document()) {
+		return false;
+	}
+	const CharString id_utf8 = String(p_id).utf8();
+	hcsr_form_control_state_t source = {};
+	source.struct_size = sizeof(source);
+	if (hcsr_renderer_get_form_control_state(renderer, id_utf8.ptr(), &source) != HCSR_STATUS_OK) {
+		return false;
+	}
+	r_state = HTMLFormControlState();
+	r_state.element_id = StringName(String::utf8(source.element_id_utf8));
+	r_state.tag_name = StringName(String::utf8(source.tag_name_utf8));
+	r_state.value = String::utf8(source.value_utf8);
+	r_state.checked = source.checked != 0;
+	r_state.selected = source.selected != 0;
+	r_state.selected_index = source.selected_index;
+	r_state.focused = source.focused != 0;
+	return true;
+}
+
 void HTMLSurfaceHCSRBackend::get_frame_metadata(HTMLFrameMetadata &r_metadata) const {
 	r_metadata = frame_metadata;
 }
