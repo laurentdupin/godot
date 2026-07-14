@@ -613,6 +613,15 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 		hcsr_renderer_release_gpu_frame_packet(p_packet);
 		return;
 	}
+	if (gpu_texture_rid.is_valid() && native_gpu_size != size) {
+		// Keep presenting the previous texture while the resized logical frame is
+		// prepared. Release it only here, immediately before the replacement native
+		// resource is created and imported in this same render-thread callback.
+		_detach_gpu_texture_import_on_render_thread();
+		native_gpu_texture = nullptr;
+		native_gpu_generation = 0;
+		native_gpu_size = Size2i();
+	}
 	hcsr_gpu_frame_t output = {};
 	output.struct_size = sizeof(output);
 	if (hcsr_renderer_submit_gpu_frame(renderer, p_packet, &output) != HCSR_STATUS_OK) {
@@ -670,12 +679,11 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 		_render_gpu_frame_on_render_thread(packet);
 		return gpu_render_succeeded;
 	} else {
-		const bool needs_initial_texture = !gpu_texture_rid.is_valid();
+		const bool needs_texture_publish = !gpu_texture_rid.is_valid() || native_gpu_size != size;
 		rendering_server->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread_callback).bind((uint64_t)this, (uint64_t)packet));
-		if (needs_initial_texture) {
-			// One-time initialization must publish a texture object before callers can
-			// obtain it. Subsequent frames remain ordered in Godot's render queue and
-			// never synchronize the game thread.
+		if (needs_texture_publish) {
+			// Initial creation and resize publish the replacement texture atomically.
+			// Steady-state frames remain ordered without synchronizing the game thread.
 			rendering_server->sync();
 			return gpu_render_succeeded;
 		}
@@ -781,12 +789,6 @@ void HTMLSurfaceHCSRBackend::set_size(const Size2i &p_size) {
 	const Size2i new_size(MAX(1, p_size.x), MAX(1, p_size.y));
 	if (size == new_size) {
 		return;
-	}
-	if (render_backend != HCSR_RENDER_BACKEND_CPU) {
-		_detach_gpu_texture_import();
-		native_gpu_texture = nullptr;
-		native_gpu_generation = 0;
-		native_gpu_size = Size2i();
 	}
 	HTMLSurfaceCPUBackend::set_size(new_size);
 	viewport_dirty = true;
