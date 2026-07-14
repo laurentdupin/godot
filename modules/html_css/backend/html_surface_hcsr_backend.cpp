@@ -38,6 +38,14 @@ static String hcsr_inject_document_style(const String &p_html, const Color &p_ba
 	return root_end >= 0 ? p_html.insert(root_end + 1, style) : p_html;
 }
 
+static String hcsr_globalize_res_urls(const String &p_source) {
+	String project_root = ProjectSettings::get_singleton()->globalize_path("res://").replace("\\", "/");
+	if (!project_root.ends_with("/")) {
+		project_root += "/";
+	}
+	return p_source.replace("res://", project_root);
+}
+
 static String hcsr_get_tag_attribute(const String &p_tag, const String &p_attribute) {
 	const String lower_tag = p_tag.to_lower();
 	const String attribute = p_attribute.to_lower();
@@ -329,7 +337,10 @@ void HTMLSurfaceHCSRBackend::_record_error(const String &p_context) {
 		terminal_failure_reason += ": " + String::utf8(last_error);
 	}
 	terminal_failure = true;
-	ERR_PRINT(terminal_failure_reason);
+	if (terminal_failure_reason != last_reported_error) {
+		last_reported_error = terminal_failure_reason;
+		ERR_PRINT(terminal_failure_reason);
+	}
 }
 
 bool HTMLSurfaceHCSRBackend::_sync_viewport() {
@@ -371,7 +382,7 @@ bool HTMLSurfaceHCSRBackend::_load_document_source(String &r_html, String &r_doc
 	if (resource_root.is_empty()) {
 		resource_root = "res://";
 	}
-	r_asset_root = ProjectSettings::get_singleton()->globalize_path(resource_root);
+	r_asset_root = ProjectSettings::get_singleton()->globalize_path(resource_root.begins_with("res://") ? String("res://") : resource_root);
 
 	String css;
 	if (r_asset_root.is_empty()) {
@@ -387,7 +398,7 @@ bool HTMLSurfaceHCSRBackend::_load_document_source(String &r_html, String &r_doc
 		css += "\n" + String::utf8((const char *)asset.bytes.ptr(), asset.bytes.size()) + "\n";
 	}
 	css += document->get_css();
-	r_html = hcsr_inject_document_style(html, document->get_background_color(), css);
+	r_html = hcsr_globalize_res_urls(hcsr_inject_document_style(html, document->get_background_color(), css));
 	if (document_path.is_empty()) {
 		document_path = resource_root.path_join("hcsr_document.html");
 	}
@@ -504,7 +515,8 @@ Error HTMLSurfaceHCSRBackend::_apply_dom_mutation(hcsr_dom_mutation_operation_ki
 
 	const CharString target_utf8 = p_target.utf8();
 	const CharString name_utf8 = p_name.utf8();
-	const CharString value_utf8 = p_value.utf8();
+	const String normalized_value = p_content_kind == HCSR_DOM_MUTATION_CONTENT_HTML ? hcsr_globalize_res_urls(p_value) : p_value;
+	const CharString value_utf8 = normalized_value.utf8();
 	hcsr_dom_mutation_t mutation = {};
 	mutation.struct_size = sizeof(mutation);
 	mutation.operation = p_operation;
@@ -513,7 +525,7 @@ Error HTMLSurfaceHCSRBackend::_apply_dom_mutation(hcsr_dom_mutation_operation_ki
 	mutation.content_kind = p_content_kind;
 	mutation.target_utf8 = p_target.is_empty() ? nullptr : target_utf8.ptr();
 	mutation.name_utf8 = p_name.is_empty() ? nullptr : name_utf8.ptr();
-	mutation.value_utf8 = p_value.is_empty() ? "" : value_utf8.ptr();
+	mutation.value_utf8 = normalized_value.is_empty() ? "" : value_utf8.ptr();
 	mutation.child_index = -1;
 
 	uint8_t changed = 0;
@@ -808,6 +820,7 @@ void HTMLSurfaceHCSRBackend::_update_performance_profile() {
 
 void HTMLSurfaceHCSRBackend::mark_document_dirty() {
 	document_dirty = true;
+	last_reported_error = String();
 }
 
 void HTMLSurfaceHCSRBackend::set_size(const Size2i &p_size) {
@@ -831,6 +844,7 @@ void HTMLSurfaceHCSRBackend::set_document(const Ref<HTMLDocument> &p_document) {
 	if (document != p_document) {
 		document = p_document;
 		document_dirty = true;
+		last_reported_error = String();
 	}
 }
 
@@ -911,6 +925,32 @@ Error HTMLSurfaceHCSRBackend::wheel(const Point2 &p_position, const Vector2 &p_d
 	scroll_offset.x = MAX(0, scroll_offset.x + Math::round(p_delta.x));
 	scroll_offset.y = MAX(0, scroll_offset.y + Math::round(p_delta.y));
 	return _set_input();
+}
+
+bool HTMLSurfaceHCSRBackend::hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const {
+	if (renderer == nullptr) {
+		return false;
+	}
+
+	hcsr_element_hit_t source = {};
+	source.struct_size = sizeof(source);
+	if (hcsr_renderer_hit_test(renderer, Math::floor(p_position.x), Math::floor(p_position.y), &source) != HCSR_STATUS_OK || source.element_key_utf8[0] == '\0') {
+		return false;
+	}
+
+	r_hit = HTMLElementHit();
+	r_hit.element_id = StringName(String::utf8(source.element_id_utf8));
+	r_hit.tag_name = StringName(String::utf8(source.tag_name_utf8));
+	r_hit.bounds = Rect2i(source.left, source.top, MAX(0, source.right - source.left), MAX(0, source.bottom - source.top));
+	r_hit.disabled = source.disabled != 0;
+	const String action = String::utf8(source.action_utf8);
+	if (!action.is_empty()) {
+		HTMLElementAttribute attribute;
+		attribute.name = SNAME("data-godot-action");
+		attribute.value = action;
+		r_hit.attributes.push_back(attribute);
+	}
+	return true;
 }
 
 Error HTMLSurfaceHCSRBackend::set_element_text(const StringName &p_id, const String &p_text) {

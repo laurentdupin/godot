@@ -30,6 +30,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool gpu_render_succeeded = false;
 	bool backdrop_filter_enabled = false;
 	String terminal_failure_reason;
+	String last_reported_error;
 
 	bool _ensure_renderer();
 	bool _sync_viewport();
@@ -77,6 +78,7 @@ public:
 	virtual Error mouse_down(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) override;
 	virtual Error mouse_up(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) override;
 	virtual Error wheel(const Point2 &p_position, const Vector2 &p_delta) override;
+	virtual bool hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const override;
 	virtual Error set_element_text(const StringName &p_id, const String &p_text) override;
 	virtual Error set_element_inner_html(const StringName &p_id, const String &p_html_fragment) override;
 	virtual Error set_body_inner_html(const String &p_html_fragment) override;

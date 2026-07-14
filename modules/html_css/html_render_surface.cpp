@@ -391,6 +391,10 @@ const HTMLElementHit *HTMLRenderSurface::find_hit_at(const Point2i &p_position) 
 }
 
 bool HTMLRenderSurface::hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const {
+	if (backend != nullptr && backend->hit_test(p_position, r_hit)) {
+		return true;
+	}
+
 	const HTMLElementHit *hit = frame_metadata.find_hit_at(Point2i(Math::floor(p_position.x), Math::floor(p_position.y)));
 	if (hit == nullptr) {
 		return false;
