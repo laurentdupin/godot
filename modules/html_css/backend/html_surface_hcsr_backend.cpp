@@ -467,6 +467,26 @@ Error HTMLSurfaceHCSRBackend::_set_input() {
 			: FAILED;
 }
 
+bool HTMLSurfaceHCSRBackend::_clamp_scroll_offset_to_content(bool &r_changed) {
+	r_changed = false;
+	int32_t content_width = 0;
+	int32_t content_height = 0;
+	if (hcsr_renderer_get_content_size(renderer, &content_width, &content_height) != HCSR_STATUS_OK) {
+		_record_error("HCSR could not report the document content size");
+		return false;
+	}
+
+	const Vector2i clamped_offset(
+			CLAMP(scroll_offset.x, 0, MAX(0, content_width - size.x)),
+			CLAMP(scroll_offset.y, 0, MAX(0, content_height - size.y)));
+	if (clamped_offset == scroll_offset) {
+		return true;
+	}
+	scroll_offset = clamped_offset;
+	r_changed = true;
+	return _set_input() == OK;
+}
+
 Error HTMLSurfaceHCSRBackend::_apply_dom_mutation(hcsr_dom_mutation_operation_kind_t p_operation, hcsr_dom_mutation_target_kind_t p_target_kind, const String &p_target, const String &p_name, const String &p_value, hcsr_dom_mutation_content_kind_t p_content_kind) {
 	if (!_sync_document()) {
 		return ERR_UNAVAILABLE;
@@ -630,9 +650,21 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 		return false;
 	}
 	hcsr_gpu_frame_packet_t *packet = nullptr;
-	if (hcsr_renderer_prepare_gpu_frame(renderer, timeline_time_seconds, &packet) != HCSR_STATUS_OK || packet == nullptr) {
-		_record_error("HCSR could not prepare the Godot GPU frame");
-		return false;
+	for (int attempt = 0; attempt < 2; attempt++) {
+		if (hcsr_renderer_prepare_gpu_frame(renderer, timeline_time_seconds, &packet) != HCSR_STATUS_OK || packet == nullptr) {
+			_record_error("HCSR could not prepare the Godot GPU frame");
+			return false;
+		}
+		bool scroll_offset_changed = false;
+		if (!_clamp_scroll_offset_to_content(scroll_offset_changed)) {
+			hcsr_renderer_release_gpu_frame_packet(packet);
+			return false;
+		}
+		if (attempt > 0 || !scroll_offset_changed) {
+			break;
+		}
+		hcsr_renderer_release_gpu_frame_packet(packet);
+		packet = nullptr;
 	}
 	if (rendering_server->is_on_render_thread()) {
 		_render_gpu_frame_on_render_thread(packet);
@@ -663,10 +695,22 @@ bool HTMLSurfaceHCSRBackend::_render_frame() {
 		return rendered;
 	}
 	hcsr_frame_t output = {};
-	output.struct_size = sizeof(output);
-	if (hcsr_renderer_render_frame(renderer, timeline_time_seconds, &output) != HCSR_STATUS_OK) {
-		_record_error("HCSR could not render the Godot frame");
-		return false;
+	for (int attempt = 0; attempt < 2; attempt++) {
+		output = {};
+		output.struct_size = sizeof(output);
+		if (hcsr_renderer_render_frame(renderer, timeline_time_seconds, &output) != HCSR_STATUS_OK) {
+			_record_error("HCSR could not render the Godot frame");
+			return false;
+		}
+		bool scroll_offset_changed = false;
+		if (!_clamp_scroll_offset_to_content(scroll_offset_changed)) {
+			hcsr_renderer_release_frame(renderer, &output);
+			return false;
+		}
+		if (attempt > 0 || !scroll_offset_changed) {
+			break;
+		}
+		hcsr_renderer_release_frame(renderer, &output);
 	}
 	if (output.pixels == nullptr || output.width <= 0 || output.height <= 0 || output.stride < output.width * 4) {
 		hcsr_renderer_release_frame(renderer, &output);
