@@ -613,7 +613,10 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 		hcsr_renderer_release_gpu_frame_packet(p_packet);
 		return;
 	}
-	if (gpu_texture_rid.is_valid() && native_gpu_size != size) {
+	// Metal imports hold an independent retain on the HCSR texture. Keep that import
+	// visible until submission returns a valid replacement so a failed resized
+	// frame cannot expose an empty external texture.
+	if (render_backend != HCSR_RENDER_BACKEND_METAL && gpu_texture_rid.is_valid() && native_gpu_size != size) {
 		// Keep presenting the previous texture while the resized logical frame is
 		// prepared. Release it only here, immediately before the replacement native
 		// resource is created and imported in this same render-thread callback.
@@ -658,29 +661,48 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 		terminal_failure_reason = "RenderingServer is unavailable for HCSR GPU rendering.";
 		return false;
 	}
-	hcsr_gpu_frame_packet_t *packet = nullptr;
+	hcsr_gpu_frame_packet_t *packets[2] = {};
+	int packet_count = 0;
 	for (int attempt = 0; attempt < 2; attempt++) {
+		hcsr_gpu_frame_packet_t *packet = nullptr;
 		if (hcsr_renderer_prepare_gpu_frame(renderer, timeline_time_seconds, &packet) != HCSR_STATUS_OK || packet == nullptr) {
+			for (int packet_index = 0; packet_index < packet_count; packet_index++) {
+				hcsr_renderer_release_gpu_frame_packet(packets[packet_index]);
+			}
 			_record_error("HCSR could not prepare the Godot GPU frame");
 			return false;
 		}
+		packets[packet_count++] = packet;
 		bool scroll_offset_changed = false;
 		if (!_clamp_scroll_offset_to_content(scroll_offset_changed)) {
-			hcsr_renderer_release_gpu_frame_packet(packet);
+			for (int packet_index = 0; packet_index < packet_count; packet_index++) {
+				hcsr_renderer_release_gpu_frame_packet(packets[packet_index]);
+			}
 			return false;
 		}
 		if (attempt > 0 || !scroll_offset_changed) {
 			break;
 		}
-		hcsr_renderer_release_gpu_frame_packet(packet);
-		packet = nullptr;
+		// The first packet advanced HCSR's retained-paint planner and may contain
+		// packet creation commands needed by the corrected-scroll packet. Submit
+		// both in order instead of dropping the first one.
 	}
 	if (rendering_server->is_on_render_thread()) {
-		_render_gpu_frame_on_render_thread(packet);
+		for (int packet_index = 0; packet_index < packet_count; packet_index++) {
+			_render_gpu_frame_on_render_thread(packets[packet_index]);
+			if (!gpu_render_succeeded) {
+				for (int remaining_index = packet_index + 1; remaining_index < packet_count; remaining_index++) {
+					hcsr_renderer_release_gpu_frame_packet(packets[remaining_index]);
+				}
+				return false;
+			}
+		}
 		return gpu_render_succeeded;
 	} else {
 		const bool needs_texture_publish = !gpu_texture_rid.is_valid() || native_gpu_size != size;
-		rendering_server->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread_callback).bind((uint64_t)this, (uint64_t)packet));
+		for (int packet_index = 0; packet_index < packet_count; packet_index++) {
+			rendering_server->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread_callback).bind((uint64_t)this, (uint64_t)packets[packet_index]));
+		}
 		if (needs_texture_publish) {
 			// Initial creation and resize publish the replacement texture atomically.
 			// Steady-state frames remain ordered without synchronizing the game thread.
