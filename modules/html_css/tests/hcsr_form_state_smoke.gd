@@ -2,7 +2,7 @@ extends SceneTree
 
 func _initialize() -> void:
 	var document := HTMLDocument.new()
-	document.html = "<!DOCTYPE html><html><head></head><body><input id='name' value='old'><input id='check' type='checkbox'><input id='radio-a' type='radio' name='mode' checked><input id='radio-b' type='radio' name='mode'><textarea id='notes'>initial</textarea><select id='choice'><option value='a'>Alpha</option><option id='option-b' value='b'>Beta</option></select></body></html>"
+	document.html = "<!DOCTYPE html><html><body><input id='name' value='old'><input id='check' type='checkbox'><input id='radio-a' type='radio' name='mode' checked><input id='radio-b' type='radio' name='mode'><textarea id='notes'>initial</textarea><select id='choice'><option value='a'>Alpha</option><option id='option-b' value='b'>Beta</option></select></body></html>"
 	document.resource_root = "res://"
 
 	var view := HTMLView.new()

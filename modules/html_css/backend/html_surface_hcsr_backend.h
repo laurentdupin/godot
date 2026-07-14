@@ -6,6 +6,8 @@
 
 #include "html_surface_cpu_backend.h"
 
+#include "core/templates/safe_refcount.h"
+
 #include "hcsr_renderer.h"
 
 class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
@@ -28,6 +30,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool terminal_failure = false;
 	bool gpu_device_configured = false;
 	bool gpu_render_succeeded = false;
+	SafeFlag gpu_frame_pending;
 	bool backdrop_filter_enabled = false;
 	String terminal_failure_reason;
 	String last_reported_error;

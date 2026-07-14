@@ -34,8 +34,9 @@ static String hcsr_inject_document_style(const String &p_html, const Color &p_ba
 	if (head_end >= 0) {
 		return p_html.insert(head_end, style);
 	}
-	const int root_end = p_html.find(">");
-	return root_end >= 0 ? p_html.insert(root_end + 1, style) : p_html;
+	const int html_start = lower_html.find("<html");
+	const int html_open_end = html_start >= 0 ? p_html.find(">", html_start + 5) : -1;
+	return html_open_end >= 0 ? p_html.insert(html_open_end + 1, "<head>" + style + "</head>") : p_html;
 }
 
 static String hcsr_globalize_res_urls(const String &p_source) {
@@ -670,6 +671,7 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread_callback(uint64_
 	hcsr_gpu_frame_packet_t *packet = (hcsr_gpu_frame_packet_t *)p_packet_ptr;
 	if (backend != nullptr) {
 		backend->_render_gpu_frame_on_render_thread(packet);
+		backend->gpu_frame_pending.clear();
 	} else if (packet != nullptr) {
 		hcsr_renderer_release_gpu_frame_packet(packet);
 	}
@@ -681,28 +683,28 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 		terminal_failure_reason = "RenderingServer is unavailable for HCSR GPU rendering.";
 		return false;
 	}
+	if (gpu_frame_pending.is_set()) {
+		// Keep presenting the previous completed texture. Preparing another retained
+		// delta before the render thread submits the outstanding packet would make
+		// the logical retained state run ahead of the GPU presenter.
+		return true;
+	}
 	hcsr_gpu_frame_packet_t *packet = nullptr;
-	for (int attempt = 0; attempt < 2; attempt++) {
-		if (hcsr_renderer_prepare_gpu_frame(renderer, timeline_time_seconds, &packet) != HCSR_STATUS_OK || packet == nullptr) {
-			_record_error("HCSR could not prepare the Godot GPU frame");
-			return false;
-		}
-		bool scroll_offset_changed = false;
-		if (!_clamp_scroll_offset_to_content(scroll_offset_changed)) {
-			hcsr_renderer_release_gpu_frame_packet(packet);
-			return false;
-		}
-		if (attempt > 0 || !scroll_offset_changed) {
-			break;
-		}
+	if (hcsr_renderer_prepare_gpu_frame(renderer, timeline_time_seconds, &packet) != HCSR_STATUS_OK || packet == nullptr) {
+		_record_error("HCSR could not prepare the Godot GPU frame");
+		return false;
+	}
+	bool scroll_offset_changed = false;
+	if (!_clamp_scroll_offset_to_content(scroll_offset_changed)) {
 		hcsr_renderer_release_gpu_frame_packet(packet);
-		packet = nullptr;
+		return false;
 	}
 	if (rendering_server->is_on_render_thread()) {
 		_render_gpu_frame_on_render_thread(packet);
 		return gpu_render_succeeded;
 	} else {
 		const bool needs_texture_publish = !gpu_texture_rid.is_valid() || native_gpu_size != size;
+		gpu_frame_pending.set();
 		rendering_server->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread_callback).bind((uint64_t)this, (uint64_t)packet));
 		if (needs_texture_publish) {
 			// Initial creation and resize publish the replacement texture atomically.
