@@ -81,6 +81,7 @@ private:
 	bool pointer_press_active = false;
 	MouseButton pointer_press_button = MouseButton::NONE;
 	HTMLElementHit pointer_press_hit;
+	Vector2 pointer_last_html_position;
 	bool frame_render_pending = false;
 	int frame_render_delay = 0;
 	uint64_t input_trace_sequence = 0;
@@ -111,6 +112,8 @@ private:
 	bool _hit_test(const Vector2 &p_html_position, HTMLElementHit &r_hit) const;
 	bool _same_activation_target(const HTMLElementHit &p_pressed, const HTMLElementHit &p_released) const;
 	void _emit_activation(const HTMLElementHit &p_hit, const Vector2 &p_html_position, MouseButton p_button);
+	void _emit_pointer_phase(const StringName &p_phase, const HTMLElementHit &p_hit, const Vector2 &p_html_position, MouseButton p_button);
+	void _cancel_pointer_interaction(const StringName &p_phase);
 	bool _send_action_key_event(const Ref<InputEvent> &p_event);
 	bool _send_key_event(const Ref<InputEventKey> &p_event);
 	void _call_bound_action(const StringName &p_action, const Dictionary &p_payload);
@@ -141,6 +144,7 @@ public:
 
 	void set_input_enabled(bool p_input_enabled);
 	bool is_input_enabled() const;
+	void cancel_pointer_interaction();
 
 	void set_focus_on_click(bool p_focus_on_click);
 	bool is_focus_on_click_enabled() const;

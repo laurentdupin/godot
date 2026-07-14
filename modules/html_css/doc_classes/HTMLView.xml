@@ -79,6 +79,16 @@
 				Emitted when an HTML element is clicked.
 			</description>
 		</signal>
+		<signal name="element_pointer_event">
+			<param index="0" name="phase" type="StringName" />
+			<param index="1" name="element_id" type="StringName" />
+			<param index="2" name="action" type="StringName" />
+			<param index="3" name="button" type="int" />
+			<param index="4" name="payload" type="Dictionary" />
+			<description>
+				Emitted for actionable element pointer phases. [param phase] is [code]down[/code], [code]up[/code], [code]cancel[/code], [code]leave[/code], or [code]capture_loss[/code]. The payload retains the pressed element metadata and document position, allowing hold interactions to cancel independently from click activation.
+			</description>
+		</signal>
 		<signal name="render_error">
 			<param index="0" name="message" type="String" />
 			<description>
@@ -87,6 +97,12 @@
 		</signal>
 	</signals>
 	<methods>
+		<method name="cancel_pointer_interaction">
+			<return type="void" />
+			<description>
+				Cancels the active pointer press, emits [signal element_pointer_event] with the [code]cancel[/code] phase, and prevents later click activation for that press.
+			</description>
+		</method>
 		<method name="add_css_file">
 			<return type="void" />
 			<param index="0" name="css_file" type="String" />
@@ -118,7 +134,7 @@
 			<return type="Dictionary" />
 			<param index="0" name="id" type="StringName" />
 			<description>
-				Returns the latest state for a form control in the live document, or an empty [Dictionary] when no control with [param id] is available. The dictionary contains [code]element_id[/code], [code]tag_name[/code], [code]value[/code], [code]checked[/code], [code]focused[/code], [code]selection_offsets_present[/code], [code]selection_start[/code], and [code]selection_end[/code].
+				Returns the latest state for a form control in the live document, or an empty [Dictionary] when no control with [param id] is available. The dictionary contains [code]element_id[/code], [code]tag_name[/code], [code]value[/code], [code]checked[/code], [code]selected[/code], [code]selected_index[/code], [code]focused[/code], [code]selection_offsets_present[/code], [code]selection_start[/code], and [code]selection_end[/code].
 			</description>
 		</method>
 		<method name="local_to_html_position" qualifiers="const">

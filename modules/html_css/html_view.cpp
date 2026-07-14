@@ -361,6 +361,7 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("bind_action", "action", "callable"), &HTMLView::bind_action);
 	ClassDB::bind_method(D_METHOD("unbind_action", "action"), &HTMLView::unbind_action);
 	ClassDB::bind_method(D_METHOD("has_action", "action"), &HTMLView::has_action);
+	ClassDB::bind_method(D_METHOD("cancel_pointer_interaction"), &HTMLView::cancel_pointer_interaction);
 
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "document", PROPERTY_HINT_RESOURCE_TYPE, HTMLDocument::get_class_static()), "set_document", "get_document");
 	ADD_PROPERTY(PropertyInfo(Variant::STRING, "html", PROPERTY_HINT_MULTILINE_TEXT), "set_html", "get_html");
@@ -383,6 +384,12 @@ void HTMLView::_bind_methods() {
 
 	ADD_SIGNAL(MethodInfo("action_requested", PropertyInfo(Variant::STRING_NAME, "action"), PropertyInfo(Variant::DICTIONARY, "payload")));
 	ADD_SIGNAL(MethodInfo("element_clicked", PropertyInfo(Variant::STRING_NAME, "element_id"), PropertyInfo(Variant::INT, "button")));
+	ADD_SIGNAL(MethodInfo("element_pointer_event",
+			PropertyInfo(Variant::STRING_NAME, "phase"),
+			PropertyInfo(Variant::STRING_NAME, "element_id"),
+			PropertyInfo(Variant::STRING_NAME, "action"),
+			PropertyInfo(Variant::INT, "button"),
+			PropertyInfo(Variant::DICTIONARY, "payload")));
 	ADD_SIGNAL(MethodInfo("render_error", PropertyInfo(Variant::STRING, "message")));
 
 	BIND_ENUM_CONSTANT(BACKEND_AUTO);
@@ -425,7 +432,23 @@ void HTMLView::_notification(int p_what) {
 		} break;
 
 		case NOTIFICATION_EXIT_TREE: {
+			_cancel_pointer_interaction(SNAME("capture_loss"));
 			_disconnect_viewport_size_changed();
+		} break;
+
+		case NOTIFICATION_MOUSE_EXIT_SELF: {
+			_cancel_pointer_interaction(SNAME("leave"));
+		} break;
+
+		case NOTIFICATION_FOCUS_EXIT:
+		case NOTIFICATION_APPLICATION_FOCUS_OUT: {
+			_cancel_pointer_interaction(SNAME("capture_loss"));
+		} break;
+
+		case NOTIFICATION_VISIBILITY_CHANGED: {
+			if (!is_visible_in_tree()) {
+				_cancel_pointer_interaction(SNAME("capture_loss"));
+			}
 		} break;
 
 		case NOTIFICATION_DRAW: {
@@ -967,6 +990,30 @@ void HTMLView::_emit_activation(const HTMLElementHit &p_hit, const Vector2 &p_ht
 	_call_bound_action(activation.action, activation.payload);
 }
 
+void HTMLView::_emit_pointer_phase(const StringName &p_phase, const HTMLElementHit &p_hit, const Vector2 &p_html_position, MouseButton p_button) {
+	const Point2i document_position(Math::floor(p_html_position.x), Math::floor(p_html_position.y));
+	HTMLActionActivation activation = HTMLActivationEngine::activate(p_hit, document_position, p_button);
+	activation.payload[SNAME("phase")] = p_phase;
+	emit_signal(SNAME("element_pointer_event"), p_phase, activation.element_id, activation.action, (int)p_button, activation.payload);
+}
+
+void HTMLView::_cancel_pointer_interaction(const StringName &p_phase) {
+	if (!pointer_press_active) {
+		return;
+	}
+
+	const MouseButton cancelled_button = pointer_press_button;
+	const HTMLSurfaceMouseButton html_button = _to_html_mouse_button(cancelled_button);
+	if (html_button != HTML_SURFACE_MOUSE_BUTTON_NONE) {
+		surface->mouse_up(pointer_last_html_position, html_button, 0, 1);
+	}
+	_emit_pointer_phase(p_phase, pointer_press_hit, pointer_last_html_position, cancelled_button);
+	pointer_press_active = false;
+	pointer_press_button = MouseButton::NONE;
+	pointer_press_hit = HTMLElementHit();
+	_queue_frame_render();
+}
+
 bool HTMLView::_send_action_key_event(const Ref<InputEvent> &p_event) {
 	struct ActionKeyMapping {
 		StringName action;
@@ -1119,11 +1166,18 @@ void HTMLView::clear_css_files() {
 }
 
 void HTMLView::set_input_enabled(bool p_input_enabled) {
+	if (input_enabled && !p_input_enabled) {
+		_cancel_pointer_interaction(SNAME("cancel"));
+	}
 	input_enabled = p_input_enabled;
 }
 
 bool HTMLView::is_input_enabled() const {
 	return input_enabled;
+}
+
+void HTMLView::cancel_pointer_interaction() {
+	_cancel_pointer_interaction(SNAME("cancel"));
 }
 
 void HTMLView::set_focus_on_click(bool p_focus_on_click) {
@@ -1394,6 +1448,7 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 	Ref<InputEventMouseMotion> mm = p_event;
 	if (mm.is_valid()) {
 		const Vector2 html_position = _local_to_html_position(mm->get_position());
+		pointer_last_html_position = html_position;
 		if (surface->mouse_move(html_position, _modifiers_from_event(mm)) == OK) {
 			_queue_frame_render();
 		}
@@ -1404,6 +1459,7 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 	Ref<InputEventMouseButton> mb = p_event;
 	if (mb.is_valid()) {
 		const Vector2 html_position = _local_to_html_position(mb->get_position());
+		pointer_last_html_position = html_position;
 		const MouseButton button_index = mb->get_button_index();
 
 		Vector2 wheel_delta;
@@ -1455,8 +1511,9 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 			pointer_press_button = button_index;
 			const Error down_err = surface->mouse_down(html_position, html_button, _modifiers_from_event(mb, button_index, true), mb->is_double_click() ? 2 : 1);
 			const bool has_press_hit = _hit_test(html_position, pointer_press_hit);
-			if (has_press_hit) {
+			if (has_press_hit && !pointer_press_hit.disabled) {
 				pointer_press_active = true;
+				_emit_pointer_phase(SNAME("down"), pointer_press_hit, html_position, button_index);
 			}
 			html_view_input_trace(vformat("seq=%d mouse_down accepted local=%s html=%s button=%d err=%d press_hit=%s element_id=%s elapsed_ms=%.3f",
 					(int64_t)trace_sequence,
@@ -1479,6 +1536,9 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 		const Error up_err = surface->mouse_up(html_position, html_button, _modifiers_from_event(mb, button_index, false), mb->is_double_click() ? 2 : 1);
 		HTMLElementHit release_hit;
 		const bool has_release_hit = _hit_test(html_position, release_hit);
+		if (pointer_press_active && pointer_press_button == button_index) {
+			_emit_pointer_phase(SNAME("up"), pointer_press_hit, html_position, button_index);
+		}
 		bool activation_emitted = false;
 		if (button_index == MouseButton::LEFT && pointer_press_active && pointer_press_button == button_index && has_release_hit && _same_activation_target(pointer_press_hit, release_hit)) {
 			_emit_activation(release_hit, html_position, button_index);
@@ -1495,6 +1555,8 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 				activation_emitted ? "true" : "false",
 				html_view_elapsed_ms(input_start_usec)));
 		pointer_press_active = false;
+		pointer_press_button = MouseButton::NONE;
+		pointer_press_hit = HTMLElementHit();
 		_queue_frame_render();
 		pending_input_trace_sequence = trace_sequence;
 		html_view_input_trace(vformat("seq=%d queued_frame after=mouse_up frame_render_pending=%s", (int64_t)trace_sequence, frame_render_pending ? "true" : "false"));
