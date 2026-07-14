@@ -5132,6 +5132,12 @@ bool Main::iteration() {
 		}
 
 		Engine::get_singleton()->_fps = frames;
+#ifdef DEBUG_ENABLED
+		SceneTree *fps_scene_tree = SceneTree::get_singleton();
+		if (!editor && !project_manager && fps_scene_tree != nullptr && fps_scene_tree->get_root() != nullptr) {
+			fps_scene_tree->get_root()->set_debug_frames_per_second(frames);
+		}
+#endif
 		performance->set_process_time(USEC_TO_SEC(process_max));
 		performance->set_physics_process_time(USEC_TO_SEC(physics_process_max));
 		performance->set_navigation_process_time(USEC_TO_SEC(navigation_process_max));

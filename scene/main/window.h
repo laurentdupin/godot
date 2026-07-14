@@ -120,6 +120,9 @@ private:
 
 	String title;
 	String displayed_title;
+#ifdef DEBUG_ENABLED
+	int debug_frames_per_second = -1;
+#endif
 	mutable int current_screen = 0;
 	mutable Point2i position;
 	mutable Size2i size = Size2i(DEFAULT_WINDOW_SIZE, DEFAULT_WINDOW_SIZE);
@@ -312,6 +315,9 @@ public:
 	void set_title(const String &p_title);
 	String get_title() const;
 	String get_displayed_title() const;
+#ifdef DEBUG_ENABLED
+	void set_debug_frames_per_second(int p_frames_per_second);
+#endif
 
 	void set_initial_position(WindowInitialPosition p_initial_position);
 	WindowInitialPosition get_initial_position() const;

@@ -3351,6 +3351,9 @@ void Window::_update_displayed_title() {
 		// Since this results in lower performance, this should be clearly presented
 		// to the user.
 		displayed_title = vformat("%s (DEBUG)", displayed_title);
+		if (debug_frames_per_second >= 0) {
+			displayed_title = vformat("%s - %d FPS", displayed_title, debug_frames_per_second);
+		}
 	}
 #endif
 
@@ -3377,6 +3380,17 @@ void Window::_update_displayed_title() {
 	update_configuration_warnings();
 	queue_accessibility_update();
 }
+
+#ifdef DEBUG_ENABLED
+void Window::set_debug_frames_per_second(int p_frames_per_second) {
+	const int new_frames_per_second = MAX(0, p_frames_per_second);
+	if (debug_frames_per_second == new_frames_per_second) {
+		return;
+	}
+	debug_frames_per_second = new_frames_per_second;
+	_update_displayed_title();
+}
+#endif
 
 void Window::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_title", "title"), &Window::set_title);
