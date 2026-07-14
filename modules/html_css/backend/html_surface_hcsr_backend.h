@@ -58,6 +58,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	static void _destroy_renderer_on_render_thread_callback(uint64_t p_backend_ptr);
 	void _record_error(const String &p_context);
 	Error _set_input();
+	Error _apply_dom_mutation(hcsr_dom_mutation_operation_kind_t p_operation, hcsr_dom_mutation_target_kind_t p_target_kind, const String &p_target, const String &p_name, const String &p_value, hcsr_dom_mutation_content_kind_t p_content_kind = HCSR_DOM_MUTATION_CONTENT_TEXT);
 
 public:
 	virtual void mark_document_dirty() override;
@@ -74,6 +75,13 @@ public:
 	virtual Error mouse_down(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) override;
 	virtual Error mouse_up(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) override;
 	virtual Error wheel(const Point2 &p_position, const Vector2 &p_delta) override;
+	virtual Error set_element_text(const StringName &p_id, const String &p_text) override;
+	virtual Error set_element_inner_html(const StringName &p_id, const String &p_html_fragment) override;
+	virtual Error set_body_inner_html(const String &p_html_fragment) override;
+	virtual Error set_element_attribute(const StringName &p_id, const StringName &p_name, const String &p_value) override;
+	virtual Error remove_element_attribute(const StringName &p_id, const StringName &p_name) override;
+	virtual Error set_element_style(const StringName &p_id, const String &p_css_text) override;
+	virtual Error replace_stylesheet_text(const StringName &p_style_id, const String &p_css_text) override;
 	virtual void get_frame_metadata(HTMLFrameMetadata &r_metadata) const override;
 	virtual Ref<Texture2D> get_texture() const override;
 	virtual Ref<HTMLTexture2D> get_html_texture() const override;

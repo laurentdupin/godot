@@ -467,6 +467,33 @@ Error HTMLSurfaceHCSRBackend::_set_input() {
 			: FAILED;
 }
 
+Error HTMLSurfaceHCSRBackend::_apply_dom_mutation(hcsr_dom_mutation_operation_kind_t p_operation, hcsr_dom_mutation_target_kind_t p_target_kind, const String &p_target, const String &p_name, const String &p_value, hcsr_dom_mutation_content_kind_t p_content_kind) {
+	if (!_sync_document()) {
+		return ERR_UNAVAILABLE;
+	}
+
+	const CharString target_utf8 = p_target.utf8();
+	const CharString name_utf8 = p_name.utf8();
+	const CharString value_utf8 = p_value.utf8();
+	hcsr_dom_mutation_t mutation = {};
+	mutation.struct_size = sizeof(mutation);
+	mutation.operation = p_operation;
+	mutation.target_kind = p_target_kind;
+	mutation.match_policy = HCSR_DOM_MUTATION_REQUIRE_MATCH;
+	mutation.content_kind = p_content_kind;
+	mutation.target_utf8 = p_target.is_empty() ? nullptr : target_utf8.ptr();
+	mutation.name_utf8 = p_name.is_empty() ? nullptr : name_utf8.ptr();
+	mutation.value_utf8 = p_value.is_empty() ? "" : value_utf8.ptr();
+	mutation.child_index = -1;
+
+	uint8_t changed = 0;
+	if (hcsr_renderer_apply_dom_mutations(renderer, &mutation, 1, &changed) != HCSR_STATUS_OK) {
+		_record_error("HCSR rejected a Godot DOM mutation");
+		return FAILED;
+	}
+	return OK;
+}
+
 void HTMLSurfaceHCSRBackend::_ensure_gpu_texture_imported_on_render_thread() {
 	if (gpu_texture_rid.is_valid() || native_gpu_texture == nullptr || native_gpu_size.x <= 0 || native_gpu_size.y <= 0) {
 		return;
@@ -808,9 +835,39 @@ Error HTMLSurfaceHCSRBackend::mouse_up(const Point2 &p_position, HTMLSurfaceMous
 
 Error HTMLSurfaceHCSRBackend::wheel(const Point2 &p_position, const Vector2 &p_delta) {
 	pointer_position = p_position;
-	scroll_offset.x = MAX(0, scroll_offset.x - Math::round(p_delta.x * 40.0f));
-	scroll_offset.y = MAX(0, scroll_offset.y - Math::round(p_delta.y * 40.0f));
+	// HTMLView supplies a signed pixel delta. Positive values move the viewport
+	// toward increasing document coordinates.
+	scroll_offset.x = MAX(0, scroll_offset.x + Math::round(p_delta.x));
+	scroll_offset.y = MAX(0, scroll_offset.y + Math::round(p_delta.y));
 	return _set_input();
+}
+
+Error HTMLSurfaceHCSRBackend::set_element_text(const StringName &p_id, const String &p_text) {
+	return _apply_dom_mutation(HCSR_DOM_MUTATION_SET_TEXT, HCSR_DOM_TARGET_ID, String(p_id), String(), p_text);
+}
+
+Error HTMLSurfaceHCSRBackend::set_element_inner_html(const StringName &p_id, const String &p_html_fragment) {
+	return _apply_dom_mutation(HCSR_DOM_MUTATION_SET_INNER_CONTENT, HCSR_DOM_TARGET_ID, String(p_id), String(), p_html_fragment, HCSR_DOM_MUTATION_CONTENT_HTML);
+}
+
+Error HTMLSurfaceHCSRBackend::set_body_inner_html(const String &p_html_fragment) {
+	return _apply_dom_mutation(HCSR_DOM_MUTATION_SET_INNER_CONTENT, HCSR_DOM_TARGET_ROOT_BODY, String(), String(), p_html_fragment, HCSR_DOM_MUTATION_CONTENT_HTML);
+}
+
+Error HTMLSurfaceHCSRBackend::set_element_attribute(const StringName &p_id, const StringName &p_name, const String &p_value) {
+	return _apply_dom_mutation(HCSR_DOM_MUTATION_SET_ATTRIBUTE, HCSR_DOM_TARGET_ID, String(p_id), String(p_name), p_value);
+}
+
+Error HTMLSurfaceHCSRBackend::remove_element_attribute(const StringName &p_id, const StringName &p_name) {
+	return _apply_dom_mutation(HCSR_DOM_MUTATION_REMOVE_ATTRIBUTE, HCSR_DOM_TARGET_ID, String(p_id), String(p_name), String());
+}
+
+Error HTMLSurfaceHCSRBackend::set_element_style(const StringName &p_id, const String &p_css_text) {
+	return _apply_dom_mutation(HCSR_DOM_MUTATION_SET_ATTRIBUTE, HCSR_DOM_TARGET_ID, String(p_id), "style", p_css_text);
+}
+
+Error HTMLSurfaceHCSRBackend::replace_stylesheet_text(const StringName &p_style_id, const String &p_css_text) {
+	return _apply_dom_mutation(HCSR_DOM_MUTATION_SET_TEXT, HCSR_DOM_TARGET_ID, String(p_style_id), String(), p_css_text);
 }
 
 void HTMLSurfaceHCSRBackend::get_frame_metadata(HTMLFrameMetadata &r_metadata) const {
