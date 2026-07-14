@@ -556,12 +556,20 @@ void HTMLSurfaceHCSRBackend::_destroy_renderer_on_render_thread_callback(uint64_
 	}
 }
 
-void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread() {
+void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_packet_t *p_packet) {
 	gpu_render_succeeded = false;
+	if (p_packet == nullptr) {
+		terminal_failure_reason = "HCSR received an invalid prepared Godot GPU frame.";
+		return;
+	}
+	if (renderer == nullptr) {
+		hcsr_renderer_release_gpu_frame_packet(p_packet);
+		return;
+	}
 	hcsr_gpu_frame_t output = {};
 	output.struct_size = sizeof(output);
-	if (hcsr_renderer_render_gpu(renderer, timeline_time_seconds, &output) != HCSR_STATUS_OK) {
-		_record_error("HCSR could not render the Godot GPU frame");
+	if (hcsr_renderer_submit_gpu_frame(renderer, p_packet, &output) != HCSR_STATUS_OK) {
+		_record_error("HCSR could not submit the prepared Godot GPU frame");
 		return;
 	}
 	if (output.native_texture == nullptr || output.width <= 0 || output.height <= 0 || output.render_backend != render_backend) {
@@ -578,10 +586,13 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread() {
 	gpu_render_succeeded = gpu_texture_rid.is_valid();
 }
 
-void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread_callback(uint64_t p_backend_ptr) {
+void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread_callback(uint64_t p_backend_ptr, uint64_t p_packet_ptr) {
 	HTMLSurfaceHCSRBackend *backend = (HTMLSurfaceHCSRBackend *)p_backend_ptr;
+	hcsr_gpu_frame_packet_t *packet = (hcsr_gpu_frame_packet_t *)p_packet_ptr;
 	if (backend != nullptr) {
-		backend->_render_gpu_frame_on_render_thread();
+		backend->_render_gpu_frame_on_render_thread(packet);
+	} else if (packet != nullptr) {
+		hcsr_renderer_release_gpu_frame_packet(packet);
 	}
 }
 
@@ -591,13 +602,26 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 		terminal_failure_reason = "RenderingServer is unavailable for HCSR GPU rendering.";
 		return false;
 	}
-	if (rendering_server->is_on_render_thread()) {
-		_render_gpu_frame_on_render_thread();
-	} else {
-		rendering_server->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread_callback).bind((uint64_t)this));
-		rendering_server->sync();
+	hcsr_gpu_frame_packet_t *packet = nullptr;
+	if (hcsr_renderer_prepare_gpu_frame(renderer, timeline_time_seconds, &packet) != HCSR_STATUS_OK || packet == nullptr) {
+		_record_error("HCSR could not prepare the Godot GPU frame");
+		return false;
 	}
-	return gpu_render_succeeded;
+	if (rendering_server->is_on_render_thread()) {
+		_render_gpu_frame_on_render_thread(packet);
+		return gpu_render_succeeded;
+	} else {
+		const bool needs_initial_texture = !gpu_texture_rid.is_valid();
+		rendering_server->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread_callback).bind((uint64_t)this, (uint64_t)packet));
+		if (needs_initial_texture) {
+			// One-time initialization must publish a texture object before callers can
+			// obtain it. Subsequent frames remain ordered in Godot's render queue and
+			// never synchronize the game thread.
+			rendering_server->sync();
+			return gpu_render_succeeded;
+		}
+	}
+	return true;
 }
 
 bool HTMLSurfaceHCSRBackend::_render_frame() {
