@@ -37,6 +37,10 @@
 
 #include "core/object/class_db.h"
 
+#if defined(DEBUG_ENABLED) && defined(HTML_CSS_USE_HCSR)
+#include "backend/hcsr_performance_monitor.h"
+#endif
+
 #if defined(TOOLS_ENABLED) && defined(HTML_CSS_USE_HCSR)
 #include "editor/html_package_export_plugin.h"
 #include "editor/export/editor_export.h"
@@ -65,6 +69,9 @@ void initialize_html_css_module(ModuleInitializationLevel p_level) {
 #ifndef _3D_DISABLED
 	GDREGISTER_CLASS(HTMLSurface3D);
 #endif
+#if defined(DEBUG_ENABLED) && defined(HTML_CSS_USE_HCSR)
+	HCSRPerformanceMonitor::initialize();
+#endif
 #if defined(TOOLS_ENABLED) && defined(HTML_CSS_USE_HCSR)
 	EditorNode::add_init_callback(html_package_editor_init);
 #endif
@@ -74,4 +81,7 @@ void uninitialize_html_css_module(ModuleInitializationLevel p_level) {
 	if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
 		return;
 	}
+#if defined(DEBUG_ENABLED) && defined(HTML_CSS_USE_HCSR)
+	HCSRPerformanceMonitor::finalize();
+#endif
 }

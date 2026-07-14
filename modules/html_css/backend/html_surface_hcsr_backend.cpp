@@ -4,6 +4,7 @@
 
 #include "html_surface_hcsr_backend.h"
 
+#include "hcsr_performance_monitor.h"
 #include "../bridge/html_asset_provider.h"
 
 #include "core/config/project_settings.h"
@@ -131,6 +132,15 @@ bool HTMLSurfaceHCSRBackend::_ensure_renderer() {
 		ERR_PRINT(terminal_failure_reason);
 		return false;
 	}
+
+#ifdef DEBUG_ENABLED
+	if (hcsr_renderer_set_performance_profiling_enabled(renderer, 1) != HCSR_STATUS_OK) {
+		_record_error("HCSR rejected performance profiling configuration");
+		hcsr_renderer_destroy(renderer);
+		renderer = nullptr;
+		return false;
+	}
+#endif
 
 	viewport_dirty = true;
 	document_dirty = true;
@@ -628,6 +638,7 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 		_record_error("HCSR could not submit the prepared Godot GPU frame");
 		return;
 	}
+	_update_performance_profile();
 	if (output.native_texture == nullptr || output.width <= 0 || output.height <= 0 || output.render_backend != render_backend) {
 		_record_error("HCSR returned an invalid Godot GPU frame");
 		return;
@@ -710,6 +721,7 @@ bool HTMLSurfaceHCSRBackend::_render_frame() {
 			_record_error("HCSR could not render the Godot frame");
 			return false;
 		}
+		_update_performance_profile();
 		bool scroll_offset_changed = false;
 		if (!_clamp_scroll_offset_to_content(scroll_offset_changed)) {
 			hcsr_renderer_release_frame(renderer, &output);
@@ -779,6 +791,19 @@ void HTMLSurfaceHCSRBackend::_read_backdrop_filter_regions() {
 		}
 		frame_metadata.backdrop_filter_regions.push_back(region);
 	}
+}
+
+void HTMLSurfaceHCSRBackend::_update_performance_profile() {
+#ifdef DEBUG_ENABLED
+	if (renderer == nullptr) {
+		return;
+	}
+	hcsr_performance_profile_t profile = {};
+	profile.struct_size = sizeof(profile);
+	if (hcsr_renderer_get_performance_profile(renderer, &profile) == HCSR_STATUS_OK) {
+		HCSRPerformanceMonitor::update((uint64_t)this, profile);
+	}
+#endif
 }
 
 void HTMLSurfaceHCSRBackend::mark_document_dirty() {
@@ -936,6 +961,9 @@ HTMLSurfaceHCSRBackend::HTMLSurfaceHCSRBackend(hcsr_render_backend_t p_render_ba
 }
 
 HTMLSurfaceHCSRBackend::~HTMLSurfaceHCSRBackend() {
+#ifdef DEBUG_ENABLED
+	HCSRPerformanceMonitor::remove((uint64_t)this);
+#endif
 	_detach_gpu_texture_import();
 	RenderingServer *rendering_server = RenderingServer::get_singleton();
 	if (render_backend == HCSR_RENDER_BACKEND_CPU || rendering_server == nullptr || rendering_server->is_on_render_thread()) {

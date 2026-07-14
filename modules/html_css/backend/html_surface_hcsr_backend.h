@@ -57,6 +57,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	static void _detach_gpu_texture_import_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _destroy_renderer_on_render_thread_callback(uint64_t p_backend_ptr);
 	void _record_error(const String &p_context);
+	void _update_performance_profile();
 	Error _set_input();
 	bool _clamp_scroll_offset_to_content(bool &r_changed);
 	Error _apply_dom_mutation(hcsr_dom_mutation_operation_kind_t p_operation, hcsr_dom_mutation_target_kind_t p_target_kind, const String &p_target, const String &p_name, const String &p_value, hcsr_dom_mutation_content_kind_t p_content_kind = HCSR_DOM_MUTATION_CONTENT_TEXT);
