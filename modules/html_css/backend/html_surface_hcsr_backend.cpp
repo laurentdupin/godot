@@ -689,9 +689,14 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 	if (gpu_frame_pending.is_set()) {
 		// Keep presenting the previous completed texture. Preparing another retained
 		// delta before the render thread submits the outstanding packet would make
-		// the logical retained state run ahead of the GPU presenter.
+		// the logical retained state run ahead of the GPU presenter. Remember that
+		// the game-thread request still needs a replacement packet once the queued
+		// packet completes; otherwise a mutation made from an input callback can be
+		// left showing the prior generation until another input event arrives.
+		gpu_follow_up_frame_requested.set();
 		return true;
 	}
+	gpu_follow_up_frame_requested.clear();
 	hcsr_gpu_frame_packet_t *packet = nullptr;
 	if (hcsr_renderer_prepare_gpu_frame(renderer, timeline_time_seconds, &packet) != HCSR_STATUS_OK || packet == nullptr) {
 		_record_error("HCSR could not prepare the Godot GPU frame");
@@ -887,6 +892,18 @@ void HTMLSurfaceHCSRBackend::render_placeholder(const String &p_marker) {
 	if (!_render_frame()) {
 		clear_to_background();
 	}
+}
+
+bool HTMLSurfaceHCSRBackend::poll_pending_output(bool *r_waiting_for_completion) {
+	const bool follow_up_requested = gpu_follow_up_frame_requested.is_set();
+	if (r_waiting_for_completion != nullptr) {
+		*r_waiting_for_completion = follow_up_requested && gpu_frame_pending.is_set();
+	}
+	return false;
+}
+
+bool HTMLSurfaceHCSRBackend::has_pending_output() const {
+	return gpu_follow_up_frame_requested.is_set();
 }
 
 bool HTMLSurfaceHCSRBackend::has_terminal_render_failure() const {

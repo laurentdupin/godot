@@ -31,6 +31,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool gpu_device_configured = false;
 	bool gpu_render_succeeded = false;
 	SafeFlag gpu_frame_pending;
+	SafeFlag gpu_follow_up_frame_requested;
 	bool backdrop_filter_enabled = false;
 	String terminal_failure_reason;
 	String last_reported_error;
@@ -75,6 +76,8 @@ public:
 	virtual void set_backdrop_filter_enabled(bool p_enabled) override;
 	virtual Error update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame) override;
 	virtual void render_placeholder(const String &p_marker) override;
+	virtual bool poll_pending_output(bool *r_waiting_for_completion = nullptr) override;
+	virtual bool has_pending_output() const override;
 	virtual bool has_terminal_render_failure() const override;
 	virtual String get_terminal_render_failure_reason() const override;
 	virtual Error mouse_move(const Point2 &p_position, int p_modifiers) override;
