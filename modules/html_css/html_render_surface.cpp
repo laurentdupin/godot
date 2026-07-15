@@ -419,6 +419,21 @@ Error HTMLRenderSurface::mouse_up(const Point2 &p_position, HTMLSurfaceMouseButt
 	return backend->mouse_up(p_position, p_button, p_modifiers, p_click_count);
 }
 
+Error HTMLRenderSurface::pointer_cancel(const Point2 &p_position, int p_pointer_id) {
+	_ensure_backend();
+	return backend->pointer_cancel(p_position, p_pointer_id);
+}
+
+Error HTMLRenderSurface::notify_pointer_leave(const Point2 &p_position, bool p_cancel_pressed_interaction, int p_pointer_id) {
+	_ensure_backend();
+	return backend->notify_pointer_leave(p_position, p_cancel_pressed_interaction, p_pointer_id);
+}
+
+bool HTMLRenderSurface::poll_pointer_event(HTMLPointerEvent &r_event) {
+	_ensure_backend();
+	return backend->poll_pointer_event(r_event);
+}
+
 Error HTMLRenderSurface::wheel(const Point2 &p_position, const Vector2 &p_delta) {
 	_ensure_backend();
 	return backend->wheel(p_position, p_delta);

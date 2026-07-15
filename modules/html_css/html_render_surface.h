@@ -96,6 +96,9 @@ public:
 	Error mouse_move(const Point2 &p_position, int p_modifiers);
 	Error mouse_down(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count);
 	Error mouse_up(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count);
+	Error pointer_cancel(const Point2 &p_position, int p_pointer_id = 1);
+	Error notify_pointer_leave(const Point2 &p_position, bool p_cancel_pressed_interaction = true, int p_pointer_id = 1);
+	bool poll_pointer_event(HTMLPointerEvent &r_event);
 	Error wheel(const Point2 &p_position, const Vector2 &p_delta);
 	Error key_down(HTMLSurfaceInputKey p_key, int p_modifiers);
 	Error key_up(HTMLSurfaceInputKey p_key, int p_modifiers);

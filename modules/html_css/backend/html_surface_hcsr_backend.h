@@ -80,6 +80,9 @@ public:
 	virtual Error mouse_move(const Point2 &p_position, int p_modifiers) override;
 	virtual Error mouse_down(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) override;
 	virtual Error mouse_up(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) override;
+	virtual Error pointer_cancel(const Point2 &p_position, int p_pointer_id) override;
+	virtual Error notify_pointer_leave(const Point2 &p_position, bool p_cancel_pressed_interaction, int p_pointer_id) override;
+	virtual bool poll_pointer_event(HTMLPointerEvent &r_event) override;
 	virtual Error wheel(const Point2 &p_position, const Vector2 &p_delta) override;
 	virtual bool hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const override;
 	virtual Error set_element_text(const StringName &p_id, const String &p_text) override;

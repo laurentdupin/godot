@@ -900,7 +900,12 @@ String HTMLSurfaceHCSRBackend::get_terminal_render_failure_reason() const {
 Error HTMLSurfaceHCSRBackend::mouse_move(const Point2 &p_position, int p_modifiers) {
 	(void)p_modifiers;
 	pointer_position = p_position;
-	return _set_input();
+	const Error input_error = _set_input();
+	if (input_error != OK) {
+		return input_error;
+	}
+	const uint32_t buttons = primary_button_pressed ? 1U : 0U;
+	return hcsr_renderer_dispatch_pointer_move(renderer, p_position.x, p_position.y, buttons, 1) == HCSR_STATUS_OK ? OK : ERR_CANT_ACQUIRE_RESOURCE;
 }
 
 Error HTMLSurfaceHCSRBackend::mouse_down(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) {
@@ -910,7 +915,11 @@ Error HTMLSurfaceHCSRBackend::mouse_down(const Point2 &p_position, HTMLSurfaceMo
 	if (p_button == HTML_SURFACE_MOUSE_BUTTON_LEFT) {
 		primary_button_pressed = true;
 	}
-	return _set_input();
+	const Error input_error = _set_input();
+	if (input_error != OK) {
+		return input_error;
+	}
+	return hcsr_renderer_dispatch_pointer_down(renderer, p_position.x, p_position.y, (hcsr_pointer_button_t)p_button, 1) == HCSR_STATUS_OK ? OK : ERR_CANT_ACQUIRE_RESOURCE;
 }
 
 Error HTMLSurfaceHCSRBackend::mouse_up(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) {
@@ -920,7 +929,69 @@ Error HTMLSurfaceHCSRBackend::mouse_up(const Point2 &p_position, HTMLSurfaceMous
 	if (p_button == HTML_SURFACE_MOUSE_BUTTON_LEFT) {
 		primary_button_pressed = false;
 	}
-	return _set_input();
+	const Error input_error = _set_input();
+	if (input_error != OK) {
+		return input_error;
+	}
+	return hcsr_renderer_dispatch_pointer_up(renderer, p_position.x, p_position.y, (hcsr_pointer_button_t)p_button, 1) == HCSR_STATUS_OK ? OK : ERR_CANT_ACQUIRE_RESOURCE;
+}
+
+Error HTMLSurfaceHCSRBackend::pointer_cancel(const Point2 &p_position, int p_pointer_id) {
+	pointer_position = p_position;
+	primary_button_pressed = false;
+	const Error input_error = _set_input();
+	if (input_error != OK) {
+		return input_error;
+	}
+	return hcsr_renderer_dispatch_pointer_cancel(renderer, p_position.x, p_position.y, p_pointer_id) == HCSR_STATUS_OK ? OK : ERR_CANT_ACQUIRE_RESOURCE;
+}
+
+Error HTMLSurfaceHCSRBackend::notify_pointer_leave(const Point2 &p_position, bool p_cancel_pressed_interaction, int p_pointer_id) {
+	pointer_position = p_position;
+	if (p_cancel_pressed_interaction) {
+		primary_button_pressed = false;
+	}
+	const Error input_error = _set_input();
+	if (input_error != OK) {
+		return input_error;
+	}
+	return hcsr_renderer_notify_pointer_leave(renderer, p_position.x, p_position.y, p_cancel_pressed_interaction ? 1 : 0, p_pointer_id) == HCSR_STATUS_OK ? OK : ERR_CANT_ACQUIRE_RESOURCE;
+}
+
+bool HTMLSurfaceHCSRBackend::poll_pointer_event(HTMLPointerEvent &r_event) {
+	if (renderer == nullptr || hcsr_renderer_pointer_event_count(renderer) == 0) {
+		return false;
+	}
+
+	hcsr_pointer_event_t source = {};
+	source.struct_size = sizeof(source);
+	if (hcsr_renderer_poll_pointer_event(renderer, &source) != HCSR_STATUS_OK || source.struct_size == 0) {
+		return false;
+	}
+
+	r_event = HTMLPointerEvent();
+	r_event.sequence = source.sequence;
+	r_event.type = (HTMLPointerEventType)source.type;
+	r_event.target.element_id = StringName(String::utf8(source.element_id_utf8));
+	r_event.target.tag_name = StringName(String::utf8(source.tag_name_utf8));
+	r_event.target.bounds = Rect2i(source.left, source.top, MAX(0, source.right - source.left), MAX(0, source.bottom - source.top));
+	r_event.target.disabled = source.disabled != 0;
+	r_event.action_element_id = StringName(String::utf8(source.action_element_id_utf8));
+	r_event.action = String::utf8(source.action_utf8);
+	if (!r_event.action.is_empty()) {
+		HTMLElementAttribute attribute;
+		attribute.name = SNAME("data-godot-action");
+		attribute.value = r_event.action;
+		r_event.target.attributes.push_back(attribute);
+	}
+	r_event.document_position = Point2(source.document_x, source.document_y);
+	r_event.button = source.button;
+	r_event.buttons = source.buttons;
+	r_event.pointer_id = source.pointer_id;
+	r_event.bubbles = source.bubbles != 0;
+	r_event.default_prevented = source.default_prevented != 0;
+	r_event.state_changed = source.state_changed != 0;
+	return true;
 }
 
 Error HTMLSurfaceHCSRBackend::wheel(const Point2 &p_position, const Vector2 &p_delta) {

@@ -96,6 +96,9 @@ public:
 	virtual Error mouse_move(const Point2 &, int) { return ERR_UNAVAILABLE; }
 	virtual Error mouse_down(const Point2 &, HTMLSurfaceMouseButton, int, int) { return ERR_UNAVAILABLE; }
 	virtual Error mouse_up(const Point2 &, HTMLSurfaceMouseButton, int, int) { return ERR_UNAVAILABLE; }
+	virtual Error pointer_cancel(const Point2 &, int) { return ERR_UNAVAILABLE; }
+	virtual Error notify_pointer_leave(const Point2 &, bool, int) { return ERR_UNAVAILABLE; }
+	virtual bool poll_pointer_event(HTMLPointerEvent &) { return false; }
 	virtual Error wheel(const Point2 &, const Vector2 &) { return ERR_UNAVAILABLE; }
 	virtual Error key_down(HTMLSurfaceInputKey, int) { return ERR_UNAVAILABLE; }
 	virtual Error key_up(HTMLSurfaceInputKey, int) { return ERR_UNAVAILABLE; }

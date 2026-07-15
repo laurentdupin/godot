@@ -997,7 +997,77 @@ void HTMLView::_emit_pointer_phase(const StringName &p_phase, const HTMLElementH
 	emit_signal(SNAME("element_pointer_event"), p_phase, activation.element_id, activation.action, (int)p_button, activation.payload);
 }
 
+void HTMLView::_emit_surface_pointer_event(const HTMLPointerEvent &p_event) {
+	StringName phase;
+	switch (p_event.type) {
+		case HTML_POINTER_EVENT_ENTER: phase = SNAME("enter"); break;
+		case HTML_POINTER_EVENT_LEAVE: phase = SNAME("leave"); break;
+		case HTML_POINTER_EVENT_MOVE: phase = SNAME("move"); break;
+		case HTML_POINTER_EVENT_DOWN: phase = SNAME("down"); break;
+		case HTML_POINTER_EVENT_UP: phase = SNAME("up"); break;
+		case HTML_POINTER_EVENT_CANCEL: phase = SNAME("cancel"); break;
+		case HTML_POINTER_EVENT_CAPTURE_GAINED: phase = SNAME("capture"); break;
+		case HTML_POINTER_EVENT_CAPTURE_LOST: phase = SNAME("capture_loss"); break;
+		case HTML_POINTER_EVENT_CLICK: phase = SNAME("click"); break;
+	}
+
+	MouseButton button = MouseButton::NONE;
+	switch (p_event.button) {
+		case HTML_SURFACE_MOUSE_BUTTON_LEFT: button = MouseButton::LEFT; break;
+		case HTML_SURFACE_MOUSE_BUTTON_MIDDLE: button = MouseButton::MIDDLE; break;
+		case HTML_SURFACE_MOUSE_BUTTON_RIGHT: button = MouseButton::RIGHT; break;
+		default: break;
+	}
+
+	const Point2i document_position(Math::floor(p_event.document_position.x), Math::floor(p_event.document_position.y));
+	HTMLActionActivation activation = HTMLActivationEngine::activate(p_event.target, document_position, button);
+	if (!p_event.action.is_empty()) {
+		activation.action = StringName(p_event.action);
+		activation.has_action = true;
+	}
+	activation.payload[SNAME("phase")] = phase;
+	activation.payload[SNAME("sequence")] = (int64_t)p_event.sequence;
+	activation.payload[SNAME("pointer_id")] = p_event.pointer_id;
+	activation.payload[SNAME("buttons")] = p_event.buttons;
+	activation.payload[SNAME("bubbles")] = p_event.bubbles;
+	activation.payload[SNAME("default_prevented")] = p_event.default_prevented;
+	activation.payload[SNAME("state_changed")] = p_event.state_changed;
+	activation.payload[SNAME("action_element_id")] = p_event.action_element_id;
+	activation.payload[SNAME("target_element_id")] = p_event.target.element_id;
+	const StringName effective_element_id = p_event.action_element_id != StringName() ? p_event.action_element_id : p_event.target.element_id;
+	activation.payload[SNAME("element_id")] = effective_element_id;
+	emit_signal(SNAME("element_pointer_event"), phase, effective_element_id, activation.action, (int)button, activation.payload);
+
+	if (p_event.type == HTML_POINTER_EVENT_CLICK && activation.has_action && !p_event.target.disabled) {
+		const StringName activated_element_id = p_event.action_element_id != StringName() ? p_event.action_element_id : p_event.target.element_id;
+		emit_signal(SNAME("element_clicked"), activated_element_id, (int)button);
+		emit_signal(SNAME("action_requested"), activation.action, activation.payload);
+		_call_bound_action(activation.action, activation.payload);
+	}
+}
+
+bool HTMLView::_drain_surface_pointer_events() {
+	bool consumed = false;
+	HTMLPointerEvent pointer_event;
+	while (surface->poll_pointer_event(pointer_event)) {
+		consumed = true;
+		_emit_surface_pointer_event(pointer_event);
+	}
+	return consumed;
+}
+
 void HTMLView::_cancel_pointer_interaction(const StringName &p_phase) {
+	const Error native_cancel_error = p_phase == SNAME("leave")
+			? surface->notify_pointer_leave(pointer_last_html_position, true, 1)
+			: surface->pointer_cancel(pointer_last_html_position, 1);
+	if (native_cancel_error == OK && _drain_surface_pointer_events()) {
+		pointer_press_active = false;
+		pointer_press_button = MouseButton::NONE;
+		pointer_press_hit = HTMLElementHit();
+		_queue_frame_render();
+		return;
+	}
+
 	if (!pointer_press_active) {
 		return;
 	}
@@ -1450,6 +1520,7 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 		const Vector2 html_position = _local_to_html_position(mm->get_position());
 		pointer_last_html_position = html_position;
 		if (surface->mouse_move(html_position, _modifiers_from_event(mm)) == OK) {
+			_drain_surface_pointer_events();
 			_queue_frame_render();
 		}
 		accept_event();
@@ -1510,8 +1581,9 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 			pointer_press_active = false;
 			pointer_press_button = button_index;
 			const Error down_err = surface->mouse_down(html_position, html_button, _modifiers_from_event(mb, button_index, true), mb->is_double_click() ? 2 : 1);
+			const bool used_surface_dispatch = _drain_surface_pointer_events();
 			const bool has_press_hit = _hit_test(html_position, pointer_press_hit);
-			if (has_press_hit && !pointer_press_hit.disabled) {
+			if (!used_surface_dispatch && has_press_hit && !pointer_press_hit.disabled) {
 				pointer_press_active = true;
 				_emit_pointer_phase(SNAME("down"), pointer_press_hit, html_position, button_index);
 			}
@@ -1534,13 +1606,14 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 		const uint64_t trace_sequence = ++input_trace_sequence;
 		const uint64_t input_start_usec = html_view_input_trace_enabled() && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 		const Error up_err = surface->mouse_up(html_position, html_button, _modifiers_from_event(mb, button_index, false), mb->is_double_click() ? 2 : 1);
+		const bool used_surface_dispatch = _drain_surface_pointer_events();
 		HTMLElementHit release_hit;
 		const bool has_release_hit = _hit_test(html_position, release_hit);
-		if (pointer_press_active && pointer_press_button == button_index) {
+		if (!used_surface_dispatch && pointer_press_active && pointer_press_button == button_index) {
 			_emit_pointer_phase(SNAME("up"), pointer_press_hit, html_position, button_index);
 		}
 		bool activation_emitted = false;
-		if (button_index == MouseButton::LEFT && pointer_press_active && pointer_press_button == button_index && has_release_hit && _same_activation_target(pointer_press_hit, release_hit)) {
+		if (!used_surface_dispatch && button_index == MouseButton::LEFT && pointer_press_active && pointer_press_button == button_index && has_release_hit && _same_activation_target(pointer_press_hit, release_hit)) {
 			_emit_activation(release_hit, html_position, button_index);
 			activation_emitted = true;
 		}

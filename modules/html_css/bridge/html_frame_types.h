@@ -105,6 +105,33 @@ struct HTMLElementHit {
 	}
 };
 
+enum HTMLPointerEventType {
+	HTML_POINTER_EVENT_ENTER = 0,
+	HTML_POINTER_EVENT_LEAVE = 1,
+	HTML_POINTER_EVENT_MOVE = 2,
+	HTML_POINTER_EVENT_DOWN = 3,
+	HTML_POINTER_EVENT_UP = 4,
+	HTML_POINTER_EVENT_CANCEL = 5,
+	HTML_POINTER_EVENT_CAPTURE_GAINED = 6,
+	HTML_POINTER_EVENT_CAPTURE_LOST = 7,
+	HTML_POINTER_EVENT_CLICK = 8,
+};
+
+struct HTMLPointerEvent {
+	uint64_t sequence = 0;
+	HTMLPointerEventType type = HTML_POINTER_EVENT_MOVE;
+	HTMLElementHit target;
+	StringName action_element_id;
+	String action;
+	Point2 document_position;
+	int button = 0;
+	uint32_t buttons = 0;
+	int pointer_id = 1;
+	bool bubbles = false;
+	bool default_prevented = false;
+	bool state_changed = false;
+};
+
 struct HTMLFormControlState {
 	StringName element_id;
 	StringName tag_name;
