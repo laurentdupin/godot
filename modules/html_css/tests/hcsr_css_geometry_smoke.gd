@@ -51,6 +51,12 @@ func _initialize() -> void:
 	if arrow_center.r < 0.55 or arrow_center.r > 0.90 or arrow_outside.r < 0.98:
 		_fail("Zero-content asymmetric borders did not paint a CSS triangle: center=%s outside=%s" % [arrow_center, arrow_outside])
 		return
+	for y in range(70, 96):
+		for x in range(125, 190):
+			var empty_button_pixel := image.get_pixel(x, y)
+			if empty_button_pixel.r < 0.98 or empty_button_pixel.g < 0.98 or empty_button_pixel.b < 0.98:
+				_fail("Empty fixed dismiss button painted visible fallback content at %d,%d: %s" % [x, y, empty_button_pixel])
+				return
 	if texture_rect != null:
 		texture_rect.queue_free()
 	target.free()
