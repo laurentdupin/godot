@@ -66,6 +66,7 @@ protected:
 		BLIT_MODE_USE_LAYER,
 		BLIT_MODE_LENS,
 		BLIT_MODE_NORMAL_ALPHA,
+		BLIT_MODE_NORMAL_PREMULTIPLIED_ALPHA,
 		BLIT_MODE_MAX
 	};
 
@@ -89,7 +90,8 @@ protected:
 
 		float reference_multiplier; // 4 - 84
 		float output_max_value; // 4 - 88
-		uint32_t pad[2]; // 8 - 96 (padding to reach 16-byte boundary)
+		uint32_t premultiplied_alpha; // 4 - 92
+		uint32_t pad; // 4 - 96 (padding to reach 16-byte boundary)
 	};
 
 	struct BlitPipelines {

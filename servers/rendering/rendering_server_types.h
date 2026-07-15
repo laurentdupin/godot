@@ -136,6 +136,13 @@ struct BlitToScreen {
 	RID render_target;
 	Rect2 src_rect = Rect2(0.0, 0.0, 1.0, 1.0);
 	Rect2i dst_rect;
+	RSE::ViewportScreenCompositionMode composition_mode = RSE::VIEWPORT_SCREEN_COMPOSITION_REPLACE;
+	int32_t composition_order = 0;
+	uint64_t composition_sequence = 0;
+
+	bool operator<(const BlitToScreen &p_other) const {
+		return composition_order == p_other.composition_order ? composition_sequence < p_other.composition_sequence : composition_order < p_other.composition_order;
+	}
 
 	struct {
 		bool use_layer = false;

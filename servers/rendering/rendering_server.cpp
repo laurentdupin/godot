@@ -2863,6 +2863,7 @@ void RenderingServer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("viewport_set_active", "viewport", "active"), &RenderingServer::viewport_set_active);
 	ClassDB::bind_method(D_METHOD("viewport_set_parent_viewport", "viewport", "parent_viewport"), &RenderingServer::viewport_set_parent_viewport);
 	ClassDB::bind_method(D_METHOD("viewport_attach_to_screen", "viewport", "rect", "screen"), &RenderingServer::viewport_attach_to_screen, DEFVAL(Rect2()), DEFVAL(DisplayServerEnums::MAIN_WINDOW_ID));
+	ClassDB::bind_method(D_METHOD("viewport_set_screen_composition", "viewport", "mode", "order"), &RenderingServer::viewport_set_screen_composition, DEFVAL(0));
 	ClassDB::bind_method(D_METHOD("viewport_set_render_direct_to_screen", "viewport", "enabled"), &RenderingServer::viewport_set_render_direct_to_screen);
 	ClassDB::bind_method(D_METHOD("viewport_set_canvas_cull_mask", "viewport", "canvas_cull_mask"), &RenderingServer::viewport_set_canvas_cull_mask);
 
@@ -2928,6 +2929,10 @@ void RenderingServer::_bind_methods() {
 	BIND_ENUM_CONSTANT(RSE::VIEWPORT_SCALING_3D_MODE_METALFX_TEMPORAL);
 	BIND_ENUM_CONSTANT(RSE::VIEWPORT_SCALING_3D_MODE_NEAREST);
 	BIND_ENUM_CONSTANT(RSE::VIEWPORT_SCALING_3D_MODE_MAX);
+
+	BIND_ENUM_CONSTANT(RSE::VIEWPORT_SCREEN_COMPOSITION_REPLACE);
+	BIND_ENUM_CONSTANT(RSE::VIEWPORT_SCREEN_COMPOSITION_PREMULTIPLIED_ALPHA);
+	BIND_ENUM_CONSTANT(RSE::VIEWPORT_SCREEN_COMPOSITION_MAX);
 
 	BIND_ENUM_CONSTANT(RSE::VIEWPORT_UPDATE_DISABLED);
 	BIND_ENUM_CONSTANT(RSE::VIEWPORT_UPDATE_ONCE); // Then goes to disabled, must be manually updated.

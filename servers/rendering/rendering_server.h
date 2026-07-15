@@ -550,6 +550,7 @@ public:
 	virtual void viewport_set_canvas_cull_mask(RID p_viewport, uint32_t p_canvas_cull_mask) = 0;
 
 	virtual void viewport_attach_to_screen(RID p_viewport, const Rect2 &p_rect = Rect2(), DisplayServerEnums::WindowID p_screen = DisplayServerEnums::MAIN_WINDOW_ID) = 0;
+	virtual void viewport_set_screen_composition(RID p_viewport, RSE::ViewportScreenCompositionMode p_mode, int p_order) = 0;
 	virtual void viewport_set_render_direct_to_screen(RID p_viewport, bool p_enable) = 0;
 
 	virtual void viewport_set_scaling_3d_mode(RID p_viewport, RSE::ViewportScaling3DMode p_scaling_3d_mode) = 0;
@@ -1120,6 +1121,7 @@ VARIANT_ENUM_CAST_EXT(RSE::ParticlesCollisionType, RenderingServer::ParticlesCol
 VARIANT_ENUM_CAST_EXT(RSE::ParticlesCollisionHeightfieldResolution, RenderingServer::ParticlesCollisionHeightfieldResolution);
 VARIANT_ENUM_CAST_EXT(RSE::FogVolumeShape, RenderingServer::FogVolumeShape);
 VARIANT_ENUM_CAST_EXT(RSE::ViewportScaling3DMode, RenderingServer::ViewportScaling3DMode);
+VARIANT_ENUM_CAST_EXT(RSE::ViewportScreenCompositionMode, RenderingServer::ViewportScreenCompositionMode);
 VARIANT_ENUM_CAST_EXT(RSE::ViewportUpdateMode, RenderingServer::ViewportUpdateMode);
 VARIANT_ENUM_CAST_EXT(RSE::ViewportClearMode, RenderingServer::ViewportClearMode);
 VARIANT_ENUM_CAST_EXT(RSE::ViewportEnvironmentMode, RenderingServer::ViewportEnvironmentMode);

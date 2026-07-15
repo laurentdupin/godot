@@ -4114,7 +4114,7 @@
 			<param index="1" name="rect" type="Rect2" default="Rect2(0, 0, 0, 0)" />
 			<param index="2" name="screen" type="int" default="0" />
 			<description>
-				Copies the viewport to a region of the screen specified by [param rect]. If [method viewport_set_render_direct_to_screen] is [code]true[/code], then the viewport does not use a framebuffer and the contents of the viewport are rendered directly to screen. However, note that the root viewport is drawn last, therefore it will draw over the screen. Accordingly, you must set the root viewport to an area that does not cover the area that you have attached this viewport to.
+				Copies the viewport to a region of the screen specified by [param rect]. By default, attached viewports use replace composition in viewport draw order. Use [method viewport_set_screen_composition] to define deterministic layer order and premultiplied-alpha composition. If [method viewport_set_render_direct_to_screen] is [code]true[/code], then the viewport does not use a framebuffer and the contents of the viewport are rendered directly to screen. In that mode, the root viewport is drawn last and will draw over the screen, so you must set the root viewport to an area that does not cover the area that you have attached this viewport to.
 				For example, you can set the root viewport to not render at all with the following code:
 				[codeblocks]
 				[gdscript]
@@ -4419,6 +4419,16 @@
 			<param index="1" name="scenario" type="RID" />
 			<description>
 				Sets a viewport's scenario. The scenario contains information about environment information, reflection atlas, etc.
+			</description>
+		</method>
+		<method name="viewport_set_screen_composition">
+			<return type="void" />
+			<param index="0" name="viewport" type="RID" />
+			<param index="1" name="mode" type="int" enum="RenderingServer.ViewportScreenCompositionMode" />
+			<param index="2" name="order" type="int" default="0" />
+			<description>
+				Sets how the viewport is composed when copied to a screen by [method viewport_attach_to_screen]. Viewports attached to the same window are presented in ascending [param order], preserving viewport draw order when values are equal.
+				Premultiplied-alpha composition requires an offscreen render target and is therefore mutually exclusive with [method viewport_set_render_direct_to_screen]. Selecting a composited mode disables direct-to-screen rendering; enabling direct-to-screen rendering restores replace composition.
 			</description>
 		</method>
 		<method name="viewport_set_screen_space_aa">
@@ -5407,6 +5417,15 @@
 		</constant>
 		<constant name="VIEWPORT_SCALING_3D_MODE_MAX" value="6" enum="ViewportScaling3DMode">
 			Represents the size of the [enum ViewportScaling3DMode] enum.
+		</constant>
+		<constant name="VIEWPORT_SCREEN_COMPOSITION_REPLACE" value="0" enum="ViewportScreenCompositionMode">
+			Copies the viewport to the screen without blending. Use this for the base layer or for an entirely opaque viewport that should replace previously presented content.
+		</constant>
+		<constant name="VIEWPORT_SCREEN_COMPOSITION_PREMULTIPLIED_ALPHA" value="1" enum="ViewportScreenCompositionMode">
+			Composes the viewport over earlier screen layers using premultiplied alpha. Transparent pixels preserve earlier layers, translucent pixels blend with them, and opaque pixels replace them.
+		</constant>
+		<constant name="VIEWPORT_SCREEN_COMPOSITION_MAX" value="2" enum="ViewportScreenCompositionMode">
+			Represents the size of the [enum ViewportScreenCompositionMode] enum.
 		</constant>
 		<constant name="VIEWPORT_UPDATE_DISABLED" value="0" enum="ViewportUpdateMode">
 			Do not update the viewport's render target.

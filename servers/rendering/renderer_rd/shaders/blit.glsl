@@ -24,8 +24,8 @@ layout(push_constant, std140) uniform Pos {
 
 	float reference_multiplier;
 	float output_max_value;
+	bool premultiplied_alpha;
 	uint pad1;
-	uint pad2;
 }
 data;
 
@@ -70,8 +70,8 @@ layout(push_constant, std140) uniform Pos {
 
 	float reference_multiplier;
 	float output_max_value;
+	bool premultiplied_alpha;
 	uint pad1;
-	uint pad2;
 }
 data;
 
@@ -151,6 +151,12 @@ void main() {
 	color = texture(src_rt, uv);
 #endif
 
+	// Transfer functions operate on unassociated colors. Viewport render targets contain
+	// premultiplied colors, so preserve their alpha convention across color-space conversion.
+	if (data.premultiplied_alpha) {
+		color.rgb = color.a > 0.0 ? color.rgb / color.a : vec3(0.0);
+	}
+
 	// Colorspace conversion for final blit.
 	if (data.target_color_space == COLOR_SPACE_REC709_LINEAR) {
 		if (data.source_is_srgb == true) {
@@ -187,5 +193,9 @@ void main() {
 				color.rgb += screen_space_dither(gl_FragCoord.xy);
 			}
 		}
+	}
+
+	if (data.premultiplied_alpha) {
+		color.rgb *= color.a;
 	}
 }

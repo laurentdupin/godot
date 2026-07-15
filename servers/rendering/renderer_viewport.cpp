@@ -36,6 +36,7 @@
 #include "core/object/worker_thread_pool.h"
 #include "core/os/os.h"
 #include "core/profiling/profiling.h"
+#include "core/templates/hash_set.h"
 #include "servers/display/display_server.h"
 #include "servers/rendering/renderer_canvas_cull.h"
 #include "servers/rendering/renderer_compositor.h"
@@ -804,6 +805,8 @@ void RendererViewport::draw_viewports(bool p_swap_buffers) {
 	}
 
 	HashMap<DisplayServerEnums::WindowID, Vector<RenderingServerTypes::BlitToScreen>> blit_to_screen_list;
+	HashSet<DisplayServerEnums::WindowID> composited_windows;
+	uint64_t composition_sequence = 0;
 	//draw viewports
 	RENDER_TIMESTAMP("> Render Viewports");
 
@@ -852,6 +855,15 @@ void RendererViewport::draw_viewports(bool p_swap_buffers) {
 
 		if (visible) {
 			vp->last_pass = draw_viewports_pass;
+		}
+	}
+
+	// OpenGL normally presents simple attached viewports as soon as they are rendered. Windows
+	// with composited layers must defer every presentation instead, otherwise the base can be
+	// swapped before a later layer has even been discovered.
+	for (Viewport *vp : sorted_active_viewports) {
+		if (vp->last_pass == draw_viewports_pass && (vp->screen_composition_mode != RSE::VIEWPORT_SCREEN_COMPOSITION_REPLACE || vp->screen_composition_order != 0) && vp->viewport_to_screen != DisplayServerEnums::INVALID_WINDOW_ID) {
+			composited_windows.insert(vp->viewport_to_screen);
 		}
 	}
 
@@ -904,7 +916,10 @@ void RendererViewport::draw_viewports(bool p_swap_buffers) {
 				// commit our eyes
 				Vector<RenderingServerTypes::BlitToScreen> blits = xr_interface->post_draw_viewport(vp->render_target, vp->viewport_to_screen_rect);
 				if (vp->viewport_to_screen != DisplayServerEnums::INVALID_WINDOW_ID) {
-					if (RSG::rasterizer->is_opengl()) {
+					for (int b = 0; b < blits.size(); b++) {
+						blits.write[b].composition_sequence = composition_sequence++;
+					}
+					if (RSG::rasterizer->is_opengl() && !composited_windows.has(vp->viewport_to_screen)) {
 						if (blits.size() > 0) {
 							RSG::rasterizer->blit_render_targets_to_screen(vp->viewport_to_screen, blits.ptr(), blits.size());
 							RSG::rasterizer->gl_end_frame(p_swap_buffers);
@@ -932,6 +947,9 @@ void RendererViewport::draw_viewports(bool p_swap_buffers) {
 				//copy to screen if set as such
 				RenderingServerTypes::BlitToScreen blit;
 				blit.render_target = vp->render_target;
+				blit.composition_mode = vp->screen_composition_mode;
+				blit.composition_order = vp->screen_composition_order;
+				blit.composition_sequence = composition_sequence++;
 				if (vp->viewport_to_screen_rect != Rect2()) {
 					blit.dst_rect = vp->viewport_to_screen_rect;
 				} else {
@@ -939,7 +957,7 @@ void RendererViewport::draw_viewports(bool p_swap_buffers) {
 					blit.dst_rect.size = vp->size;
 				}
 
-				if (RSG::rasterizer->is_opengl()) {
+				if (RSG::rasterizer->is_opengl() && !composited_windows.has(vp->viewport_to_screen)) {
 					RSG::rasterizer->blit_render_targets_to_screen(vp->viewport_to_screen, &blit, 1);
 					RSG::rasterizer->gl_end_frame(p_swap_buffers);
 				} else {
@@ -977,7 +995,17 @@ void RendererViewport::draw_viewports(bool p_swap_buffers) {
 	RENDER_TIMESTAMP("< Render Viewports");
 
 	GodotProfileZoneGrouped(_profile_zone, "rasterizer->blit_render_targets_to_screen");
-	if (p_swap_buffers && !blit_to_screen_list.is_empty()) {
+	for (KeyValue<int, Vector<RenderingServerTypes::BlitToScreen>> &E : blit_to_screen_list) {
+		E.value.sort();
+	}
+
+	if (RSG::rasterizer->is_opengl()) {
+		for (const KeyValue<int, Vector<RenderingServerTypes::BlitToScreen>> &E : blit_to_screen_list) {
+			DisplayServer::get_singleton()->gl_window_make_current(E.key);
+			RSG::rasterizer->blit_render_targets_to_screen(E.key, E.value.ptr(), E.value.size());
+			RSG::rasterizer->gl_end_frame(p_swap_buffers);
+		}
+	} else if (p_swap_buffers) {
 		for (const KeyValue<int, Vector<RenderingServerTypes::BlitToScreen>> &E : blit_to_screen_list) {
 			RSG::rasterizer->blit_render_targets_to_screen(E.key, E.value.ptr(), E.value.size());
 		}
@@ -1179,12 +1207,29 @@ void RendererViewport::viewport_attach_to_screen(RID p_viewport, const Rect2 &p_
 	}
 }
 
+void RendererViewport::viewport_set_screen_composition(RID p_viewport, RSE::ViewportScreenCompositionMode p_mode, int p_order) {
+	Viewport *viewport = viewport_owner.get_or_null(p_viewport);
+	ERR_FAIL_NULL(viewport);
+	ERR_FAIL_INDEX(int(p_mode), int(RSE::VIEWPORT_SCREEN_COMPOSITION_MAX));
+
+	if (p_mode != RSE::VIEWPORT_SCREEN_COMPOSITION_REPLACE && viewport->viewport_render_direct_to_screen) {
+		viewport_set_render_direct_to_screen(p_viewport, false);
+	}
+
+	viewport->screen_composition_mode = p_mode;
+	viewport->screen_composition_order = p_order;
+}
+
 void RendererViewport::viewport_set_render_direct_to_screen(RID p_viewport, bool p_enable) {
 	Viewport *viewport = viewport_owner.get_or_null(p_viewport);
 	ERR_FAIL_NULL(viewport);
 
 	if (p_enable == viewport->viewport_render_direct_to_screen) {
 		return;
+	}
+	if (p_enable) {
+		viewport->screen_composition_mode = RSE::VIEWPORT_SCREEN_COMPOSITION_REPLACE;
+		viewport->screen_composition_order = 0;
 	}
 
 	// if disabled, reset render_target size and position

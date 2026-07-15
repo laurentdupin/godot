@@ -80,7 +80,7 @@ protected:
 	RasterizerSceneGLES3 *scene = nullptr;
 	static RasterizerGLES3 *singleton;
 
-	void _blit_render_target_to_screen(DisplayServerEnums::WindowID p_screen, const RenderingServerTypes::BlitToScreen &p_blit, bool p_first = true);
+	void _blit_render_target_to_screen(DisplayServerEnums::WindowID p_screen, const RenderingServerTypes::BlitToScreen &p_blit, int p_screen_height, bool p_first = true);
 
 public:
 	RendererUtilities *get_utilities() { return utilities; }

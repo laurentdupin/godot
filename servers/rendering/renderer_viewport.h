@@ -83,6 +83,8 @@ public:
 		DisplayServerEnums::WindowID viewport_to_screen = DisplayServerEnums::INVALID_WINDOW_ID;
 		Rect2 viewport_to_screen_rect;
 		bool viewport_render_direct_to_screen = false;
+		RSE::ViewportScreenCompositionMode screen_composition_mode = RSE::VIEWPORT_SCREEN_COMPOSITION_REPLACE;
+		int screen_composition_order = 0;
 
 		bool disable_2d = false;
 		RSE::ViewportEnvironmentMode disable_environment = RSE::VIEWPORT_ENVIRONMENT_INHERIT;
@@ -227,6 +229,7 @@ public:
 	void viewport_set_size(RID p_viewport, int p_width, int p_height, int p_view_count = 1);
 
 	void viewport_attach_to_screen(RID p_viewport, const Rect2 &p_rect = Rect2(), DisplayServerEnums::WindowID p_screen = DisplayServerEnums::MAIN_WINDOW_ID);
+	void viewport_set_screen_composition(RID p_viewport, RSE::ViewportScreenCompositionMode p_mode, int p_order);
 	void viewport_set_render_direct_to_screen(RID p_viewport, bool p_enable);
 
 	void viewport_set_active(RID p_viewport, bool p_active);

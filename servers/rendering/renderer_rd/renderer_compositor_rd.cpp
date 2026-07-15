@@ -61,7 +61,8 @@ void RendererCompositorRD::blit_render_targets_to_screen(DisplayServerEnums::Win
 		RID rd_texture = texture_storage->render_target_get_rd_texture(p_render_targets[i].render_target);
 		ERR_CONTINUE(rd_texture.is_null());
 
-		BlitMode mode = p_render_targets[i].lens_distortion.apply ? BLIT_MODE_LENS : (p_render_targets[i].multi_view.use_layer ? BLIT_MODE_USE_LAYER : BLIT_MODE_NORMAL);
+		BlitMode mode = p_render_targets[i].lens_distortion.apply ? BLIT_MODE_LENS : (p_render_targets[i].multi_view.use_layer ? BLIT_MODE_USE_LAYER : (p_render_targets[i].composition_mode == RSE::VIEWPORT_SCREEN_COMPOSITION_PREMULTIPLIED_ALPHA ? BLIT_MODE_NORMAL_PREMULTIPLIED_ALPHA : BLIT_MODE_NORMAL));
+		BlitMode shader_mode = mode == BLIT_MODE_NORMAL_PREMULTIPLIED_ALPHA ? BLIT_MODE_NORMAL : mode;
 
 		HashMap<RID, RID>::Iterator it = render_target_descriptors.find(rd_texture);
 		if (it == render_target_descriptors.end() || !RD::get_singleton()->uniform_set_is_valid(it->value)) {
@@ -72,7 +73,7 @@ void RendererCompositorRD::blit_render_targets_to_screen(DisplayServerEnums::Win
 			u.append_id(blit.sampler);
 			u.append_id(rd_texture);
 			uniforms.push_back(u);
-			RID uniform_set = RD::get_singleton()->uniform_set_create(uniforms, blit.shader.version_get_shader(blit.shader_version, mode), 0);
+			RID uniform_set = RD::get_singleton()->uniform_set_create(uniforms, blit.shader.version_get_shader(blit.shader_version, shader_mode), 0);
 
 			it = render_target_descriptors.insert(rd_texture, uniform_set);
 		}
@@ -113,6 +114,7 @@ void RendererCompositorRD::blit_render_targets_to_screen(DisplayServerEnums::Win
 		blit.push_constant.target_color_space = color_space;
 		blit.push_constant.reference_multiplier = reference_multiplier;
 		blit.push_constant.output_max_value = output_max_value;
+		blit.push_constant.premultiplied_alpha = mode == BLIT_MODE_NORMAL_PREMULTIPLIED_ALPHA;
 
 		RD::get_singleton()->draw_list_set_push_constant(draw_list, &blit.push_constant, sizeof(BlitPushConstant));
 		RD::get_singleton()->draw_list_draw(draw_list, true);
@@ -197,7 +199,20 @@ RendererCompositorRD::BlitPipelines RendererCompositorRD::_get_blit_pipelines_fo
 
 	BlitPipelines pipelines;
 	for (int i = 0; i < BLIT_MODE_MAX; i++) {
-		pipelines.pipelines[i] = RD::get_singleton()->render_pipeline_create(blit.shader.version_get_shader(blit.shader_version, i), format, RD::INVALID_ID, RD::RENDER_PRIMITIVE_TRIANGLES, RD::PipelineRasterizationState(), RD::PipelineMultisampleState(), RD::PipelineDepthStencilState(), i == BLIT_MODE_NORMAL_ALPHA ? RenderingDevice::PipelineColorBlendState::create_blend() : RenderingDevice::PipelineColorBlendState::create_disabled(), 0);
+		BlitMode shader_mode = i == BLIT_MODE_NORMAL_PREMULTIPLIED_ALPHA ? BLIT_MODE_NORMAL : BlitMode(i);
+		RenderingDevice::PipelineColorBlendState blend_state = RenderingDevice::PipelineColorBlendState::create_disabled();
+		if (i == BLIT_MODE_NORMAL_ALPHA) {
+			blend_state = RenderingDevice::PipelineColorBlendState::create_blend();
+		} else if (i == BLIT_MODE_NORMAL_PREMULTIPLIED_ALPHA) {
+			RenderingDevice::PipelineColorBlendState::Attachment attachment;
+			attachment.enable_blend = true;
+			attachment.src_color_blend_factor = RD::BLEND_FACTOR_ONE;
+			attachment.dst_color_blend_factor = RD::BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+			attachment.src_alpha_blend_factor = RD::BLEND_FACTOR_ONE;
+			attachment.dst_alpha_blend_factor = RD::BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+			blend_state.attachments.write[0] = attachment;
+		}
+		pipelines.pipelines[i] = RD::get_singleton()->render_pipeline_create(blit.shader.version_get_shader(blit.shader_version, shader_mode), format, RD::INVALID_ID, RD::RENDER_PRIMITIVE_TRIANGLES, RD::PipelineRasterizationState(), RD::PipelineMultisampleState(), RD::PipelineDepthStencilState(), blend_state, 0);
 	}
 	blit.pipelines_by_format.insert(format, pipelines);
 	return pipelines;

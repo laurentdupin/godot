@@ -749,6 +749,7 @@ public:
 	FUNC2(viewport_set_clear_mode, RID, RSE::ViewportClearMode)
 
 	FUNC3(viewport_attach_to_screen, RID, const Rect2 &, int)
+	FUNC3(viewport_set_screen_composition, RID, RSE::ViewportScreenCompositionMode, int)
 	FUNC2(viewport_set_render_direct_to_screen, RID, bool)
 
 	FUNC2(viewport_set_scaling_3d_mode, RID, RSE::ViewportScaling3DMode)

@@ -394,7 +394,7 @@ RasterizerGLES3::RasterizerGLES3() {
 RasterizerGLES3::~RasterizerGLES3() {
 }
 
-void RasterizerGLES3::_blit_render_target_to_screen(DisplayServerEnums::WindowID p_screen, const RenderingServerTypes::BlitToScreen &p_blit, bool p_first) {
+void RasterizerGLES3::_blit_render_target_to_screen(DisplayServerEnums::WindowID p_screen, const RenderingServerTypes::BlitToScreen &p_blit, int p_screen_height, bool p_first) {
 	GLES3::RenderTarget *rt = GLES3::TextureStorage::get_singleton()->get_render_target(p_blit.render_target);
 
 	ERR_FAIL_NULL(rt);
@@ -425,7 +425,7 @@ void RasterizerGLES3::_blit_render_target_to_screen(DisplayServerEnums::WindowID
 	glBindFramebuffer(GL_FRAMEBUFFER, GLES3::TextureStorage::system_fbo);
 
 	if (p_first) {
-		if (p_blit.dst_rect.position != Vector2() || p_blit.dst_rect.size != rt->size) {
+		if (p_blit.composition_mode != RSE::VIEWPORT_SCREEN_COMPOSITION_REPLACE || p_blit.dst_rect.position != Vector2() || p_blit.dst_rect.size != rt->size) {
 			// Viewport doesn't cover entire window so clear window to black before blitting.
 			// Querying the actual window size from the DisplayServer would deadlock in separate render thread mode,
 			// so let's set the biggest viewport the implementation supports, to be sure the window is fully covered.
@@ -444,7 +444,15 @@ void RasterizerGLES3::_blit_render_target_to_screen(DisplayServerEnums::WindowID
 
 	Rect2 screenrect = Rect2(Vector2(0.0, flip_y ? 1.0 : 0.0), Vector2(1.0, flip_y ? -1.0 : 1.0));
 
-	glViewport(int(MIN(p1.x, p2.x)), int(MIN(p1.y, p2.y)), Math::abs(size.x), Math::abs(size.y));
+	int viewport_y = int(MIN(p1.y, p2.y));
+#ifdef WINDOWS_ENABLED
+	if (!screen_flipped_y && p_screen_height > 0) {
+#else
+	if (p_screen_height > 0) {
+#endif
+		viewport_y = p_screen_height - int(MAX(p1.y, p2.y));
+	}
+	glViewport(int(MIN(p1.x, p2.x)), viewport_y, Math::abs(size.x), Math::abs(size.y));
 
 	glActiveTexture(GL_TEXTURE0);
 	GLenum target = rt->view_count > 1 ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D;
@@ -455,7 +463,11 @@ void RasterizerGLES3::_blit_render_target_to_screen(DisplayServerEnums::WindowID
 	glDisable(GL_CULL_FACE);
 
 	glEnable(GL_BLEND);
-	glBlendFunc(GL_ONE, GL_ZERO);
+	if (p_blit.composition_mode == RSE::VIEWPORT_SCREEN_COMPOSITION_PREMULTIPLIED_ALPHA) {
+		glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+	} else {
+		glBlendFunc(GL_ONE, GL_ZERO);
+	}
 
 	if (p_blit.lens_distortion.apply && (p_blit.lens_distortion.k1 != 0.0 || p_blit.lens_distortion.k2)) {
 		copy_effects->copy_with_lens_distortion(screenrect, p_blit.multi_view.use_layer ? p_blit.multi_view.layer : 0, p_blit.lens_distortion.eye_center, p_blit.lens_distortion.k1, p_blit.lens_distortion.k2, p_blit.lens_distortion.upscale, p_blit.lens_distortion.aspect_ratio, linear_to_srgb);
@@ -470,8 +482,18 @@ void RasterizerGLES3::_blit_render_target_to_screen(DisplayServerEnums::WindowID
 
 // is this p_screen useless in a multi window environment?
 void RasterizerGLES3::blit_render_targets_to_screen(DisplayServerEnums::WindowID p_screen, const RenderingServerTypes::BlitToScreen *p_render_targets, int p_amount) {
+	int screen_height = 0;
+	if (p_amount > 1) {
+		if (p_render_targets[0].composition_mode == RSE::VIEWPORT_SCREEN_COMPOSITION_REPLACE && p_render_targets[0].dst_rect.position == Vector2()) {
+			screen_height = int(p_render_targets[0].dst_rect.size.y);
+		} else {
+			for (int i = 0; i < p_amount; i++) {
+				screen_height = MAX(screen_height, int(p_render_targets[i].dst_rect.get_end().y));
+			}
+		}
+	}
 	for (int i = 0; i < p_amount; i++) {
-		_blit_render_target_to_screen(p_screen, p_render_targets[i], i == 0);
+		_blit_render_target_to_screen(p_screen, p_render_targets[i], screen_height, i == 0);
 	}
 }
 
