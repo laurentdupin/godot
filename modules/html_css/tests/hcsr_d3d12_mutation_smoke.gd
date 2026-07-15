@@ -1,0 +1,53 @@
+extends SceneTree
+
+const WIDTH := 420
+const HEIGHT := 180
+const STYLE := "body{margin:0;background:#111827;color:#f9fafb;font-size:18px}.row{display:flex;gap:12px;padding:12px}.label{width:112px}.ui-select-options{display:none;position:absolute;left:126px;top:42px;width:180px;background:#1f2937}.ui-select-options.open{display:block}"
+const BODY_PREFIX := "<div class='row'><span class='label'>Alpha glyphs</span><span class='label'>Bravo glyphs</span><span class='label'>Charlie glyphs</span></div>"
+const OPTIONS := "<div id='options' class='%s'><div>First option</div><div>Second option</div><div>Third option</div></div>"
+const BODY_SUFFIX := "<div class='row'><span class='label'>Delta glyphs</span><span class='label'>Echo glyphs</span><span class='label'>Foxtrot glyphs</span></div>"
+
+func _initialize() -> void:
+	root.size = Vector2i(WIDTH * 2, HEIGHT)
+	var mutated := _make_view("ui-select-options")
+	var fresh := _make_view("ui-select-options open")
+	fresh.position = Vector2(WIDTH, 0)
+	root.add_child(mutated)
+	root.add_child(fresh)
+	await process_frame
+	await process_frame
+	if mutated.set_element_attribute(&"options", &"class", "ui-select-options open") != OK:
+		_fail("D3D12 mutation was rejected.")
+		return
+	for _frame in range(5):
+		await process_frame
+	await RenderingServer.frame_post_draw
+
+	var viewport_image := root.get_texture().get_image()
+	if viewport_image == null or viewport_image.get_width() < WIDTH * 2 or viewport_image.get_height() < HEIGHT:
+		_fail("D3D12 mutation smoke could not read back the composed viewport (size=%s)." % [viewport_image.get_size() if viewport_image != null else Vector2i.ZERO])
+		return
+	var changed := 0
+	for y in range(HEIGHT):
+		for x in range(WIDTH):
+			if viewport_image.get_pixel(x, y) != viewport_image.get_pixel(x + WIDTH, y):
+				changed += 1
+	if changed != 0:
+		_fail("D3D12 class mutation lost or misplaced retained content; %d pixels differ from a fresh final render." % changed)
+		return
+
+	print("HCSR Godot D3D12 retained mutation smoke passed.")
+	quit()
+
+func _make_view(options_class: String) -> HTMLView:
+	var document := HTMLDocument.new()
+	document.html = "<!DOCTYPE html><html><head><style>%s</style></head><body>%s%s%s</body></html>" % [STYLE, BODY_PREFIX, OPTIONS % options_class, BODY_SUFFIX]
+	var view := HTMLView.new()
+	view.backend_preference = HTMLView.BACKEND_D3D12
+	view.size = Vector2(WIDTH, HEIGHT)
+	view.document = document
+	return view
+
+func _fail(message: String) -> void:
+	push_error(message)
+	quit(1)
