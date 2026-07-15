@@ -636,7 +636,10 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 		hcsr_renderer_release_gpu_frame_packet(p_packet);
 		return;
 	}
-	if (gpu_texture_rid.is_valid() && native_gpu_size != size) {
+	// Metal imports hold an independent retain on the HCSR texture. Keep that import
+	// visible until submission returns a valid replacement so a failed resized
+	// frame cannot expose an empty external texture.
+	if (render_backend != HCSR_RENDER_BACKEND_METAL && gpu_texture_rid.is_valid() && native_gpu_size != size) {
 		// Keep presenting the previous texture while the resized logical frame is
 		// prepared. Release it only here, immediately before the replacement native
 		// resource is created and imported in this same render-thread callback.
