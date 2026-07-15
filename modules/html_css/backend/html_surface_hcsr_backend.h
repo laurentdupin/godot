@@ -6,6 +6,7 @@
 
 #include "html_surface_cpu_backend.h"
 
+#include "core/templates/hash_map.h"
 #include "core/templates/safe_refcount.h"
 
 #include "hcsr_renderer.h"
@@ -17,6 +18,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	Ref<HTMLTexture2D> gpu_texture;
 	HTMLFrameMetadata frame_metadata;
 	RID gpu_texture_rid;
+	HashMap<uint64_t, RID> gpu_texture_import_cache;
 	void *native_gpu_texture = nullptr;
 	uint64_t native_gpu_generation = 0;
 	Size2i native_gpu_size;
@@ -32,6 +34,9 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool gpu_render_succeeded = false;
 	SafeFlag gpu_frame_pending;
 	SafeFlag gpu_follow_up_frame_requested;
+	SafeFlag gpu_presentation_poll_pending;
+	SafeFlag gpu_completed_presentation_available;
+	SafeFlag gpu_presentation_work_pending;
 	bool backdrop_filter_enabled = false;
 	String terminal_failure_reason;
 	String last_reported_error;
@@ -51,6 +56,8 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	void _configure_metal_device_on_render_thread();
 	bool _render_gpu_frame();
 	void _render_gpu_frame_on_render_thread(hcsr_gpu_frame_packet_t *p_packet);
+	void _poll_gpu_presentation_on_render_thread();
+	bool _accept_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output);
 	void _ensure_gpu_texture_imported_on_render_thread();
 	void _detach_gpu_texture_import();
 	void _detach_gpu_texture_import_on_render_thread();
@@ -59,6 +66,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	static void _configure_vulkan_device_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _configure_metal_device_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _render_gpu_frame_on_render_thread_callback(uint64_t p_backend_ptr, uint64_t p_packet_ptr);
+	static void _poll_gpu_presentation_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _detach_gpu_texture_import_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _destroy_renderer_on_render_thread_callback(uint64_t p_backend_ptr);
 	void _record_error(const String &p_context);
