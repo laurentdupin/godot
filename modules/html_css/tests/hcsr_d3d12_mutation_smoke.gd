@@ -7,7 +7,13 @@ const BODY_PREFIX := "<div class='row'><span class='label'>Alpha glyphs</span><s
 const OPTIONS := "<div id='options' class='%s'><div>First option</div><div>Second option</div><div>Third option</div></div>"
 const BODY_SUFFIX := "<div class='row'><span class='label'>Delta glyphs</span><span class='label'>Echo glyphs</span><span class='label'>Foxtrot glyphs</span></div>"
 
+var backend_preference := HTMLView.BACKEND_D3D12
+var backend_name := "D3D12"
+
 func _initialize() -> void:
+	if OS.get_cmdline_user_args().has("--vulkan"):
+		backend_preference = HTMLView.BACKEND_VULKAN
+		backend_name = "Vulkan"
 	root.size = Vector2i(WIDTH * 2, HEIGHT)
 	var mutated := _make_view("ui-select-options")
 	var fresh := _make_view("ui-select-options open")
@@ -17,7 +23,7 @@ func _initialize() -> void:
 	await process_frame
 	await process_frame
 	if mutated.set_element_attribute(&"options", &"class", "ui-select-options open") != OK:
-		_fail("D3D12 mutation was rejected.")
+		_fail("%s mutation was rejected." % backend_name)
 		return
 	for _frame in range(5):
 		await process_frame
@@ -25,7 +31,7 @@ func _initialize() -> void:
 
 	var viewport_image := root.get_texture().get_image()
 	if viewport_image == null or viewport_image.get_width() < WIDTH * 2 or viewport_image.get_height() < HEIGHT:
-		_fail("D3D12 mutation smoke could not read back the composed viewport (size=%s)." % [viewport_image.get_size() if viewport_image != null else Vector2i.ZERO])
+		_fail("%s mutation smoke could not read back the composed viewport (size=%s)." % [backend_name, viewport_image.get_size() if viewport_image != null else Vector2i.ZERO])
 		return
 	var changed := 0
 	for y in range(HEIGHT):
@@ -33,17 +39,17 @@ func _initialize() -> void:
 			if viewport_image.get_pixel(x, y) != viewport_image.get_pixel(x + WIDTH, y):
 				changed += 1
 	if changed != 0:
-		_fail("D3D12 class mutation lost or misplaced retained content; %d pixels differ from a fresh final render." % changed)
+		_fail("%s class mutation lost or misplaced retained content; %d pixels differ from a fresh final render." % [backend_name, changed])
 		return
 
-	print("HCSR Godot D3D12 retained mutation smoke passed.")
+	print("HCSR Godot %s retained mutation smoke passed." % backend_name)
 	quit()
 
 func _make_view(options_class: String) -> HTMLView:
 	var document := HTMLDocument.new()
 	document.html = "<!DOCTYPE html><html><head><style>%s</style></head><body>%s%s%s</body></html>" % [STYLE, BODY_PREFIX, OPTIONS % options_class, BODY_SUFFIX]
 	var view := HTMLView.new()
-	view.backend_preference = HTMLView.BACKEND_D3D12
+	view.backend_preference = backend_preference
 	view.size = Vector2(WIDTH, HEIGHT)
 	view.document = document
 	return view
