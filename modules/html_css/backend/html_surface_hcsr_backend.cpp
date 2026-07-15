@@ -1013,8 +1013,22 @@ bool HTMLSurfaceHCSRBackend::poll_pointer_event(HTMLPointerEvent &r_event) {
 
 Error HTMLSurfaceHCSRBackend::wheel(const Point2 &p_position, const Vector2 &p_delta) {
 	pointer_position = p_position;
+	const Error input_error = _set_input();
+	if (input_error != OK) {
+		return input_error;
+	}
+
+	uint8_t consumed = 0;
+	if (hcsr_renderer_dispatch_wheel(renderer, p_position.x, p_position.y, p_delta.x, p_delta.y, &consumed) != HCSR_STATUS_OK) {
+		return ERR_CANT_ACQUIRE_RESOURCE;
+	}
+	if (consumed != 0) {
+		return OK;
+	}
+
 	// HTMLView supplies a signed pixel delta. Positive values move the viewport
-	// toward increasing document coordinates.
+	// toward increasing document coordinates. Only fall back to document scrolling
+	// when no hovered scrollable ancestor could consume the delta.
 	scroll_offset.x = MAX(0, scroll_offset.x + Math::round(p_delta.x));
 	scroll_offset.y = MAX(0, scroll_offset.y + Math::round(p_delta.y));
 	return _set_input();
