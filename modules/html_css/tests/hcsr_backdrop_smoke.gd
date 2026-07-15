@@ -3,13 +3,14 @@ extends SceneTree
 func _initialize() -> void:
 	var use_d3d12 := OS.get_cmdline_user_args().has("--d3d12")
 	var use_vulkan := OS.get_cmdline_user_args().has("--vulkan")
+	var use_metal := OS.get_cmdline_user_args().has("--metal")
 	var document := HTMLDocument.new()
 	document.html = "<!DOCTYPE html><html><head><style>html, body { margin: 0; background: transparent; } .glass { position: absolute; left: 40px; top: 30px; width: 160px; height: 90px; border-radius: 12px; backdrop-filter: invert(1); }</style></head><body><div class=\"glass\"></div></body></html>"
 	document.resource_root = "res://"
 	document.background_color = Color(0, 0, 0, 0)
 
 	var target := HTMLRenderTarget.new()
-	target.backend_preference = 4 if use_d3d12 else (3 if use_vulkan else 1)
+	target.backend_preference = HTMLView.BACKEND_D3D12 if use_d3d12 else (HTMLView.BACKEND_VULKAN if use_vulkan else (HTMLView.BACKEND_METAL if use_metal else HTMLView.BACKEND_CPU))
 	target.size = Vector2i(320, 180)
 	target.backdrop_filter_enabled = true
 	target.document = document
@@ -28,7 +29,7 @@ func _initialize() -> void:
 		quit(1)
 		return
 
-	print("Static HCSR Godot %s backdrop metadata and resize smoke passed." % ("D3D12" if use_d3d12 else ("Vulkan" if use_vulkan else "CPU")))
+	print("Static HCSR Godot %s backdrop metadata and resize smoke passed." % ("D3D12" if use_d3d12 else ("Vulkan" if use_vulkan else ("Metal" if use_metal else "CPU"))))
 	target.free()
 	quit()
 

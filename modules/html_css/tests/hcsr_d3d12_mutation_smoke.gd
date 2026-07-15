@@ -14,6 +14,9 @@ func _initialize() -> void:
 	if OS.get_cmdline_user_args().has("--vulkan"):
 		backend_preference = HTMLView.BACKEND_VULKAN
 		backend_name = "Vulkan"
+	elif OS.get_cmdline_user_args().has("--metal"):
+		backend_preference = HTMLView.BACKEND_METAL
+		backend_name = "Metal"
 	root.size = Vector2i(WIDTH * 2, HEIGHT)
 	var mutated := _make_view("ui-select-options")
 	var fresh := _make_view("ui-select-options open")
