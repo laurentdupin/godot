@@ -680,6 +680,13 @@ void HTMLSurfaceHCSRBackend::_detach_gpu_texture_import() {
 }
 
 void HTMLSurfaceHCSRBackend::_destroy_renderer_on_render_thread() {
+	if (deferred_gpu_packet != nullptr) {
+		hcsr_renderer_release_gpu_frame_packet(deferred_gpu_packet);
+		deferred_gpu_packet = nullptr;
+	}
+	gpu_submission_deferred.clear();
+	gpu_submission_retry_pending.clear();
+	gpu_frame_pending.clear();
 	if (renderer != nullptr) {
 		hcsr_renderer_destroy(renderer);
 		renderer = nullptr;
@@ -703,6 +710,22 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 		hcsr_renderer_release_gpu_frame_packet(p_packet);
 		return;
 	}
+	uint8_t submission_ready = 0;
+	// Submission readiness is part of the immutable packet handoff: retain the
+	// packet unchanged until the borrowed host queue releases a frame slot.
+	if (hcsr_renderer_can_submit_gpu_frame(renderer, p_packet, &submission_ready) != HCSR_STATUS_OK) {
+		hcsr_renderer_release_gpu_frame_packet(p_packet);
+		_record_error("HCSR could not query Godot GPU submission readiness");
+		return;
+	}
+	if (submission_ready == 0) {
+		deferred_gpu_packet = p_packet;
+		gpu_submission_deferred.set();
+		gpu_render_succeeded = gpu_texture_rid.is_valid();
+		return;
+	}
+	deferred_gpu_packet = nullptr;
+	gpu_submission_deferred.clear();
 	// Metal imports hold an independent retain on the HCSR texture. Keep that import
 	// visible until submission returns a valid replacement so a failed resized
 	// frame cannot expose an empty external texture.
@@ -733,9 +756,50 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread_callback(uint64_
 	hcsr_gpu_frame_packet_t *packet = (hcsr_gpu_frame_packet_t *)p_packet_ptr;
 	if (backend != nullptr) {
 		backend->_render_gpu_frame_on_render_thread(packet);
-		backend->gpu_frame_pending.clear();
+		if (!backend->gpu_submission_deferred.is_set()) {
+			backend->gpu_frame_pending.clear();
+		}
 	} else if (packet != nullptr) {
 		hcsr_renderer_release_gpu_frame_packet(packet);
+	}
+}
+
+void HTMLSurfaceHCSRBackend::_retry_deferred_gpu_frame_on_render_thread() {
+	gpu_submission_retry_pending.clear();
+	if (deferred_gpu_packet == nullptr) {
+		gpu_submission_deferred.clear();
+		gpu_frame_pending.clear();
+		return;
+	}
+
+	hcsr_gpu_frame_packet_t *packet = deferred_gpu_packet;
+	deferred_gpu_packet = nullptr;
+	_render_gpu_frame_on_render_thread(packet);
+	if (!gpu_submission_deferred.is_set()) {
+		gpu_frame_pending.clear();
+	}
+}
+
+void HTMLSurfaceHCSRBackend::_retry_deferred_gpu_frame_on_render_thread_callback(uint64_t p_backend_ptr) {
+	HTMLSurfaceHCSRBackend *backend = (HTMLSurfaceHCSRBackend *)p_backend_ptr;
+	if (backend != nullptr) {
+		backend->_retry_deferred_gpu_frame_on_render_thread();
+	}
+}
+
+void HTMLSurfaceHCSRBackend::_schedule_deferred_gpu_submission() {
+	if (!gpu_submission_deferred.is_set() || gpu_submission_retry_pending.is_set()) {
+		return;
+	}
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	if (rendering_server == nullptr) {
+		return;
+	}
+	gpu_submission_retry_pending.set();
+	if (rendering_server->is_on_render_thread()) {
+		_retry_deferred_gpu_frame_on_render_thread();
+	} else {
+		rendering_server->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRBackend::_retry_deferred_gpu_frame_on_render_thread_callback).bind((uint64_t)this));
 	}
 }
 
@@ -753,6 +817,7 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 		return false;
 	}
 	if (gpu_frame_pending.is_set()) {
+		_schedule_deferred_gpu_submission();
 		// Keep presenting the previous completed texture. Preparing another retained
 		// delta before the render thread submits the outstanding packet would make
 		// the logical retained state run ahead of the GPU presenter. Remember that
@@ -961,6 +1026,7 @@ void HTMLSurfaceHCSRBackend::render_placeholder(const String &p_marker) {
 }
 
 bool HTMLSurfaceHCSRBackend::poll_pending_output(bool *r_waiting_for_completion) {
+	_schedule_deferred_gpu_submission();
 	const bool follow_up_requested = gpu_follow_up_frame_requested.is_set();
 	if (gpu_completed_presentation_available.is_set()) {
 		gpu_completed_presentation_available.clear();
@@ -985,6 +1051,8 @@ bool HTMLSurfaceHCSRBackend::poll_pending_output(bool *r_waiting_for_completion)
 	}
 	if (r_waiting_for_completion != nullptr) {
 		*r_waiting_for_completion = (follow_up_requested && gpu_frame_pending.is_set())
+				|| gpu_submission_deferred.is_set()
+				|| gpu_submission_retry_pending.is_set()
 				|| gpu_presentation_work_pending.is_set()
 				|| gpu_presentation_poll_pending.is_set();
 	}
@@ -993,6 +1061,8 @@ bool HTMLSurfaceHCSRBackend::poll_pending_output(bool *r_waiting_for_completion)
 
 bool HTMLSurfaceHCSRBackend::has_pending_output() const {
 	return gpu_follow_up_frame_requested.is_set()
+			|| gpu_submission_deferred.is_set()
+			|| gpu_submission_retry_pending.is_set()
 			|| gpu_presentation_work_pending.is_set()
 			|| gpu_presentation_poll_pending.is_set()
 			|| gpu_completed_presentation_available.is_set();

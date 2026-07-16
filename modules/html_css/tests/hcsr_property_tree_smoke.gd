@@ -16,7 +16,7 @@ func _initialize() -> void:
 
 	for _frame in range(8):
 		await process_frame
-	await RenderingServer.frame_post_draw
+		RenderingServer.force_draw(false)
 
 	var image := root.get_texture().get_image()
 	if image == null or image.get_width() < WIDTH * 2 or image.get_height() < HEIGHT:

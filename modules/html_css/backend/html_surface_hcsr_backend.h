@@ -32,7 +32,10 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool terminal_failure = false;
 	bool gpu_device_configured = false;
 	bool gpu_render_succeeded = false;
+	hcsr_gpu_frame_packet_t *deferred_gpu_packet = nullptr;
 	SafeFlag gpu_frame_pending;
+	SafeFlag gpu_submission_deferred;
+	SafeFlag gpu_submission_retry_pending;
 	SafeFlag gpu_follow_up_frame_requested;
 	SafeFlag gpu_presentation_poll_pending;
 	SafeFlag gpu_completed_presentation_available;
@@ -56,6 +59,8 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	void _configure_metal_device_on_render_thread();
 	bool _render_gpu_frame();
 	void _render_gpu_frame_on_render_thread(hcsr_gpu_frame_packet_t *p_packet);
+	void _retry_deferred_gpu_frame_on_render_thread();
+	void _schedule_deferred_gpu_submission();
 	void _poll_gpu_presentation_on_render_thread();
 	bool _accept_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output);
 	void _ensure_gpu_texture_imported_on_render_thread();
@@ -66,6 +71,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	static void _configure_vulkan_device_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _configure_metal_device_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _render_gpu_frame_on_render_thread_callback(uint64_t p_backend_ptr, uint64_t p_packet_ptr);
+	static void _retry_deferred_gpu_frame_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _poll_gpu_presentation_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _detach_gpu_texture_import_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _destroy_renderer_on_render_thread_callback(uint64_t p_backend_ptr);
