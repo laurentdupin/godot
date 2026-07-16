@@ -1186,6 +1186,9 @@ Error HTMLSurfaceHCSRBackend::wheel(const Point2 &p_position, const Vector2 &p_d
 		return ERR_CANT_ACQUIRE_RESOURCE;
 	}
 	if (consumed != 0) {
+		// Nested scrolling is committed through HCSR's scroll property tree: the
+		// content transform advances while its scrollport clip remains anchored.
+		// Mirroring the delta into the document offset would apply it twice.
 		return OK;
 	}
 
