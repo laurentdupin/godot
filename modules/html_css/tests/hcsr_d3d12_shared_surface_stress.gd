@@ -29,24 +29,33 @@ func _initialize() -> void:
 	_send_wheel(Vector2(960, 500), MOUSE_BUTTON_WHEEL_UP, 14.0)
 	for _frame in range(6):
 		await process_frame
+	await RenderingServer.frame_post_draw
+	var top_reference := root.get_texture().get_image()
+	if top_reference == null:
+		_fail("D3D12 shared-surface stress could not capture its previous committed frame.")
+		return
 
 	for iteration in range(13):
 		var button := MOUSE_BUTTON_WHEEL_DOWN if iteration % 2 == 0 else MOUSE_BUTTON_WHEEL_UP
 		_send_wheel(Vector2(960, 500), button, 14.0)
 		await process_frame
 	await RenderingServer.frame_post_draw
-	var stressed_frame := root.get_texture().get_image()
-	if stressed_frame == null or stressed_frame.get_size() != bottom_reference.get_size():
+	var immediate_frame := root.get_texture().get_image()
+	if immediate_frame == null or immediate_frame.get_size() != bottom_reference.get_size():
 		_fail("D3D12 shared-surface stress could not capture its stressed frame.")
 		return
+	var immediate_bottom_difference := _count_changed_pixels(immediate_frame, bottom_reference)
+	var immediate_top_difference := _count_changed_pixels(immediate_frame, top_reference)
+	if immediate_bottom_difference != 0 and immediate_top_difference != 0:
+		_fail("D3D12 shared presentation exposed a partial retained frame; it matches neither adjacent completed commit (%d bottom differences, %d top differences)." % [immediate_bottom_difference, immediate_top_difference])
+		return
 
-	var changed_pixels := 0
-	for y in range(HEIGHT):
-		for x in range(WIDTH):
-			if stressed_frame.get_pixel(x, y) != bottom_reference.get_pixel(x, y):
-				changed_pixels += 1
+	await process_frame
+	await RenderingServer.frame_post_draw
+	var completed_frame := root.get_texture().get_image()
+	var changed_pixels := _count_changed_pixels(completed_frame, bottom_reference) if completed_frame != null else -1
 	if changed_pixels != 0:
-		_fail("D3D12 shared presentation exposed a partial retained frame; %d pixels differ from the stable bottom frame." % changed_pixels)
+		_fail("D3D12 shared presentation did not publish the final completed commit within one follow-up frame; %d pixels differ." % changed_pixels)
 		return
 
 	print("HCSR Godot D3D12 shared-surface retained-scroll stress passed.")
@@ -74,6 +83,16 @@ func _send_wheel(position: Vector2, button: MouseButton, factor: float) -> void:
 	wheel.global_position = position
 	wheel.pressed = true
 	root.push_input(wheel, true)
+
+func _count_changed_pixels(left: Image, right: Image) -> int:
+	if left.get_size() != right.get_size():
+		return -1
+	var changed_pixels := 0
+	for y in range(HEIGHT):
+		for x in range(WIDTH):
+			if left.get_pixel(x, y) != right.get_pixel(x, y):
+				changed_pixels += 1
+	return changed_pixels
 
 func _fail(message: String) -> void:
 	push_error(message)

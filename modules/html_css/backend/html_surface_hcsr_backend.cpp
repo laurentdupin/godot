@@ -631,9 +631,15 @@ bool HTMLSurfaceHCSRBackend::_accept_gpu_frame_on_render_thread(const hcsr_gpu_f
 	return gpu_texture_rid.is_valid();
 }
 
+bool HTMLSurfaceHCSRBackend::_uses_async_gpu_presentation() const {
+	return render_backend == HCSR_RENDER_BACKEND_D3D12
+			|| render_backend == HCSR_RENDER_BACKEND_VULKAN
+			|| render_backend == HCSR_RENDER_BACKEND_METAL;
+}
+
 void HTMLSurfaceHCSRBackend::_poll_gpu_presentation_on_render_thread() {
 	gpu_presentation_poll_pending.clear();
-	if (renderer == nullptr || render_backend != HCSR_RENDER_BACKEND_D3D12) {
+	if (renderer == nullptr || !_uses_async_gpu_presentation()) {
 		gpu_presentation_work_pending.clear();
 		return;
 	}
@@ -747,7 +753,7 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 	}
 	_update_performance_profile();
 	gpu_render_succeeded = _accept_gpu_frame_on_render_thread(output);
-	if (render_backend == HCSR_RENDER_BACKEND_D3D12) {
+	if (_uses_async_gpu_presentation()) {
 		gpu_presentation_work_pending.set();
 	}
 }
@@ -1036,7 +1042,7 @@ bool HTMLSurfaceHCSRBackend::poll_pending_output(bool *r_waiting_for_completion)
 		}
 		return true;
 	}
-	if (render_backend == HCSR_RENDER_BACKEND_D3D12
+	if (_uses_async_gpu_presentation()
 			&& gpu_presentation_work_pending.is_set()
 			&& !gpu_frame_pending.is_set()
 			&& !gpu_presentation_poll_pending.is_set()) {

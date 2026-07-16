@@ -50,6 +50,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool _load_document_source(String &r_html, String &r_document_path, String &r_asset_root) const;
 	bool _load_document_package(PackedByteArray &r_package) const;
 	bool _render_frame();
+	bool _uses_async_gpu_presentation() const;
 	void _read_backdrop_filter_regions();
 	bool _configure_d3d12_device();
 	void _configure_d3d12_device_on_render_thread();
