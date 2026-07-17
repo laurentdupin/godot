@@ -51,6 +51,7 @@
 #include "scene/resources/3d/shape_3d.h"
 #include "scene/resources/3d/sphere_shape_3d.h"
 #include "scene/resources/physics_material.h"
+#include "servers/physics_3d/physics_server_3d.h"
 #endif // PHYSICS_3D_DISABLED
 
 #ifndef NAVIGATION_3D_DISABLED
@@ -2104,6 +2105,11 @@ GridMap::~GridMap() {
 
 #ifdef DEBUG_ENABLED
 	_debug_clear_octants();
+
+	if (debug_octant_line_mesh_rid.is_valid()) {
+		RS::get_singleton()->free_rid(debug_octant_line_mesh_rid);
+		debug_octant_line_mesh_rid = RID();
+	}
 
 #ifndef NAVIGATION_3D_DISABLED
 	NavigationServer3D::get_singleton()->disconnect("map_changed", callable_mp(this, &GridMap::_navigation_map_changed));
