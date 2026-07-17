@@ -542,7 +542,7 @@ void HTMLSurfaceHCSRBackend::_ensure_gpu_texture_imported_on_render_thread() {
 		return;
 	}
 	const uint64_t native_handle = (uint64_t)native_gpu_texture;
-	if (render_backend == HCSR_RENDER_BACKEND_D3D12) {
+	if (_uses_presentation_texture_import_cache()) {
 		const RID *cached_rid = gpu_texture_import_cache.getptr(native_handle);
 		if (cached_rid != nullptr && cached_rid->is_valid()) {
 			gpu_texture_rid = *cached_rid;
@@ -587,7 +587,7 @@ void HTMLSurfaceHCSRBackend::_ensure_gpu_texture_imported_on_render_thread() {
 	if (gpu_texture.is_null()) {
 		gpu_texture.instantiate();
 	}
-	if (render_backend == HCSR_RENDER_BACKEND_D3D12) {
+	if (_uses_presentation_texture_import_cache()) {
 		gpu_texture_import_cache.insert(native_handle, gpu_texture_rid);
 	}
 	gpu_texture->set_external_texture(gpu_texture_rid, native_gpu_size, true);
@@ -618,7 +618,7 @@ bool HTMLSurfaceHCSRBackend::_accept_gpu_frame_on_render_thread(const hcsr_gpu_f
 		return false;
 	}
 	if (native_gpu_texture != p_output.native_texture || native_gpu_generation != p_output.resource_generation || native_gpu_size != Size2i(p_output.width, p_output.height)) {
-		if (render_backend == HCSR_RENDER_BACKEND_D3D12 && native_gpu_size == Size2i(p_output.width, p_output.height)) {
+		if (_uses_presentation_texture_import_cache() && native_gpu_size == Size2i(p_output.width, p_output.height)) {
 			gpu_texture_rid = RID();
 		} else {
 			_detach_gpu_texture_import_on_render_thread();
@@ -635,6 +635,11 @@ bool HTMLSurfaceHCSRBackend::_uses_async_gpu_presentation() const {
 	return render_backend == HCSR_RENDER_BACKEND_D3D12
 			|| render_backend == HCSR_RENDER_BACKEND_VULKAN
 			|| render_backend == HCSR_RENDER_BACKEND_METAL;
+}
+
+bool HTMLSurfaceHCSRBackend::_uses_presentation_texture_import_cache() const {
+	return render_backend == HCSR_RENDER_BACKEND_D3D12
+			|| render_backend == HCSR_RENDER_BACKEND_VULKAN;
 }
 
 void HTMLSurfaceHCSRBackend::_poll_gpu_presentation_on_render_thread() {
