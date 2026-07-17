@@ -447,6 +447,7 @@ bool HTMLSurfaceHCSRBackend::_sync_document() {
 			return false;
 		}
 		document_dirty = false;
+		pending_document_commits.clear();
 		terminal_failure = false;
 		terminal_failure_reason = String();
 		return true;
@@ -469,6 +470,7 @@ bool HTMLSurfaceHCSRBackend::_sync_document() {
 		return false;
 	}
 	document_dirty = false;
+	pending_document_commits.clear();
 	terminal_failure = false;
 	terminal_failure_reason = String();
 	return true;
@@ -529,12 +531,39 @@ Error HTMLSurfaceHCSRBackend::_apply_dom_mutation(hcsr_dom_mutation_operation_ki
 	mutation.value_utf8 = normalized_value.is_empty() ? "" : value_utf8.ptr();
 	mutation.child_index = -1;
 
-	uint8_t changed = 0;
-	if (hcsr_renderer_apply_dom_mutations(renderer, &mutation, 1, &changed) != HCSR_STATUS_OK) {
-		_record_error("HCSR rejected a Godot DOM mutation");
+	uint64_t commit_id = 0;
+	if (hcsr_renderer_queue_dom_mutations(renderer, &mutation, 1, &commit_id) != HCSR_STATUS_OK || commit_id == 0) {
+		_record_error("HCSR could not queue a Godot DOM mutation");
 		return FAILED;
 	}
+	pending_document_commits.push_back(commit_id);
 	return OK;
+}
+
+void HTMLSurfaceHCSRBackend::_retire_document_commits() {
+	for (int commit_index = pending_document_commits.size() - 1; commit_index >= 0; commit_index--) {
+		hcsr_document_commit_status_t status = {};
+		status.struct_size = sizeof(status);
+		if (hcsr_renderer_get_document_commit_status(renderer, pending_document_commits[commit_index], &status) != HCSR_STATUS_OK
+				|| status.state == HCSR_DOCUMENT_COMMIT_PENDING) {
+			continue;
+		}
+
+		pending_document_commits.remove_at(commit_index);
+		if (status.state != HCSR_DOCUMENT_COMMIT_FAILED) {
+			continue;
+		}
+
+		String failure = "HCSR rejected an asynchronous Godot DOM mutation";
+		const char *last_error = hcsr_renderer_last_error(renderer);
+		if (last_error != nullptr && last_error[0] != '\0') {
+			failure += ": " + String::utf8(last_error);
+		}
+		if (failure != last_reported_error) {
+			last_reported_error = failure;
+			ERR_PRINT(failure);
+		}
+	}
 }
 
 void HTMLSurfaceHCSRBackend::_ensure_gpu_texture_imported_on_render_thread() {
@@ -845,6 +874,7 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 		_record_error("HCSR could not prepare the Godot GPU frame");
 		return false;
 	}
+	_retire_document_commits();
 	bool scroll_offset_changed = false;
 	if (!_clamp_scroll_offset_to_content(scroll_offset_changed)) {
 		hcsr_renderer_release_gpu_frame_packet(packet);
@@ -886,6 +916,7 @@ bool HTMLSurfaceHCSRBackend::_render_frame() {
 			_record_error("HCSR could not render the Godot frame");
 			return false;
 		}
+		_retire_document_commits();
 		_update_performance_profile();
 		bool scroll_offset_changed = false;
 		if (!_clamp_scroll_offset_to_content(scroll_offset_changed)) {

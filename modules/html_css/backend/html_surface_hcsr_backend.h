@@ -8,6 +8,7 @@
 
 #include "core/templates/hash_map.h"
 #include "core/templates/safe_refcount.h"
+#include "core/templates/vector.h"
 
 #include "hcsr_renderer.h"
 
@@ -40,6 +41,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	SafeFlag gpu_presentation_poll_pending;
 	SafeFlag gpu_completed_presentation_available;
 	SafeFlag gpu_presentation_work_pending;
+	Vector<uint64_t> pending_document_commits;
 	bool backdrop_filter_enabled = false;
 	String terminal_failure_reason;
 	String last_reported_error;
@@ -78,6 +80,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	static void _detach_gpu_texture_import_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _destroy_renderer_on_render_thread_callback(uint64_t p_backend_ptr);
 	void _record_error(const String &p_context);
+	void _retire_document_commits();
 	void _update_performance_profile();
 	Error _set_input();
 	bool _clamp_scroll_offset_to_content(bool &r_changed);
