@@ -870,16 +870,33 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 	}
 	gpu_follow_up_frame_requested.clear();
 	hcsr_gpu_frame_packet_t *packet = nullptr;
-	if (hcsr_renderer_prepare_gpu_frame(renderer, timeline_time_seconds, &packet) != HCSR_STATUS_OK || packet == nullptr) {
-		_record_error("HCSR could not prepare the Godot GPU frame");
-		return false;
-	}
-	_retire_document_commits();
-	bool scroll_offset_changed = false;
-	if (!_clamp_scroll_offset_to_content(scroll_offset_changed)) {
+	for (int attempt = 0; attempt < 2; attempt++) {
+		packet = nullptr;
+		if (hcsr_renderer_prepare_gpu_frame(renderer, timeline_time_seconds, &packet) != HCSR_STATUS_OK || packet == nullptr) {
+			_record_error("HCSR could not prepare the Godot GPU frame");
+			return false;
+		}
+		_retire_document_commits();
+		bool scroll_offset_changed = false;
+		if (!_clamp_scroll_offset_to_content(scroll_offset_changed)) {
+			hcsr_renderer_release_gpu_frame_packet(packet);
+			return false;
+		}
+		if (!scroll_offset_changed) {
+			break;
+		}
+
+		// A prepared packet is an immutable snapshot of its render inputs. Never
+		// submit a packet after clamping changed the host scroll state: doing so
+		// presents one frame translated by an offset the document cannot reach.
 		hcsr_renderer_release_gpu_frame_packet(packet);
-		return false;
+		packet = nullptr;
+		if (attempt > 0) {
+			_record_error("HCSR document scroll state did not stabilize while preparing a GPU frame");
+			return false;
+		}
 	}
+	ERR_FAIL_NULL_V(packet, false);
 	if (rendering_server->is_on_render_thread()) {
 		_render_gpu_frame_on_render_thread(packet);
 		return gpu_render_succeeded;
@@ -1239,7 +1256,8 @@ Error HTMLSurfaceHCSRBackend::wheel(const Point2 &p_position, const Vector2 &p_d
 	// when no hovered scrollable ancestor could consume the delta.
 	scroll_offset.x = MAX(0, scroll_offset.x + Math::round(p_delta.x));
 	scroll_offset.y = MAX(0, scroll_offset.y + Math::round(p_delta.y));
-	return _set_input();
+	bool scroll_offset_changed = false;
+	return _clamp_scroll_offset_to_content(scroll_offset_changed) ? OK : FAILED;
 }
 
 bool HTMLSurfaceHCSRBackend::hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const {
