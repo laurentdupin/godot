@@ -1145,9 +1145,9 @@ Error HTMLSurfaceHCSRBackend::mouse_move(const Point2 &p_position, int p_modifie
 		return input_error;
 	}
 	const uint32_t buttons = primary_button_pressed ? 1U : 0U;
-	uint8_t visual_state_changed = 0;
-	const hcsr_status_t status = hcsr_renderer_dispatch_pointer_move_ex(renderer, p_position.x, p_position.y, buttons, 1, &visual_state_changed);
-	r_visual_state_changed = visual_state_changed != 0;
+	uint32_t damage_flags = HCSR_POINTER_DAMAGE_NONE;
+	const hcsr_status_t status = hcsr_renderer_dispatch_pointer_move_ex2(renderer, p_position.x, p_position.y, buttons, 1, &damage_flags);
+	r_visual_state_changed = (damage_flags & HCSR_POINTER_DAMAGE_VISUAL) != 0;
 	return status == HCSR_STATUS_OK ? OK : ERR_CANT_ACQUIRE_RESOURCE;
 }
 
