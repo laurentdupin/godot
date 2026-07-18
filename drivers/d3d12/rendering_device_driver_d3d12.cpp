@@ -3496,6 +3496,8 @@ void RenderingDeviceDriverD3D12::shader_destroy_modules(ShaderID p_shader) {
 /*********************/
 
 RDD::UniformSetID RenderingDeviceDriverD3D12::uniform_set_create(VectorView<BoundUniform> p_uniforms, ShaderID p_shader, uint32_t p_set_index, int p_linear_pool_index) {
+	MutexLock descriptor_heap_lock(shader_visible_descriptor_heap_mutex);
+
 	// Pre-bookkeep.
 	UniformSetInfo *uniform_set_info = VersatileResource::allocate<UniformSetInfo>(resources_allocator);
 
@@ -3743,6 +3745,8 @@ RDD::UniformSetID RenderingDeviceDriverD3D12::uniform_set_create(VectorView<Boun
 }
 
 void RenderingDeviceDriverD3D12::uniform_set_free(UniformSetID p_uniform_set) {
+	MutexLock descriptor_heap_lock(shader_visible_descriptor_heap_mutex);
+
 	UniformSetInfo *uniform_set_info = (UniformSetInfo *)p_uniform_set.id;
 
 	resource_descriptor_heap.free(uniform_set_info->resource_descriptor_heap_alloc);
@@ -3927,6 +3931,8 @@ void RenderingDeviceDriverD3D12::_command_check_descriptor_sets(CommandBufferID 
 /******************/
 
 RenderingDeviceDriverD3D12::DescriptorHeap::Allocation RenderingDeviceDriverD3D12::_command_allocate_per_frame_descriptor() {
+	MutexLock descriptor_heap_lock(shader_visible_descriptor_heap_mutex);
+
 	FrameInfo &f = frames[frame_idx];
 	if (f.descriptor_allocation_count < f.descriptor_allocations.size()) {
 		uint32_t allocation_index = f.descriptor_allocation_count;
@@ -5806,6 +5812,8 @@ void RenderingDeviceDriverD3D12::begin_segment(uint32_t p_frame_index, uint32_t 
 }
 
 void RenderingDeviceDriverD3D12::end_segment() {
+	MutexLock descriptor_heap_lock(shader_visible_descriptor_heap_mutex);
+
 	FrameInfo &f = frames[frame_idx];
 
 	// Free leftover descriptors.

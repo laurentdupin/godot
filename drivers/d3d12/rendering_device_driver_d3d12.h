@@ -169,6 +169,7 @@ class RenderingDeviceDriverD3D12 : public RenderingDeviceDriver {
 
 	DescriptorHeap resource_descriptor_heap;
 	DescriptorHeap sampler_descriptor_heap;
+	BinaryMutex shader_visible_descriptor_heap_mutex;
 	CPUDescriptorHeapPool resource_descriptor_heap_pool;
 	CPUDescriptorHeapPool rtv_descriptor_heap_pool;
 	CPUDescriptorHeapPool dsv_descriptor_heap_pool;
