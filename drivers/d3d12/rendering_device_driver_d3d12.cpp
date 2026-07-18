@@ -938,6 +938,9 @@ RDD::BufferID RenderingDeviceDriverD3D12::buffer_create(uint64_t p_size, BitFiel
 				IID_PPV_ARGS(buffer.GetAddressOf()));
 	}
 
+	if (FAILED(res)) {
+		_report_device_removed(res, "buffer creation");
+	}
 	ERR_FAIL_COND_V_MSG(!SUCCEEDED(res), BufferID(), "Can't create buffer of size: " + itos(p_size) + ", error " + vformat("0x%08ux", (uint64_t)res) + ".");
 
 	// Bookkeep.
@@ -1399,6 +1402,9 @@ RDD::TextureID RenderingDeviceDriverD3D12::texture_create(const TextureFormat &p
 					allocation.GetAddressOf(),
 					IID_PPV_ARGS(main_texture.GetAddressOf()));
 			initial_state = D3D12_RESOURCE_STATE_COPY_DEST;
+		}
+		if (FAILED(res)) {
+			_report_device_removed(res, "texture creation");
 		}
 		ERR_FAIL_COND_V_MSG(!SUCCEEDED(res), TextureID(), "CreateResource failed with error " + vformat("0x%08ux", (uint64_t)res) + ".");
 		texture = main_texture.Get();
@@ -6122,8 +6128,81 @@ bool RenderingDeviceDriverD3D12::is_in_developer_mode() {
 	return (value != 0);
 }
 
+void RenderingDeviceDriverD3D12::_enable_device_removed_diagnostics() {
+	PFN_D3D12_GET_DEBUG_INTERFACE d3d_D3D12GetDebugInterface = (PFN_D3D12_GET_DEBUG_INTERFACE)(void *)GetProcAddress(context_driver->lib_d3d12, "D3D12GetDebugInterface");
+	if (d3d_D3D12GetDebugInterface == nullptr) {
+		return;
+	}
+
+	ComPtr<ID3D12DeviceRemovedExtendedDataSettings1> dred_settings;
+	if (SUCCEEDED(d3d_D3D12GetDebugInterface(IID_PPV_ARGS(dred_settings.GetAddressOf())))) {
+		dred_settings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+		dred_settings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+		dred_settings->SetBreadcrumbContextEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+	}
+}
+
+static String _dred_name(const char *p_name_a, const wchar_t *p_name_w) {
+	if (p_name_a != nullptr && p_name_a[0] != '\0') {
+		return String::utf8(p_name_a);
+	}
+	if (p_name_w != nullptr && p_name_w[0] != L'\0') {
+		return String::utf16((const char16_t *)p_name_w);
+	}
+	return "<unnamed>";
+}
+
+void RenderingDeviceDriverD3D12::_report_device_removed(HRESULT p_observed_error, const char *p_operation) {
+	if (device_removal_reported || device == nullptr) {
+		return;
+	}
+
+	const HRESULT removal_reason = device->GetDeviceRemovedReason();
+	if (SUCCEEDED(removal_reason) && p_observed_error != DXGI_ERROR_DEVICE_REMOVED && p_observed_error != DXGI_ERROR_DEVICE_RESET && p_observed_error != DXGI_ERROR_DEVICE_HUNG) {
+		return;
+	}
+	device_removal_reported = true;
+	ERR_PRINT(vformat("D3D12 device removal detected during %s: observed=0x%08ux, reason=0x%08ux.", p_operation, (uint64_t)(uint32_t)p_observed_error, (uint64_t)(uint32_t)removal_reason));
+
+	ComPtr<ID3D12DeviceRemovedExtendedData1> dred;
+	if (FAILED(device.As(&dred))) {
+		ERR_PRINT("D3D12 DRED 1.1 is unavailable for this device.");
+		return;
+	}
+
+	D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1 breadcrumb_output = {};
+	if (SUCCEEDED(dred->GetAutoBreadcrumbsOutput1(&breadcrumb_output))) {
+		const D3D12_AUTO_BREADCRUMB_NODE1 *node = breadcrumb_output.pHeadAutoBreadcrumbNode;
+		for (uint32_t node_index = 0; node != nullptr && node_index < 64; node_index++, node = node->pNext) {
+			const uint32_t completed = node->pLastBreadcrumbValue != nullptr ? *node->pLastBreadcrumbValue : 0;
+			const uint32_t last_operation = completed > 0 && node->BreadcrumbCount > 0 && node->pCommandHistory != nullptr ? (uint32_t)node->pCommandHistory[MIN(completed - 1, node->BreadcrumbCount - 1)] : 0;
+			ERR_PRINT(vformat("D3D12 DRED breadcrumb[%u]: queue=%s, list=%s, completed=%u/%u, last_op=%u.", node_index, _dred_name(node->pCommandQueueDebugNameA, node->pCommandQueueDebugNameW), _dred_name(node->pCommandListDebugNameA, node->pCommandListDebugNameW), completed, node->BreadcrumbCount, last_operation));
+			for (uint32_t context_index = 0; context_index < node->BreadcrumbContextsCount && context_index < 16; context_index++) {
+				const D3D12_DRED_BREADCRUMB_CONTEXT &context = node->pBreadcrumbContexts[context_index];
+				if (context.BreadcrumbIndex + 8 >= completed && context.BreadcrumbIndex <= completed + 1) {
+					ERR_PRINT(vformat("D3D12 DRED context: breadcrumb=%u, label=%s.", context.BreadcrumbIndex, _dred_name(nullptr, context.pContextString)));
+				}
+			}
+		}
+	}
+
+	D3D12_DRED_PAGE_FAULT_OUTPUT1 page_fault_output = {};
+	if (SUCCEEDED(dred->GetPageFaultAllocationOutput1(&page_fault_output))) {
+		ERR_PRINT(vformat("D3D12 DRED page fault VA: 0x%016llx.", page_fault_output.PageFaultVA));
+		const D3D12_DRED_ALLOCATION_NODE1 *allocation = page_fault_output.pHeadExistingAllocationNode;
+		for (uint32_t allocation_index = 0; allocation != nullptr && allocation_index < 32; allocation_index++, allocation = allocation->pNext) {
+			ERR_PRINT(vformat("D3D12 DRED live allocation[%u]: type=%u, name=%s.", allocation_index, (uint32_t)allocation->AllocationType, _dred_name(allocation->ObjectNameA, allocation->ObjectNameW)));
+		}
+		allocation = page_fault_output.pHeadRecentFreedAllocationNode;
+		for (uint32_t allocation_index = 0; allocation != nullptr && allocation_index < 32; allocation_index++, allocation = allocation->pNext) {
+			ERR_PRINT(vformat("D3D12 DRED recently freed allocation[%u]: type=%u, name=%s.", allocation_index, (uint32_t)allocation->AllocationType, _dred_name(allocation->ObjectNameA, allocation->ObjectNameW)));
+		}
+	}
+}
+
 Error RenderingDeviceDriverD3D12::_initialize_device() {
 	HRESULT res;
+	_enable_device_removed_diagnostics();
 
 	if (is_in_developer_mode()) {
 		typedef HRESULT(WINAPI * PFN_D3D12_ENABLE_EXPERIMENTAL_FEATURES)(_In_ UINT, _In_count_(NumFeatures) const IID *, _In_opt_count_(NumFeatures) void *, _In_opt_count_(NumFeatures) UINT *);

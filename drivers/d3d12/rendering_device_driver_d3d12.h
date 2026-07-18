@@ -199,6 +199,10 @@ private:
 	/****************/
 
 	Microsoft::WRL::ComPtr<D3D12MA::Allocator> allocator;
+	bool device_removal_reported = false;
+
+	void _enable_device_removed_diagnostics();
+	void _report_device_removed(HRESULT p_observed_error, const char *p_operation);
 
 	/******************/
 	/**** RESOURCE ****/
