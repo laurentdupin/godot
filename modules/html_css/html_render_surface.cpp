@@ -429,6 +429,21 @@ Error HTMLRenderSurface::notify_pointer_leave(const Point2 &p_position, bool p_c
 	return backend->notify_pointer_leave(p_position, p_cancel_pressed_interaction, p_pointer_id);
 }
 
+Error HTMLRenderSurface::begin_scrollbar_interaction(const Point2 &p_position, double p_event_time_seconds, bool &r_consumed) {
+	_ensure_backend();
+	return backend->begin_scrollbar_interaction(p_position, p_event_time_seconds, r_consumed);
+}
+
+Error HTMLRenderSurface::update_scrollbar_interaction(const Point2 &p_position, bool &r_consumed) {
+	_ensure_backend();
+	return backend->update_scrollbar_interaction(p_position, r_consumed);
+}
+
+Error HTMLRenderSurface::end_scrollbar_interaction(bool &r_consumed) {
+	_ensure_backend();
+	return backend->end_scrollbar_interaction(r_consumed);
+}
+
 bool HTMLRenderSurface::poll_pointer_event(HTMLPointerEvent &r_event) {
 	_ensure_backend();
 	return backend->poll_pointer_event(r_event);

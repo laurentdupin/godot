@@ -98,6 +98,9 @@ public:
 	virtual Error mouse_up(const Point2 &, HTMLSurfaceMouseButton, int, int) { return ERR_UNAVAILABLE; }
 	virtual Error pointer_cancel(const Point2 &, int) { return ERR_UNAVAILABLE; }
 	virtual Error notify_pointer_leave(const Point2 &, bool, int) { return ERR_UNAVAILABLE; }
+	virtual Error begin_scrollbar_interaction(const Point2 &, double, bool &r_consumed) { r_consumed = false; return OK; }
+	virtual Error update_scrollbar_interaction(const Point2 &, bool &r_consumed) { r_consumed = false; return OK; }
+	virtual Error end_scrollbar_interaction(bool &r_consumed) { r_consumed = false; return OK; }
 	virtual bool poll_pointer_event(HTMLPointerEvent &) { return false; }
 	virtual Error wheel(const Point2 &, const Vector2 &) { return ERR_UNAVAILABLE; }
 	virtual Error key_down(HTMLSurfaceInputKey, int) { return ERR_UNAVAILABLE; }

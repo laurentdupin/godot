@@ -98,6 +98,9 @@ public:
 	Error mouse_up(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count);
 	Error pointer_cancel(const Point2 &p_position, int p_pointer_id = 1);
 	Error notify_pointer_leave(const Point2 &p_position, bool p_cancel_pressed_interaction = true, int p_pointer_id = 1);
+	Error begin_scrollbar_interaction(const Point2 &p_position, double p_event_time_seconds, bool &r_consumed);
+	Error update_scrollbar_interaction(const Point2 &p_position, bool &r_consumed);
+	Error end_scrollbar_interaction(bool &r_consumed);
 	bool poll_pointer_event(HTMLPointerEvent &r_event);
 	Error wheel(const Point2 &p_position, const Vector2 &p_delta);
 	Error key_down(HTMLSurfaceInputKey p_key, int p_modifiers);

@@ -1057,6 +1057,13 @@ bool HTMLView::_drain_surface_pointer_events() {
 }
 
 void HTMLView::_cancel_pointer_interaction(const StringName &p_phase) {
+	if (scrollbar_interaction_active) {
+		bool consumed = false;
+		surface->end_scrollbar_interaction(consumed);
+		scrollbar_interaction_active = false;
+		_queue_frame_render();
+	}
+
 	const Error native_cancel_error = p_phase == SNAME("leave")
 			? surface->notify_pointer_leave(pointer_last_html_position, true, 1)
 			: surface->pointer_cancel(pointer_last_html_position, 1);
@@ -1519,6 +1526,14 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 	if (mm.is_valid()) {
 		const Vector2 html_position = _local_to_html_position(mm->get_position());
 		pointer_last_html_position = html_position;
+		if (scrollbar_interaction_active) {
+			bool consumed = false;
+			if (surface->update_scrollbar_interaction(html_position, consumed) == OK && consumed) {
+				_queue_frame_render();
+			}
+			accept_event();
+			return;
+		}
 		if (surface->mouse_move(html_position, _modifiers_from_event(mm)) == OK) {
 			_drain_surface_pointer_events();
 			_queue_frame_render();
@@ -1576,6 +1591,19 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 		}
 
 		if (mb->is_pressed()) {
+			if (button_index == MouseButton::LEFT) {
+				bool scrollbar_consumed = false;
+				const double event_time_seconds = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() / 1000000.0 : 0.0;
+				if (surface->begin_scrollbar_interaction(html_position, event_time_seconds, scrollbar_consumed) == OK && scrollbar_consumed) {
+					scrollbar_interaction_active = true;
+					pointer_press_active = false;
+					pointer_press_button = MouseButton::NONE;
+					pointer_press_hit = HTMLElementHit();
+					_queue_frame_render();
+					accept_event();
+					return;
+				}
+			}
 			const uint64_t trace_sequence = ++input_trace_sequence;
 			const uint64_t input_start_usec = html_view_input_trace_enabled() && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 			pointer_press_active = false;
@@ -1599,6 +1627,15 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 			_queue_frame_render();
 			pending_input_trace_sequence = trace_sequence;
 			html_view_input_trace(vformat("seq=%d queued_frame after=mouse_down frame_render_pending=%s", (int64_t)trace_sequence, frame_render_pending ? "true" : "false"));
+			accept_event();
+			return;
+		}
+
+		if (button_index == MouseButton::LEFT && scrollbar_interaction_active) {
+			bool consumed = false;
+			surface->end_scrollbar_interaction(consumed);
+			scrollbar_interaction_active = false;
+			_queue_frame_render();
 			accept_event();
 			return;
 		}

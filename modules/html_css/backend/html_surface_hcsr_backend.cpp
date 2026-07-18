@@ -1197,6 +1197,44 @@ Error HTMLSurfaceHCSRBackend::notify_pointer_leave(const Point2 &p_position, boo
 	return hcsr_renderer_notify_pointer_leave(renderer, p_position.x, p_position.y, p_cancel_pressed_interaction ? 1 : 0, p_pointer_id) == HCSR_STATUS_OK ? OK : ERR_CANT_ACQUIRE_RESOURCE;
 }
 
+Error HTMLSurfaceHCSRBackend::begin_scrollbar_interaction(const Point2 &p_position, double p_event_time_seconds, bool &r_consumed) {
+	pointer_position = p_position;
+	const Error input_error = _set_input();
+	if (input_error != OK) {
+		r_consumed = false;
+		return input_error;
+	}
+
+	uint8_t consumed = 0;
+	if (hcsr_renderer_begin_scrollbar_interaction(renderer, p_position.x, p_position.y, p_event_time_seconds, &consumed) != HCSR_STATUS_OK) {
+		r_consumed = false;
+		return ERR_CANT_ACQUIRE_RESOURCE;
+	}
+	r_consumed = consumed != 0;
+	return OK;
+}
+
+Error HTMLSurfaceHCSRBackend::update_scrollbar_interaction(const Point2 &p_position, bool &r_consumed) {
+	pointer_position = p_position;
+	uint8_t consumed = 0;
+	if (hcsr_renderer_update_scrollbar_interaction(renderer, p_position.x, p_position.y, &consumed) != HCSR_STATUS_OK) {
+		r_consumed = false;
+		return ERR_CANT_ACQUIRE_RESOURCE;
+	}
+	r_consumed = consumed != 0;
+	return OK;
+}
+
+Error HTMLSurfaceHCSRBackend::end_scrollbar_interaction(bool &r_consumed) {
+	uint8_t consumed = 0;
+	if (hcsr_renderer_end_scrollbar_interaction(renderer, &consumed) != HCSR_STATUS_OK) {
+		r_consumed = false;
+		return ERR_CANT_ACQUIRE_RESOURCE;
+	}
+	r_consumed = consumed != 0;
+	return OK;
+}
+
 bool HTMLSurfaceHCSRBackend::poll_pointer_event(HTMLPointerEvent &r_event) {
 	if (renderer == nullptr || hcsr_renderer_pointer_event_count(renderer) == 0) {
 		return false;

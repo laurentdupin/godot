@@ -79,6 +79,7 @@ private:
 	StringName text_backspace_action = "ui_text_backspace";
 	StringName text_delete_action = "ui_text_delete";
 	bool pointer_press_active = false;
+	bool scrollbar_interaction_active = false;
 	MouseButton pointer_press_button = MouseButton::NONE;
 	HTMLElementHit pointer_press_hit;
 	Vector2 pointer_last_html_position;
