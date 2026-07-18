@@ -1136,15 +1136,19 @@ String HTMLSurfaceHCSRBackend::get_terminal_render_failure_reason() const {
 	return terminal_failure_reason;
 }
 
-Error HTMLSurfaceHCSRBackend::mouse_move(const Point2 &p_position, int p_modifiers) {
+Error HTMLSurfaceHCSRBackend::mouse_move(const Point2 &p_position, int p_modifiers, bool &r_visual_state_changed) {
 	(void)p_modifiers;
+	r_visual_state_changed = false;
 	pointer_position = p_position;
 	const Error input_error = _set_input();
 	if (input_error != OK) {
 		return input_error;
 	}
 	const uint32_t buttons = primary_button_pressed ? 1U : 0U;
-	return hcsr_renderer_dispatch_pointer_move(renderer, p_position.x, p_position.y, buttons, 1) == HCSR_STATUS_OK ? OK : ERR_CANT_ACQUIRE_RESOURCE;
+	uint8_t visual_state_changed = 0;
+	const hcsr_status_t status = hcsr_renderer_dispatch_pointer_move_ex(renderer, p_position.x, p_position.y, buttons, 1, &visual_state_changed);
+	r_visual_state_changed = visual_state_changed != 0;
+	return status == HCSR_STATUS_OK ? OK : ERR_CANT_ACQUIRE_RESOURCE;
 }
 
 Error HTMLSurfaceHCSRBackend::mouse_down(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) {

@@ -833,7 +833,8 @@ void HTMLSurfaceExternalCApiBackend::get_frame_metadata(HTMLFrameMetadata &r_met
 	r_metadata = frame_metadata;
 }
 
-Error HTMLSurfaceExternalCApiBackend::mouse_move(const Point2 &p_position, int p_modifiers) {
+Error HTMLSurfaceExternalCApiBackend::mouse_move(const Point2 &p_position, int p_modifiers, bool &r_visual_state_changed) {
+	r_visual_state_changed = true;
 	if (!_prepare_for_input()) {
 		return ERR_UNAVAILABLE;
 	}

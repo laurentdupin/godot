@@ -1534,9 +1534,12 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 			accept_event();
 			return;
 		}
-		if (surface->mouse_move(html_position, _modifiers_from_event(mm)) == OK) {
+		bool visual_state_changed = true;
+		if (surface->mouse_move(html_position, _modifiers_from_event(mm), visual_state_changed) == OK) {
 			_drain_surface_pointer_events();
-			_queue_frame_render();
+			if (visual_state_changed) {
+				_queue_frame_render();
+			}
 		}
 		accept_event();
 		return;

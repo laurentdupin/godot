@@ -83,7 +83,7 @@ public:
 	virtual Error update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame) override;
 	virtual void render_placeholder(const String &p_marker) override;
 	virtual void get_frame_metadata(HTMLFrameMetadata &r_metadata) const override;
-	virtual Error mouse_move(const Point2 &p_position, int p_modifiers) override;
+	virtual Error mouse_move(const Point2 &p_position, int p_modifiers, bool &r_visual_state_changed) override;
 	virtual Error mouse_down(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) override;
 	virtual Error mouse_up(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) override;
 	virtual Error wheel(const Point2 &p_position, const Vector2 &p_delta) override;

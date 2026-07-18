@@ -93,7 +93,7 @@ public:
 	const Vector<HTMLBackdropFilterRegion> &get_backdrop_filter_regions() const;
 	const HTMLElementHit *find_hit_at(const Point2i &p_position) const;
 	bool hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const;
-	Error mouse_move(const Point2 &p_position, int p_modifiers);
+	Error mouse_move(const Point2 &p_position, int p_modifiers, bool &r_visual_state_changed);
 	Error mouse_down(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count);
 	Error mouse_up(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count);
 	Error pointer_cancel(const Point2 &p_position, int p_pointer_id = 1);

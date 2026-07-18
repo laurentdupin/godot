@@ -99,7 +99,7 @@ public:
 	virtual bool has_pending_output() const override;
 	virtual bool has_terminal_render_failure() const override;
 	virtual String get_terminal_render_failure_reason() const override;
-	virtual Error mouse_move(const Point2 &p_position, int p_modifiers) override;
+	virtual Error mouse_move(const Point2 &p_position, int p_modifiers, bool &r_visual_state_changed) override;
 	virtual Error mouse_down(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) override;
 	virtual Error mouse_up(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) override;
 	virtual Error pointer_cancel(const Point2 &p_position, int p_pointer_id) override;

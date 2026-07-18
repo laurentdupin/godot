@@ -93,7 +93,7 @@ public:
 	virtual Error submit_cpu_frame(const HTMLCPUFrame &p_frame) = 0;
 	virtual void get_frame_metadata(HTMLFrameMetadata &r_metadata) const = 0;
 	virtual void get_gpu_backdrop_frame(HTMLGPUBackdropFrame &r_frame) const { r_frame.clear(); }
-	virtual Error mouse_move(const Point2 &, int) { return ERR_UNAVAILABLE; }
+	virtual Error mouse_move(const Point2 &, int, bool &r_visual_state_changed) { r_visual_state_changed = true; return ERR_UNAVAILABLE; }
 	virtual Error mouse_down(const Point2 &, HTMLSurfaceMouseButton, int, int) { return ERR_UNAVAILABLE; }
 	virtual Error mouse_up(const Point2 &, HTMLSurfaceMouseButton, int, int) { return ERR_UNAVAILABLE; }
 	virtual Error pointer_cancel(const Point2 &, int) { return ERR_UNAVAILABLE; }

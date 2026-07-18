@@ -404,9 +404,9 @@ bool HTMLRenderSurface::hit_test(const Point2 &p_position, HTMLElementHit &r_hit
 	return true;
 }
 
-Error HTMLRenderSurface::mouse_move(const Point2 &p_position, int p_modifiers) {
+Error HTMLRenderSurface::mouse_move(const Point2 &p_position, int p_modifiers, bool &r_visual_state_changed) {
 	_ensure_backend();
-	return backend->mouse_move(p_position, p_modifiers);
+	return backend->mouse_move(p_position, p_modifiers, r_visual_state_changed);
 }
 
 Error HTMLRenderSurface::mouse_down(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) {
