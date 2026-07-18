@@ -1770,6 +1770,9 @@ RID RenderingDevice::texture_create_shared(const TextureView &p_view, RID p_with
 	Texture texture = *src_texture;
 	texture.slice_trackers = nullptr;
 	texture.shared_fallback = nullptr;
+	// Shared views are independently freeable dependants of the imported root;
+	// only the pool's root slot RID carries the pool-ownership guard.
+	texture.external_pool_owner = RID();
 
 	RDD::TextureView tv;
 	bool create_shared = true;
@@ -1870,7 +1873,7 @@ RID RenderingDevice::texture_create_from_extension(TextureType p_type, DataForma
 		texture.barrier_aspect_flags.set_flag(RDD::TEXTURE_ASPECT_COLOR_BIT);
 	}
 
-	texture.driver_id = driver->texture_create_from_extension(p_image, p_type, p_format, p_layers, (texture.usage_flags & (TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | TEXTURE_USAGE_DEPTH_RESOLVE_ATTACHMENT_BIT)), p_mipmaps);
+	texture.driver_id = driver->texture_create_from_extension(p_image, texture.texture_format());
 	ERR_FAIL_COND_V(!texture.driver_id, RID());
 
 	_texture_make_mutable(&texture, RID());
@@ -2153,6 +2156,7 @@ RID RenderingDevice::texture_create_shared_from_slice(const TextureView &p_view,
 	Texture texture = *src_texture;
 	texture.slice_trackers = nullptr;
 	texture.shared_fallback = nullptr;
+	texture.external_pool_owner = RID();
 
 	get_image_format_required_size(texture.format, texture.width, texture.height, texture.depth, p_mipmap + 1, &texture.width, &texture.height);
 	texture.mipmaps = p_mipmaps;

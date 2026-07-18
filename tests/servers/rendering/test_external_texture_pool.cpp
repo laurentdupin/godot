@@ -42,6 +42,7 @@ TEST_CASE("[RenderingDevice][D3D12] External producer texture pool uses nonblock
 	RID pool = rd->external_texture_pool_create();
 	REQUIRE(pool.is_valid());
 	Microsoft::WRL::ComPtr<ID3D12Resource> resources[3];
+	ID3D12Resource *resource_ptrs[3] = {};
 	Microsoft::WRL::ComPtr<ID3D12Fence> producer_fences[3];
 	Microsoft::WRL::ComPtr<ID3D12Fence> release_fences[3];
 	HANDLE producer_handles[3] = {};
@@ -78,6 +79,8 @@ TEST_CASE("[RenderingDevice][D3D12] External producer texture pool uses nonblock
 				1,
 				RenderingDevice::EXTERNAL_TEXTURE_STATE_GENERAL);
 		REQUIRE(added_slot == slot);
+		resource_ptrs[slot] = resources[slot].Get();
+		resources[slot].Reset(); // The imported root must retain its own COM reference.
 		Dictionary status = rd->external_texture_pool_get_slot_status(pool, slot);
 		HANDLE release_handle = reinterpret_cast<HANDLE>(uint64_t(status["release_timeline"]));
 		REQUIRE(release_handle != nullptr);
@@ -115,7 +118,7 @@ TEST_CASE("[RenderingDevice][D3D12] External producer texture pool uses nonblock
 	producer_upload->Unmap(0, nullptr);
 	D3D12_RESOURCE_BARRIER to_copy = {};
 	to_copy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-	to_copy.Transition.pResource = resources[0].Get();
+	to_copy.Transition.pResource = resource_ptrs[0];
 	to_copy.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 	to_copy.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
 	to_copy.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
@@ -129,7 +132,7 @@ TEST_CASE("[RenderingDevice][D3D12] External producer texture pool uses nonblock
 	source.PlacedFootprint.Footprint.Depth = 1;
 	source.PlacedFootprint.Footprint.RowPitch = 64 * 4;
 	D3D12_TEXTURE_COPY_LOCATION destination = {};
-	destination.pResource = resources[0].Get();
+	destination.pResource = resource_ptrs[0];
 	destination.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
 	producer_commands->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
 	D3D12_RESOURCE_BARRIER to_common = to_copy;
@@ -151,6 +154,19 @@ TEST_CASE("[RenderingDevice][D3D12] External producer texture pool uses nonblock
 		}
 	}
 	REQUIRE(first_completed.is_valid());
+	// Texture2DRD/RenderingServer create both a same-format shared view and an
+	// sRGB reinterpretation before exposing an RD texture to CanvasItem or 3D.
+	// Imported roots must support that ordinary sampled-texture path even though
+	// their native allocation remains producer-owned.
+	RenderingDevice::TextureView identity_view;
+	RID identity_shared = rd->texture_create_shared(identity_view, first_completed);
+	REQUIRE(identity_shared.is_valid());
+	RenderingDevice::TextureView srgb_view;
+	srgb_view.format_override = RenderingDevice::DATA_FORMAT_R8G8B8A8_SRGB;
+	RID srgb_shared = rd->texture_create_shared(srgb_view, first_completed);
+	REQUIRE(srgb_shared.is_valid());
+	rd->free_rid(srgb_shared);
+	rd->free_rid(identity_shared);
 	Vector<uint8_t> acquired_pixels = rd->texture_get_data(first_completed, 0);
 	REQUIRE(acquired_pixels.size() == 64 * 64 * 4);
 	CHECK(acquired_pixels[0] == 0x21);
@@ -216,6 +232,14 @@ TEST_CASE("[RenderingDevice][D3D12] External producer texture pool uses nonblock
 	rd->free_rid(pool);
 	rd->submit();
 	rd->sync();
+	producer_upload.Reset();
+	producer_commands.Reset();
+	producer_allocator.Reset();
+	producer_queue.Reset();
+	for (int32_t slot = 0; slot < 3; slot++) {
+		producer_fences[slot].Reset();
+		release_fences[slot].Reset();
+	}
 	memdelete(rd);
 	memdelete(context);
 }
@@ -249,6 +273,7 @@ TEST_CASE("[RenderingDevice][Vulkan] External producer texture pool uses nonbloc
 	for (int32_t slot = 0; slot < 3; slot++) {
 		VkImageCreateInfo image_info = {};
 		image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+		image_info.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
 		image_info.imageType = VK_IMAGE_TYPE_2D;
 		image_info.format = VK_FORMAT_R8G8B8A8_UNORM;
 		image_info.extent = { 64, 64, 1 };
@@ -323,6 +348,15 @@ TEST_CASE("[RenderingDevice][Vulkan] External producer texture pool uses nonbloc
 	REQUIRE(rd->external_texture_pool_publish(pool, 0, 1, generation, RenderingDevice::EXTERNAL_TEXTURE_STATE_UNDEFINED) == OK);
 	RID first_completed = rd->external_texture_pool_acquire_latest(pool);
 	REQUIRE(first_completed.is_valid());
+	RenderingDevice::TextureView identity_view;
+	RID identity_shared = rd->texture_create_shared(identity_view, first_completed);
+	REQUIRE(identity_shared.is_valid());
+	RenderingDevice::TextureView srgb_view;
+	srgb_view.format_override = RenderingDevice::DATA_FORMAT_R8G8B8A8_SRGB;
+	RID srgb_shared = rd->texture_create_shared(srgb_view, first_completed);
+	REQUIRE(srgb_shared.is_valid());
+	rd->free_rid(srgb_shared);
+	rd->free_rid(identity_shared);
 	generation++;
 	REQUIRE(rd->external_texture_pool_publish(pool, 1, 1, generation, RenderingDevice::EXTERNAL_TEXTURE_STATE_UNDEFINED) == OK);
 	const uint64_t pending_poll_start = OS::get_singleton()->get_ticks_usec();
@@ -338,9 +372,10 @@ TEST_CASE("[RenderingDevice][Vulkan] External producer texture pool uses nonbloc
 	for (uint64_t iteration = 1; iteration <= 96; iteration++) {
 		const int32_t slot = int32_t((iteration - 1) % 3);
 		Dictionary status = rd->external_texture_pool_get_slot_status(pool, slot);
-		if (!bool(status["available"])) {
+		for (uint32_t release_poll = 0; release_poll < 16 && !bool(status["available"]); release_poll++) {
 			rd->submit();
 			rd->sync();
+			rd->external_texture_pool_acquire_latest(pool);
 			status = rd->external_texture_pool_get_slot_status(pool, slot);
 		}
 		REQUIRE(bool(status["available"]));

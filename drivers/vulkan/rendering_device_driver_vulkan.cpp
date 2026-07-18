@@ -2473,24 +2473,75 @@ RDD::TextureID RenderingDeviceDriverVulkan::texture_create(const TextureFormat &
 	return TextureID(tex_info);
 }
 
-RDD::TextureID RenderingDeviceDriverVulkan::texture_create_from_extension(uint64_t p_native_texture, TextureType p_type, DataFormat p_format, uint32_t p_array_layers, bool p_depth_stencil, uint32_t p_mipmaps) {
+RDD::TextureID RenderingDeviceDriverVulkan::texture_create_from_extension(uint64_t p_native_texture, const TextureFormat &p_format) {
 	VkImage vk_image = (VkImage)p_native_texture;
+	const bool depth_stencil = (p_format.usage_bits & (TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | TEXTURE_USAGE_DEPTH_RESOLVE_ATTACHMENT_BIT)) != 0;
+
+	// Imported images are not allocated by this driver, but their complete
+	// descriptor is still required when shared views reinterpret the format.
+	VkImageCreateInfo image_create_info = {};
+	image_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+	if (!p_format.shareable_formats.is_empty()) {
+		image_create_info.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+	}
+	if (p_format.texture_type == TEXTURE_TYPE_CUBE || p_format.texture_type == TEXTURE_TYPE_CUBE_ARRAY) {
+		image_create_info.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+	}
+	image_create_info.imageType = RD_TEX_TYPE_TO_VK_IMG_TYPE[p_format.texture_type];
+	image_create_info.format = RD_TO_VK_FORMAT[p_format.format];
+	image_create_info.extent = { p_format.width, p_format.height, p_format.depth };
+	image_create_info.mipLevels = p_format.mipmaps;
+	image_create_info.arrayLayers = p_format.array_layers;
+	image_create_info.samples = _ensure_supported_sample_count(p_format.samples);
+	image_create_info.tiling = (p_format.usage_bits & TEXTURE_USAGE_CPU_READ_BIT) ? VK_IMAGE_TILING_LINEAR : VK_IMAGE_TILING_OPTIMAL;
+	image_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+	image_create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	if (p_format.usage_bits & TEXTURE_USAGE_SAMPLING_BIT) {
+		image_create_info.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+	}
+	if (p_format.usage_bits & TEXTURE_USAGE_STORAGE_BIT) {
+		image_create_info.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+	}
+	if (p_format.usage_bits & TEXTURE_USAGE_COLOR_ATTACHMENT_BIT) {
+		image_create_info.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+	}
+	if (depth_stencil) {
+		image_create_info.usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+	}
+	if (p_format.usage_bits & TEXTURE_USAGE_INPUT_ATTACHMENT_BIT) {
+		image_create_info.usage |= VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+	}
+	if ((p_format.usage_bits & TEXTURE_USAGE_VRS_ATTACHMENT_BIT) && (p_format.usage_bits & TEXTURE_USAGE_VRS_FRAGMENT_SHADING_RATE_BIT)) {
+		image_create_info.usage |= VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR;
+	}
+	if ((p_format.usage_bits & TEXTURE_USAGE_VRS_ATTACHMENT_BIT) && (p_format.usage_bits & TEXTURE_USAGE_VRS_FRAGMENT_DENSITY_MAP_BIT)) {
+		image_create_info.usage |= VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT;
+	}
+	if (p_format.usage_bits & TEXTURE_USAGE_CAN_UPDATE_BIT) {
+		image_create_info.usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+	}
+	if (p_format.usage_bits & TEXTURE_USAGE_CAN_COPY_FROM_BIT) {
+		image_create_info.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+	}
+	if (p_format.usage_bits & TEXTURE_USAGE_CAN_COPY_TO_BIT) {
+		image_create_info.usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+	}
 
 	// We only need to create a view into the already existing natively-provided texture.
 
 	VkImageViewCreateInfo image_view_create_info = {};
 	image_view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
 	image_view_create_info.image = vk_image;
-	image_view_create_info.viewType = (VkImageViewType)p_type;
-	image_view_create_info.format = RD_TO_VK_FORMAT[p_format];
+	image_view_create_info.viewType = (VkImageViewType)p_format.texture_type;
+	image_view_create_info.format = RD_TO_VK_FORMAT[p_format.format];
 	image_view_create_info.components.r = VK_COMPONENT_SWIZZLE_R;
 	image_view_create_info.components.g = VK_COMPONENT_SWIZZLE_G;
 	image_view_create_info.components.b = VK_COMPONENT_SWIZZLE_B;
 	image_view_create_info.components.a = VK_COMPONENT_SWIZZLE_A;
 	image_view_create_info.subresourceRange.baseMipLevel = 0;
-	image_view_create_info.subresourceRange.levelCount = p_mipmaps;
-	image_view_create_info.subresourceRange.layerCount = p_array_layers;
-	image_view_create_info.subresourceRange.aspectMask = p_depth_stencil ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+	image_view_create_info.subresourceRange.levelCount = p_format.mipmaps;
+	image_view_create_info.subresourceRange.layerCount = p_format.array_layers;
+	image_view_create_info.subresourceRange.aspectMask = depth_stencil ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
 
 	VkImageView vk_image_view = VK_NULL_HANDLE;
 	VkResult err = vkCreateImageView(vk_device, &image_view_create_info, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_IMAGE_VIEW), &vk_image_view);
@@ -2501,8 +2552,10 @@ RDD::TextureID RenderingDeviceDriverVulkan::texture_create_from_extension(uint64
 	// Bookkeep.
 
 	TextureInfo *tex_info = VersatileResource::allocate<TextureInfo>(resources_allocator);
+	tex_info->vk_image = vk_image;
 	tex_info->vk_view = vk_image_view;
-	tex_info->rd_format = p_format;
+	tex_info->rd_format = p_format.format;
+	tex_info->vk_create_info = image_create_info;
 	tex_info->vk_view_create_info = image_view_create_info;
 #ifdef DEBUG_ENABLED
 	tex_info->created_from_extension = true;

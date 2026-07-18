@@ -1496,7 +1496,7 @@ RDD::TextureID RenderingDeviceDriverD3D12::texture_create(const TextureFormat &p
 	return TextureID(tex_info);
 }
 
-RDD::TextureID RenderingDeviceDriverD3D12::texture_create_from_extension(uint64_t p_native_texture, TextureType p_type, DataFormat p_format, uint32_t p_array_layers, bool p_depth_stencil, uint32_t p_mipmaps) {
+RDD::TextureID RenderingDeviceDriverD3D12::texture_create_from_extension(uint64_t p_native_texture, const TextureFormat &p_format) {
 	ID3D12Resource *texture = (ID3D12Resource *)p_native_texture;
 
 #if defined(_MSC_VER) || !defined(_WIN32)
@@ -1508,9 +1508,9 @@ RDD::TextureID RenderingDeviceDriverD3D12::texture_create_from_extension(uint64_
 	CD3DX12_RESOURCE_DESC resource_desc(base_resource_desc);
 	D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
 	{
-		srv_desc.Format = RD_TO_D3D12_FORMAT[p_format].general_format;
-		srv_desc.ViewDimension = resource_desc.SampleDesc.Count == 1 ? RD_TEXTURE_TYPE_TO_D3D12_VIEW_DIMENSION_FOR_SRV[p_type] : RD_TEXTURE_TYPE_TO_D3D12_VIEW_DIMENSION_FOR_SRV_MS[p_type];
-		srv_desc.Shader4ComponentMapping = _compute_component_mapping(TextureView{ p_format });
+		srv_desc.Format = RD_TO_D3D12_FORMAT[p_format.format].general_format;
+		srv_desc.ViewDimension = resource_desc.SampleDesc.Count == 1 ? RD_TEXTURE_TYPE_TO_D3D12_VIEW_DIMENSION_FOR_SRV[p_format.texture_type] : RD_TEXTURE_TYPE_TO_D3D12_VIEW_DIMENSION_FOR_SRV_MS[p_format.texture_type];
+		srv_desc.Shader4ComponentMapping = _compute_component_mapping(TextureView{ p_format.format });
 
 		switch (srv_desc.ViewDimension) {
 			case D3D12_SRV_DIMENSION_TEXTURE1D: {
@@ -1518,7 +1518,7 @@ RDD::TextureID RenderingDeviceDriverD3D12::texture_create_from_extension(uint64_
 			} break;
 			case D3D12_SRV_DIMENSION_TEXTURE1DARRAY: {
 				srv_desc.Texture1DArray.MipLevels = resource_desc.MipLevels;
-				srv_desc.Texture1DArray.ArraySize = p_array_layers;
+				srv_desc.Texture1DArray.ArraySize = p_format.array_layers;
 			} break;
 			case D3D12_SRV_DIMENSION_TEXTURE2D: {
 				srv_desc.Texture2D.MipLevels = resource_desc.MipLevels;
@@ -1527,14 +1527,14 @@ RDD::TextureID RenderingDeviceDriverD3D12::texture_create_from_extension(uint64_
 			} break;
 			case D3D12_SRV_DIMENSION_TEXTURE2DARRAY: {
 				srv_desc.Texture2DArray.MipLevels = resource_desc.MipLevels;
-				srv_desc.Texture2DArray.ArraySize = p_array_layers;
+				srv_desc.Texture2DArray.ArraySize = p_format.array_layers;
 			} break;
 			case D3D12_SRV_DIMENSION_TEXTURE2DMSARRAY: {
-				srv_desc.Texture2DMSArray.ArraySize = p_array_layers;
+				srv_desc.Texture2DMSArray.ArraySize = p_format.array_layers;
 			} break;
 			case D3D12_SRV_DIMENSION_TEXTURECUBEARRAY: {
 				srv_desc.TextureCubeArray.MipLevels = resource_desc.MipLevels;
-				srv_desc.TextureCubeArray.NumCubes = p_array_layers / 6;
+				srv_desc.TextureCubeArray.NumCubes = p_format.array_layers / 6;
 			} break;
 			case D3D12_SRV_DIMENSION_TEXTURE3D: {
 				srv_desc.Texture3D.MipLevels = resource_desc.MipLevels;
@@ -1549,16 +1549,16 @@ RDD::TextureID RenderingDeviceDriverD3D12::texture_create_from_extension(uint64_
 
 	D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
 	{
-		uav_desc.Format = RD_TO_D3D12_FORMAT[p_format].general_format;
-		uav_desc.ViewDimension = resource_desc.SampleDesc.Count == 1 ? RD_TEXTURE_TYPE_TO_D3D12_VIEW_DIMENSION_FOR_UAV[p_type] : D3D12_UAV_DIMENSION_UNKNOWN;
+		uav_desc.Format = RD_TO_D3D12_FORMAT[p_format.format].general_format;
+		uav_desc.ViewDimension = resource_desc.SampleDesc.Count == 1 ? RD_TEXTURE_TYPE_TO_D3D12_VIEW_DIMENSION_FOR_UAV[p_format.texture_type] : D3D12_UAV_DIMENSION_UNKNOWN;
 
 		switch (uav_desc.ViewDimension) {
 			case D3D12_UAV_DIMENSION_TEXTURE1DARRAY: {
-				uav_desc.Texture1DArray.ArraySize = p_array_layers;
+				uav_desc.Texture1DArray.ArraySize = p_format.array_layers;
 			} break;
 			case D3D12_UAV_DIMENSION_TEXTURE2DARRAY: {
 				// Either for an actual 2D texture array, cubemap or cubemap array.
-				uav_desc.Texture2DArray.ArraySize = p_array_layers;
+				uav_desc.Texture2DArray.ArraySize = p_format.array_layers;
 			} break;
 			case D3D12_UAV_DIMENSION_TEXTURE3D: {
 				uav_desc.Texture3D.WSize = resource_desc.Depth();
@@ -1569,15 +1569,19 @@ RDD::TextureID RenderingDeviceDriverD3D12::texture_create_from_extension(uint64_
 	}
 
 	TextureInfo *tex_info = VersatileResource::allocate<TextureInfo>(resources_allocator);
-	tex_info->resource = texture;
-	tex_info->owner_info.resource = nullptr; // Not allocated by us.
+	// Hold an independent COM reference without claiming allocation ownership.
+	// The producer remains free to release its import-side reference after this
+	// call, while Godot keeps the resource alive through all dependent views.
+	tex_info->owner_info.resource = texture;
+	tex_info->resource = tex_info->owner_info.resource.Get();
 	tex_info->owner_info.allocation = nullptr; // Not allocated by us.
-	tex_info->owner_info.states.subresource_states.resize(resource_desc.MipLevels * p_array_layers);
+	tex_info->owner_info.states.subresource_states.resize(resource_desc.MipLevels * p_format.array_layers);
+	const bool depth_stencil = (p_format.usage_bits & (TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | TEXTURE_USAGE_DEPTH_RESOLVE_ATTACHMENT_BIT)) != 0;
 	for (uint32_t i = 0; i < tex_info->owner_info.states.subresource_states.size(); i++) {
-		tex_info->owner_info.states.subresource_states[i] = !p_depth_stencil ? D3D12_RESOURCE_STATE_RENDER_TARGET : D3D12_RESOURCE_STATE_DEPTH_WRITE;
+		tex_info->owner_info.states.subresource_states[i] = !depth_stencil ? D3D12_RESOURCE_STATE_RENDER_TARGET : D3D12_RESOURCE_STATE_DEPTH_WRITE;
 	}
 	tex_info->states_ptr = &tex_info->owner_info.states;
-	tex_info->format = p_format;
+	tex_info->format = p_format.format;
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wstrict-aliasing"
@@ -1587,7 +1591,7 @@ RDD::TextureID RenderingDeviceDriverD3D12::texture_create_from_extension(uint64_
 #pragma GCC diagnostic pop
 #endif
 	tex_info->base_layer = 0;
-	tex_info->layers = p_array_layers;
+	tex_info->layers = p_format.array_layers;
 	tex_info->base_mip = 0;
 	tex_info->mipmaps = resource_desc.MipLevels;
 	tex_info->view_descs.srv = srv_desc;
@@ -1657,12 +1661,11 @@ RDD::TextureID RenderingDeviceDriverD3D12::texture_create_shared_from_slice(Text
 
 RDD::TextureID RenderingDeviceDriverD3D12::_texture_create_shared_from_slice(TextureID p_original_texture, const TextureView &p_view, TextureSliceType p_slice_type, uint32_t p_layer, uint32_t p_layers, uint32_t p_mipmap, uint32_t p_mipmaps) {
 	TextureInfo *owner_tex_info = (TextureInfo *)p_original_texture.id;
-#ifdef DEBUG_ENABLED
-	ERR_FAIL_COND_V(!owner_tex_info->owner_info.allocation, TextureID());
-#endif
+	ERR_FAIL_NULL_V(owner_tex_info, TextureID());
+	ERR_FAIL_NULL_V(owner_tex_info->resource, TextureID());
+	ERR_FAIL_NULL_V(owner_tex_info->states_ptr, TextureID());
+	DEV_ASSERT(owner_tex_info->main_texture == nullptr);
 
-	ComPtr<ID3D12Resource> new_texture;
-	ComPtr<D3D12MA::Allocation> new_allocation;
 	ID3D12Resource *resource = owner_tex_info->resource;
 	CD3DX12_RESOURCE_DESC new_tex_resource_desc = owner_tex_info->desc;
 

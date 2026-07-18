@@ -413,14 +413,14 @@ RDD::TextureID RenderingDeviceDriverMetal::texture_create(const TextureFormat &p
 	return TextureID(reinterpret_cast<uint64_t>(obj));
 }
 
-RDD::TextureID RenderingDeviceDriverMetal::texture_create_from_extension(uint64_t p_native_texture, TextureType p_type, DataFormat p_format, uint32_t p_array_layers, bool p_depth_stencil, uint32_t p_mipmaps) {
+RDD::TextureID RenderingDeviceDriverMetal::texture_create_from_extension(uint64_t p_native_texture, const TextureFormat &p_format) {
 	MTL::Texture *res = reinterpret_cast<MTL::Texture *>(p_native_texture);
 
 	// If the requested format is different, we need to create a view.
-	MTL::PixelFormat format = (MTL::PixelFormat)pixel_formats->getMTLPixelFormat(p_format);
+	MTL::PixelFormat format = (MTL::PixelFormat)pixel_formats->getMTLPixelFormat(p_format.format);
 	if (res->pixelFormat() != format) {
 		MTL::TextureSwizzleChannels swizzle = MTL::TextureSwizzleChannels::Default();
-		res = res->newTextureView(format, res->textureType(), NS::Range::Make(0, res->mipmapLevelCount()), NS::Range::Make(0, p_array_layers), swizzle);
+		res = res->newTextureView(format, res->textureType(), NS::Range::Make(0, p_format.mipmaps), NS::Range::Make(0, p_format.array_layers), swizzle);
 		ERR_FAIL_NULL_V_MSG(res, TextureID(), "Unable to create texture view.");
 	} else {
 		// Extension textures are producer-owned. Hold an independent reference

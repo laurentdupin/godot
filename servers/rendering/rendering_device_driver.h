@@ -278,7 +278,7 @@ public:
 	};
 
 	virtual TextureID texture_create(const TextureFormat &p_format, const TextureView &p_view) = 0;
-	virtual TextureID texture_create_from_extension(uint64_t p_native_texture, TextureType p_type, DataFormat p_format, uint32_t p_array_layers, bool p_depth_stencil, uint32_t p_mipmaps) = 0;
+	virtual TextureID texture_create_from_extension(uint64_t p_native_texture, const TextureFormat &p_format) = 0;
 	// External producer textures publish their actual layout between frames. Updating
 	// the driver's tracker before graph recording prevents the first consumer barrier
 	// from assuming an unrelated or undefined state.
