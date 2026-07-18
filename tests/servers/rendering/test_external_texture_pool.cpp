@@ -55,7 +55,9 @@ TEST_CASE("[RenderingDevice][D3D12] External producer texture pool uses nonblock
 	texture_description.Height = 64;
 	texture_description.DepthOrArraySize = 1;
 	texture_description.MipLevels = 1;
-	texture_description.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	// Keep this fully typed, matching D3D11/WGC producer resources. Godot must
+	// not create an incompatible sRGB view directly on this resource.
+	texture_description.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
 	texture_description.SampleDesc.Count = 1;
 	texture_description.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
 	texture_description.Flags = D3D12_RESOURCE_FLAG_NONE;
@@ -67,7 +69,7 @@ TEST_CASE("[RenderingDevice][D3D12] External producer texture pool uses nonblock
 		const int32_t added_slot = rd->external_texture_pool_add_slot(
 				pool,
 				RenderingDevice::TEXTURE_TYPE_2D,
-				RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM,
+				RenderingDevice::DATA_FORMAT_B8G8R8A8_UNORM,
 				RenderingDevice::TEXTURE_SAMPLES_1,
 				RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT,
 				uint64_t(resources[slot].Get()),
@@ -126,7 +128,7 @@ TEST_CASE("[RenderingDevice][D3D12] External producer texture pool uses nonblock
 	D3D12_TEXTURE_COPY_LOCATION source = {};
 	source.pResource = producer_upload.Get();
 	source.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-	source.PlacedFootprint.Footprint.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	source.PlacedFootprint.Footprint.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
 	source.PlacedFootprint.Footprint.Width = 64;
 	source.PlacedFootprint.Footprint.Height = 64;
 	source.PlacedFootprint.Footprint.Depth = 1;
@@ -162,9 +164,50 @@ TEST_CASE("[RenderingDevice][D3D12] External producer texture pool uses nonblock
 	RID identity_shared = rd->texture_create_shared(identity_view, first_completed);
 	REQUIRE(identity_shared.is_valid());
 	RenderingDevice::TextureView srgb_view;
-	srgb_view.format_override = RenderingDevice::DATA_FORMAT_R8G8B8A8_SRGB;
+	srgb_view.format_override = RenderingDevice::DATA_FORMAT_B8G8R8A8_SRGB;
 	RID srgb_shared = rd->texture_create_shared(srgb_view, first_completed);
 	REQUIRE(srgb_shared.is_valid());
+	Vector<uint8_t> srgb_pixels = rd->texture_get_data(srgb_shared, 0);
+	REQUIRE(srgb_pixels.size() == 64 * 64 * 4);
+	CHECK(srgb_pixels[0] == 0x21);
+	CHECK(srgb_pixels[1] == 0x43);
+	CHECK(srgb_pixels[2] == 0x65);
+	CHECK(srgb_pixels[3] == 0xff);
+	String shader_error;
+	const String shader_source = R"(
+#version 450
+layout(set = 0, binding = 0) uniform sampler2D source_texture;
+layout(set = 0, binding = 1, std430) buffer OutputBuffer { ivec2 texture_size; } output_buffer;
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+void main() {
+	output_buffer.texture_size = textureSize(source_texture, 0);
+}
+)";
+	RenderingDevice::ShaderStageSPIRVData compute_stage;
+	compute_stage.shader_stage = RenderingDevice::SHADER_STAGE_COMPUTE;
+	compute_stage.spirv = rd->shader_compile_spirv_from_source(RenderingDevice::SHADER_STAGE_COMPUTE, shader_source, RenderingDevice::SHADER_LANGUAGE_GLSL, &shader_error, false);
+	INFO(shader_error);
+	REQUIRE(!compute_stage.spirv.is_empty());
+	Vector<RenderingDevice::ShaderStageSPIRVData> shader_stages;
+	shader_stages.push_back(compute_stage);
+	RID shader = rd->shader_create_from_spirv(shader_stages, "External BGRA sRGB view smoke");
+	REQUIRE(shader.is_valid());
+	RID output_buffer = rd->storage_buffer_create(8);
+	REQUIRE(output_buffer.is_valid());
+	RID sampler = rd->sampler_create(RenderingDevice::SamplerState());
+	REQUIRE(sampler.is_valid());
+	Vector<RID> sampled_texture;
+	sampled_texture.push_back(sampler);
+	sampled_texture.push_back(srgb_shared);
+	Vector<RenderingDevice::Uniform> uniforms;
+	uniforms.push_back(RenderingDevice::Uniform(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, sampled_texture));
+	uniforms.push_back(RenderingDevice::Uniform(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER, 1, output_buffer));
+	RID uniform_set = rd->uniform_set_create(uniforms, shader, 0);
+	REQUIRE(uniform_set.is_valid());
+	rd->free_rid(uniform_set);
+	rd->free_rid(sampler);
+	rd->free_rid(output_buffer);
+	rd->free_rid(shader);
 	rd->free_rid(srgb_shared);
 	rd->free_rid(identity_shared);
 	Vector<uint8_t> acquired_pixels = rd->texture_get_data(first_completed, 0);

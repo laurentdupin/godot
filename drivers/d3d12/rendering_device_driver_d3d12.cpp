@@ -133,7 +133,7 @@ const RenderingDeviceDriverD3D12::D3D12Format RenderingDeviceDriverD3D12::RD_TO_
 	/* DATA_FORMAT_B8G8R8A8_SSCALED */ { DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_SINT },
 	/* DATA_FORMAT_B8G8R8A8_UINT */ { DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UINT },
 	/* DATA_FORMAT_B8G8R8A8_SINT */ { DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_SINT },
-	/* DATA_FORMAT_B8G8R8A8_SRGB */ { DXGI_FORMAT_B8G8R8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB },
+	/* DATA_FORMAT_B8G8R8A8_SRGB */ { DXGI_FORMAT_B8G8R8A8_TYPELESS, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB },
 	/* DATA_FORMAT_A8B8G8R8_UNORM_PACK32 */ { DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM },
 	/* DATA_FORMAT_A8B8G8R8_SNORM_PACK32 */ { DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_SNORM },
 	/* DATA_FORMAT_A8B8G8R8_USCALED_PACK32 */ { DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UINT },
@@ -1898,12 +1898,22 @@ BitField<RDD::TextureUsageBits> RenderingDeviceDriverD3D12::texture_get_usages_s
 
 bool RenderingDeviceDriverD3D12::texture_can_make_shared_with_format(TextureID p_texture, DataFormat p_format, bool &r_raw_reinterpretation) {
 	r_raw_reinterpretation = false;
+	TextureInfo *tex_info = (TextureInfo *)p_texture.id;
+	ERR_FAIL_NULL_V(tex_info, false);
+
+	const DXGI_FORMAT resource_format = tex_info->desc.Format;
+	const DXGI_FORMAT source_family = RD_TO_D3D12_FORMAT[tex_info->format].family;
+	const DXGI_FORMAT requested_format = RD_TO_D3D12_FORMAT[p_format].general_format;
+	if (resource_format != source_family && resource_format != requested_format) {
+		// A fully typed external resource cannot be reinterpreted through another
+		// typed view. Fall back to RenderingDevice's alias/copy path instead.
+		return false;
+	}
 
 	if (format_capabilities.relaxed_casting_supported) {
 		// Relaxed casting is supported, there should be no need to check for format family compatibility.
 		return true;
 	} else {
-		TextureInfo *tex_info = (TextureInfo *)p_texture.id;
 		if (tex_info->format == DATA_FORMAT_R16_UINT && p_format == DATA_FORMAT_R4G4B4A4_UNORM_PACK16) {
 			// Specific cases that require buffer reinterpretation.
 			r_raw_reinterpretation = true;

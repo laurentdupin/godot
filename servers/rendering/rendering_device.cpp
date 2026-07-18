@@ -1859,8 +1859,23 @@ RID RenderingDevice::texture_create_from_extension(TextureType p_type, DataForma
 	texture.usage_flags = p_usage;
 	texture.base_mipmap = 0;
 	texture.base_layer = 0;
-	texture.allowed_shared_formats.push_back(RD::DATA_FORMAT_R8G8B8A8_UNORM);
-	texture.allowed_shared_formats.push_back(RD::DATA_FORMAT_R8G8B8A8_SRGB);
+	texture.allowed_shared_formats.push_back(p_format);
+	switch (p_format) {
+		case RD::DATA_FORMAT_R8G8B8A8_UNORM:
+			texture.allowed_shared_formats.push_back(RD::DATA_FORMAT_R8G8B8A8_SRGB);
+			break;
+		case RD::DATA_FORMAT_R8G8B8A8_SRGB:
+			texture.allowed_shared_formats.push_back(RD::DATA_FORMAT_R8G8B8A8_UNORM);
+			break;
+		case RD::DATA_FORMAT_B8G8R8A8_UNORM:
+			texture.allowed_shared_formats.push_back(RD::DATA_FORMAT_B8G8R8A8_SRGB);
+			break;
+		case RD::DATA_FORMAT_B8G8R8A8_SRGB:
+			texture.allowed_shared_formats.push_back(RD::DATA_FORMAT_B8G8R8A8_UNORM);
+			break;
+		default:
+			break;
+	}
 
 	if (p_usage.has_flag(TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) || p_usage.has_flag(TEXTURE_USAGE_DEPTH_RESOLVE_ATTACHMENT_BIT)) {
 		texture.read_aspect_flags.set_flag(RDD::TEXTURE_ASPECT_DEPTH_BIT);
@@ -2059,7 +2074,12 @@ RID RenderingDevice::external_texture_pool_acquire_latest(RID p_pool) {
 		new_slot.pending = false;
 		new_slot.current = true;
 		pool->current_slot = newest_slot;
-		_external_texture_set_layout(texture_owner.get_or_null(new_slot.texture), new_slot.published_layout);
+		Texture *new_texture = texture_owner.get_or_null(new_slot.texture);
+		_external_texture_set_layout(new_texture, new_slot.published_layout);
+		// The producer changed the resource outside RenderingDevice. Advance the
+		// root revision so format-conversion fallback views refresh on first use.
+		_texture_check_shared_fallback(new_texture);
+		new_texture->shared_fallback->revision++;
 		pending_external_acquires.push_back({ new_slot.producer_timeline, new_slot.producer_value });
 	}
 
