@@ -79,6 +79,20 @@ public:
 
 	typedef void (*InvalidationCallback)(void *);
 
+	enum ExternalTextureState {
+		EXTERNAL_TEXTURE_STATE_UNDEFINED = RDD::TEXTURE_LAYOUT_UNDEFINED,
+		EXTERNAL_TEXTURE_STATE_GENERAL = RDD::TEXTURE_LAYOUT_GENERAL,
+		EXTERNAL_TEXTURE_STATE_STORAGE = RDD::TEXTURE_LAYOUT_STORAGE_OPTIMAL,
+		EXTERNAL_TEXTURE_STATE_COLOR_ATTACHMENT = RDD::TEXTURE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+		EXTERNAL_TEXTURE_STATE_DEPTH_STENCIL_ATTACHMENT = RDD::TEXTURE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+		EXTERNAL_TEXTURE_STATE_DEPTH_STENCIL_READ = RDD::TEXTURE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+		EXTERNAL_TEXTURE_STATE_SHADER_READ = RDD::TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		EXTERNAL_TEXTURE_STATE_COPY_SOURCE = RDD::TEXTURE_LAYOUT_COPY_SRC_OPTIMAL,
+		EXTERNAL_TEXTURE_STATE_COPY_DESTINATION = RDD::TEXTURE_LAYOUT_COPY_DST_OPTIMAL,
+		EXTERNAL_TEXTURE_STATE_RESOLVE_SOURCE = RDD::TEXTURE_LAYOUT_RESOLVE_SRC_OPTIMAL,
+		EXTERNAL_TEXTURE_STATE_RESOLVE_DESTINATION = RDD::TEXTURE_LAYOUT_RESOLVE_DST_OPTIMAL,
+	};
+
 private:
 	static RenderingDevice *singleton;
 
@@ -371,6 +385,7 @@ public:
 		BitField<RDD::TextureAspectBits> barrier_aspect_flags = {};
 		bool bound = false; // Bound to framebuffer.
 		RID owner;
+		RID external_pool_owner;
 
 		RDG::ResourceTracker *draw_tracker = nullptr;
 		HashMap<Rect2i, RDG::ResourceTracker *> *slice_trackers = nullptr;
@@ -407,6 +422,41 @@ public:
 	};
 
 	RID_Owner<Texture, true> texture_owner;
+
+	struct ExternalTexturePoolSlot {
+		RID texture;
+		uint64_t producer_timeline = 0;
+		uint64_t release_timeline = 0;
+		uint64_t release_native_handle = 0;
+		uint64_t producer_value = 0;
+		uint64_t release_value = 0;
+		uint64_t generation = 0;
+		RDD::TextureLayout published_layout = RDD::TEXTURE_LAYOUT_UNDEFINED;
+		bool pending = false;
+		bool current = false;
+		bool retired = false;
+	};
+
+	struct ExternalTexturePool {
+		Vector<ExternalTexturePoolSlot> slots;
+		int32_t current_slot = -1;
+		uint64_t last_published_generation = 0;
+		bool stopped = false;
+		bool destroy_requested = false;
+	};
+
+	struct ExternalTimelineOperation {
+		uint64_t timeline = 0;
+		uint64_t value = 0;
+		RID texture;
+	};
+
+	RID_Owner<ExternalTexturePool, true> external_texture_pool_owner;
+	LocalVector<ExternalTimelineOperation> pending_external_acquires;
+	LocalVector<ExternalTimelineOperation> pending_external_releases;
+
+	static RDG::ResourceUsage _external_layout_to_resource_usage(RDD::TextureLayout p_layout);
+	void _external_texture_set_layout(Texture *p_texture, RDD::TextureLayout p_layout);
 	uint32_t texture_upload_region_size_px = 0;
 	uint32_t texture_download_region_size_px = 0;
 
@@ -463,6 +513,16 @@ public:
 	RID texture_create(const TextureFormat &p_format, const TextureView &p_view, const Vector<Vector<uint8_t>> &p_data = Vector<Vector<uint8_t>>());
 	RID texture_create_shared(const TextureView &p_view, RID p_with_texture);
 	RID texture_create_from_extension(TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_image, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps = 1);
+
+	// A bounded pool for textures written by an external GPU producer. Native
+	// resources remain ordinary RenderingDevice texture RIDs and can therefore be
+	// sampled by regular CanvasItem and 3D materials.
+	RID external_texture_pool_create();
+	int32_t external_texture_pool_add_slot(RID p_pool, TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_native_texture, uint64_t p_producer_timeline, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, ExternalTextureState p_initial_state);
+	Error external_texture_pool_publish(RID p_pool, int32_t p_slot, uint64_t p_producer_value, uint64_t p_generation, ExternalTextureState p_published_state);
+	RID external_texture_pool_acquire_latest(RID p_pool);
+	Dictionary external_texture_pool_get_slot_status(RID p_pool, int32_t p_slot);
+	void external_texture_pool_stop(RID p_pool);
 	RID texture_create_shared_from_slice(const TextureView &p_view, RID p_with_texture, uint32_t p_layer, uint32_t p_mipmap, uint32_t p_mipmaps = 1, TextureSliceType p_slice_type = TEXTURE_SLICE_2D, uint32_t p_layers = 0);
 	Error texture_update(RID p_texture, uint32_t p_layer, const Vector<uint8_t> &p_data);
 	Vector<uint8_t> texture_get_data(RID p_texture, uint32_t p_layer); // CPU textures will return immediately, while GPU textures will most likely force a flush
@@ -1781,6 +1841,8 @@ private:
 		// List in usage order, from last to free to first to free.
 		List<Buffer> buffers_to_dispose_of;
 		List<Texture> textures_to_dispose_of;
+		List<RID> external_texture_pools_to_dispose_of;
+		List<uint64_t> external_timelines_to_dispose_of;
 		List<Framebuffer> framebuffers_to_dispose_of;
 		List<RDD::SamplerID> samplers_to_dispose_of;
 		List<Shader> shaders_to_dispose_of;
@@ -1943,6 +2005,7 @@ public:
 
 	String get_device_vendor_name() const;
 	String get_device_name() const;
+	Dictionary get_external_device_identity();
 	RenderingDeviceEnums::DeviceType get_device_type() const;
 	String get_device_api_name() const;
 	String get_device_api_version() const;
@@ -2023,6 +2086,7 @@ private:
 
 VARIANT_ENUM_CAST_EXT(RenderingDeviceEnums::DeviceType, RenderingDevice::DeviceType)
 VARIANT_ENUM_CAST(RenderingDevice::DriverResource)
+VARIANT_ENUM_CAST(RenderingDevice::ExternalTextureState)
 VARIANT_ENUM_CAST(RenderingDevice::ShaderStage)
 VARIANT_ENUM_CAST(RenderingDevice::ShaderLanguage)
 VARIANT_ENUM_CAST(RenderingDevice::CompareOperator)

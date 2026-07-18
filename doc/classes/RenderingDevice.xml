@@ -593,6 +593,12 @@
 				Returns the name of the video adapter (e.g. "GeForce GTX 1080/PCIe/SSE2"). Equivalent to [method RenderingServer.get_video_adapter_name]. See also [method get_device_vendor_name].
 			</description>
 		</method>
+		<method name="get_external_device_identity">
+			<return type="Dictionary" />
+			<description>
+				Returns the native logical device, physical device, top-level API object, main command queue, queue family, and a backend-neutral two-word device identifier. External GPU producers must use these values to select the same adapter and to open shared resources on Godot's logical device.
+			</description>
+		</method>
 		<method name="get_device_pipeline_cache_uuid" qualifiers="const">
 			<return type="String" />
 			<description>
@@ -1151,6 +1157,64 @@
 			<param index="9" name="mipmaps" type="int" default="1" />
 			<description>
 				Returns an RID for an existing [param image] ([code]VkImage[/code]) with the given [param type], [param format], [param samples], [param usage_flags], [param width], [param height], [param depth], [param layers], and [param mipmaps]. This can be used to allow Godot to render onto foreign images.
+			</description>
+		</method>
+		<method name="external_texture_pool_create">
+			<return type="RID" />
+			<description>
+				Creates an external producer texture pool. Add at least two slots with [method external_texture_pool_add_slot], then publish completed producer frames with [method external_texture_pool_publish]. Free the returned RID with [method free_rid].
+			</description>
+		</method>
+		<method name="external_texture_pool_add_slot">
+			<return type="int" />
+			<param index="0" name="pool" type="RID" />
+			<param index="1" name="type" type="int" enum="RenderingDevice.TextureType" />
+			<param index="2" name="format" type="int" enum="RenderingDevice.DataFormat" />
+			<param index="3" name="samples" type="int" enum="RenderingDevice.TextureSamples" />
+			<param index="4" name="usage_flags" type="int" enum="RenderingDevice.TextureUsageBits" is_bitfield="true" />
+			<param index="5" name="native_texture" type="int" />
+			<param index="6" name="producer_timeline" type="int" />
+			<param index="7" name="width" type="int" />
+			<param index="8" name="height" type="int" />
+			<param index="9" name="depth" type="int" />
+			<param index="10" name="layers" type="int" />
+			<param index="11" name="mipmaps" type="int" />
+			<param index="12" name="initial_state" type="int" enum="RenderingDevice.ExternalTextureState" />
+			<description>
+				Imports one producer-owned texture and a borrowed native producer timeline handle. The resource must be opened on the logical device returned by [method get_external_device_identity]. The returned slot index remains stable until the pool is freed.
+			</description>
+		</method>
+		<method name="external_texture_pool_publish">
+			<return type="int" enum="Error" />
+			<param index="0" name="pool" type="RID" />
+			<param index="1" name="slot" type="int" />
+			<param index="2" name="producer_value" type="int" />
+			<param index="3" name="generation" type="int" />
+			<param index="4" name="published_state" type="int" enum="RenderingDevice.ExternalTextureState" />
+			<description>
+				Publishes a producer frame without waiting. Both values must increase monotonically. Returns [constant ERR_BUSY] if the slot is still pending, current, or in flight. Godot keeps sampling the last completed slot until the producer timeline reaches [param producer_value].
+			</description>
+		</method>
+		<method name="external_texture_pool_acquire_latest">
+			<return type="RID" />
+			<param index="0" name="pool" type="RID" />
+			<description>
+				Nonblocking completion poll that adopts the newest completed generation and returns its ordinary sampled texture RID. Call on the render thread before recording consumers. If no newer publication is complete, the previous texture RID is returned.
+			</description>
+		</method>
+		<method name="external_texture_pool_get_slot_status">
+			<return type="Dictionary" />
+			<param index="0" name="pool" type="RID" />
+			<param index="1" name="slot" type="int" />
+			<description>
+				Returns the slot texture, pool-owned native release timeline handle, required release value and state, completion and lifecycle flags, and last generation. Before signaling a release, Godot transitions the texture to [constant EXTERNAL_TEXTURE_STATE_GENERAL]. The producer opens or duplicates the release handle on its device but must not close the pool-owned original. A slot can be overwritten only when [code]available[/code] is [code]true[/code].
+			</description>
+		</method>
+		<method name="external_texture_pool_stop">
+			<return type="void" />
+			<param index="0" name="pool" type="RID" />
+			<description>
+				Stops publication and retires current or pending slots through GPU-ordered release signals. It does not wait on the CPU. The pool can then be freed safely.
 			</description>
 		</method>
 		<method name="texture_create_shared">
@@ -2176,6 +2240,21 @@
 		<constant name="BARRIER_MASK_NO_BARRIER" value="32768" enum="BarrierMask" is_bitfield="true">
 			No barrier for any type.
 		</constant>
+		<constant name="EXTERNAL_TEXTURE_STATE_UNDEFINED" value="0" enum="ExternalTextureState">
+			The producer has not preserved texture contents.
+		</constant>
+		<constant name="EXTERNAL_TEXTURE_STATE_GENERAL" value="1" enum="ExternalTextureState">
+			Backend-neutral general/common state.
+		</constant>
+		<constant name="EXTERNAL_TEXTURE_STATE_STORAGE" value="2" enum="ExternalTextureState" />
+		<constant name="EXTERNAL_TEXTURE_STATE_COLOR_ATTACHMENT" value="3" enum="ExternalTextureState" />
+		<constant name="EXTERNAL_TEXTURE_STATE_DEPTH_STENCIL_ATTACHMENT" value="4" enum="ExternalTextureState" />
+		<constant name="EXTERNAL_TEXTURE_STATE_DEPTH_STENCIL_READ" value="5" enum="ExternalTextureState" />
+		<constant name="EXTERNAL_TEXTURE_STATE_SHADER_READ" value="6" enum="ExternalTextureState" />
+		<constant name="EXTERNAL_TEXTURE_STATE_COPY_SOURCE" value="7" enum="ExternalTextureState" />
+		<constant name="EXTERNAL_TEXTURE_STATE_COPY_DESTINATION" value="8" enum="ExternalTextureState" />
+		<constant name="EXTERNAL_TEXTURE_STATE_RESOLVE_SOURCE" value="9" enum="ExternalTextureState" />
+		<constant name="EXTERNAL_TEXTURE_STATE_RESOLVE_DESTINATION" value="10" enum="ExternalTextureState" />
 		<constant name="TEXTURE_TYPE_1D" value="0" enum="TextureType">
 			1-dimensional texture.
 		</constant>

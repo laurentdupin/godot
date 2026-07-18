@@ -1598,6 +1598,55 @@ RDD::TextureID RenderingDeviceDriverD3D12::texture_create_from_extension(uint64_
 	return TextureID(tex_info);
 }
 
+static D3D12_RESOURCE_STATES _external_texture_layout_to_d3d12_state(RDD::TextureLayout p_layout) {
+	switch (p_layout) {
+		case RDD::TEXTURE_LAYOUT_UNDEFINED:
+		case RDD::TEXTURE_LAYOUT_GENERAL:
+			return D3D12_RESOURCE_STATE_COMMON;
+		case RDD::TEXTURE_LAYOUT_STORAGE_OPTIMAL:
+			return D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+		case RDD::TEXTURE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+			return D3D12_RESOURCE_STATE_RENDER_TARGET;
+		case RDD::TEXTURE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+			return D3D12_RESOURCE_STATE_DEPTH_WRITE;
+		case RDD::TEXTURE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
+			return D3D12_RESOURCE_STATE_DEPTH_READ;
+		case RDD::TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+			return D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+		case RDD::TEXTURE_LAYOUT_COPY_SRC_OPTIMAL:
+			return D3D12_RESOURCE_STATE_COPY_SOURCE;
+		case RDD::TEXTURE_LAYOUT_COPY_DST_OPTIMAL:
+			return D3D12_RESOURCE_STATE_COPY_DEST;
+		case RDD::TEXTURE_LAYOUT_RESOLVE_SRC_OPTIMAL:
+			return D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
+		case RDD::TEXTURE_LAYOUT_RESOLVE_DST_OPTIMAL:
+			return D3D12_RESOURCE_STATE_RESOLVE_DEST;
+		case RDD::TEXTURE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL:
+			return D3D12_RESOURCE_STATE_SHADING_RATE_SOURCE;
+		case RDD::TEXTURE_LAYOUT_FRAGMENT_DENSITY_MAP_ATTACHMENT_OPTIMAL:
+			// D3D12 has no fragment-density-map resource state.
+			return D3D12_RESOURCE_STATE_COMMON;
+		case RDD::TEXTURE_LAYOUT_MAX:
+			break;
+	}
+
+	ERR_FAIL_V_MSG(D3D12_RESOURCE_STATE_COMMON, "Invalid external texture layout.");
+}
+
+void RenderingDeviceDriverD3D12::texture_set_external_layout(TextureID p_texture, TextureLayout p_layout) {
+	TextureInfo *texture_info = (TextureInfo *)p_texture.id;
+	ERR_FAIL_NULL(texture_info);
+	if (texture_info->main_texture != nullptr) {
+		texture_info = texture_info->main_texture;
+	}
+
+	const D3D12_RESOURCE_STATES state = _external_texture_layout_to_d3d12_state(p_layout);
+	for (uint32_t i = 0; i < texture_info->states_ptr->subresource_states.size(); i++) {
+		texture_info->states_ptr->subresource_states[i] = state;
+	}
+	texture_info->states_ptr->last_batch_with_uav_barrier = 0;
+}
+
 RDD::TextureID RenderingDeviceDriverD3D12::texture_create_shared(TextureID p_original_texture, const TextureView &p_view) {
 	return _texture_create_shared_from_slice(p_original_texture, p_view, (TextureSliceType)-1, 0, 0, 0, 0);
 }
@@ -2428,6 +2477,78 @@ RDD::SemaphoreID RenderingDeviceDriverD3D12::semaphore_create() {
 void RenderingDeviceDriverD3D12::semaphore_free(SemaphoreID p_semaphore) {
 	SemaphoreInfo *semaphore = (SemaphoreInfo *)(p_semaphore.id);
 	memdelete(semaphore);
+}
+
+uint64_t RenderingDeviceDriverD3D12::external_timeline_create(uint64_t p_initial_value) {
+	ID3D12Fence *timeline = nullptr;
+	const HRESULT result = device->CreateFence(p_initial_value, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&timeline));
+	ERR_FAIL_COND_V_MSG(FAILED(result), 0, vformat("D3D12: Failed to create an external producer timeline fence (HRESULT 0x%08ux).", (uint64_t)result));
+	return (uint64_t)timeline;
+}
+
+uint64_t RenderingDeviceDriverD3D12::external_timeline_import(uint64_t p_native_handle) {
+	HANDLE shared_handle = (HANDLE)p_native_handle;
+	ERR_FAIL_NULL_V(shared_handle, 0);
+
+	ID3D12Fence *timeline = nullptr;
+	const HRESULT result = device->OpenSharedHandle(shared_handle, IID_PPV_ARGS(&timeline));
+	ERR_FAIL_COND_V_MSG(FAILED(result), 0, vformat("D3D12: Failed to import an external producer timeline fence (HRESULT 0x%08ux).", (uint64_t)result));
+	// OpenSharedHandle does not consume or close the caller-owned Win32 handle.
+	return (uint64_t)timeline;
+}
+
+uint64_t RenderingDeviceDriverD3D12::external_timeline_export(uint64_t p_timeline) {
+	ID3D12Fence *timeline = (ID3D12Fence *)p_timeline;
+	ERR_FAIL_NULL_V(timeline, 0);
+
+	HANDLE shared_handle = nullptr;
+	const HRESULT result = device->CreateSharedHandle(timeline, nullptr, GENERIC_ALL, nullptr, &shared_handle);
+	ERR_FAIL_COND_V_MSG(FAILED(result), 0, vformat("D3D12: Failed to export an external producer timeline fence (HRESULT 0x%08ux).", (uint64_t)result));
+	// The pool owns this exported Win32 handle until external_timeline_export_free().
+	// Receivers may open it on another device but must not close the original handle.
+	return (uint64_t)shared_handle;
+}
+
+void RenderingDeviceDriverD3D12::external_timeline_export_free(uint64_t p_native_handle) {
+	HANDLE shared_handle = (HANDLE)p_native_handle;
+	ERR_FAIL_NULL(shared_handle);
+	const BOOL closed = CloseHandle(shared_handle);
+	ERR_FAIL_COND_MSG(closed == 0, vformat("D3D12: Failed to close an exported external producer timeline handle (Win32 error %d).", (uint32_t)GetLastError()));
+}
+
+void RenderingDeviceDriverD3D12::external_timeline_free(uint64_t p_timeline) {
+	ID3D12Fence *timeline = (ID3D12Fence *)p_timeline;
+	ERR_FAIL_NULL(timeline);
+	timeline->Release();
+}
+
+bool RenderingDeviceDriverD3D12::external_timeline_is_complete(uint64_t p_timeline, uint64_t p_value) const {
+	ID3D12Fence *timeline = (ID3D12Fence *)p_timeline;
+	ERR_FAIL_NULL_V(timeline, false);
+	const uint64_t completed_value = timeline->GetCompletedValue();
+	return completed_value != UINT64_MAX && completed_value >= p_value;
+}
+
+Error RenderingDeviceDriverD3D12::command_queue_wait_external_timeline(CommandQueueID p_cmd_queue, uint64_t p_timeline, uint64_t p_value) {
+	CommandQueueInfo *command_queue = (CommandQueueInfo *)(p_cmd_queue.id);
+	ID3D12Fence *timeline = (ID3D12Fence *)p_timeline;
+	ERR_FAIL_NULL_V(command_queue, ERR_INVALID_PARAMETER);
+	ERR_FAIL_NULL_V(timeline, ERR_INVALID_PARAMETER);
+
+	const HRESULT result = command_queue->d3d_queue->Wait(timeline, p_value);
+	ERR_FAIL_COND_V_MSG(FAILED(result), FAILED, vformat("D3D12: Failed to enqueue an external producer timeline wait (HRESULT 0x%08ux).", (uint64_t)result));
+	return OK;
+}
+
+Error RenderingDeviceDriverD3D12::command_queue_signal_external_timeline(CommandQueueID p_cmd_queue, uint64_t p_timeline, uint64_t p_value) {
+	CommandQueueInfo *command_queue = (CommandQueueInfo *)(p_cmd_queue.id);
+	ID3D12Fence *timeline = (ID3D12Fence *)p_timeline;
+	ERR_FAIL_NULL_V(command_queue, ERR_INVALID_PARAMETER);
+	ERR_FAIL_NULL_V(timeline, ERR_INVALID_PARAMETER);
+
+	const HRESULT result = command_queue->d3d_queue->Signal(timeline, p_value);
+	ERR_FAIL_COND_V_MSG(FAILED(result), FAILED, vformat("D3D12: Failed to enqueue an external producer timeline signal (HRESULT 0x%08ux).", (uint64_t)result));
+	return OK;
 }
 
 /******************/
@@ -5777,6 +5898,17 @@ uint64_t RenderingDeviceDriverD3D12::get_resource_native_handle(DriverResource p
 		default: {
 			return 0;
 		}
+	}
+}
+
+void RenderingDeviceDriverD3D12::get_external_device_identifier(uint64_t &r_low, uint64_t &r_high) const {
+	DXGI_ADAPTER_DESC description = {};
+	if (adapter != nullptr && SUCCEEDED(adapter->GetDesc(&description))) {
+		r_low = uint64_t(uint32_t(description.AdapterLuid.LowPart)) | (uint64_t(uint32_t(description.AdapterLuid.HighPart)) << 32);
+		r_high = 0;
+	} else {
+		r_low = 0;
+		r_high = 0;
 	}
 }
 

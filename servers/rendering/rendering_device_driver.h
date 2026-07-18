@@ -279,6 +279,10 @@ public:
 
 	virtual TextureID texture_create(const TextureFormat &p_format, const TextureView &p_view) = 0;
 	virtual TextureID texture_create_from_extension(uint64_t p_native_texture, TextureType p_type, DataFormat p_format, uint32_t p_array_layers, bool p_depth_stencil, uint32_t p_mipmaps) = 0;
+	// External producer textures publish their actual layout between frames. Updating
+	// the driver's tracker before graph recording prevents the first consumer barrier
+	// from assuming an unrelated or undefined state.
+	virtual void texture_set_external_layout(TextureID p_texture, TextureLayout p_layout) {}
 	// texture_create_shared_*() can only use original, non-view textures as original. RenderingDevice is responsible for ensuring that.
 	virtual TextureID texture_create_shared(TextureID p_original_texture, const TextureView &p_view) = 0;
 	virtual TextureID texture_create_shared_from_slice(TextureID p_original_texture, const TextureView &p_view, TextureSliceType p_slice_type, uint32_t p_layer, uint32_t p_layers, uint32_t p_mipmap, uint32_t p_mipmaps) = 0;
@@ -417,6 +421,18 @@ public:
 
 	virtual SemaphoreID semaphore_create() = 0;
 	virtual void semaphore_free(SemaphoreID p_semaphore) = 0;
+
+	// Timeline synchronization used by resources produced outside RenderingDevice.
+	// Native handles are backend objects from the same logical device. All waits and
+	// signals are GPU queue operations; completion queries must never block the CPU.
+	virtual uint64_t external_timeline_create(uint64_t p_initial_value) { return 0; }
+	virtual uint64_t external_timeline_import(uint64_t p_native_handle) { return 0; }
+	virtual uint64_t external_timeline_export(uint64_t p_timeline) { return 0; }
+	virtual void external_timeline_export_free(uint64_t p_native_handle) {}
+	virtual void external_timeline_free(uint64_t p_timeline) {}
+	virtual bool external_timeline_is_complete(uint64_t p_timeline, uint64_t p_value) const { return false; }
+	virtual Error command_queue_wait_external_timeline(CommandQueueID p_cmd_queue, uint64_t p_timeline, uint64_t p_value) { return ERR_UNAVAILABLE; }
+	virtual Error command_queue_signal_external_timeline(CommandQueueID p_cmd_queue, uint64_t p_timeline, uint64_t p_value) { return ERR_UNAVAILABLE; }
 
 	/*************************/
 	/**** COMMAND BUFFERS ****/
@@ -934,6 +950,10 @@ public:
 
 	virtual void set_object_name(ObjectType p_type, ID p_driver_id, const String &p_name) = 0;
 	virtual uint64_t get_resource_native_handle(DriverResource p_type, ID p_driver_id) = 0;
+	virtual void get_external_device_identifier(uint64_t &r_low, uint64_t &r_high) const {
+		r_low = 0;
+		r_high = 0;
+	}
 	virtual uint64_t get_total_memory_used() = 0;
 	virtual uint64_t get_lazily_memory_used() = 0;
 	virtual uint64_t limit_get(Limit p_limit) = 0;

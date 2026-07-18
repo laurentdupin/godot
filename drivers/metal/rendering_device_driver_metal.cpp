@@ -530,6 +530,78 @@ void RenderingDeviceDriverMetal::texture_free(TextureID p_texture) {
 	obj->release();
 }
 
+uint64_t RenderingDeviceDriverMetal::external_timeline_create(uint64_t p_initial_value) {
+	if (__builtin_available(macOS 10.14, iOS 12.0, tvOS 12.0, visionOS 1.0, *)) {
+		MTL::SharedEvent *event = device->newSharedEvent();
+		ERR_FAIL_NULL_V_MSG(event, 0, "Unable to create Metal external shared event.");
+		event->setSignaledValue(p_initial_value);
+		return uint64_t(reinterpret_cast<uintptr_t>(event));
+	}
+	return 0;
+}
+
+uint64_t RenderingDeviceDriverMetal::external_timeline_import(uint64_t p_native_handle) {
+	ERR_FAIL_COND_V(p_native_handle == 0, 0);
+	if (__builtin_available(macOS 10.14, iOS 12.0, tvOS 12.0, visionOS 1.0, *)) {
+		MTL::SharedEventHandle *handle = reinterpret_cast<MTL::SharedEventHandle *>(uintptr_t(p_native_handle));
+		MTL::SharedEvent *event = device->newSharedEvent(handle);
+		ERR_FAIL_NULL_V_MSG(event, 0, "Unable to import Metal external shared event.");
+		return uint64_t(reinterpret_cast<uintptr_t>(event));
+	}
+	return 0;
+}
+
+uint64_t RenderingDeviceDriverMetal::external_timeline_export(uint64_t p_timeline) {
+	ERR_FAIL_COND_V(p_timeline == 0, 0);
+	if (__builtin_available(macOS 10.14, iOS 12.0, tvOS 12.0, visionOS 1.0, *)) {
+		MTL::SharedEvent *event = reinterpret_cast<MTL::SharedEvent *>(uintptr_t(p_timeline));
+		MTL::SharedEventHandle *handle = event->newSharedEventHandle();
+		ERR_FAIL_NULL_V_MSG(handle, 0, "Unable to export Metal external shared event.");
+		return uint64_t(reinterpret_cast<uintptr_t>(handle));
+	}
+	return 0;
+}
+
+void RenderingDeviceDriverMetal::external_timeline_export_free(uint64_t p_native_handle) {
+	if (p_native_handle != 0) {
+		MTL::SharedEventHandle *handle = reinterpret_cast<MTL::SharedEventHandle *>(uintptr_t(p_native_handle));
+		handle->release();
+	}
+}
+
+void RenderingDeviceDriverMetal::external_timeline_free(uint64_t p_timeline) {
+	if (p_timeline != 0) {
+		MTL::SharedEvent *event = reinterpret_cast<MTL::SharedEvent *>(uintptr_t(p_timeline));
+		event->release();
+	}
+}
+
+bool RenderingDeviceDriverMetal::external_timeline_is_complete(uint64_t p_timeline, uint64_t p_value) const {
+	ERR_FAIL_COND_V(p_timeline == 0, false);
+	MTL::SharedEvent *event = reinterpret_cast<MTL::SharedEvent *>(uintptr_t(p_timeline));
+	return event->signaledValue() >= p_value;
+}
+
+Error RenderingDeviceDriverMetal::command_queue_wait_external_timeline(CommandQueueID p_cmd_queue, uint64_t p_timeline, uint64_t p_value) {
+	ERR_FAIL_COND_V(p_cmd_queue.id == 0 || p_timeline == 0, ERR_INVALID_PARAMETER);
+	MTL::SharedEvent *event = reinterpret_cast<MTL::SharedEvent *>(uintptr_t(p_timeline));
+	MTL::CommandBuffer *command_buffer = get_command_queue()->commandBuffer();
+	ERR_FAIL_NULL_V(command_buffer, ERR_CANT_CREATE);
+	command_buffer->encodeWait(event, p_value);
+	command_buffer->commit();
+	return OK;
+}
+
+Error RenderingDeviceDriverMetal::command_queue_signal_external_timeline(CommandQueueID p_cmd_queue, uint64_t p_timeline, uint64_t p_value) {
+	ERR_FAIL_COND_V(p_cmd_queue.id == 0 || p_timeline == 0, ERR_INVALID_PARAMETER);
+	MTL::SharedEvent *event = reinterpret_cast<MTL::SharedEvent *>(uintptr_t(p_timeline));
+	MTL::CommandBuffer *command_buffer = get_command_queue()->commandBuffer();
+	ERR_FAIL_NULL_V(command_buffer, ERR_CANT_CREATE);
+	command_buffer->encodeSignalEvent(event, p_value);
+	command_buffer->commit();
+	return OK;
+}
+
 uint64_t RenderingDeviceDriverMetal::texture_get_allocation_size(TextureID p_texture) {
 	MTL::Texture *obj = reinterpret_cast<MTL::Texture *>(p_texture.id);
 	return NS::Object::sendMessageSafe<NS::UInteger>(obj, _MTL_PRIVATE_SEL(allocatedSize));
@@ -2488,6 +2560,11 @@ uint64_t RenderingDeviceDriverMetal::get_resource_native_handle(DriverResource p
 			return 0;
 		}
 	}
+}
+
+void RenderingDeviceDriverMetal::get_external_device_identifier(uint64_t &r_low, uint64_t &r_high) const {
+	r_low = device != nullptr ? device->registryID() : 0;
+	r_high = 0;
 }
 
 void RenderingDeviceDriverMetal::_copy_queue_copy_to_buffer(Span<uint8_t> p_src_data, MTL::Buffer *p_dst_buffer, uint64_t p_dst_offset) {

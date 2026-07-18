@@ -319,6 +319,7 @@ protected:
 public:
 	virtual TextureID texture_create(const TextureFormat &p_format, const TextureView &p_view) override final;
 	virtual TextureID texture_create_from_extension(uint64_t p_native_texture, TextureType p_type, DataFormat p_format, uint32_t p_array_layers, bool p_depth_stencil, uint32_t p_mipmaps) override final;
+	virtual void texture_set_external_layout(TextureID p_texture, TextureLayout p_layout) override final;
 	virtual TextureID texture_create_shared(TextureID p_original_texture, const TextureView &p_view) override final;
 	virtual TextureID texture_create_shared_from_slice(TextureID p_original_texture, const TextureView &p_view, TextureSliceType p_slice_type, uint32_t p_layer, uint32_t p_layers, uint32_t p_mipmap, uint32_t p_mipmaps) override final;
 	virtual void texture_free(TextureID p_texture) override final;
@@ -404,6 +405,14 @@ private:
 
 	virtual SemaphoreID semaphore_create() override;
 	virtual void semaphore_free(SemaphoreID p_semaphore) override;
+	virtual uint64_t external_timeline_create(uint64_t p_initial_value) override final;
+	virtual uint64_t external_timeline_import(uint64_t p_native_handle) override final;
+	virtual uint64_t external_timeline_export(uint64_t p_timeline) override final;
+	virtual void external_timeline_export_free(uint64_t p_native_handle) override final;
+	virtual void external_timeline_free(uint64_t p_timeline) override final;
+	virtual bool external_timeline_is_complete(uint64_t p_timeline, uint64_t p_value) const override final;
+	virtual Error command_queue_wait_external_timeline(CommandQueueID p_cmd_queue, uint64_t p_timeline, uint64_t p_value) override final;
+	virtual Error command_queue_signal_external_timeline(CommandQueueID p_cmd_queue, uint64_t p_timeline, uint64_t p_value) override final;
 
 	/******************/
 	/**** COMMANDS ****/
@@ -920,6 +929,7 @@ public:
 
 	virtual void set_object_name(ObjectType p_type, ID p_driver_id, const String &p_name) override final;
 	virtual uint64_t get_resource_native_handle(DriverResource p_type, ID p_driver_id) override final;
+	virtual void get_external_device_identifier(uint64_t &r_low, uint64_t &r_high) const override final;
 	virtual uint64_t get_total_memory_used() override final;
 	virtual uint64_t get_lazily_memory_used() override final;
 	virtual uint64_t limit_get(Limit p_limit) override final;

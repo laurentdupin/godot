@@ -1883,6 +1883,213 @@ RID RenderingDevice::texture_create_from_extension(TextureType p_type, DataForma
 	return id;
 }
 
+RDG::ResourceUsage RenderingDevice::_external_layout_to_resource_usage(RDD::TextureLayout p_layout) {
+	switch (p_layout) {
+		case RDD::TEXTURE_LAYOUT_GENERAL:
+			return RDG::RESOURCE_USAGE_GENERAL;
+		case RDD::TEXTURE_LAYOUT_STORAGE_OPTIMAL:
+			return RDG::RESOURCE_USAGE_STORAGE_IMAGE_READ_WRITE;
+		case RDD::TEXTURE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+			return RDG::RESOURCE_USAGE_ATTACHMENT_COLOR_READ_WRITE;
+		case RDD::TEXTURE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+			return RDG::RESOURCE_USAGE_ATTACHMENT_DEPTH_STENCIL_READ_WRITE;
+		case RDD::TEXTURE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
+		case RDD::TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+			return RDG::RESOURCE_USAGE_TEXTURE_SAMPLE;
+		case RDD::TEXTURE_LAYOUT_COPY_SRC_OPTIMAL:
+			return RDG::RESOURCE_USAGE_COPY_FROM;
+		case RDD::TEXTURE_LAYOUT_COPY_DST_OPTIMAL:
+			return RDG::RESOURCE_USAGE_COPY_TO;
+		case RDD::TEXTURE_LAYOUT_RESOLVE_SRC_OPTIMAL:
+			return RDG::RESOURCE_USAGE_RESOLVE_FROM;
+		case RDD::TEXTURE_LAYOUT_RESOLVE_DST_OPTIMAL:
+			return RDG::RESOURCE_USAGE_RESOLVE_TO;
+		case RDD::TEXTURE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL:
+			return RDG::RESOURCE_USAGE_ATTACHMENT_FRAGMENT_SHADING_RATE_READ;
+		case RDD::TEXTURE_LAYOUT_FRAGMENT_DENSITY_MAP_ATTACHMENT_OPTIMAL:
+			return RDG::RESOURCE_USAGE_ATTACHMENT_FRAGMENT_DENSITY_MAP_READ;
+		default:
+			return RDG::RESOURCE_USAGE_NONE;
+	}
+}
+
+void RenderingDevice::_external_texture_set_layout(Texture *p_texture, RDD::TextureLayout p_layout) {
+	ERR_FAIL_NULL(p_texture);
+	_texture_make_mutable(p_texture, RID());
+	if (p_texture->draw_tracker != nullptr) {
+		p_texture->draw_tracker->usage = _external_layout_to_resource_usage(p_layout);
+		p_texture->draw_tracker->usage_access.clear();
+		p_texture->draw_tracker->command_frame = -1;
+	}
+	driver->texture_set_external_layout(p_texture->driver_id, p_layout);
+}
+
+RID RenderingDevice::external_texture_pool_create() {
+	ERR_RENDER_THREAD_GUARD_V(RID());
+	ExternalTexturePool pool;
+	return external_texture_pool_owner.make_rid(pool);
+}
+
+int32_t RenderingDevice::external_texture_pool_add_slot(RID p_pool, TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_native_texture, uint64_t p_producer_timeline, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, ExternalTextureState p_initial_state) {
+	ERR_RENDER_THREAD_GUARD_V(-1);
+	ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_pool);
+	ERR_FAIL_NULL_V(pool, -1);
+	ERR_FAIL_COND_V(pool->stopped, -1);
+	ERR_FAIL_COND_V(p_native_texture == 0 || p_producer_timeline == 0, -1);
+	ERR_FAIL_INDEX_V(p_initial_state, RDD::TEXTURE_LAYOUT_MAX, -1);
+	const RDD::TextureLayout initial_layout = (RDD::TextureLayout)p_initial_state;
+
+	RID texture = texture_create_from_extension(p_type, p_format, p_samples, p_usage, p_native_texture, p_width, p_height, p_depth, p_layers, p_mipmaps);
+	ERR_FAIL_COND_V(!texture.is_valid(), -1);
+	uint64_t producer_timeline = driver->external_timeline_import(p_producer_timeline);
+	uint64_t release_timeline = driver->external_timeline_create(0);
+	uint64_t release_native_handle = release_timeline != 0 ? driver->external_timeline_export(release_timeline) : 0;
+	if (producer_timeline == 0 || release_timeline == 0 || release_native_handle == 0) {
+		if (release_native_handle != 0) {
+			driver->external_timeline_export_free(release_native_handle);
+		}
+		if (producer_timeline != 0) {
+			driver->external_timeline_free(producer_timeline);
+		}
+		if (release_timeline != 0) {
+			driver->external_timeline_free(release_timeline);
+		}
+		free_rid(texture);
+		ERR_FAIL_V_MSG(-1, "The active RenderingDevice backend does not support external producer timelines.");
+	}
+
+	ExternalTexturePoolSlot slot;
+	slot.texture = texture;
+	slot.producer_timeline = producer_timeline;
+	slot.release_timeline = release_timeline;
+	slot.release_native_handle = release_native_handle;
+	slot.published_layout = initial_layout;
+	texture_owner.get_or_null(texture)->external_pool_owner = p_pool;
+	_external_texture_set_layout(texture_owner.get_or_null(texture), initial_layout);
+	pool->slots.push_back(slot);
+	return pool->slots.size() - 1;
+}
+
+Error RenderingDevice::external_texture_pool_publish(RID p_pool, int32_t p_slot, uint64_t p_producer_value, uint64_t p_generation, ExternalTextureState p_published_state) {
+	_THREAD_SAFE_METHOD_
+	ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_pool);
+	ERR_FAIL_NULL_V(pool, ERR_INVALID_PARAMETER);
+	ERR_FAIL_INDEX_V(p_published_state, RDD::TEXTURE_LAYOUT_MAX, ERR_INVALID_PARAMETER);
+	const RDD::TextureLayout published_layout = (RDD::TextureLayout)p_published_state;
+	ERR_FAIL_COND_V(pool->stopped, ERR_UNAVAILABLE);
+	ERR_FAIL_INDEX_V(p_slot, pool->slots.size(), ERR_INVALID_PARAMETER);
+	ExternalTexturePoolSlot &slot = pool->slots.write[p_slot];
+	if (slot.retired && driver->external_timeline_is_complete(slot.release_timeline, slot.release_value)) {
+		slot.retired = false;
+	}
+	ERR_FAIL_COND_V(slot.current || slot.pending || slot.retired, ERR_BUSY);
+	ERR_FAIL_COND_V(p_generation <= pool->last_published_generation || p_producer_value <= slot.producer_value, ERR_INVALID_PARAMETER);
+	slot.producer_value = p_producer_value;
+	slot.generation = p_generation;
+	pool->last_published_generation = p_generation;
+	slot.published_layout = published_layout;
+	slot.release_value++;
+	slot.pending = true;
+	return OK;
+}
+
+RID RenderingDevice::external_texture_pool_acquire_latest(RID p_pool) {
+	ERR_RENDER_THREAD_GUARD_V(RID());
+	ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_pool);
+	ERR_FAIL_NULL_V(pool, RID());
+
+	int32_t newest_slot = -1;
+	uint64_t newest_generation = 0;
+	for (int32_t i = 0; i < pool->slots.size(); i++) {
+		const ExternalTexturePoolSlot &slot = pool->slots[i];
+		if (slot.pending && driver->external_timeline_is_complete(slot.producer_timeline, slot.producer_value) && (newest_slot < 0 || slot.generation > newest_generation)) {
+			newest_slot = i;
+			newest_generation = slot.generation;
+		}
+	}
+
+	if (newest_slot >= 0) {
+		for (int32_t i = 0; i < pool->slots.size(); i++) {
+			ExternalTexturePoolSlot &slot = pool->slots.write[i];
+			if (!slot.pending || !driver->external_timeline_is_complete(slot.producer_timeline, slot.producer_value)) {
+				continue;
+			}
+			if (i == newest_slot) {
+				continue;
+			}
+			pending_external_acquires.push_back({ slot.producer_timeline, slot.producer_value });
+			pending_external_releases.push_back({ slot.release_timeline, slot.release_value, slot.texture });
+			slot.pending = false;
+			slot.retired = true;
+		}
+
+		if (pool->current_slot >= 0) {
+			ExternalTexturePoolSlot &old_slot = pool->slots.write[pool->current_slot];
+			old_slot.current = false;
+			old_slot.retired = true;
+			pending_external_releases.push_back({ old_slot.release_timeline, old_slot.release_value, old_slot.texture });
+		}
+
+		ExternalTexturePoolSlot &new_slot = pool->slots.write[newest_slot];
+		new_slot.pending = false;
+		new_slot.current = true;
+		pool->current_slot = newest_slot;
+		_external_texture_set_layout(texture_owner.get_or_null(new_slot.texture), new_slot.published_layout);
+		pending_external_acquires.push_back({ new_slot.producer_timeline, new_slot.producer_value });
+	}
+
+	for (ExternalTexturePoolSlot &slot : pool->slots) {
+		if (slot.retired && driver->external_timeline_is_complete(slot.release_timeline, slot.release_value)) {
+			slot.retired = false;
+		}
+	}
+
+	return pool->current_slot >= 0 ? pool->slots[pool->current_slot].texture : RID();
+}
+
+Dictionary RenderingDevice::external_texture_pool_get_slot_status(RID p_pool, int32_t p_slot) {
+	_THREAD_SAFE_METHOD_
+	Dictionary result;
+	ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_pool);
+	ERR_FAIL_NULL_V(pool, result);
+	ERR_FAIL_INDEX_V(p_slot, pool->slots.size(), result);
+	const ExternalTexturePoolSlot &slot = pool->slots[p_slot];
+	const bool release_complete = driver->external_timeline_is_complete(slot.release_timeline, slot.release_value);
+	result["texture"] = slot.texture;
+	result["release_timeline"] = slot.release_native_handle;
+	result["release_value"] = slot.release_value;
+	result["release_state"] = EXTERNAL_TEXTURE_STATE_GENERAL;
+	result["release_complete"] = release_complete;
+	result["generation"] = slot.generation;
+	result["pending"] = slot.pending;
+	result["current"] = slot.current;
+	result["retired"] = slot.retired;
+	result["available"] = !slot.pending && !slot.current && (!slot.retired || release_complete);
+	return result;
+}
+
+void RenderingDevice::external_texture_pool_stop(RID p_pool) {
+	ERR_RENDER_THREAD_GUARD();
+	ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_pool);
+	ERR_FAIL_NULL(pool);
+	pool->stopped = true;
+	if (pool->current_slot >= 0) {
+		ExternalTexturePoolSlot &slot = pool->slots.write[pool->current_slot];
+		slot.current = false;
+		slot.retired = true;
+		pending_external_releases.push_back({ slot.release_timeline, slot.release_value, slot.texture });
+		pool->current_slot = -1;
+	}
+	for (ExternalTexturePoolSlot &slot : pool->slots) {
+		if (slot.pending) {
+			pending_external_acquires.push_back({ slot.producer_timeline, slot.producer_value });
+			pending_external_releases.push_back({ slot.release_timeline, slot.release_value, slot.texture });
+			slot.pending = false;
+			slot.retired = true;
+		}
+	}
+}
+
 RID RenderingDevice::texture_create_shared_from_slice(const TextureView &p_view, RID p_with_texture, uint32_t p_layer, uint32_t p_mipmap, uint32_t p_mipmaps, TextureSliceType p_slice_type, uint32_t p_layers) {
 	Texture *src_texture = texture_owner.get_or_null(p_with_texture);
 	ERR_FAIL_NULL_V(src_texture, RID());
@@ -7622,8 +7829,17 @@ void RenderingDevice::_free_internal(RID p_id) {
 #endif
 
 	// Push everything so it's disposed of next time this frame index is processed (means, it's safe to do it).
-	if (texture_owner.owns(p_id)) {
+	if (external_texture_pool_owner.owns(p_id)) {
+		ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_id);
+		if (pool->destroy_requested) {
+			return;
+		}
+		external_texture_pool_stop(p_id);
+		pool->destroy_requested = true;
+		frames[frame].external_texture_pools_to_dispose_of.push_back(p_id);
+	} else if (texture_owner.owns(p_id)) {
 		Texture *texture = texture_owner.get_or_null(p_id);
+		ERR_FAIL_COND_MSG(texture->external_pool_owner.is_valid(), "External producer slot textures are owned by their pool and cannot be freed independently.");
 		_check_transfer_worker_texture(texture);
 
 		RDG::ResourceTracker *draw_tracker = texture->draw_tracker;
@@ -7993,6 +8209,35 @@ void RenderingDevice::_free_pending_resources(int p_frame) {
 		frames[p_frame].framebuffers_to_dispose_of.pop_front();
 	}
 
+	// External texture pools are retired only after this frame's fence. Their
+	// queued release transitions and timeline signals have therefore completed,
+	// and their ordinary texture disposal can safely join this frame's lists.
+	while (frames[p_frame].external_texture_pools_to_dispose_of.front()) {
+		const RID pool_id = frames[p_frame].external_texture_pools_to_dispose_of.front()->get();
+		ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(pool_id);
+		if (pool != nullptr) {
+			for (ExternalTexturePoolSlot &slot : pool->slots) {
+				Texture *texture = texture_owner.get_or_null(slot.texture);
+				if (texture != nullptr) {
+					texture->external_pool_owner = RID();
+					_free_dependencies(slot.texture);
+					_free_internal(slot.texture);
+				}
+				if (slot.release_timeline != 0) {
+					frames[p_frame].external_timelines_to_dispose_of.push_back(slot.release_timeline);
+				}
+				if (slot.producer_timeline != 0) {
+					frames[p_frame].external_timelines_to_dispose_of.push_back(slot.producer_timeline);
+				}
+				if (slot.release_native_handle != 0) {
+					driver->external_timeline_export_free(slot.release_native_handle);
+				}
+			}
+			external_texture_pool_owner.free(pool_id);
+		}
+		frames[p_frame].external_texture_pools_to_dispose_of.pop_front();
+	}
+
 	// Textures.
 	while (frames[p_frame].textures_to_dispose_of.front()) {
 		Texture *texture = &frames[p_frame].textures_to_dispose_of.front()->get();
@@ -8006,6 +8251,11 @@ void RenderingDevice::_free_pending_resources(int p_frame) {
 		driver->texture_free(texture->driver_id);
 
 		frames[p_frame].textures_to_dispose_of.pop_front();
+	}
+
+	while (frames[p_frame].external_timelines_to_dispose_of.front()) {
+		driver->external_timeline_free(frames[p_frame].external_timelines_to_dispose_of.front()->get());
+		frames[p_frame].external_timelines_to_dispose_of.pop_front();
 	}
 
 	// Buffers.
@@ -8111,6 +8361,22 @@ void RenderingDevice::_end_frame() {
 		ERR_PRINT("Found open raytracing list at the end of the frame, this should never happen (further raytracing will likely not work).");
 	}
 
+	// Return retired external textures to a backend-neutral state before the
+	// release timeline is signaled. The callback has no commands of its own;
+	// its declared graph usage emits the required final resource barrier.
+	for (const ExternalTimelineOperation &release : pending_external_releases) {
+		Texture *texture = texture_owner.get_or_null(release.texture);
+		if (texture == nullptr) {
+			continue;
+		}
+		_texture_make_mutable(texture, release.texture);
+		LocalVector<RDG::ResourceTracker *> trackers;
+		LocalVector<RDG::ResourceUsage> usages;
+		trackers.push_back(texture->draw_tracker);
+		usages.push_back(RDG::RESOURCE_USAGE_GENERAL);
+		draw_graph.add_driver_callback([](RDD *, RDD::CommandBufferID, void *) {}, nullptr, trackers, usages);
+	}
+
 	// The command buffer must be copied into a stack variable as the driver workarounds can change the command buffer in use.
 	RDD::CommandBufferID command_buffer = frames[frame].command_buffer;
 	GodotProfileZoneGroupedFirst(_profile_zone, "_submit_transfer_workers");
@@ -8128,6 +8394,12 @@ void RenderingDevice::_end_frame() {
 
 void RenderingDevice::execute_chained_cmds(bool p_present_swap_chain, RenderingDeviceDriver::FenceID p_draw_fence,
 		RenderingDeviceDriver::SemaphoreID p_dst_draw_semaphore_to_signal) {
+	for (const ExternalTimelineOperation &acquire : pending_external_acquires) {
+		const Error error = driver->command_queue_wait_external_timeline(main_queue, acquire.timeline, acquire.value);
+		ERR_CONTINUE_MSG(error != OK, "Could not enqueue an external producer timeline wait.");
+	}
+	pending_external_acquires.clear();
+
 	// Execute command buffers and use semaphores to wait on the execution of the previous one.
 	// Normally there's only one command buffer, but driver workarounds can force situations where
 	// there'll be more.
@@ -8181,6 +8453,11 @@ void RenderingDevice::execute_chained_cmds(bool p_present_swap_chain, RenderingD
 	}
 
 	frames[frame].semaphores_to_wait_on.clear();
+	for (const ExternalTimelineOperation &release : pending_external_releases) {
+		const Error error = driver->command_queue_signal_external_timeline(main_queue, release.timeline, release.value);
+		ERR_CONTINUE_MSG(error != OK, "Could not enqueue an external producer release signal.");
+	}
+	pending_external_releases.clear();
 }
 
 void RenderingDevice::_execute_frame(bool p_present) {
@@ -8782,6 +9059,27 @@ uint64_t RenderingDevice::get_driver_resource(DriverResource p_resource, RID p_r
 	return driver->get_resource_native_handle(p_resource, driver_id);
 }
 
+Dictionary RenderingDevice::get_external_device_identity() {
+	ERR_RENDER_THREAD_GUARD_V(Dictionary());
+	Dictionary identity;
+	identity["api"] = get_device_api_name();
+	identity["device_name"] = get_device_name();
+	identity["vendor_name"] = get_device_vendor_name();
+	identity["logical_device"] = get_driver_resource(DRIVER_RESOURCE_LOGICAL_DEVICE);
+	identity["physical_device"] = get_driver_resource(DRIVER_RESOURCE_PHYSICAL_DEVICE);
+	identity["topmost_object"] = get_driver_resource(DRIVER_RESOURCE_TOPMOST_OBJECT);
+	identity["command_queue"] = get_driver_resource(DRIVER_RESOURCE_COMMAND_QUEUE);
+	identity["queue_family"] = get_driver_resource(DRIVER_RESOURCE_QUEUE_FAMILY);
+	uint64_t identifier_low = 0;
+	uint64_t identifier_high = 0;
+	driver->get_external_device_identifier(identifier_low, identifier_high);
+	PackedInt64Array identifier;
+	identifier.push_back(int64_t(identifier_low));
+	identifier.push_back(int64_t(identifier_high));
+	identity["device_identifier"] = identifier;
+	return identity;
+}
+
 String RenderingDevice::get_driver_and_device_memory_report() const {
 	return context->get_driver_and_device_memory_report();
 }
@@ -9053,6 +9351,12 @@ void RenderingDevice::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("texture_create_shared", "view", "with_texture"), &RenderingDevice::_texture_create_shared);
 	ClassDB::bind_method(D_METHOD("texture_create_shared_from_slice", "view", "with_texture", "layer", "mipmap", "mipmaps", "slice_type"), &RenderingDevice::_texture_create_shared_from_slice, DEFVAL(1), DEFVAL(TEXTURE_SLICE_2D));
 	ClassDB::bind_method(D_METHOD("texture_create_from_extension", "type", "format", "samples", "usage_flags", "image", "width", "height", "depth", "layers", "mipmaps"), &RenderingDevice::texture_create_from_extension, DEFVAL(1));
+	ClassDB::bind_method(D_METHOD("external_texture_pool_create"), &RenderingDevice::external_texture_pool_create);
+	ClassDB::bind_method(D_METHOD("external_texture_pool_add_slot", "pool", "type", "format", "samples", "usage_flags", "native_texture", "producer_timeline", "width", "height", "depth", "layers", "mipmaps", "initial_state"), &RenderingDevice::external_texture_pool_add_slot);
+	ClassDB::bind_method(D_METHOD("external_texture_pool_publish", "pool", "slot", "producer_value", "generation", "published_state"), &RenderingDevice::external_texture_pool_publish);
+	ClassDB::bind_method(D_METHOD("external_texture_pool_acquire_latest", "pool"), &RenderingDevice::external_texture_pool_acquire_latest);
+	ClassDB::bind_method(D_METHOD("external_texture_pool_get_slot_status", "pool", "slot"), &RenderingDevice::external_texture_pool_get_slot_status);
+	ClassDB::bind_method(D_METHOD("external_texture_pool_stop", "pool"), &RenderingDevice::external_texture_pool_stop);
 
 	ClassDB::bind_method(D_METHOD("texture_update", "texture", "layer", "data"), &RenderingDevice::texture_update);
 	ClassDB::bind_method(D_METHOD("texture_get_data", "texture", "layer"), &RenderingDevice::texture_get_data);
@@ -9218,6 +9522,7 @@ void RenderingDevice::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("get_device_vendor_name"), &RenderingDevice::get_device_vendor_name);
 	ClassDB::bind_method(D_METHOD("get_device_name"), &RenderingDevice::get_device_name);
+	ClassDB::bind_method(D_METHOD("get_external_device_identity"), &RenderingDevice::get_external_device_identity);
 	ClassDB::bind_method(D_METHOD("get_device_pipeline_cache_uuid"), &RenderingDevice::get_device_pipeline_cache_uuid);
 
 	ClassDB::bind_method(D_METHOD("get_memory_usage", "type"), &RenderingDevice::get_memory_usage);
@@ -9517,6 +9822,17 @@ void RenderingDevice::_bind_methods() {
 	BIND_BITFIELD_FLAG(BARRIER_MASK_ALL_BARRIERS);
 	BIND_BITFIELD_FLAG(BARRIER_MASK_NO_BARRIER);
 #endif
+	BIND_ENUM_CONSTANT(EXTERNAL_TEXTURE_STATE_UNDEFINED);
+	BIND_ENUM_CONSTANT(EXTERNAL_TEXTURE_STATE_GENERAL);
+	BIND_ENUM_CONSTANT(EXTERNAL_TEXTURE_STATE_STORAGE);
+	BIND_ENUM_CONSTANT(EXTERNAL_TEXTURE_STATE_COLOR_ATTACHMENT);
+	BIND_ENUM_CONSTANT(EXTERNAL_TEXTURE_STATE_DEPTH_STENCIL_ATTACHMENT);
+	BIND_ENUM_CONSTANT(EXTERNAL_TEXTURE_STATE_DEPTH_STENCIL_READ);
+	BIND_ENUM_CONSTANT(EXTERNAL_TEXTURE_STATE_SHADER_READ);
+	BIND_ENUM_CONSTANT(EXTERNAL_TEXTURE_STATE_COPY_SOURCE);
+	BIND_ENUM_CONSTANT(EXTERNAL_TEXTURE_STATE_COPY_DESTINATION);
+	BIND_ENUM_CONSTANT(EXTERNAL_TEXTURE_STATE_RESOLVE_SOURCE);
+	BIND_ENUM_CONSTANT(EXTERNAL_TEXTURE_STATE_RESOLVE_DESTINATION);
 
 	BIND_ENUM_CONSTANT(TEXTURE_TYPE_1D);
 	BIND_ENUM_CONSTANT(TEXTURE_TYPE_2D);

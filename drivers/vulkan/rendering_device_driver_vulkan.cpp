@@ -38,6 +38,14 @@
 
 #include <thirdparty/misc/smolv.h>
 
+#ifdef UNIX_ENABLED
+#include <unistd.h>
+#endif
+
+#ifdef WINDOWS_ENABLED
+#include <windows.h>
+#endif
+
 #if defined(SWAPPY_FRAME_PACING_ENABLED)
 #include "platform/android/java_godot_wrapper.h"
 #include "platform/android/os_android.h"
@@ -586,6 +594,13 @@ Error RenderingDeviceDriverVulkan::_initialize_device_extensions() {
 	_register_requested_device_extension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, false);
 	_register_requested_device_extension(VK_NV_RAY_TRACING_VALIDATION_EXTENSION_NAME, false);
 	_register_requested_device_extension(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME, false);
+	_register_requested_device_extension(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME, false);
+	_register_requested_device_extension(VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME, false);
+#ifdef WINDOWS_ENABLED
+	_register_requested_device_extension(VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME, false);
+#elif defined(UNIX_ENABLED)
+	_register_requested_device_extension(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME, false);
+#endif
 
 	// We don't actually use this extension, but some runtime components on some platforms
 	// can and will fill the validation layers with useless info otherwise if not enabled.
@@ -915,6 +930,7 @@ Error RenderingDeviceDriverVulkan::_check_device_capabilities() {
 		VkPhysicalDeviceAccelerationStructureFeaturesKHR acceleration_structure_features = {};
 		VkPhysicalDeviceRayTracingPipelineFeaturesKHR raytracing_pipeline_features = {};
 		VkPhysicalDeviceSynchronization2FeaturesKHR sync_2_features = {};
+		VkPhysicalDeviceTimelineSemaphoreFeatures timeline_semaphore_features = {};
 		VkPhysicalDeviceRayTracingValidationFeaturesNV raytracing_validation_features = {};
 
 		const bool use_1_2_features = physical_device_properties.apiVersion >= VK_API_VERSION_1_2;
@@ -1006,10 +1022,17 @@ Error RenderingDeviceDriverVulkan::_check_device_capabilities() {
 			next_features = &sync_2_features;
 		}
 
+		if (!use_1_2_features && enabled_device_extension_names.has(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME)) {
+			timeline_semaphore_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+			timeline_semaphore_features.pNext = next_features;
+			next_features = &timeline_semaphore_features;
+		}
+
 		VkPhysicalDeviceFeatures2 device_features_2 = {};
 		device_features_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
 		device_features_2.pNext = next_features;
 		functions.GetPhysicalDeviceFeatures2(physical_device, &device_features_2);
+		timeline_semaphore_support = use_1_2_features ? bool(device_features_vk_1_2.timelineSemaphore) : bool(timeline_semaphore_features.timelineSemaphore);
 
 		if (use_1_2_features) {
 #ifdef MACOS_ENABLED
@@ -1439,6 +1462,14 @@ Error RenderingDeviceDriverVulkan::_initialize_device(const LocalVector<VkDevice
 		raytracing_validation_features.pNext = create_info_next;
 		raytracing_validation_features.rayTracingValidation = raytracing_capabilities.validation;
 		create_info_next = &raytracing_validation_features;
+	}
+
+	VkPhysicalDeviceTimelineSemaphoreFeatures timeline_semaphore_features = {};
+	if (timeline_semaphore_support) {
+		timeline_semaphore_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+		timeline_semaphore_features.pNext = create_info_next;
+		timeline_semaphore_features.timelineSemaphore = VK_TRUE;
+		create_info_next = &timeline_semaphore_features;
 	}
 
 	VkPhysicalDeviceVulkan11Features vulkan_1_1_features = {};
@@ -3100,6 +3131,192 @@ RDD::SemaphoreID RenderingDeviceDriverVulkan::semaphore_create() {
 
 void RenderingDeviceDriverVulkan::semaphore_free(SemaphoreID p_semaphore) {
 	vkDestroySemaphore(vk_device, VkSemaphore(p_semaphore.id), VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SEMAPHORE));
+}
+
+uint64_t RenderingDeviceDriverVulkan::external_timeline_create(uint64_t p_initial_value) {
+	ERR_FAIL_COND_V_MSG(!timeline_semaphore_support, 0, "Vulkan timeline semaphores are not supported by this device.");
+
+	VkSemaphoreTypeCreateInfo timeline_info = {};
+	timeline_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+	timeline_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+	timeline_info.initialValue = p_initial_value;
+
+	VkExportSemaphoreCreateInfo export_info = {};
+	export_info.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
+	bool export_supported = false;
+#ifdef WINDOWS_ENABLED
+	export_info.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+	export_supported = enabled_device_extension_names.has(VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME);
+#elif defined(UNIX_ENABLED)
+	export_info.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
+	export_supported = enabled_device_extension_names.has(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
+#endif
+
+	VkSemaphoreCreateInfo create_info = {};
+	create_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+	create_info.pNext = &timeline_info;
+	timeline_info.pNext = export_supported ? &export_info : nullptr;
+
+	VkSemaphore semaphore = VK_NULL_HANDLE;
+	VkResult err = vkCreateSemaphore(vk_device, &create_info, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SEMAPHORE), &semaphore);
+	ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, 0, vformat("Couldn't create Vulkan external timeline semaphore (VkResult error %d).", err));
+	return uint64_t(semaphore);
+}
+
+uint64_t RenderingDeviceDriverVulkan::external_timeline_import(uint64_t p_native_handle) {
+	ERR_FAIL_COND_V_MSG(!timeline_semaphore_support || p_native_handle == 0, 0, "A valid native timeline semaphore handle is required.");
+#ifdef WINDOWS_ENABLED
+	ERR_FAIL_COND_V_MSG(!enabled_device_extension_names.has(VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME), 0, "Vulkan Win32 external semaphores are not supported by this device.");
+#elif defined(UNIX_ENABLED)
+	ERR_FAIL_COND_V_MSG(!enabled_device_extension_names.has(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME), 0, "Vulkan file-descriptor external semaphores are not supported by this device.");
+#else
+	ERR_FAIL_V_MSG(0, "Vulkan external semaphore handles are not supported on this platform.");
+#endif
+
+	VkSemaphoreTypeCreateInfo timeline_info = {};
+	timeline_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+	timeline_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+
+	VkSemaphoreCreateInfo create_info = {};
+	create_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+	create_info.pNext = &timeline_info;
+
+	VkSemaphore semaphore = VK_NULL_HANDLE;
+	VkResult err = vkCreateSemaphore(vk_device, &create_info, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SEMAPHORE), &semaphore);
+	ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, 0, vformat("Couldn't create Vulkan timeline semaphore for import (VkResult error %d).", err));
+
+#ifdef WINDOWS_ENABLED
+	VkImportSemaphoreWin32HandleInfoKHR import_info = {};
+	import_info.sType = VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR;
+	import_info.semaphore = semaphore;
+	import_info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+	import_info.handle = reinterpret_cast<HANDLE>(uintptr_t(p_native_handle));
+	err = vkImportSemaphoreWin32HandleKHR(vk_device, &import_info);
+#elif defined(UNIX_ENABLED)
+	VkImportSemaphoreFdInfoKHR import_info = {};
+	import_info.sType = VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR;
+	import_info.semaphore = semaphore;
+	import_info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
+	// Vulkan consumes a successfully imported file descriptor. Duplicate the
+	// caller-owned handle so the RenderingDevice import contract remains borrowed.
+	const int imported_fd = dup(int(p_native_handle));
+	if (imported_fd < 0) {
+		vkDestroySemaphore(vk_device, semaphore, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SEMAPHORE));
+		ERR_FAIL_V_MSG(0, "Couldn't duplicate Vulkan external timeline semaphore file descriptor.");
+	}
+	import_info.fd = imported_fd;
+	err = vkImportSemaphoreFdKHR(vk_device, &import_info);
+	if (err != VK_SUCCESS) {
+		close(imported_fd);
+	}
+#else
+	err = VK_ERROR_EXTENSION_NOT_PRESENT;
+#endif
+	if (err != VK_SUCCESS) {
+		vkDestroySemaphore(vk_device, semaphore, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SEMAPHORE));
+		ERR_FAIL_V_MSG(0, vformat("Couldn't import Vulkan external timeline semaphore (VkResult error %d).", err));
+	}
+	return uint64_t(semaphore);
+}
+
+uint64_t RenderingDeviceDriverVulkan::external_timeline_export(uint64_t p_timeline) {
+	ERR_FAIL_COND_V(p_timeline == 0, 0);
+#ifdef WINDOWS_ENABLED
+	ERR_FAIL_COND_V_MSG(!enabled_device_extension_names.has(VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME), 0, "Vulkan Win32 external semaphores are not supported by this device.");
+	VkSemaphoreGetWin32HandleInfoKHR handle_info = {};
+	handle_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR;
+	handle_info.semaphore = VkSemaphore(p_timeline);
+	handle_info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+	HANDLE handle = nullptr;
+	VkResult err = vkGetSemaphoreWin32HandleKHR(vk_device, &handle_info, &handle);
+	ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, 0, vformat("Couldn't export Vulkan external timeline semaphore (VkResult error %d).", err));
+	return uint64_t(reinterpret_cast<uintptr_t>(handle));
+#elif defined(UNIX_ENABLED)
+	ERR_FAIL_COND_V_MSG(!enabled_device_extension_names.has(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME), 0, "Vulkan file-descriptor external semaphores are not supported by this device.");
+	VkSemaphoreGetFdInfoKHR handle_info = {};
+	handle_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
+	handle_info.semaphore = VkSemaphore(p_timeline);
+	handle_info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
+	int fd = -1;
+	VkResult err = vkGetSemaphoreFdKHR(vk_device, &handle_info, &fd);
+	ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, 0, vformat("Couldn't export Vulkan external timeline semaphore (VkResult error %d).", err));
+	return uint64_t(fd);
+#else
+	return 0;
+#endif
+}
+
+void RenderingDeviceDriverVulkan::external_timeline_export_free(uint64_t p_native_handle) {
+	if (p_native_handle == 0) {
+		return;
+	}
+#ifdef WINDOWS_ENABLED
+	CloseHandle(reinterpret_cast<HANDLE>(uintptr_t(p_native_handle)));
+#elif defined(UNIX_ENABLED)
+	close(int(p_native_handle));
+#endif
+}
+
+void RenderingDeviceDriverVulkan::external_timeline_free(uint64_t p_timeline) {
+	if (p_timeline != 0) {
+		vkDestroySemaphore(vk_device, VkSemaphore(p_timeline), VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SEMAPHORE));
+	}
+}
+
+bool RenderingDeviceDriverVulkan::external_timeline_is_complete(uint64_t p_timeline, uint64_t p_value) const {
+	ERR_FAIL_COND_V(p_timeline == 0, false);
+	uint64_t completed_value = 0;
+	VkResult err = vkGetSemaphoreCounterValue(vk_device, VkSemaphore(p_timeline), &completed_value);
+	ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, false, vformat("Couldn't query Vulkan external timeline semaphore (VkResult error %d).", err));
+	return completed_value >= p_value;
+}
+
+Error RenderingDeviceDriverVulkan::command_queue_wait_external_timeline(CommandQueueID p_cmd_queue, uint64_t p_timeline, uint64_t p_value) {
+	ERR_FAIL_COND_V(!timeline_semaphore_support || p_cmd_queue.id == 0 || p_timeline == 0, ERR_INVALID_PARAMETER);
+	CommandQueue *command_queue = (CommandQueue *)p_cmd_queue.id;
+	Queue &device_queue = queue_families[command_queue->queue_family][command_queue->queue_index];
+	VkSemaphore semaphore = VkSemaphore(p_timeline);
+	VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+
+	VkTimelineSemaphoreSubmitInfo timeline_info = {};
+	timeline_info.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+	timeline_info.waitSemaphoreValueCount = 1;
+	timeline_info.pWaitSemaphoreValues = &p_value;
+
+	VkSubmitInfo submit_info = {};
+	submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submit_info.pNext = &timeline_info;
+	submit_info.waitSemaphoreCount = 1;
+	submit_info.pWaitSemaphores = &semaphore;
+	submit_info.pWaitDstStageMask = &wait_stage;
+
+	MutexLock lock(device_queue.submit_mutex);
+	VkResult err = vkQueueSubmit(device_queue.queue, 1, &submit_info, VK_NULL_HANDLE);
+	ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, FAILED, vformat("Couldn't enqueue Vulkan external timeline wait (VkResult error %d).", err));
+	return OK;
+}
+
+Error RenderingDeviceDriverVulkan::command_queue_signal_external_timeline(CommandQueueID p_cmd_queue, uint64_t p_timeline, uint64_t p_value) {
+	ERR_FAIL_COND_V(!timeline_semaphore_support || p_cmd_queue.id == 0 || p_timeline == 0, ERR_INVALID_PARAMETER);
+	CommandQueue *command_queue = (CommandQueue *)p_cmd_queue.id;
+	Queue &device_queue = queue_families[command_queue->queue_family][command_queue->queue_index];
+	VkSemaphore semaphore = VkSemaphore(p_timeline);
+
+	VkTimelineSemaphoreSubmitInfo timeline_info = {};
+	timeline_info.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+	timeline_info.signalSemaphoreValueCount = 1;
+	timeline_info.pSignalSemaphoreValues = &p_value;
+
+	VkSubmitInfo submit_info = {};
+	submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submit_info.pNext = &timeline_info;
+	submit_info.signalSemaphoreCount = 1;
+	submit_info.pSignalSemaphores = &semaphore;
+
+	MutexLock lock(device_queue.submit_mutex);
+	VkResult err = vkQueueSubmit(device_queue.queue, 1, &submit_info, VK_NULL_HANDLE);
+	ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, FAILED, vformat("Couldn't enqueue Vulkan external timeline signal (VkResult error %d).", err));
+	return OK;
 }
 
 /******************/
@@ -7242,6 +7459,23 @@ uint64_t RenderingDeviceDriverVulkan::get_resource_native_handle(DriverResource 
 		default: {
 			return 0;
 		}
+	}
+}
+
+void RenderingDeviceDriverVulkan::get_external_device_identifier(uint64_t &r_low, uint64_t &r_high) const {
+	VkPhysicalDeviceIDProperties id_properties = {};
+	id_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+	VkPhysicalDeviceProperties2 properties = {};
+	properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+	properties.pNext = &id_properties;
+	const RenderingContextDriverVulkan::Functions &functions = context_driver->functions_get();
+	if (functions.GetPhysicalDeviceProperties2 != nullptr) {
+		functions.GetPhysicalDeviceProperties2(physical_device, &properties);
+		memcpy(&r_low, id_properties.deviceUUID, sizeof(uint64_t));
+		memcpy(&r_high, id_properties.deviceUUID + sizeof(uint64_t), sizeof(uint64_t));
+	} else {
+		memcpy(&r_low, physical_device_properties.pipelineCacheUUID, sizeof(uint64_t));
+		memcpy(&r_high, physical_device_properties.pipelineCacheUUID + sizeof(uint64_t), sizeof(uint64_t));
 	}
 }
 
