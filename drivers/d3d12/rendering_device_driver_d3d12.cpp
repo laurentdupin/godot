@@ -6176,7 +6176,7 @@ void RenderingDeviceDriverD3D12::_report_device_removed(HRESULT p_observed_error
 			SIZE_T message_size = 0;
 			HRESULT message_result = info_queue->GetMessage(message_index, nullptr, &message_size);
 			if (FAILED(message_result) || message_size == 0) {
-				ERR_PRINT(vformat("D3D12 debug info queue message %llu size query failed (HRESULT 0x%08ux).", message_index, (uint64_t)(uint32_t)message_result));
+				ERR_PRINT(vformat("D3D12 debug info queue message %d size query failed (HRESULT 0x%08ux).", (int64_t)message_index, (uint64_t)(uint32_t)message_result));
 				continue;
 			}
 			Vector<uint8_t> message_storage;
@@ -6184,10 +6184,10 @@ void RenderingDeviceDriverD3D12::_report_device_removed(HRESULT p_observed_error
 			D3D12_MESSAGE *message = reinterpret_cast<D3D12_MESSAGE *>(message_storage.ptrw());
 			message_result = info_queue->GetMessage(message_index, message, &message_size);
 			if (FAILED(message_result)) {
-				ERR_PRINT(vformat("D3D12 debug info queue message %llu retrieval failed (HRESULT 0x%08ux).", message_index, (uint64_t)(uint32_t)message_result));
+				ERR_PRINT(vformat("D3D12 debug info queue message %d retrieval failed (HRESULT 0x%08ux).", (int64_t)message_index, (uint64_t)(uint32_t)message_result));
 				continue;
 			}
-			ERR_PRINT(vformat("D3D12 debug message[%llu]: severity=%u, category=%u, id=%u, text=%s", message_index, (uint32_t)message->Severity, (uint32_t)message->Category, (uint32_t)message->ID, message->pDescription));
+			ERR_PRINT(vformat("D3D12 debug message[%d]: severity=%u, category=%u, id=%u, text=%s", (int64_t)message_index, (uint32_t)message->Severity, (uint32_t)message->Category, (uint32_t)message->ID, message->pDescription));
 		}
 	} else {
 		ERR_PRINT(vformat("D3D12 debug info queue is unavailable (HRESULT 0x%08ux). Reproduce with --gpu-validation to enable it.", (uint64_t)(uint32_t)info_queue_result));
