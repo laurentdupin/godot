@@ -954,6 +954,10 @@ public:
 		r_low = 0;
 		r_high = 0;
 	}
+	virtual bool get_external_device_luid(uint64_t &r_luid) const {
+		r_luid = 0;
+		return false;
+	}
 	virtual uint64_t get_total_memory_used() = 0;
 	virtual uint64_t get_lazily_memory_used() = 0;
 	virtual uint64_t limit_get(Limit p_limit) = 0;

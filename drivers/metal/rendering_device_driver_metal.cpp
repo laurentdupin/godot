@@ -422,6 +422,10 @@ RDD::TextureID RenderingDeviceDriverMetal::texture_create_from_extension(uint64_
 		MTL::TextureSwizzleChannels swizzle = MTL::TextureSwizzleChannels::Default();
 		res = res->newTextureView(format, res->textureType(), NS::Range::Make(0, res->mipmapLevelCount()), NS::Range::Make(0, p_array_layers), swizzle);
 		ERR_FAIL_NULL_V_MSG(res, TextureID(), "Unable to create texture view.");
+	} else {
+		// Extension textures are producer-owned. Hold an independent reference
+		// so texture_free() cannot consume the producer's ownership.
+		res->retain();
 	}
 
 	_track_resource(res);

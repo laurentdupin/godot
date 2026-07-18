@@ -5912,6 +5912,16 @@ void RenderingDeviceDriverD3D12::get_external_device_identifier(uint64_t &r_low,
 	}
 }
 
+bool RenderingDeviceDriverD3D12::get_external_device_luid(uint64_t &r_luid) const {
+	DXGI_ADAPTER_DESC description = {};
+	if (adapter == nullptr || FAILED(adapter->GetDesc(&description))) {
+		r_luid = 0;
+		return false;
+	}
+	r_luid = uint64_t(uint32_t(description.AdapterLuid.LowPart)) | (uint64_t(uint32_t(description.AdapterLuid.HighPart)) << 32);
+	return true;
+}
+
 uint64_t RenderingDeviceDriverD3D12::get_total_memory_used() {
 	D3D12MA::Budget local_budget;
 	D3D12MA::Budget non_local_budget;

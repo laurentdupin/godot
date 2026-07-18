@@ -596,7 +596,7 @@
 		<method name="get_external_device_identity">
 			<return type="Dictionary" />
 			<description>
-				Returns the native logical device, physical device, top-level API object, main command queue, queue family, and a backend-neutral two-word device identifier. External GPU producers must use these values to select the same adapter and to open shared resources on Godot's logical device.
+				Returns the native logical device, physical device, top-level API object, main command queue, queue family, and a backend-neutral two-word device identifier. On Windows, [code]adapter_luid[/code] is also returned when the backend exposes one, including D3D12 and Vulkan. External GPU producers must use these values to select the same adapter and to open shared resources on Godot's logical device.
 			</description>
 		</method>
 		<method name="get_device_pipeline_cache_uuid" qualifiers="const">
@@ -1200,6 +1200,14 @@
 			<param index="0" name="pool" type="RID" />
 			<description>
 				Nonblocking completion poll that adopts the newest completed generation and returns its ordinary sampled texture RID. Call on the render thread before recording consumers. If no newer publication is complete, the previous texture RID is returned.
+			</description>
+		</method>
+		<method name="external_texture_pool_abandon_pending">
+			<return type="int" enum="Error" />
+			<param index="0" name="pool" type="RID" />
+			<param index="1" name="slot" type="int" />
+			<description>
+				Abandons an unfinished publication without waiting for its producer timeline. This is a fault-recovery operation: before calling it, the producer must be stopped or lost such that it can no longer access the slot. Godot never samples the abandoned publication and GPU-signals its release value without imposing a resource-state transition.
 			</description>
 		</method>
 		<method name="external_texture_pool_get_slot_status">

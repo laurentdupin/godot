@@ -7479,6 +7479,26 @@ void RenderingDeviceDriverVulkan::get_external_device_identifier(uint64_t &r_low
 	}
 }
 
+bool RenderingDeviceDriverVulkan::get_external_device_luid(uint64_t &r_luid) const {
+	r_luid = 0;
+#ifdef WINDOWS_ENABLED
+	VkPhysicalDeviceIDProperties id_properties = {};
+	id_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+	VkPhysicalDeviceProperties2 properties = {};
+	properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+	properties.pNext = &id_properties;
+	const RenderingContextDriverVulkan::Functions &functions = context_driver->functions_get();
+	if (functions.GetPhysicalDeviceProperties2 != nullptr) {
+		functions.GetPhysicalDeviceProperties2(physical_device, &properties);
+		if (id_properties.deviceLUIDValid && VK_LUID_SIZE == sizeof(uint64_t)) {
+			memcpy(&r_luid, id_properties.deviceLUID, sizeof(uint64_t));
+			return true;
+		}
+	}
+#endif
+	return false;
+}
+
 uint64_t RenderingDeviceDriverVulkan::get_total_memory_used() {
 	const VkPhysicalDeviceMemoryProperties *memory_properties = nullptr;
 	vmaGetMemoryProperties(allocator, &memory_properties);

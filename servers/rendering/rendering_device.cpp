@@ -1927,6 +1927,7 @@ void RenderingDevice::_external_texture_set_layout(Texture *p_texture, RDD::Text
 RID RenderingDevice::external_texture_pool_create() {
 	ERR_RENDER_THREAD_GUARD_V(RID());
 	ExternalTexturePool pool;
+	pool.mutex = memnew(Mutex);
 	return external_texture_pool_owner.make_rid(pool);
 }
 
@@ -1934,6 +1935,7 @@ int32_t RenderingDevice::external_texture_pool_add_slot(RID p_pool, TextureType 
 	ERR_RENDER_THREAD_GUARD_V(-1);
 	ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_pool);
 	ERR_FAIL_NULL_V(pool, -1);
+	MutexLock lock(*pool->mutex);
 	ERR_FAIL_COND_V(pool->stopped, -1);
 	ERR_FAIL_COND_V(p_native_texture == 0 || p_producer_timeline == 0, -1);
 	ERR_FAIL_INDEX_V(p_initial_state, RDD::TEXTURE_LAYOUT_MAX, -1);
@@ -1971,9 +1973,9 @@ int32_t RenderingDevice::external_texture_pool_add_slot(RID p_pool, TextureType 
 }
 
 Error RenderingDevice::external_texture_pool_publish(RID p_pool, int32_t p_slot, uint64_t p_producer_value, uint64_t p_generation, ExternalTextureState p_published_state) {
-	_THREAD_SAFE_METHOD_
 	ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_pool);
 	ERR_FAIL_NULL_V(pool, ERR_INVALID_PARAMETER);
+	MutexLock lock(*pool->mutex);
 	ERR_FAIL_INDEX_V(p_published_state, RDD::TEXTURE_LAYOUT_MAX, ERR_INVALID_PARAMETER);
 	const RDD::TextureLayout published_layout = (RDD::TextureLayout)p_published_state;
 	ERR_FAIL_COND_V(pool->stopped, ERR_UNAVAILABLE);
@@ -1993,10 +1995,30 @@ Error RenderingDevice::external_texture_pool_publish(RID p_pool, int32_t p_slot,
 	return OK;
 }
 
+Error RenderingDevice::external_texture_pool_abandon_pending(RID p_pool, int32_t p_slot) {
+	ERR_RENDER_THREAD_GUARD_V(ERR_UNAVAILABLE);
+	ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_pool);
+	ERR_FAIL_NULL_V(pool, ERR_INVALID_PARAMETER);
+	MutexLock lock(*pool->mutex);
+	ERR_FAIL_INDEX_V(p_slot, pool->slots.size(), ERR_INVALID_PARAMETER);
+	ExternalTexturePoolSlot &slot = pool->slots.write[p_slot];
+	ERR_FAIL_COND_V(!slot.pending, ERR_INVALID_PARAMETER);
+
+	// This path is intentionally explicit: the caller guarantees that the
+	// producer has stopped accessing the resource (for example after device
+	// loss). Since Godot never acquired the unfinished publication, no producer
+	// wait or resource transition is required before releasing the slot.
+	slot.pending = false;
+	slot.retired = true;
+	pending_external_releases.push_back({ slot.release_timeline, slot.release_value, RID() });
+	return OK;
+}
+
 RID RenderingDevice::external_texture_pool_acquire_latest(RID p_pool) {
 	ERR_RENDER_THREAD_GUARD_V(RID());
 	ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_pool);
 	ERR_FAIL_NULL_V(pool, RID());
+	MutexLock lock(*pool->mutex);
 
 	int32_t newest_slot = -1;
 	uint64_t newest_generation = 0;
@@ -2048,10 +2070,10 @@ RID RenderingDevice::external_texture_pool_acquire_latest(RID p_pool) {
 }
 
 Dictionary RenderingDevice::external_texture_pool_get_slot_status(RID p_pool, int32_t p_slot) {
-	_THREAD_SAFE_METHOD_
 	Dictionary result;
 	ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_pool);
 	ERR_FAIL_NULL_V(pool, result);
+	MutexLock lock(*pool->mutex);
 	ERR_FAIL_INDEX_V(p_slot, pool->slots.size(), result);
 	const ExternalTexturePoolSlot &slot = pool->slots[p_slot];
 	const bool release_complete = driver->external_timeline_is_complete(slot.release_timeline, slot.release_value);
@@ -2072,6 +2094,7 @@ void RenderingDevice::external_texture_pool_stop(RID p_pool) {
 	ERR_RENDER_THREAD_GUARD();
 	ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_pool);
 	ERR_FAIL_NULL(pool);
+	MutexLock lock(*pool->mutex);
 	pool->stopped = true;
 	if (pool->current_slot >= 0) {
 		ExternalTexturePoolSlot &slot = pool->slots.write[pool->current_slot];
@@ -7831,6 +7854,7 @@ void RenderingDevice::_free_internal(RID p_id) {
 	// Push everything so it's disposed of next time this frame index is processed (means, it's safe to do it).
 	if (external_texture_pool_owner.owns(p_id)) {
 		ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_id);
+		MutexLock lock(*pool->mutex);
 		if (pool->destroy_requested) {
 			return;
 		}
@@ -8216,6 +8240,8 @@ void RenderingDevice::_free_pending_resources(int p_frame) {
 		const RID pool_id = frames[p_frame].external_texture_pools_to_dispose_of.front()->get();
 		ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(pool_id);
 		if (pool != nullptr) {
+			Mutex *pool_mutex = pool->mutex;
+			MutexLock lock(*pool_mutex);
 			for (ExternalTexturePoolSlot &slot : pool->slots) {
 				Texture *texture = texture_owner.get_or_null(slot.texture);
 				if (texture != nullptr) {
@@ -8234,6 +8260,8 @@ void RenderingDevice::_free_pending_resources(int p_frame) {
 				}
 			}
 			external_texture_pool_owner.free(pool_id);
+			lock.temp_unlock();
+			memdelete(pool_mutex);
 		}
 		frames[p_frame].external_texture_pools_to_dispose_of.pop_front();
 	}
@@ -9077,6 +9105,10 @@ Dictionary RenderingDevice::get_external_device_identity() {
 	identifier.push_back(int64_t(identifier_low));
 	identifier.push_back(int64_t(identifier_high));
 	identity["device_identifier"] = identifier;
+	uint64_t adapter_luid = 0;
+	if (driver->get_external_device_luid(adapter_luid)) {
+		identity["adapter_luid"] = int64_t(adapter_luid);
+	}
 	return identity;
 }
 
@@ -9159,8 +9191,20 @@ void RenderingDevice::finalize() {
 	ERR_RENDER_THREAD_GUARD();
 
 	if (!frames.is_empty()) {
+		// External pools own ordinary texture RIDs and must enqueue their final
+		// release transitions before the last device submission. This also
+		// covers callers that destroy the RenderingDevice without explicitly
+		// stopping or freeing their pool first.
+		const LocalVector<RID> external_pools = external_texture_pool_owner.get_owned_list();
+		for (const RID &pool : external_pools) {
+			free_rid(pool);
+		}
+
 		// Wait for all frames to have finished rendering.
 		_flush_and_stall_for_all_frames(false);
+		for (uint32_t i = 0; i < frames.size(); i++) {
+			_free_pending_resources(i);
+		}
 	}
 
 	// Wait for transfer workers to finish.
@@ -9354,6 +9398,7 @@ void RenderingDevice::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("external_texture_pool_create"), &RenderingDevice::external_texture_pool_create);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_add_slot", "pool", "type", "format", "samples", "usage_flags", "native_texture", "producer_timeline", "width", "height", "depth", "layers", "mipmaps", "initial_state"), &RenderingDevice::external_texture_pool_add_slot);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_publish", "pool", "slot", "producer_value", "generation", "published_state"), &RenderingDevice::external_texture_pool_publish);
+	ClassDB::bind_method(D_METHOD("external_texture_pool_abandon_pending", "pool", "slot"), &RenderingDevice::external_texture_pool_abandon_pending);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_acquire_latest", "pool"), &RenderingDevice::external_texture_pool_acquire_latest);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_get_slot_status", "pool", "slot"), &RenderingDevice::external_texture_pool_get_slot_status);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_stop", "pool"), &RenderingDevice::external_texture_pool_stop);

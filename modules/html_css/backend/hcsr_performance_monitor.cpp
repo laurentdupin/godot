@@ -18,7 +18,9 @@ struct HCSRMonitorDefinition {
 
 void HCSRPerformanceMonitor::initialize() {
 	Performance *performance = Performance::get_singleton();
-	ERR_FAIL_NULL(performance);
+	if (performance == nullptr) {
+		return;
+	}
 
 	static const HCSRMonitorDefinition definitions[] = {
 		{ "HCSR/Frame Time", MONITOR_FRAME_TIME, Performance::MONITOR_TYPE_TIME },

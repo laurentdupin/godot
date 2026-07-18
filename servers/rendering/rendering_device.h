@@ -439,6 +439,7 @@ public:
 
 	struct ExternalTexturePool {
 		Vector<ExternalTexturePoolSlot> slots;
+		Mutex *mutex = nullptr;
 		int32_t current_slot = -1;
 		uint64_t last_published_generation = 0;
 		bool stopped = false;
@@ -520,6 +521,7 @@ public:
 	RID external_texture_pool_create();
 	int32_t external_texture_pool_add_slot(RID p_pool, TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_native_texture, uint64_t p_producer_timeline, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, ExternalTextureState p_initial_state);
 	Error external_texture_pool_publish(RID p_pool, int32_t p_slot, uint64_t p_producer_value, uint64_t p_generation, ExternalTextureState p_published_state);
+	Error external_texture_pool_abandon_pending(RID p_pool, int32_t p_slot);
 	RID external_texture_pool_acquire_latest(RID p_pool);
 	Dictionary external_texture_pool_get_slot_status(RID p_pool, int32_t p_slot);
 	void external_texture_pool_stop(RID p_pool);
