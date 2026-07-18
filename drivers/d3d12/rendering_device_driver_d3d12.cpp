@@ -6164,14 +6164,49 @@ void RenderingDeviceDriverD3D12::_report_device_removed(HRESULT p_observed_error
 	device_removal_reported = true;
 	ERR_PRINT(vformat("D3D12 device removal detected during %s: observed=0x%08ux, reason=0x%08ux.", p_operation, (uint64_t)(uint32_t)p_observed_error, (uint64_t)(uint32_t)removal_reason));
 
+	ComPtr<ID3D12InfoQueue> info_queue;
+	const HRESULT info_queue_result = device.As(&info_queue);
+	if (SUCCEEDED(info_queue_result)) {
+		const uint64_t stored_message_count = info_queue->GetNumStoredMessagesAllowedByRetrievalFilter();
+		const uint64_t first_message = stored_message_count > 64 ? stored_message_count - 64 : 0;
+		if (stored_message_count == 0) {
+			ERR_PRINT("D3D12 debug info queue contains no retained messages. Reproduce with --gpu-validation to enable API validation messages.");
+		}
+		for (uint64_t message_index = first_message; message_index < stored_message_count; message_index++) {
+			SIZE_T message_size = 0;
+			HRESULT message_result = info_queue->GetMessage(message_index, nullptr, &message_size);
+			if (FAILED(message_result) || message_size == 0) {
+				ERR_PRINT(vformat("D3D12 debug info queue message %llu size query failed (HRESULT 0x%08ux).", message_index, (uint64_t)(uint32_t)message_result));
+				continue;
+			}
+			Vector<uint8_t> message_storage;
+			message_storage.resize(message_size);
+			D3D12_MESSAGE *message = reinterpret_cast<D3D12_MESSAGE *>(message_storage.ptrw());
+			message_result = info_queue->GetMessage(message_index, message, &message_size);
+			if (FAILED(message_result)) {
+				ERR_PRINT(vformat("D3D12 debug info queue message %llu retrieval failed (HRESULT 0x%08ux).", message_index, (uint64_t)(uint32_t)message_result));
+				continue;
+			}
+			ERR_PRINT(vformat("D3D12 debug message[%llu]: severity=%u, category=%u, id=%u, text=%s", message_index, (uint32_t)message->Severity, (uint32_t)message->Category, (uint32_t)message->ID, message->pDescription));
+		}
+	} else {
+		ERR_PRINT(vformat("D3D12 debug info queue is unavailable (HRESULT 0x%08ux). Reproduce with --gpu-validation to enable it.", (uint64_t)(uint32_t)info_queue_result));
+	}
+
 	ComPtr<ID3D12DeviceRemovedExtendedData1> dred;
-	if (FAILED(device.As(&dred))) {
-		ERR_PRINT("D3D12 DRED 1.1 is unavailable for this device.");
+	const HRESULT dred_interface_result = device.As(&dred);
+	if (FAILED(dred_interface_result)) {
+		ERR_PRINT(vformat("D3D12 DRED 1.1 is unavailable for this device (HRESULT 0x%08ux).", (uint64_t)(uint32_t)dred_interface_result));
 		return;
 	}
 
 	D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1 breadcrumb_output = {};
-	if (SUCCEEDED(dred->GetAutoBreadcrumbsOutput1(&breadcrumb_output))) {
+	const HRESULT breadcrumb_result = dred->GetAutoBreadcrumbsOutput1(&breadcrumb_output);
+	if (FAILED(breadcrumb_result)) {
+		ERR_PRINT(vformat("D3D12 DRED automatic breadcrumb query failed (HRESULT 0x%08ux).", (uint64_t)(uint32_t)breadcrumb_result));
+	} else if (breadcrumb_output.pHeadAutoBreadcrumbNode == nullptr) {
+		ERR_PRINT("D3D12 DRED automatic breadcrumb query returned no command-list history.");
+	} else {
 		const D3D12_AUTO_BREADCRUMB_NODE1 *node = breadcrumb_output.pHeadAutoBreadcrumbNode;
 		for (uint32_t node_index = 0; node != nullptr && node_index < 64; node_index++, node = node->pNext) {
 			const uint32_t completed = node->pLastBreadcrumbValue != nullptr ? *node->pLastBreadcrumbValue : 0;
@@ -6187,7 +6222,12 @@ void RenderingDeviceDriverD3D12::_report_device_removed(HRESULT p_observed_error
 	}
 
 	D3D12_DRED_PAGE_FAULT_OUTPUT1 page_fault_output = {};
-	if (SUCCEEDED(dred->GetPageFaultAllocationOutput1(&page_fault_output))) {
+	const HRESULT page_fault_result = dred->GetPageFaultAllocationOutput1(&page_fault_output);
+	if (FAILED(page_fault_result)) {
+		ERR_PRINT(vformat("D3D12 DRED page-fault query failed (HRESULT 0x%08ux).", (uint64_t)(uint32_t)page_fault_result));
+	} else if (page_fault_output.PageFaultVA == 0 && page_fault_output.pHeadExistingAllocationNode == nullptr && page_fault_output.pHeadRecentFreedAllocationNode == nullptr) {
+		ERR_PRINT("D3D12 DRED page-fault query returned no fault or allocation data.");
+	} else {
 		ERR_PRINT(vformat("D3D12 DRED page fault VA: 0x%016llx.", page_fault_output.PageFaultVA));
 		const D3D12_DRED_ALLOCATION_NODE1 *allocation = page_fault_output.pHeadExistingAllocationNode;
 		for (uint32_t allocation_index = 0; allocation != nullptr && allocation_index < 32; allocation_index++, allocation = allocation->pNext) {

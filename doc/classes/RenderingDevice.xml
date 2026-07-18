@@ -1181,7 +1181,7 @@
 			<param index="11" name="mipmaps" type="int" />
 			<param index="12" name="initial_state" type="int" enum="RenderingDevice.ExternalTextureState" />
 			<description>
-				Imports one producer-owned texture and a borrowed native producer timeline handle. The resource must be opened on the logical device returned by [method get_external_device_identity] and support ordinary sampled views, including the linear/sRGB view pair for RGBA8 formats. Vulkan producers must create such images with [code]VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT[/code]. The returned slot index remains stable until the pool is freed.
+				Imports one producer-owned texture and a borrowed native producer timeline handle. The resource must be opened on the logical device returned by [method get_external_device_identity] and support ordinary sampled views, including the linear/sRGB view pair for RGBA8 formats. On D3D12, the producer and Godot synchronize exclusive ownership only with the producer and release timeline fences; a D3D11 resource imported by D3D12 must therefore use an NT shared handle without [code]D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX[/code]. Both sides hand the resource over in [constant EXTERNAL_TEXTURE_STATE_GENERAL] ([code]D3D12_RESOURCE_STATE_COMMON[/code]). Vulkan producers must create such images with [code]VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT[/code]. The returned slot index remains stable until the pool is freed.
 			</description>
 		</method>
 		<method name="external_texture_pool_publish">
