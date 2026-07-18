@@ -6152,6 +6152,10 @@ static String _dred_name(const char *p_name_a, const wchar_t *p_name_w) {
 	return "<unnamed>";
 }
 
+static String _dred_hex(uint64_t p_value, int p_digits = 8) {
+	return String::num_uint64(p_value, 16).pad_zeros(p_digits);
+}
+
 void RenderingDeviceDriverD3D12::_report_device_removed(HRESULT p_observed_error, const char *p_operation) {
 	if (device_removal_reported || device == nullptr) {
 		return;
@@ -6162,7 +6166,7 @@ void RenderingDeviceDriverD3D12::_report_device_removed(HRESULT p_observed_error
 		return;
 	}
 	device_removal_reported = true;
-	ERR_PRINT(vformat("D3D12 device removal detected during %s: observed=0x%08ux, reason=0x%08ux.", p_operation, (uint64_t)(uint32_t)p_observed_error, (uint64_t)(uint32_t)removal_reason));
+	ERR_PRINT(vformat("D3D12 device removal detected during %s: observed=0x%s, reason=0x%s.", p_operation, _dred_hex((uint32_t)p_observed_error), _dred_hex((uint32_t)removal_reason)));
 
 	ComPtr<ID3D12InfoQueue> info_queue;
 	const HRESULT info_queue_result = device.As(&info_queue);
@@ -6176,7 +6180,7 @@ void RenderingDeviceDriverD3D12::_report_device_removed(HRESULT p_observed_error
 			SIZE_T message_size = 0;
 			HRESULT message_result = info_queue->GetMessage(message_index, nullptr, &message_size);
 			if (FAILED(message_result) || message_size == 0) {
-				ERR_PRINT(vformat("D3D12 debug info queue message %d size query failed (HRESULT 0x%08ux).", (int64_t)message_index, (uint64_t)(uint32_t)message_result));
+				ERR_PRINT(vformat("D3D12 debug info queue message %d size query failed (HRESULT 0x%s).", (int64_t)message_index, _dred_hex((uint32_t)message_result)));
 				continue;
 			}
 			Vector<uint8_t> message_storage;
@@ -6184,26 +6188,26 @@ void RenderingDeviceDriverD3D12::_report_device_removed(HRESULT p_observed_error
 			D3D12_MESSAGE *message = reinterpret_cast<D3D12_MESSAGE *>(message_storage.ptrw());
 			message_result = info_queue->GetMessage(message_index, message, &message_size);
 			if (FAILED(message_result)) {
-				ERR_PRINT(vformat("D3D12 debug info queue message %d retrieval failed (HRESULT 0x%08ux).", (int64_t)message_index, (uint64_t)(uint32_t)message_result));
+				ERR_PRINT(vformat("D3D12 debug info queue message %d retrieval failed (HRESULT 0x%s).", (int64_t)message_index, _dred_hex((uint32_t)message_result)));
 				continue;
 			}
-			ERR_PRINT(vformat("D3D12 debug message[%d]: severity=%u, category=%u, id=%u, text=%s", (int64_t)message_index, (uint32_t)message->Severity, (uint32_t)message->Category, (uint32_t)message->ID, message->pDescription));
+			ERR_PRINT(vformat("D3D12 debug message[%d]: severity=%d, category=%d, id=%d, text=%s", (int64_t)message_index, (int64_t)message->Severity, (int64_t)message->Category, (int64_t)message->ID, message->pDescription));
 		}
 	} else {
-		ERR_PRINT(vformat("D3D12 debug info queue is unavailable (HRESULT 0x%08ux). Reproduce with --gpu-validation to enable it.", (uint64_t)(uint32_t)info_queue_result));
+		ERR_PRINT(vformat("D3D12 debug info queue is unavailable (HRESULT 0x%s). Reproduce with --gpu-validation to enable it.", _dred_hex((uint32_t)info_queue_result)));
 	}
 
 	ComPtr<ID3D12DeviceRemovedExtendedData1> dred;
 	const HRESULT dred_interface_result = device.As(&dred);
 	if (FAILED(dred_interface_result)) {
-		ERR_PRINT(vformat("D3D12 DRED 1.1 is unavailable for this device (HRESULT 0x%08ux).", (uint64_t)(uint32_t)dred_interface_result));
+		ERR_PRINT(vformat("D3D12 DRED 1.1 is unavailable for this device (HRESULT 0x%s).", _dred_hex((uint32_t)dred_interface_result)));
 		return;
 	}
 
 	D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1 breadcrumb_output = {};
 	const HRESULT breadcrumb_result = dred->GetAutoBreadcrumbsOutput1(&breadcrumb_output);
 	if (FAILED(breadcrumb_result)) {
-		ERR_PRINT(vformat("D3D12 DRED automatic breadcrumb query failed (HRESULT 0x%08ux).", (uint64_t)(uint32_t)breadcrumb_result));
+		ERR_PRINT(vformat("D3D12 DRED automatic breadcrumb query failed (HRESULT 0x%s).", _dred_hex((uint32_t)breadcrumb_result)));
 	} else if (breadcrumb_output.pHeadAutoBreadcrumbNode == nullptr) {
 		ERR_PRINT("D3D12 DRED automatic breadcrumb query returned no command-list history.");
 	} else {
@@ -6211,11 +6215,11 @@ void RenderingDeviceDriverD3D12::_report_device_removed(HRESULT p_observed_error
 		for (uint32_t node_index = 0; node != nullptr && node_index < 64; node_index++, node = node->pNext) {
 			const uint32_t completed = node->pLastBreadcrumbValue != nullptr ? *node->pLastBreadcrumbValue : 0;
 			const uint32_t last_operation = completed > 0 && node->BreadcrumbCount > 0 && node->pCommandHistory != nullptr ? (uint32_t)node->pCommandHistory[MIN(completed - 1, node->BreadcrumbCount - 1)] : 0;
-			ERR_PRINT(vformat("D3D12 DRED breadcrumb[%u]: queue=%s, list=%s, completed=%u/%u, last_op=%u.", node_index, _dred_name(node->pCommandQueueDebugNameA, node->pCommandQueueDebugNameW), _dred_name(node->pCommandListDebugNameA, node->pCommandListDebugNameW), completed, node->BreadcrumbCount, last_operation));
+			ERR_PRINT(vformat("D3D12 DRED breadcrumb[%d]: queue=%s, list=%s, completed=%d/%d, last_op=%d.", (int64_t)node_index, _dred_name(node->pCommandQueueDebugNameA, node->pCommandQueueDebugNameW), _dred_name(node->pCommandListDebugNameA, node->pCommandListDebugNameW), (int64_t)completed, (int64_t)node->BreadcrumbCount, (int64_t)last_operation));
 			for (uint32_t context_index = 0; context_index < node->BreadcrumbContextsCount && context_index < 16; context_index++) {
 				const D3D12_DRED_BREADCRUMB_CONTEXT &context = node->pBreadcrumbContexts[context_index];
 				if (context.BreadcrumbIndex + 8 >= completed && context.BreadcrumbIndex <= completed + 1) {
-					ERR_PRINT(vformat("D3D12 DRED context: breadcrumb=%u, label=%s.", context.BreadcrumbIndex, _dred_name(nullptr, context.pContextString)));
+					ERR_PRINT(vformat("D3D12 DRED context: breadcrumb=%d, label=%s.", (int64_t)context.BreadcrumbIndex, _dred_name(nullptr, context.pContextString)));
 				}
 			}
 		}
@@ -6224,18 +6228,18 @@ void RenderingDeviceDriverD3D12::_report_device_removed(HRESULT p_observed_error
 	D3D12_DRED_PAGE_FAULT_OUTPUT1 page_fault_output = {};
 	const HRESULT page_fault_result = dred->GetPageFaultAllocationOutput1(&page_fault_output);
 	if (FAILED(page_fault_result)) {
-		ERR_PRINT(vformat("D3D12 DRED page-fault query failed (HRESULT 0x%08ux).", (uint64_t)(uint32_t)page_fault_result));
+		ERR_PRINT(vformat("D3D12 DRED page-fault query failed (HRESULT 0x%s).", _dred_hex((uint32_t)page_fault_result)));
 	} else if (page_fault_output.PageFaultVA == 0 && page_fault_output.pHeadExistingAllocationNode == nullptr && page_fault_output.pHeadRecentFreedAllocationNode == nullptr) {
 		ERR_PRINT("D3D12 DRED page-fault query returned no fault or allocation data.");
 	} else {
-		ERR_PRINT(vformat("D3D12 DRED page fault VA: 0x%016llx.", page_fault_output.PageFaultVA));
+		ERR_PRINT(vformat("D3D12 DRED page fault VA: 0x%s.", _dred_hex(page_fault_output.PageFaultVA, 16)));
 		const D3D12_DRED_ALLOCATION_NODE1 *allocation = page_fault_output.pHeadExistingAllocationNode;
 		for (uint32_t allocation_index = 0; allocation != nullptr && allocation_index < 32; allocation_index++, allocation = allocation->pNext) {
-			ERR_PRINT(vformat("D3D12 DRED live allocation[%u]: type=%u, name=%s.", allocation_index, (uint32_t)allocation->AllocationType, _dred_name(allocation->ObjectNameA, allocation->ObjectNameW)));
+			ERR_PRINT(vformat("D3D12 DRED live allocation[%d]: type=%d, name=%s.", (int64_t)allocation_index, (int64_t)allocation->AllocationType, _dred_name(allocation->ObjectNameA, allocation->ObjectNameW)));
 		}
 		allocation = page_fault_output.pHeadRecentFreedAllocationNode;
 		for (uint32_t allocation_index = 0; allocation != nullptr && allocation_index < 32; allocation_index++, allocation = allocation->pNext) {
-			ERR_PRINT(vformat("D3D12 DRED recently freed allocation[%u]: type=%u, name=%s.", allocation_index, (uint32_t)allocation->AllocationType, _dred_name(allocation->ObjectNameA, allocation->ObjectNameW)));
+			ERR_PRINT(vformat("D3D12 DRED recently freed allocation[%d]: type=%d, name=%s.", (int64_t)allocation_index, (int64_t)allocation->AllocationType, _dred_name(allocation->ObjectNameA, allocation->ObjectNameW)));
 		}
 	}
 }
