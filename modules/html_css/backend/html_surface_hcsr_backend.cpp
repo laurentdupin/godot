@@ -25,6 +25,12 @@ static String hcsr_color_to_css_rgba(const Color &p_color) {
 			p_color.a);
 }
 
+static const uint64_t HCSR_REQUIRED_GODOT_GPU_CAPABILITIES =
+		HCSR_GPU_CAPABILITY_ASYNC_COMPLETION_POLLING |
+		HCSR_GPU_CAPABILITY_IMMUTABLE_GENERATION_METADATA |
+		HCSR_GPU_CAPABILITY_DEVICE_IDENTITY |
+		HCSR_GPU_CAPABILITY_OBSERVABLE_BATCH_CANCELLATION;
+
 static String hcsr_inject_document_style(const String &p_html, const Color &p_background, const String &p_css) {
 	String style = "<style data-godot-hcsr=\"true\">html { background-color: " + hcsr_color_to_css_rgba(p_background) + "; }\n";
 	style += p_css.replace("</style", "<\\/style");
@@ -202,7 +208,7 @@ void HTMLSurfaceHCSRBackend::_configure_d3d12_device_on_render_thread() {
 		_record_error("HCSR could not borrow Godot's D3D12 device");
 		return;
 	}
-	gpu_device_configured = true;
+	gpu_device_configured = _validate_gpu_capabilities();
 }
 
 void HTMLSurfaceHCSRBackend::_configure_d3d12_device_on_render_thread_callback(uint64_t p_backend_ptr) {
@@ -254,7 +260,7 @@ void HTMLSurfaceHCSRBackend::_configure_vulkan_device_on_render_thread() {
 		_record_error("HCSR could not borrow Godot's Vulkan device");
 		return;
 	}
-	gpu_device_configured = true;
+	gpu_device_configured = _validate_gpu_capabilities();
 }
 
 void HTMLSurfaceHCSRBackend::_configure_vulkan_device_on_render_thread_callback(uint64_t p_backend_ptr) {
@@ -303,7 +309,36 @@ void HTMLSurfaceHCSRBackend::_configure_metal_device_on_render_thread() {
 		_record_error("HCSR could not borrow Godot's Metal device");
 		return;
 	}
-	gpu_device_configured = true;
+	gpu_device_configured = _validate_gpu_capabilities();
+}
+
+bool HTMLSurfaceHCSRBackend::_validate_gpu_capabilities() {
+	gpu_capabilities = {};
+	gpu_capabilities.struct_size = sizeof(gpu_capabilities);
+	if (hcsr_renderer_get_gpu_capabilities(renderer, &gpu_capabilities) != HCSR_STATUS_OK) {
+		_record_error("HCSR could not report its configured GPU capabilities");
+		return false;
+	}
+	if (gpu_capabilities.render_backend != render_backend) {
+		terminal_failure_reason = vformat("HCSR configured GPU backend %d but reported backend %d.", (int)render_backend, (int)gpu_capabilities.render_backend);
+	} else if ((gpu_capabilities.flags & HCSR_REQUIRED_GODOT_GPU_CAPABILITIES) != HCSR_REQUIRED_GODOT_GPU_CAPABILITIES) {
+		terminal_failure_reason = vformat("HCSR's configured GPU presenter is missing required Godot capabilities (reported=0x%s, required=0x%s).", String::num_uint64(gpu_capabilities.flags, 16), String::num_uint64(HCSR_REQUIRED_GODOT_GPU_CAPABILITIES, 16));
+	} else if (gpu_capabilities.synchronization_mode != HCSR_GPU_SYNCHRONIZATION_ENGINE_QUEUE_ORDERED) {
+		terminal_failure_reason = "HCSR's configured GPU presenter does not order producer work on Godot's engine queue.";
+	} else if (gpu_capabilities.resource_retirement_mode != HCSR_GPU_RESOURCE_RETIREMENT_ENGINE_QUEUE_ORDERED) {
+		terminal_failure_reason = "HCSR's configured GPU presenter cannot retire presentation resources on Godot's engine queue.";
+	} else if (gpu_capabilities.maximum_prepared_packet_count == 0 || gpu_capabilities.presentation_pool_size < 2) {
+		terminal_failure_reason = "HCSR's configured GPU presenter reported invalid asynchronous queue or presentation-pool limits.";
+	} else {
+		return true;
+	}
+
+	terminal_failure = true;
+	if (terminal_failure_reason != last_reported_error) {
+		last_reported_error = terminal_failure_reason;
+		ERR_PRINT(terminal_failure_reason);
+	}
+	return false;
 }
 
 void HTMLSurfaceHCSRBackend::_configure_metal_device_on_render_thread_callback(uint64_t p_backend_ptr) {
@@ -756,9 +791,8 @@ bool HTMLSurfaceHCSRBackend::_accept_gpu_frame_on_render_thread(const hcsr_gpu_f
 }
 
 bool HTMLSurfaceHCSRBackend::_uses_async_gpu_presentation() const {
-	return render_backend == HCSR_RENDER_BACKEND_D3D12
-			|| render_backend == HCSR_RENDER_BACKEND_VULKAN
-			|| render_backend == HCSR_RENDER_BACKEND_METAL;
+	return gpu_device_configured
+			&& (gpu_capabilities.flags & HCSR_GPU_CAPABILITY_ASYNC_COMPLETION_POLLING) != 0;
 }
 
 bool HTMLSurfaceHCSRBackend::_uses_presentation_texture_import_cache() const {
@@ -827,6 +861,8 @@ void HTMLSurfaceHCSRBackend::_destroy_renderer_on_render_thread() {
 		prepared_gpu_frame_metadata.clear();
 	}
 	active_gpu_frame_generation = 0;
+	gpu_device_configured = false;
+	gpu_capabilities = {};
 	if (renderer != nullptr) {
 		hcsr_renderer_destroy(renderer);
 		renderer = nullptr;

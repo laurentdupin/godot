@@ -22,6 +22,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 
 	hcsr_renderer_t *renderer = nullptr;
 	hcsr_render_backend_t render_backend = HCSR_RENDER_BACKEND_CPU;
+	hcsr_gpu_capabilities_t gpu_capabilities = {};
 	Ref<HTMLDocument> document;
 	Ref<HTMLTexture2D> gpu_texture;
 	HTMLFrameMetadata frame_metadata;
@@ -78,6 +79,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	void _configure_vulkan_device_on_render_thread();
 	bool _configure_metal_device();
 	void _configure_metal_device_on_render_thread();
+	bool _validate_gpu_capabilities();
 	bool _render_gpu_frame();
 	void _render_gpu_frame_on_render_thread(hcsr_gpu_frame_packet_t *p_packet);
 	void _retry_deferred_gpu_frame_on_render_thread();
