@@ -391,6 +391,8 @@ void HTMLView::_bind_methods() {
 			PropertyInfo(Variant::INT, "button"),
 			PropertyInfo(Variant::DICTIONARY, "payload")));
 	ADD_SIGNAL(MethodInfo("render_error", PropertyInfo(Variant::STRING, "message")));
+	ADD_SIGNAL(MethodInfo("frame_queued", PropertyInfo(Variant::INT, "generation")));
+	ADD_SIGNAL(MethodInfo("frame_activated", PropertyInfo(Variant::INT, "generation")));
 
 	BIND_ENUM_CONSTANT(BACKEND_AUTO);
 	BIND_ENUM_CONSTANT(BACKEND_CPU);
@@ -572,6 +574,14 @@ void HTMLView::_surface_changed() {
 	update_minimum_size();
 	_update_backdrop_filter_canvas();
 	queue_redraw();
+}
+
+void HTMLView::_surface_frame_queued(uint64_t p_generation) {
+	emit_signal(SNAME("frame_queued"), p_generation);
+}
+
+void HTMLView::_surface_frame_activated(uint64_t p_generation) {
+	emit_signal(SNAME("frame_activated"), p_generation);
 }
 
 void HTMLView::_connect_viewport_size_changed() {
@@ -1705,6 +1715,8 @@ Size2 HTMLView::get_minimum_size() const {
 HTMLView::HTMLView() {
 	surface.instantiate();
 	surface->set_changed_callback(callable_mp(this, &HTMLView::_surface_changed));
+	surface->set_frame_queued_callback(callable_mp(this, &HTMLView::_surface_frame_queued));
+	surface->set_frame_activated_callback(callable_mp(this, &HTMLView::_surface_frame_activated));
 	surface->set_backend_preference(HTML_SURFACE_BACKEND_CPU);
 	surface->set_placeholder_background(Color(0.08, 0.09, 0.1, 1.0));
 	_ensure_backdrop_filter_canvas();

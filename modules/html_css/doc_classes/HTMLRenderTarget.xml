@@ -16,9 +16,21 @@
 		<member name="size" type="Vector2i" setter="set_size" getter="get_size" default="Vector2i(512, 512)" />
 	</members>
 	<signals>
+		<signal name="frame_activated">
+			<param index="0" name="generation" type="int" />
+			<description>
+				Emitted after the texture and its immutable frame metadata are atomically made active. On an engine-queue-ordered GPU backend this does not wait for producer completion on the CPU.
+			</description>
+		</signal>
+		<signal name="frame_queued">
+			<param index="0" name="generation" type="int" />
+			<description>
+				Emitted after a logical frame is submitted to the selected renderer backend. The generation is monotonically increasing for the active backend.
+			</description>
+		</signal>
 		<signal name="rendered">
 			<description>
-				Emitted after [method render_now] updates the texture.
+				Compatibility signal emitted with [signal frame_activated], after the texture generation is active. DOM mutation setters do not emit this signal before the resulting frame is rendered.
 			</description>
 		</signal>
 		<signal name="texture_changed">

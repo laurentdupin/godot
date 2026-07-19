@@ -32,7 +32,11 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	HashMap<uint64_t, RID> gpu_texture_import_cache;
 	HashMap<uint64_t, PreparedGPUFrameMetadata> prepared_gpu_frame_metadata;
 	mutable Mutex prepared_gpu_frame_metadata_mutex;
+	HashMap<uint64_t, uint64_t> submitted_gpu_frame_generations;
+	uint64_t last_queued_frame_generation = 0;
 	uint64_t active_gpu_frame_generation = 0;
+	uint64_t active_gpu_submission_token = 0;
+	uint64_t completed_gpu_submission_token = 0;
 	// Swapped with the texture and immutable frame metadata for the same completed generation.
 	hcsr_hit_test_snapshot_t *active_hit_test_snapshot = nullptr;
 	void *native_gpu_texture = nullptr;
@@ -55,7 +59,6 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	SafeFlag gpu_submission_retry_pending;
 	SafeFlag gpu_follow_up_frame_requested;
 	SafeFlag gpu_presentation_poll_pending;
-	SafeFlag gpu_completed_presentation_available;
 	SafeFlag gpu_presentation_work_pending;
 	Vector<uint64_t> pending_document_commits;
 	bool backdrop_filter_enabled = false;
@@ -89,7 +92,8 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	void _retry_deferred_gpu_frame_on_render_thread();
 	void _schedule_deferred_gpu_submission();
 	void _poll_gpu_presentation_on_render_thread();
-	bool _accept_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output);
+	bool _activate_queued_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output);
+	bool _observe_completed_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output);
 	void _ensure_gpu_texture_imported_on_render_thread();
 	void _detach_gpu_texture_import();
 	void _detach_gpu_texture_import_on_render_thread();
@@ -121,6 +125,8 @@ public:
 	virtual void render_placeholder(const String &p_marker) override;
 	virtual bool poll_pending_output(bool *r_waiting_for_completion = nullptr) override;
 	virtual bool has_pending_output() const override;
+	virtual uint64_t get_last_queued_frame_generation() const override;
+	virtual uint64_t get_active_frame_generation() const override;
 	virtual bool is_begin_frame_requested() const override;
 	virtual bool has_terminal_render_failure() const override;
 	virtual String get_terminal_render_failure_reason() const override;

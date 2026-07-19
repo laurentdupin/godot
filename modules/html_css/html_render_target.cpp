@@ -32,6 +32,7 @@
 
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
+#include "core/os/os.h"
 
 static HTMLSurfaceBackendPreference html_render_target_to_surface_backend_preference(HTMLView::BackendPreference p_backend_preference) {
 	switch (p_backend_preference) {
@@ -123,14 +124,67 @@ void HTMLRenderTarget::_bind_methods() {
 
 	ADD_SIGNAL(MethodInfo("rendered"));
 	ADD_SIGNAL(MethodInfo("texture_changed"));
+	ADD_SIGNAL(MethodInfo("frame_queued", PropertyInfo(Variant::INT, "generation")));
+	ADD_SIGNAL(MethodInfo("frame_activated", PropertyInfo(Variant::INT, "generation")));
 }
 
 void HTMLRenderTarget::_surface_changed() {
 	emit_signal(SNAME("texture_changed"));
 }
 
+void HTMLRenderTarget::_surface_frame_queued(uint64_t p_generation) {
+	emit_signal(SNAME("frame_queued"), p_generation);
+}
+
+void HTMLRenderTarget::_surface_frame_activated(uint64_t p_generation) {
+	emit_signal(SNAME("frame_activated"), p_generation);
+	emit_signal(SNAME("rendered"));
+}
+
+void HTMLRenderTarget::_queue_frame_render() {
+	frame_render_requested = true;
+	_schedule_surface_work();
+}
+
+void HTMLRenderTarget::_schedule_surface_work() {
+	if (is_inside_tree()) {
+		set_process_internal(true);
+	}
+}
+
+void HTMLRenderTarget::_notification(int p_what) {
+	if (p_what == NOTIFICATION_ENTER_TREE && (frame_render_requested || surface->has_pending_output())) {
+		set_process_internal(true);
+		return;
+	}
+	if (p_what != NOTIFICATION_INTERNAL_PROCESS) {
+		return;
+	}
+
+	bool waiting_for_completion = false;
+	surface->poll_pending_output(&waiting_for_completion);
+	if (waiting_for_completion) {
+		set_process_internal(true);
+		return;
+	}
+
+	if (frame_render_requested) {
+		frame_render_requested = false;
+		bool needs_output = true;
+		bool needs_begin_frame = false;
+		const double timeline_time_seconds = OS::get_singleton() != nullptr ? (double)OS::get_singleton()->get_ticks_usec() / 1000000.0 : 0.0;
+		if (surface->update_compositor(timeline_time_seconds, &needs_output, &needs_begin_frame) == OK && needs_output) {
+			surface->render_now("HTMLRenderTarget");
+		}
+		frame_render_requested = needs_begin_frame;
+	}
+
+	set_process_internal(frame_render_requested || surface->has_pending_output());
+}
+
 void HTMLRenderTarget::set_document(const Ref<HTMLDocument> &p_document) {
 	surface->set_document(p_document);
+	_schedule_surface_work();
 }
 
 Ref<HTMLDocument> HTMLRenderTarget::get_document() const {
@@ -144,6 +198,7 @@ void HTMLRenderTarget::set_size(const Size2i &p_size) {
 	}
 	size = new_size;
 	surface->set_size(size);
+	_schedule_surface_work();
 }
 
 Size2i HTMLRenderTarget::get_size() const {
@@ -154,6 +209,7 @@ void HTMLRenderTarget::set_backend_preference(HTMLView::BackendPreference p_back
 	ERR_FAIL_INDEX((int)p_backend_preference, 6);
 	backend_preference = p_backend_preference;
 	surface->set_backend_preference(html_render_target_to_surface_backend_preference(p_backend_preference));
+	_schedule_surface_work();
 }
 
 HTMLView::BackendPreference HTMLRenderTarget::get_backend_preference() const {
@@ -166,6 +222,7 @@ void HTMLRenderTarget::set_backdrop_filter_enabled(bool p_enabled) {
 	}
 	backdrop_filter_enabled = p_enabled;
 	surface->set_backdrop_filter_enabled(p_enabled);
+	_schedule_surface_work();
 }
 
 bool HTMLRenderTarget::is_backdrop_filter_enabled() const {
@@ -190,14 +247,15 @@ Array HTMLRenderTarget::get_backdrop_filter_regions() const {
 }
 
 void HTMLRenderTarget::render_now() {
+	frame_render_requested = false;
 	surface->render_now("HTMLRenderTarget");
-	emit_signal(SNAME("rendered"));
+	_schedule_surface_work();
 }
 
 Error HTMLRenderTarget::set_element_text(const StringName &p_id, const String &p_text) {
 	Error err = surface->set_element_text(p_id, p_text);
 	if (err == OK) {
-		emit_signal(SNAME("rendered"));
+		_queue_frame_render();
 	}
 	return err;
 }
@@ -205,7 +263,7 @@ Error HTMLRenderTarget::set_element_text(const StringName &p_id, const String &p
 Error HTMLRenderTarget::set_element_inner_html(const StringName &p_id, const String &p_html_fragment) {
 	Error err = surface->set_element_inner_html(p_id, p_html_fragment);
 	if (err == OK) {
-		emit_signal(SNAME("rendered"));
+		_queue_frame_render();
 	}
 	return err;
 }
@@ -213,7 +271,7 @@ Error HTMLRenderTarget::set_element_inner_html(const StringName &p_id, const Str
 Error HTMLRenderTarget::set_body_inner_html(const String &p_html_fragment) {
 	Error err = surface->set_body_inner_html(p_html_fragment);
 	if (err == OK) {
-		emit_signal(SNAME("rendered"));
+		_queue_frame_render();
 	}
 	return err;
 }
@@ -221,7 +279,7 @@ Error HTMLRenderTarget::set_body_inner_html(const String &p_html_fragment) {
 Error HTMLRenderTarget::set_element_attribute(const StringName &p_id, const StringName &p_name, const String &p_value) {
 	Error err = surface->set_element_attribute(p_id, p_name, p_value);
 	if (err == OK) {
-		emit_signal(SNAME("rendered"));
+		_queue_frame_render();
 	}
 	return err;
 }
@@ -229,7 +287,7 @@ Error HTMLRenderTarget::set_element_attribute(const StringName &p_id, const Stri
 Error HTMLRenderTarget::remove_element_attribute(const StringName &p_id, const StringName &p_name) {
 	Error err = surface->remove_element_attribute(p_id, p_name);
 	if (err == OK) {
-		emit_signal(SNAME("rendered"));
+		_queue_frame_render();
 	}
 	return err;
 }
@@ -237,7 +295,7 @@ Error HTMLRenderTarget::remove_element_attribute(const StringName &p_id, const S
 Error HTMLRenderTarget::set_element_style(const StringName &p_id, const String &p_css_text) {
 	Error err = surface->set_element_style(p_id, p_css_text);
 	if (err == OK) {
-		emit_signal(SNAME("rendered"));
+		_queue_frame_render();
 	}
 	return err;
 }
@@ -245,7 +303,7 @@ Error HTMLRenderTarget::set_element_style(const StringName &p_id, const String &
 Error HTMLRenderTarget::replace_stylesheet_text(const StringName &p_style_id, const String &p_css_text) {
 	Error err = surface->replace_stylesheet_text(p_style_id, p_css_text);
 	if (err == OK) {
-		emit_signal(SNAME("rendered"));
+		_queue_frame_render();
 	}
 	return err;
 }
@@ -253,7 +311,7 @@ Error HTMLRenderTarget::replace_stylesheet_text(const StringName &p_style_id, co
 Error HTMLRenderTarget::set_form_control_value(const StringName &p_id, const String &p_value) {
 	Error err = surface->set_form_control_value(p_id, p_value);
 	if (err == OK) {
-		emit_signal(SNAME("rendered"));
+		_queue_frame_render();
 	}
 	return err;
 }
@@ -261,7 +319,7 @@ Error HTMLRenderTarget::set_form_control_value(const StringName &p_id, const Str
 Error HTMLRenderTarget::set_form_control_checked(const StringName &p_id, bool p_checked) {
 	Error err = surface->set_form_control_checked(p_id, p_checked);
 	if (err == OK) {
-		emit_signal(SNAME("rendered"));
+		_queue_frame_render();
 	}
 	return err;
 }
@@ -269,7 +327,7 @@ Error HTMLRenderTarget::set_form_control_checked(const StringName &p_id, bool p_
 Error HTMLRenderTarget::focus_element(const StringName &p_id) {
 	Error err = surface->focus_element(p_id);
 	if (err == OK) {
-		emit_signal(SNAME("rendered"));
+		_queue_frame_render();
 	}
 	return err;
 }
@@ -277,7 +335,7 @@ Error HTMLRenderTarget::focus_element(const StringName &p_id) {
 Error HTMLRenderTarget::blur_focused_element() {
 	Error err = surface->blur_focused_element();
 	if (err == OK) {
-		emit_signal(SNAME("rendered"));
+		_queue_frame_render();
 	}
 	return err;
 }
@@ -285,7 +343,7 @@ Error HTMLRenderTarget::blur_focused_element() {
 Error HTMLRenderTarget::set_text_selection(const StringName &p_id, int p_start, int p_end) {
 	Error err = surface->set_text_selection(p_id, p_start, p_end);
 	if (err == OK) {
-		emit_signal(SNAME("rendered"));
+		_queue_frame_render();
 	}
 	return err;
 }
@@ -301,6 +359,8 @@ Dictionary HTMLRenderTarget::get_form_control_state(const StringName &p_id) {
 HTMLRenderTarget::HTMLRenderTarget() {
 	surface.instantiate();
 	surface->set_changed_callback(callable_mp(this, &HTMLRenderTarget::_surface_changed));
+	surface->set_frame_queued_callback(callable_mp(this, &HTMLRenderTarget::_surface_frame_queued));
+	surface->set_frame_activated_callback(callable_mp(this, &HTMLRenderTarget::_surface_frame_activated));
 	surface->set_placeholder_background(Color(0.06, 0.07, 0.08, 1.0));
 	surface->set_size(size);
 	surface->set_backend_preference(html_render_target_to_surface_backend_preference(backend_preference));

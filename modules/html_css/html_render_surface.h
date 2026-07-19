@@ -58,12 +58,18 @@ class HTMLRenderSurface : public RefCounted {
 	HTMLGPUBackdropFrame gpu_backdrop_frame;
 	HTMLSurfaceBackendPreference backend_preference = HTML_SURFACE_BACKEND_AUTO;
 	Callable changed_callback;
+	Callable frame_queued_callback;
+	Callable frame_activated_callback;
+	uint64_t notified_queued_frame_generation = 0;
+	uint64_t notified_active_frame_generation = 0;
 
 	void _ensure_backend();
 	void _sync_backend_state();
 	bool _fallback_auto_gpu_to_cpu(const String &p_reason);
 	void _document_changed();
 	void _notify_changed() const;
+	void _notify_frame_state_changes();
+	void _reset_frame_state_notifications();
 
 public:
 	void set_document(const Ref<HTMLDocument> &p_document);
@@ -83,6 +89,10 @@ public:
 	HTMLSurfaceBackendPreference get_backend_preference() const;
 
 	void set_changed_callback(const Callable &p_callback);
+	void set_frame_queued_callback(const Callable &p_callback);
+	void set_frame_activated_callback(const Callable &p_callback);
+	uint64_t get_last_queued_frame_generation() const;
+	uint64_t get_active_frame_generation() const;
 	Error update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame = nullptr);
 	void render_now(const String &p_marker);
 	bool poll_pending_output(bool *r_waiting_for_completion = nullptr);

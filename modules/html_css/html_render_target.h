@@ -44,10 +44,16 @@ class HTMLRenderTarget : public Node {
 	Size2i size = Size2i(512, 512);
 	HTMLView::BackendPreference backend_preference = HTMLView::BACKEND_AUTO;
 	bool backdrop_filter_enabled = false;
+	bool frame_render_requested = false;
 
 	void _surface_changed();
+	void _surface_frame_queued(uint64_t p_generation);
+	void _surface_frame_activated(uint64_t p_generation);
+	void _queue_frame_render();
+	void _schedule_surface_work();
 
 protected:
+	void _notification(int p_what);
 	static void _bind_methods();
 
 public:

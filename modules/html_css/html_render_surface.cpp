@@ -185,6 +185,7 @@ bool HTMLRenderSurface::_fallback_auto_gpu_to_cpu(const String &p_reason) {
 #endif
 	memdelete(backend);
 	backend = fallback_backend;
+	_reset_frame_state_notifications();
 	_sync_backend_state();
 	html_surface_warn_auto_cpu_fallback(p_reason.is_empty() ? String("GPU target rendering failed.") : p_reason);
 	return true;
@@ -209,6 +210,43 @@ void HTMLRenderSurface::_notify_changed() const {
 	if (ce.error != Callable::CallError::CALL_OK) {
 		ERR_PRINT(vformat("HTML render surface changed callback failed with error %d.", ce.error));
 	}
+}
+
+void HTMLRenderSurface::_notify_frame_state_changes() {
+	ERR_FAIL_NULL(backend);
+	const uint64_t queued_generation = backend->get_last_queued_frame_generation();
+	const uint64_t active_generation = backend->get_active_frame_generation();
+	if (queued_generation != 0 && queued_generation != notified_queued_frame_generation) {
+		notified_queued_frame_generation = queued_generation;
+		if (frame_queued_callback.is_valid()) {
+			const Variant generation = queued_generation;
+			const Variant *arguments[] = { &generation };
+			Variant ret;
+			Callable::CallError ce;
+			frame_queued_callback.callp(arguments, 1, ret, ce);
+			if (ce.error != Callable::CallError::CALL_OK) {
+				ERR_PRINT(vformat("HTML render surface frame-queued callback failed with error %d.", ce.error));
+			}
+		}
+	}
+	if (active_generation != 0 && active_generation != notified_active_frame_generation) {
+		notified_active_frame_generation = active_generation;
+		if (frame_activated_callback.is_valid()) {
+			const Variant generation = active_generation;
+			const Variant *arguments[] = { &generation };
+			Variant ret;
+			Callable::CallError ce;
+			frame_activated_callback.callp(arguments, 1, ret, ce);
+			if (ce.error != Callable::CallError::CALL_OK) {
+				ERR_PRINT(vformat("HTML render surface frame-activated callback failed with error %d.", ce.error));
+			}
+		}
+	}
+}
+
+void HTMLRenderSurface::_reset_frame_state_notifications() {
+	notified_queued_frame_generation = 0;
+	notified_active_frame_generation = 0;
 }
 
 void HTMLRenderSurface::set_document(const Ref<HTMLDocument> &p_document) {
@@ -303,6 +341,7 @@ void HTMLRenderSurface::set_backend_preference(HTMLSurfaceBackendPreference p_ba
 	if (backend != nullptr) {
 		memdelete(backend);
 		backend = nullptr;
+		_reset_frame_state_notifications();
 	}
 	render_now(marker);
 }
@@ -313,6 +352,22 @@ HTMLSurfaceBackendPreference HTMLRenderSurface::get_backend_preference() const {
 
 void HTMLRenderSurface::set_changed_callback(const Callable &p_callback) {
 	changed_callback = p_callback;
+}
+
+void HTMLRenderSurface::set_frame_queued_callback(const Callable &p_callback) {
+	frame_queued_callback = p_callback;
+}
+
+void HTMLRenderSurface::set_frame_activated_callback(const Callable &p_callback) {
+	frame_activated_callback = p_callback;
+}
+
+uint64_t HTMLRenderSurface::get_last_queued_frame_generation() const {
+	return backend != nullptr ? backend->get_last_queued_frame_generation() : 0;
+}
+
+uint64_t HTMLRenderSurface::get_active_frame_generation() const {
+	return backend != nullptr ? backend->get_active_frame_generation() : 0;
 }
 
 Error HTMLRenderSurface::update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame) {
@@ -346,6 +401,7 @@ void HTMLRenderSurface::render_now(const String &p_marker) {
 	backend->get_frame_metadata(frame_metadata);
 	backend->get_gpu_backdrop_frame(gpu_backdrop_frame);
 	_notify_changed();
+	_notify_frame_state_changes();
 }
 
 bool HTMLRenderSurface::poll_pending_output(bool *r_waiting_for_completion) {
@@ -356,6 +412,7 @@ bool HTMLRenderSurface::poll_pending_output(bool *r_waiting_for_completion) {
 		backend->get_gpu_backdrop_frame(gpu_backdrop_frame);
 		_notify_changed();
 	}
+	_notify_frame_state_changes();
 	return changed;
 }
 

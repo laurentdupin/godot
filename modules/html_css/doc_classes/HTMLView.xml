@@ -65,6 +65,18 @@
 		</member>
 	</members>
 	<signals>
+		<signal name="frame_activated">
+			<param index="0" name="generation" type="int" />
+			<description>
+				Emitted after the view atomically activates the texture and immutable interaction metadata for this generation. GPU producer completion remains asynchronous.
+			</description>
+		</signal>
+		<signal name="frame_queued">
+			<param index="0" name="generation" type="int" />
+			<description>
+				Emitted after a logical frame is submitted to the selected renderer backend.
+			</description>
+		</signal>
 		<signal name="action_requested">
 			<param index="0" name="action" type="StringName" />
 			<param index="1" name="payload" type="Dictionary" />

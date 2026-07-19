@@ -29,7 +29,8 @@ static const uint64_t HCSR_REQUIRED_GODOT_GPU_CAPABILITIES =
 		HCSR_GPU_CAPABILITY_ASYNC_COMPLETION_POLLING |
 		HCSR_GPU_CAPABILITY_IMMUTABLE_GENERATION_METADATA |
 		HCSR_GPU_CAPABILITY_DEVICE_IDENTITY |
-		HCSR_GPU_CAPABILITY_OBSERVABLE_BATCH_CANCELLATION;
+		HCSR_GPU_CAPABILITY_OBSERVABLE_BATCH_CANCELLATION |
+		HCSR_GPU_CAPABILITY_SUBMISSION_COMPLETION_TOKENS;
 
 static String hcsr_inject_document_style(const String &p_html, const Color &p_background, const String &p_css) {
 	String style = "<style data-godot-hcsr=\"true\">html { background-color: " + hcsr_color_to_css_rgba(p_background) + "; }\n";
@@ -799,19 +800,26 @@ void HTMLSurfaceHCSRBackend::_detach_gpu_texture_import_on_render_thread() {
 	gpu_texture_rid = RID();
 }
 
-bool HTMLSurfaceHCSRBackend::_accept_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output) {
-	if (p_output.native_texture == nullptr || p_output.width <= 0 || p_output.height <= 0 || p_output.render_backend != render_backend || p_output.frame_generation == 0) {
+bool HTMLSurfaceHCSRBackend::_activate_queued_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output) {
+	if (p_output.native_texture == nullptr || p_output.width <= 0 || p_output.height <= 0 || p_output.render_backend != render_backend || p_output.frame_generation == 0 || p_output.submission_token == 0 || p_output.producer_completed != 0) {
 		if (p_output.frame_generation != 0) {
 			_discard_gpu_packet_metadata(p_output.frame_generation);
 		}
-		_record_error("HCSR returned an invalid Godot GPU frame");
+		_record_error("HCSR returned an invalid queued Godot GPU frame");
 		return false;
 	}
 	PreparedGPUFrameMetadata prepared_metadata;
-	const bool activates_new_generation = p_output.frame_generation != active_gpu_frame_generation;
-	if (activates_new_generation && !_take_gpu_packet_metadata(p_output.frame_generation, prepared_metadata)) {
+	if (!_take_gpu_packet_metadata(p_output.frame_generation, prepared_metadata)) {
 		_record_error("HCSR returned a GPU texture without matching prepared frame metadata");
 		return false;
+	}
+	{
+		MutexLock lock(frame_metadata_mutex);
+		if (p_output.frame_generation <= active_gpu_frame_generation || p_output.submission_token <= active_gpu_submission_token) {
+			_release_gpu_packet_metadata(prepared_metadata);
+			_record_error("HCSR returned a non-monotonic queued Godot GPU frame");
+			return false;
+		}
 	}
 	if (native_gpu_texture != p_output.native_texture || native_gpu_generation != p_output.resource_generation || native_gpu_size != Size2i(p_output.width, p_output.height)) {
 		if (_uses_presentation_texture_import_cache() && native_gpu_size == Size2i(p_output.width, p_output.height)) {
@@ -828,20 +836,46 @@ bool HTMLSurfaceHCSRBackend::_accept_gpu_frame_on_render_thread(const hcsr_gpu_f
 		_release_gpu_packet_metadata(prepared_metadata);
 		return false;
 	}
-	if (activates_new_generation) {
-		hcsr_hit_test_snapshot_t *retired_snapshot = nullptr;
-		{
-			MutexLock lock(frame_metadata_mutex);
-			frame_metadata = prepared_metadata.frame_metadata;
-			active_gpu_frame_generation = p_output.frame_generation;
-			retired_snapshot = active_hit_test_snapshot;
-			active_hit_test_snapshot = prepared_metadata.hit_test_snapshot;
-			prepared_metadata.hit_test_snapshot = nullptr;
-		}
-		if (retired_snapshot != nullptr) {
-			hcsr_hit_test_snapshot_release(retired_snapshot);
+	hcsr_hit_test_snapshot_t *retired_snapshot = nullptr;
+	{
+		MutexLock lock(frame_metadata_mutex);
+		frame_metadata = prepared_metadata.frame_metadata;
+		last_queued_frame_generation = p_output.frame_generation;
+		active_gpu_frame_generation = p_output.frame_generation;
+		active_gpu_submission_token = p_output.submission_token;
+		submitted_gpu_frame_generations.insert(p_output.submission_token, p_output.frame_generation);
+		retired_snapshot = active_hit_test_snapshot;
+		active_hit_test_snapshot = prepared_metadata.hit_test_snapshot;
+		prepared_metadata.hit_test_snapshot = nullptr;
+	}
+	if (retired_snapshot != nullptr) {
+		hcsr_hit_test_snapshot_release(retired_snapshot);
+	}
+	return true;
+}
+
+bool HTMLSurfaceHCSRBackend::_observe_completed_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output) {
+	if (p_output.native_texture == nullptr || p_output.render_backend != render_backend || p_output.frame_generation == 0 || p_output.submission_token == 0 || p_output.producer_completed == 0) {
+		_record_error("HCSR returned an invalid completed Godot GPU frame");
+		return false;
+	}
+
+	MutexLock lock(frame_metadata_mutex);
+	const uint64_t *submitted_generation = submitted_gpu_frame_generations.getptr(p_output.submission_token);
+	if (submitted_generation == nullptr || *submitted_generation != p_output.frame_generation || p_output.submission_token <= completed_gpu_submission_token || p_output.submission_token > active_gpu_submission_token) {
+		_record_error("HCSR returned an uncorrelated Godot GPU completion");
+		return false;
+	}
+	Vector<uint64_t> retired_tokens;
+	for (const KeyValue<uint64_t, uint64_t> &entry : submitted_gpu_frame_generations) {
+		if (entry.key <= p_output.submission_token) {
+			retired_tokens.push_back(entry.key);
 		}
 	}
+	for (uint64_t token : retired_tokens) {
+		submitted_gpu_frame_generations.erase(token);
+	}
+	completed_gpu_submission_token = p_output.submission_token;
 	return true;
 }
 
@@ -874,8 +908,8 @@ void HTMLSurfaceHCSRBackend::_poll_gpu_presentation_on_render_thread() {
 	} else {
 		gpu_presentation_work_pending.clear();
 	}
-	if (updated != 0 && _accept_gpu_frame_on_render_thread(output)) {
-		gpu_completed_presentation_available.set();
+	if (updated != 0) {
+		_observe_completed_gpu_frame_on_render_thread(output);
 	}
 }
 
@@ -931,6 +965,10 @@ void HTMLSurfaceHCSRBackend::_destroy_renderer_on_render_thread() {
 			active_hit_test_snapshot = nullptr;
 		}
 		active_gpu_frame_generation = 0;
+		last_queued_frame_generation = 0;
+		active_gpu_submission_token = 0;
+		completed_gpu_submission_token = 0;
+		submitted_gpu_frame_generations.clear();
 	}
 	gpu_device_configured = false;
 	gpu_capabilities = {};
@@ -1001,7 +1039,7 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 		return;
 	}
 	_update_performance_profile();
-	gpu_render_succeeded = _accept_gpu_frame_on_render_thread(output);
+	gpu_render_succeeded = _activate_queued_gpu_frame_on_render_thread(output);
 	if (_uses_async_gpu_presentation()) {
 		gpu_presentation_work_pending.set();
 	}
@@ -1192,9 +1230,15 @@ bool HTMLSurfaceHCSRBackend::_render_frame() {
 	frame.damage.full_frame = true;
 	frame.pixels.resize(output.stride * output.height);
 	memcpy(frame.pixels.ptrw(), output.pixels, frame.pixels.size());
+	const uint64_t frame_generation = output.generation;
 	hcsr_renderer_release_frame(renderer, &output);
 	const bool rendered = submit_cpu_frame(frame) == OK;
 	if (rendered) {
+		{
+			MutexLock lock(frame_metadata_mutex);
+			last_queued_frame_generation = frame_generation;
+			active_gpu_frame_generation = frame_generation;
+		}
 		_read_backdrop_filter_regions();
 	}
 	return rendered;
@@ -1353,13 +1397,6 @@ void HTMLSurfaceHCSRBackend::render_placeholder(const String &p_marker) {
 bool HTMLSurfaceHCSRBackend::poll_pending_output(bool *r_waiting_for_completion) {
 	_schedule_deferred_gpu_submission();
 	const bool follow_up_requested = gpu_follow_up_frame_requested.is_set();
-	if (gpu_completed_presentation_available.is_set()) {
-		gpu_completed_presentation_available.clear();
-		if (r_waiting_for_completion != nullptr) {
-			*r_waiting_for_completion = false;
-		}
-		return true;
-	}
 	if (_uses_async_gpu_presentation()
 			&& gpu_presentation_work_pending.is_set()
 			&& !gpu_frame_pending.is_set()
@@ -1386,11 +1423,21 @@ bool HTMLSurfaceHCSRBackend::poll_pending_output(bool *r_waiting_for_completion)
 
 bool HTMLSurfaceHCSRBackend::has_pending_output() const {
 	return gpu_follow_up_frame_requested.is_set()
+			|| gpu_frame_pending.is_set()
 			|| gpu_submission_deferred.is_set()
 			|| gpu_submission_retry_pending.is_set()
 			|| gpu_presentation_work_pending.is_set()
-			|| gpu_presentation_poll_pending.is_set()
-			|| gpu_completed_presentation_available.is_set();
+			|| gpu_presentation_poll_pending.is_set();
+}
+
+uint64_t HTMLSurfaceHCSRBackend::get_last_queued_frame_generation() const {
+	MutexLock lock(frame_metadata_mutex);
+	return last_queued_frame_generation;
+}
+
+uint64_t HTMLSurfaceHCSRBackend::get_active_frame_generation() const {
+	MutexLock lock(frame_metadata_mutex);
+	return active_gpu_frame_generation;
 }
 
 bool HTMLSurfaceHCSRBackend::is_begin_frame_requested() const {

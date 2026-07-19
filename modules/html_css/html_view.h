@@ -96,6 +96,8 @@ private:
 	bool _should_defer_backend_activation() const;
 	void _apply_surface_backend_preference();
 	void _surface_changed();
+	void _surface_frame_queued(uint64_t p_generation);
+	void _surface_frame_activated(uint64_t p_generation);
 	void _connect_viewport_size_changed();
 	void _disconnect_viewport_size_changed();
 	void _viewport_size_changed();

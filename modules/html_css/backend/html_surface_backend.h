@@ -88,6 +88,8 @@ public:
 		return false;
 	}
 	virtual bool has_pending_output() const { return false; }
+	virtual uint64_t get_last_queued_frame_generation() const { return 0; }
+	virtual uint64_t get_active_frame_generation() const { return 0; }
 	virtual bool is_begin_frame_requested() const { return false; }
 	virtual bool has_terminal_render_failure() const { return false; }
 	virtual String get_terminal_render_failure_reason() const { return String(); }

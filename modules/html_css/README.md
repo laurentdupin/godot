@@ -86,6 +86,26 @@ Current platform packages:
 | macOS | x86_64, ARM64 | CPU, Metal |
 
 BSD, iOS, visionOS, and Web remain rejected by the HCSR build selection.
+
+## Frame lifecycle notifications
+
+`HTMLView` and `HTMLRenderTarget` expose `frame_queued(generation)` and
+`frame_activated(generation)`. Queued means that the immutable logical frame
+has been submitted to the selected backend. Activated means that Godot has
+atomically selected that generation's sampled texture, frame metadata, and
+hit-test snapshot. `HTMLRenderTarget.rendered` is a compatibility alias for
+activation; successful DOM mutation setters schedule work on an engine frame
+and do not emit it early.
+
+For HCSR GPU output, activation uses the borrowed Godot command queue's GPU
+ordering and never waits for a fence on the game or render thread. HCSR's
+opaque submission token correlates the queued frame with later nonblocking
+producer-completion polling. It is not exposed as a native D3D12, Vulkan, or
+Metal synchronization object and must not be CPU-waited. Godot keeps sampling
+the last active texture while a newer packet is pending; completion advances
+resource-retirement state without pretending that pixels changed or forcing a
+redraw. D3D12, Vulkan, and Metal use this same public lifecycle contract.
+
 To prepare Unix packages explicitly before invoking SCons, run one of:
 
 ```bash
