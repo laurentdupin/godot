@@ -595,36 +595,78 @@ bool HTMLSurfaceHCSRBackend::_read_gpu_packet_metadata(hcsr_gpu_frame_packet_t *
 		}
 		r_metadata.frame_metadata.backdrop_filter_regions.push_back(region);
 	}
+	if (hcsr_gpu_frame_packet_retain_hit_test_snapshot(p_packet, &r_metadata.hit_test_snapshot) != HCSR_STATUS_OK || r_metadata.hit_test_snapshot == nullptr) {
+		_release_gpu_packet_metadata(r_metadata);
+		_record_error("HCSR could not provide the GPU packet hit-test snapshot");
+		return false;
+	}
 	return true;
 }
 
-void HTMLSurfaceHCSRBackend::_stage_gpu_packet_metadata(uint64_t p_generation, const PreparedGPUFrameMetadata &p_metadata) {
-	MutexLock lock(prepared_gpu_frame_metadata_mutex);
-	prepared_gpu_frame_metadata.insert(p_generation, p_metadata);
+void HTMLSurfaceHCSRBackend::_release_gpu_packet_metadata(PreparedGPUFrameMetadata &r_metadata) {
+	if (r_metadata.hit_test_snapshot != nullptr) {
+		hcsr_hit_test_snapshot_release(r_metadata.hit_test_snapshot);
+		r_metadata.hit_test_snapshot = nullptr;
+	}
+}
+
+void HTMLSurfaceHCSRBackend::_stage_gpu_packet_metadata(uint64_t p_generation, PreparedGPUFrameMetadata &r_metadata) {
+	hcsr_hit_test_snapshot_t *replaced_snapshot = nullptr;
+	{
+		MutexLock lock(prepared_gpu_frame_metadata_mutex);
+		PreparedGPUFrameMetadata *existing = prepared_gpu_frame_metadata.getptr(p_generation);
+		if (existing != nullptr) {
+			replaced_snapshot = existing->hit_test_snapshot;
+		}
+		prepared_gpu_frame_metadata.insert(p_generation, r_metadata);
+		r_metadata.hit_test_snapshot = nullptr;
+	}
+	if (replaced_snapshot != nullptr) {
+		hcsr_hit_test_snapshot_release(replaced_snapshot);
+	}
 }
 
 bool HTMLSurfaceHCSRBackend::_take_gpu_packet_metadata(uint64_t p_generation, PreparedGPUFrameMetadata &r_metadata) {
-	MutexLock lock(prepared_gpu_frame_metadata_mutex);
-	const PreparedGPUFrameMetadata *metadata = prepared_gpu_frame_metadata.getptr(p_generation);
-	if (metadata == nullptr) {
-		return false;
-	}
-	r_metadata = *metadata;
-	Vector<uint64_t> retired_generations;
-	for (const KeyValue<uint64_t, PreparedGPUFrameMetadata> &entry : prepared_gpu_frame_metadata) {
-		if (entry.key <= p_generation) {
-			retired_generations.push_back(entry.key);
+	Vector<hcsr_hit_test_snapshot_t *> retired_snapshots;
+	{
+		MutexLock lock(prepared_gpu_frame_metadata_mutex);
+		const PreparedGPUFrameMetadata *metadata = prepared_gpu_frame_metadata.getptr(p_generation);
+		if (metadata == nullptr) {
+			return false;
+		}
+		r_metadata = *metadata;
+		Vector<uint64_t> retired_generations;
+		for (const KeyValue<uint64_t, PreparedGPUFrameMetadata> &entry : prepared_gpu_frame_metadata) {
+			if (entry.key <= p_generation) {
+				retired_generations.push_back(entry.key);
+				if (entry.key != p_generation && entry.value.hit_test_snapshot != nullptr) {
+					retired_snapshots.push_back(entry.value.hit_test_snapshot);
+				}
+			}
+		}
+		for (uint64_t generation : retired_generations) {
+			prepared_gpu_frame_metadata.erase(generation);
 		}
 	}
-	for (uint64_t generation : retired_generations) {
-		prepared_gpu_frame_metadata.erase(generation);
+	for (hcsr_hit_test_snapshot_t *snapshot : retired_snapshots) {
+		hcsr_hit_test_snapshot_release(snapshot);
 	}
 	return true;
 }
 
 void HTMLSurfaceHCSRBackend::_discard_gpu_packet_metadata(uint64_t p_generation) {
-	MutexLock lock(prepared_gpu_frame_metadata_mutex);
-	prepared_gpu_frame_metadata.erase(p_generation);
+	hcsr_hit_test_snapshot_t *snapshot = nullptr;
+	{
+		MutexLock lock(prepared_gpu_frame_metadata_mutex);
+		PreparedGPUFrameMetadata *metadata = prepared_gpu_frame_metadata.getptr(p_generation);
+		if (metadata != nullptr) {
+			snapshot = metadata->hit_test_snapshot;
+			prepared_gpu_frame_metadata.erase(p_generation);
+		}
+	}
+	if (snapshot != nullptr) {
+		hcsr_hit_test_snapshot_release(snapshot);
+	}
 }
 
 Error HTMLSurfaceHCSRBackend::_apply_dom_mutation(hcsr_dom_mutation_operation_kind_t p_operation, hcsr_dom_mutation_target_kind_t p_target_kind, const String &p_target, const String &p_name, const String &p_value, hcsr_dom_mutation_content_kind_t p_content_kind) {
@@ -759,6 +801,9 @@ void HTMLSurfaceHCSRBackend::_detach_gpu_texture_import_on_render_thread() {
 
 bool HTMLSurfaceHCSRBackend::_accept_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output) {
 	if (p_output.native_texture == nullptr || p_output.width <= 0 || p_output.height <= 0 || p_output.render_backend != render_backend || p_output.frame_generation == 0) {
+		if (p_output.frame_generation != 0) {
+			_discard_gpu_packet_metadata(p_output.frame_generation);
+		}
 		_record_error("HCSR returned an invalid Godot GPU frame");
 		return false;
 	}
@@ -780,12 +825,22 @@ bool HTMLSurfaceHCSRBackend::_accept_gpu_frame_on_render_thread(const hcsr_gpu_f
 	}
 	_ensure_gpu_texture_imported_on_render_thread();
 	if (!gpu_texture_rid.is_valid()) {
+		_release_gpu_packet_metadata(prepared_metadata);
 		return false;
 	}
 	if (activates_new_generation) {
-		MutexLock lock(frame_metadata_mutex);
-		frame_metadata = prepared_metadata.frame_metadata;
-		active_gpu_frame_generation = p_output.frame_generation;
+		hcsr_hit_test_snapshot_t *retired_snapshot = nullptr;
+		{
+			MutexLock lock(frame_metadata_mutex);
+			frame_metadata = prepared_metadata.frame_metadata;
+			active_gpu_frame_generation = p_output.frame_generation;
+			retired_snapshot = active_hit_test_snapshot;
+			active_hit_test_snapshot = prepared_metadata.hit_test_snapshot;
+			prepared_metadata.hit_test_snapshot = nullptr;
+		}
+		if (retired_snapshot != nullptr) {
+			hcsr_hit_test_snapshot_release(retired_snapshot);
+		}
 	}
 	return true;
 }
@@ -856,11 +911,27 @@ void HTMLSurfaceHCSRBackend::_destroy_renderer_on_render_thread() {
 	gpu_submission_deferred.clear();
 	gpu_submission_retry_pending.clear();
 	gpu_frame_pending.clear();
+	Vector<hcsr_hit_test_snapshot_t *> staged_snapshots;
 	{
 		MutexLock lock(prepared_gpu_frame_metadata_mutex);
+		for (const KeyValue<uint64_t, PreparedGPUFrameMetadata> &entry : prepared_gpu_frame_metadata) {
+			if (entry.value.hit_test_snapshot != nullptr) {
+				staged_snapshots.push_back(entry.value.hit_test_snapshot);
+			}
+		}
 		prepared_gpu_frame_metadata.clear();
 	}
-	active_gpu_frame_generation = 0;
+	for (hcsr_hit_test_snapshot_t *snapshot : staged_snapshots) {
+		hcsr_hit_test_snapshot_release(snapshot);
+	}
+	{
+		MutexLock lock(frame_metadata_mutex);
+		if (active_hit_test_snapshot != nullptr) {
+			hcsr_hit_test_snapshot_release(active_hit_test_snapshot);
+			active_hit_test_snapshot = nullptr;
+		}
+		active_gpu_frame_generation = 0;
+	}
 	gpu_device_configured = false;
 	gpu_capabilities = {};
 	if (renderer != nullptr) {
@@ -1033,6 +1104,7 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 		_retire_document_commits();
 		bool scroll_offset_changed = false;
 		if (!_clamp_scroll_offset_to_content(scroll_offset_changed, packet_metadata.content_width, packet_metadata.content_height)) {
+			_release_gpu_packet_metadata(packet_metadata);
 			hcsr_renderer_release_gpu_frame_packet(packet);
 			return false;
 		}
@@ -1043,6 +1115,7 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 		// A prepared packet is an immutable snapshot of its render inputs. Never
 		// submit a packet after clamping changed the host scroll state: doing so
 		// presents one frame translated by an offset the document cannot reach.
+		_release_gpu_packet_metadata(packet_metadata);
 		hcsr_renderer_release_gpu_frame_packet(packet);
 		packet = nullptr;
 		if (attempt > 0) {
@@ -1505,8 +1578,17 @@ bool HTMLSurfaceHCSRBackend::hit_test(const Point2 &p_position, HTMLElementHit &
 
 	hcsr_element_hit_t source = {};
 	source.struct_size = sizeof(source);
-	if (hcsr_renderer_hit_test(renderer, Math::floor(p_position.x), Math::floor(p_position.y), &source) != HCSR_STATUS_OK || source.element_key_utf8[0] == '\0') {
-		return false;
+	if (render_backend == HCSR_RENDER_BACKEND_CPU) {
+		if (hcsr_renderer_hit_test(renderer, Math::floor(p_position.x), Math::floor(p_position.y), &source) != HCSR_STATUS_OK || source.element_key_utf8[0] == '\0') {
+			return false;
+		}
+	} else {
+		MutexLock lock(frame_metadata_mutex);
+		if (active_hit_test_snapshot == nullptr
+				|| hcsr_hit_test_snapshot_hit_test(active_hit_test_snapshot, Math::floor(p_position.x), Math::floor(p_position.y), &source) != HCSR_STATUS_OK
+				|| source.element_key_utf8[0] == '\0') {
+			return false;
+		}
 	}
 
 	r_hit = HTMLElementHit();

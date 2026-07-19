@@ -18,6 +18,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 		int content_width = 0;
 		int content_height = 0;
 		HTMLFrameMetadata frame_metadata;
+		hcsr_hit_test_snapshot_t *hit_test_snapshot = nullptr;
 	};
 
 	hcsr_renderer_t *renderer = nullptr;
@@ -32,6 +33,8 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	HashMap<uint64_t, PreparedGPUFrameMetadata> prepared_gpu_frame_metadata;
 	mutable Mutex prepared_gpu_frame_metadata_mutex;
 	uint64_t active_gpu_frame_generation = 0;
+	// Swapped with the texture and immutable frame metadata for the same completed generation.
+	hcsr_hit_test_snapshot_t *active_hit_test_snapshot = nullptr;
 	void *native_gpu_texture = nullptr;
 	uint64_t native_gpu_generation = 0;
 	Size2i native_gpu_size;
@@ -70,7 +73,8 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool _uses_presentation_texture_import_cache() const;
 	void _read_backdrop_filter_regions();
 	bool _read_gpu_packet_metadata(hcsr_gpu_frame_packet_t *p_packet, PreparedGPUFrameMetadata &r_metadata, uint64_t &r_generation);
-	void _stage_gpu_packet_metadata(uint64_t p_generation, const PreparedGPUFrameMetadata &p_metadata);
+	void _release_gpu_packet_metadata(PreparedGPUFrameMetadata &r_metadata);
+	void _stage_gpu_packet_metadata(uint64_t p_generation, PreparedGPUFrameMetadata &r_metadata);
 	bool _take_gpu_packet_metadata(uint64_t p_generation, PreparedGPUFrameMetadata &r_metadata);
 	void _discard_gpu_packet_metadata(uint64_t p_generation);
 	bool _configure_d3d12_device();
