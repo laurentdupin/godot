@@ -126,7 +126,16 @@ func _expect_pixel(position: Vector2i, expected: Color, phase: String) -> bool:
 		return false
 	var actual := image.get_pixelv(position)
 	if abs(actual.r - expected.r) > 0.02 or abs(actual.g - expected.g) > 0.02 or abs(actual.b - expected.b) > 0.02:
-		_fail("%s %s published %s at %s instead of %s." % [backend_name, phase, actual, position, expected])
+		_fail("%s %s published %s at %s instead of %s; chunks=%s rebuilt=%s reused=%s." % [
+			backend_name,
+			phase,
+			actual,
+			position,
+			expected,
+			Performance.get_custom_monitor("HCSR/Paint Chunks"),
+			Performance.get_custom_monitor("HCSR/Paint Chunks Rebuilt"),
+			Performance.get_custom_monitor("HCSR/Paint Chunks Reused"),
+		])
 		return false
 	return true
 
