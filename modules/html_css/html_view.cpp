@@ -514,7 +514,7 @@ void HTMLView::_notification(int p_what) {
 				}
 				const uint64_t render_start_usec = trace_sequence != 0 && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 				surface->render_now("HTMLView");
-				if (surface->has_pending_output()) {
+				if (surface->has_pending_output() || surface->is_begin_frame_requested()) {
 					needs_begin_frame = true;
 				}
 				if (trace_sequence != 0) {

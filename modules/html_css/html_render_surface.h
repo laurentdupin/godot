@@ -87,6 +87,7 @@ public:
 	void render_now(const String &p_marker);
 	bool poll_pending_output(bool *r_waiting_for_completion = nullptr);
 	bool has_pending_output() const;
+	bool is_begin_frame_requested() const;
 	Error submit_cpu_frame(const HTMLCPUFrame &p_frame, const HTMLFrameMetadata &p_metadata = HTMLFrameMetadata());
 	const HTMLFrameMetadata &get_frame_metadata() const;
 	const HTMLGPUBackdropFrame &get_gpu_backdrop_frame() const;

@@ -363,6 +363,10 @@ bool HTMLRenderSurface::has_pending_output() const {
 	return backend != nullptr && backend->has_pending_output();
 }
 
+bool HTMLRenderSurface::is_begin_frame_requested() const {
+	return backend != nullptr && backend->is_begin_frame_requested();
+}
+
 Error HTMLRenderSurface::submit_cpu_frame(const HTMLCPUFrame &p_frame, const HTMLFrameMetadata &p_metadata) {
 	_ensure_backend();
 	Error err = backend->submit_cpu_frame(p_frame);

@@ -876,6 +876,10 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 			_record_error("HCSR could not prepare the Godot GPU frame");
 			return false;
 		}
+		if (!_update_frame_schedule()) {
+			hcsr_renderer_release_gpu_frame_packet(packet);
+			return false;
+		}
 		_retire_document_commits();
 		bool scroll_offset_changed = false;
 		if (!_clamp_scroll_offset_to_content(scroll_offset_changed)) {
@@ -931,6 +935,10 @@ bool HTMLSurfaceHCSRBackend::_render_frame() {
 		output.struct_size = sizeof(output);
 		if (hcsr_renderer_render_frame(renderer, timeline_time_seconds, &output) != HCSR_STATUS_OK) {
 			_record_error("HCSR could not render the Godot frame");
+			return false;
+		}
+		if (!_update_frame_schedule()) {
+			hcsr_renderer_release_frame(renderer, &output);
 			return false;
 		}
 		_retire_document_commits();
@@ -1019,6 +1027,30 @@ void HTMLSurfaceHCSRBackend::_update_performance_profile() {
 #endif
 }
 
+bool HTMLSurfaceHCSRBackend::_update_frame_schedule() {
+	if (renderer == nullptr) {
+		begin_frame_requested = false;
+		next_begin_frame_time_seconds = 0.0;
+		return false;
+	}
+
+	hcsr_frame_schedule_t schedule = {};
+	schedule.struct_size = sizeof(schedule);
+	if (hcsr_renderer_get_frame_schedule(renderer, &schedule) != HCSR_STATUS_OK) {
+		begin_frame_requested = false;
+		next_begin_frame_time_seconds = 0.0;
+		_record_error("HCSR could not query frame scheduling metadata");
+		return false;
+	}
+
+	begin_frame_requested = schedule.needs_begin_frame != 0;
+	const double delay_seconds = Math::is_finite(schedule.suggested_next_frame_delay_seconds)
+			? MAX(0.0, schedule.suggested_next_frame_delay_seconds)
+			: 0.0;
+	next_begin_frame_time_seconds = begin_frame_requested ? timeline_time_seconds + delay_seconds : 0.0;
+	return true;
+}
+
 void HTMLSurfaceHCSRBackend::mark_document_dirty() {
 	document_dirty = true;
 	last_reported_error = String();
@@ -1069,11 +1101,12 @@ void HTMLSurfaceHCSRBackend::set_backdrop_filter_enabled(bool p_enabled) {
 
 Error HTMLSurfaceHCSRBackend::update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame) {
 	timeline_time_seconds = MAX(0.0, p_timeline_time_seconds);
+	const bool scheduled_frame_due = begin_frame_requested && timeline_time_seconds + 0.000001 >= next_begin_frame_time_seconds;
 	if (r_needs_output != nullptr) {
-		*r_needs_output = true;
+		*r_needs_output = !begin_frame_requested || scheduled_frame_due;
 	}
 	if (r_needs_begin_frame != nullptr) {
-		*r_needs_begin_frame = false;
+		*r_needs_begin_frame = begin_frame_requested && !scheduled_frame_due;
 	}
 	return document.is_valid() && _ensure_renderer() ? OK : ERR_UNAVAILABLE;
 }
@@ -1126,6 +1159,10 @@ bool HTMLSurfaceHCSRBackend::has_pending_output() const {
 			|| gpu_presentation_work_pending.is_set()
 			|| gpu_presentation_poll_pending.is_set()
 			|| gpu_completed_presentation_available.is_set();
+}
+
+bool HTMLSurfaceHCSRBackend::is_begin_frame_requested() const {
+	return begin_frame_requested;
 }
 
 bool HTMLSurfaceHCSRBackend::has_terminal_render_failure() const {

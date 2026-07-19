@@ -25,6 +25,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	Size2i native_gpu_size;
 	float device_scale_factor = 1.0f;
 	double timeline_time_seconds = 0.0;
+	double next_begin_frame_time_seconds = 0.0;
 	Point2 pointer_position;
 	Vector2i scroll_offset;
 	bool primary_button_pressed = false;
@@ -43,6 +44,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	SafeFlag gpu_presentation_work_pending;
 	Vector<uint64_t> pending_document_commits;
 	bool backdrop_filter_enabled = false;
+	bool begin_frame_requested = false;
 	String terminal_failure_reason;
 	String last_reported_error;
 
@@ -82,6 +84,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	void _record_error(const String &p_context);
 	void _retire_document_commits();
 	void _update_performance_profile();
+	bool _update_frame_schedule();
 	Error _set_input();
 	bool _clamp_scroll_offset_to_content(bool &r_changed);
 	Error _apply_dom_mutation(hcsr_dom_mutation_operation_kind_t p_operation, hcsr_dom_mutation_target_kind_t p_target_kind, const String &p_target, const String &p_name, const String &p_value, hcsr_dom_mutation_content_kind_t p_content_kind = HCSR_DOM_MUTATION_CONTENT_TEXT);
@@ -97,6 +100,7 @@ public:
 	virtual void render_placeholder(const String &p_marker) override;
 	virtual bool poll_pending_output(bool *r_waiting_for_completion = nullptr) override;
 	virtual bool has_pending_output() const override;
+	virtual bool is_begin_frame_requested() const override;
 	virtual bool has_terminal_render_failure() const override;
 	virtual String get_terminal_render_failure_reason() const override;
 	virtual Error mouse_move(const Point2 &p_position, int p_modifiers, bool &r_visual_state_changed) override;
