@@ -5,7 +5,7 @@ func _initialize() -> void:
 	var use_vulkan := OS.get_cmdline_user_args().has("--vulkan")
 	var use_metal := OS.get_cmdline_user_args().has("--metal")
 	var document := HTMLDocument.new()
-	document.html = "<!DOCTYPE html><html><head><style>html, body { margin: 0; background: transparent; } .glass { position: absolute; left: 40px; top: 30px; width: 160px; height: 90px; border-radius: 12px; backdrop-filter: invert(1); }</style></head><body><div class=\"glass\"></div></body></html>"
+	document.html = "<!DOCTYPE html><html><head><style>html, body { margin: 0; background: transparent; } .glass { position: absolute; left: 40px; top: 30px; width: 160px; height: 90px; border-radius: 12px; backdrop-filter: invert(1); }</style></head><body><div id=\"glass\" class=\"glass\"></div></body></html>"
 	document.resource_root = "res://"
 	document.background_color = Color(0, 0, 0, 0)
 
@@ -21,10 +21,17 @@ func _initialize() -> void:
 		return
 
 	# Recreate all size-dependent output while retaining the logical document and
-	# backdrop metadata configuration. This guards the 2D viewport resize path.
+	# backdrop metadata configuration. The replacement is asynchronous: every
+	# observable state must be either the complete old generation or the complete
+	# new generation, never a new texture paired with stale metadata (or vice versa).
+	if target.set_element_style("glass", "position:absolute;left:20px;top:15px;width:120px;height:70px;border-radius:8px;backdrop-filter:invert(1)") != OK:
+		push_error("HCSR rejected the packet-metadata mutation.")
+		target.free()
+		quit(1)
+		return
 	target.size = Vector2i(240, 140)
 	target.render_now()
-	if not _validate_frame(target, Vector2i(240, 140), "resized"):
+	if not await _wait_for_resized_frame(target):
 		target.free()
 		quit(1)
 		return
@@ -33,7 +40,7 @@ func _initialize() -> void:
 	target.free()
 	quit()
 
-func _validate_frame(target: HTMLRenderTarget, expected_size: Vector2i, phase: String) -> bool:
+func _validate_frame(target: HTMLRenderTarget, expected_size: Vector2i, phase: String, expected_bounds := Rect2(40, 30, 160, 90)) -> bool:
 	var regions := target.get_backdrop_filter_regions()
 	if regions.size() != 1:
 		push_error("HCSR %s frame did not publish exactly one backdrop-filter region (received %d: %s)." % [phase, regions.size(), regions])
@@ -44,7 +51,7 @@ func _validate_frame(target: HTMLRenderTarget, expected_size: Vector2i, phase: S
 		push_error("HCSR %s frame did not preserve the supported invert operation." % phase)
 		return false
 	var bounds: Rect2 = region.get("bounds", Rect2())
-	if not bounds.is_equal_approx(Rect2(40, 30, 160, 90)):
+	if not bounds.is_equal_approx(expected_bounds):
 		push_error("HCSR %s frame reported incorrect backdrop bounds: %s." % [phase, bounds])
 		return false
 	var texture := target.get_texture()
@@ -52,3 +59,26 @@ func _validate_frame(target: HTMLRenderTarget, expected_size: Vector2i, phase: S
 		push_error("HCSR %s frame did not recreate the expected %s output texture." % [phase, expected_size])
 		return false
 	return true
+
+func _wait_for_resized_frame(target: HTMLRenderTarget) -> bool:
+	for attempt in 120:
+		target.render_now()
+		var texture := target.get_texture()
+		var regions := target.get_backdrop_filter_regions()
+		if texture == null or regions.size() != 1:
+			push_error("HCSR exposed an incomplete texture/metadata generation while resizing.")
+			return false
+		var texture_size := Vector2i(texture.get_width(), texture.get_height())
+		var bounds: Rect2 = regions[0].get("bounds", Rect2())
+		if texture_size == Vector2i(320, 180):
+			if not bounds.is_equal_approx(Rect2(40, 30, 160, 90)):
+				push_error("HCSR mixed the old texture with new packet metadata: %s." % bounds)
+				return false
+		elif texture_size == Vector2i(240, 140):
+			return _validate_frame(target, texture_size, "resized", Rect2(20, 15, 120, 70))
+		else:
+			push_error("HCSR exposed an unexpected intermediate texture size: %s." % texture_size)
+			return false
+		await process_frame
+	push_error("HCSR did not asynchronously activate the resized packet within 120 frames.")
+	return false

@@ -7,19 +7,30 @@
 #include "html_surface_cpu_backend.h"
 
 #include "core/templates/hash_map.h"
+#include "core/os/mutex.h"
 #include "core/templates/safe_refcount.h"
 #include "core/templates/vector.h"
 
 #include "hcsr_renderer.h"
 
 class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
+	struct PreparedGPUFrameMetadata {
+		int content_width = 0;
+		int content_height = 0;
+		HTMLFrameMetadata frame_metadata;
+	};
+
 	hcsr_renderer_t *renderer = nullptr;
 	hcsr_render_backend_t render_backend = HCSR_RENDER_BACKEND_CPU;
 	Ref<HTMLDocument> document;
 	Ref<HTMLTexture2D> gpu_texture;
 	HTMLFrameMetadata frame_metadata;
+	mutable Mutex frame_metadata_mutex;
 	RID gpu_texture_rid;
 	HashMap<uint64_t, RID> gpu_texture_import_cache;
+	HashMap<uint64_t, PreparedGPUFrameMetadata> prepared_gpu_frame_metadata;
+	mutable Mutex prepared_gpu_frame_metadata_mutex;
+	uint64_t active_gpu_frame_generation = 0;
 	void *native_gpu_texture = nullptr;
 	uint64_t native_gpu_generation = 0;
 	Size2i native_gpu_size;
@@ -57,6 +68,10 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool _uses_async_gpu_presentation() const;
 	bool _uses_presentation_texture_import_cache() const;
 	void _read_backdrop_filter_regions();
+	bool _read_gpu_packet_metadata(hcsr_gpu_frame_packet_t *p_packet, PreparedGPUFrameMetadata &r_metadata, uint64_t &r_generation);
+	void _stage_gpu_packet_metadata(uint64_t p_generation, const PreparedGPUFrameMetadata &p_metadata);
+	bool _take_gpu_packet_metadata(uint64_t p_generation, PreparedGPUFrameMetadata &r_metadata);
+	void _discard_gpu_packet_metadata(uint64_t p_generation);
 	bool _configure_d3d12_device();
 	void _configure_d3d12_device_on_render_thread();
 	bool _configure_vulkan_device();
@@ -86,7 +101,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	void _update_performance_profile();
 	bool _update_frame_schedule();
 	Error _set_input();
-	bool _clamp_scroll_offset_to_content(bool &r_changed);
+	bool _clamp_scroll_offset_to_content(bool &r_changed, int p_content_width = -1, int p_content_height = -1);
 	Error _apply_dom_mutation(hcsr_dom_mutation_operation_kind_t p_operation, hcsr_dom_mutation_target_kind_t p_target_kind, const String &p_target, const String &p_name, const String &p_value, hcsr_dom_mutation_content_kind_t p_content_kind = HCSR_DOM_MUTATION_CONTENT_TEXT);
 
 public:

@@ -491,13 +491,15 @@ Error HTMLSurfaceHCSRBackend::_set_input() {
 			: FAILED;
 }
 
-bool HTMLSurfaceHCSRBackend::_clamp_scroll_offset_to_content(bool &r_changed) {
+bool HTMLSurfaceHCSRBackend::_clamp_scroll_offset_to_content(bool &r_changed, int p_content_width, int p_content_height) {
 	r_changed = false;
-	int32_t content_width = 0;
-	int32_t content_height = 0;
-	if (hcsr_renderer_get_content_size(renderer, &content_width, &content_height) != HCSR_STATUS_OK) {
-		_record_error("HCSR could not report the document content size");
-		return false;
+	int32_t content_width = p_content_width;
+	int32_t content_height = p_content_height;
+	if (content_width < 0 || content_height < 0) {
+		if (hcsr_renderer_get_content_size(renderer, &content_width, &content_height) != HCSR_STATUS_OK) {
+			_record_error("HCSR could not report the document content size");
+			return false;
+		}
 	}
 
 	const Vector2i clamped_offset(
@@ -509,6 +511,85 @@ bool HTMLSurfaceHCSRBackend::_clamp_scroll_offset_to_content(bool &r_changed) {
 	scroll_offset = clamped_offset;
 	r_changed = true;
 	return _set_input() == OK;
+}
+
+bool HTMLSurfaceHCSRBackend::_read_gpu_packet_metadata(hcsr_gpu_frame_packet_t *p_packet, PreparedGPUFrameMetadata &r_metadata, uint64_t &r_generation) {
+	r_metadata = PreparedGPUFrameMetadata();
+	r_generation = 0;
+	hcsr_gpu_frame_packet_metadata_t source = {};
+	source.struct_size = sizeof(source);
+	if (hcsr_renderer_get_gpu_frame_packet_metadata(p_packet, &source) != HCSR_STATUS_OK || source.frame_generation == 0) {
+		_record_error("HCSR could not provide immutable GPU packet metadata");
+		return false;
+	}
+
+	r_generation = source.frame_generation;
+	r_metadata.content_width = source.content_width;
+	r_metadata.content_height = source.content_height;
+	for (uint32_t region_index = 0; region_index < source.backdrop_filter_region_count; region_index++) {
+		hcsr_backdrop_filter_region_t region_source = {};
+		region_source.struct_size = sizeof(region_source);
+		if (hcsr_renderer_get_gpu_frame_packet_backdrop_filter_region(p_packet, region_index, &region_source) != HCSR_STATUS_OK
+				|| region_source.frame_generation != source.frame_generation
+				|| region_source.right <= region_source.left
+				|| region_source.bottom <= region_source.top) {
+			_record_error("HCSR returned inconsistent GPU packet backdrop metadata");
+			return false;
+		}
+
+		HTMLBackdropFilterRegion region;
+		region.bounds = Rect2(region_source.left, region_source.top, region_source.right - region_source.left, region_source.bottom - region_source.top);
+		region.blur_radius_css_px = region_source.blur_radius_css_px;
+		region.border_radius_top_left = region_source.border_radius_top_left;
+		region.border_radius_top_right = region_source.border_radius_top_right;
+		region.border_radius_bottom_right = region_source.border_radius_bottom_right;
+		region.border_radius_bottom_left = region_source.border_radius_bottom_left;
+		region.opacity = region_source.opacity;
+		region.flags = region_source.flags;
+		const uint32_t operation_count = MIN(region_source.filter_operation_count, (uint32_t)HCSR_MAX_BACKDROP_FILTER_OPERATIONS);
+		for (uint32_t operation_index = 0; operation_index < operation_count; operation_index++) {
+			const int32_t operation_type = region_source.filter_operation_types[operation_index];
+			if (operation_type < HTML_BACKDROP_FILTER_OPERATION_BLUR || operation_type > HTML_BACKDROP_FILTER_OPERATION_OPACITY) {
+				region.flags |= HTML_BACKDROP_FILTER_UNSUPPORTED_FILTER_OP;
+				continue;
+			}
+			HTMLBackdropFilterOperation operation;
+			operation.type = (HTMLBackdropFilterOperationType)operation_type;
+			operation.amount = region_source.filter_operation_amounts[operation_index];
+			region.filter_operations.push_back(operation);
+		}
+		r_metadata.frame_metadata.backdrop_filter_regions.push_back(region);
+	}
+	return true;
+}
+
+void HTMLSurfaceHCSRBackend::_stage_gpu_packet_metadata(uint64_t p_generation, const PreparedGPUFrameMetadata &p_metadata) {
+	MutexLock lock(prepared_gpu_frame_metadata_mutex);
+	prepared_gpu_frame_metadata.insert(p_generation, p_metadata);
+}
+
+bool HTMLSurfaceHCSRBackend::_take_gpu_packet_metadata(uint64_t p_generation, PreparedGPUFrameMetadata &r_metadata) {
+	MutexLock lock(prepared_gpu_frame_metadata_mutex);
+	const PreparedGPUFrameMetadata *metadata = prepared_gpu_frame_metadata.getptr(p_generation);
+	if (metadata == nullptr) {
+		return false;
+	}
+	r_metadata = *metadata;
+	Vector<uint64_t> retired_generations;
+	for (const KeyValue<uint64_t, PreparedGPUFrameMetadata> &entry : prepared_gpu_frame_metadata) {
+		if (entry.key <= p_generation) {
+			retired_generations.push_back(entry.key);
+		}
+	}
+	for (uint64_t generation : retired_generations) {
+		prepared_gpu_frame_metadata.erase(generation);
+	}
+	return true;
+}
+
+void HTMLSurfaceHCSRBackend::_discard_gpu_packet_metadata(uint64_t p_generation) {
+	MutexLock lock(prepared_gpu_frame_metadata_mutex);
+	prepared_gpu_frame_metadata.erase(p_generation);
 }
 
 Error HTMLSurfaceHCSRBackend::_apply_dom_mutation(hcsr_dom_mutation_operation_kind_t p_operation, hcsr_dom_mutation_target_kind_t p_target_kind, const String &p_target, const String &p_name, const String &p_value, hcsr_dom_mutation_content_kind_t p_content_kind) {
@@ -642,8 +723,14 @@ void HTMLSurfaceHCSRBackend::_detach_gpu_texture_import_on_render_thread() {
 }
 
 bool HTMLSurfaceHCSRBackend::_accept_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output) {
-	if (p_output.native_texture == nullptr || p_output.width <= 0 || p_output.height <= 0 || p_output.render_backend != render_backend) {
+	if (p_output.native_texture == nullptr || p_output.width <= 0 || p_output.height <= 0 || p_output.render_backend != render_backend || p_output.frame_generation == 0) {
 		_record_error("HCSR returned an invalid Godot GPU frame");
+		return false;
+	}
+	PreparedGPUFrameMetadata prepared_metadata;
+	const bool activates_new_generation = p_output.frame_generation != active_gpu_frame_generation;
+	if (activates_new_generation && !_take_gpu_packet_metadata(p_output.frame_generation, prepared_metadata)) {
+		_record_error("HCSR returned a GPU texture without matching prepared frame metadata");
 		return false;
 	}
 	if (native_gpu_texture != p_output.native_texture || native_gpu_generation != p_output.resource_generation || native_gpu_size != Size2i(p_output.width, p_output.height)) {
@@ -657,7 +744,15 @@ bool HTMLSurfaceHCSRBackend::_accept_gpu_frame_on_render_thread(const hcsr_gpu_f
 		native_gpu_size = Size2i(p_output.width, p_output.height);
 	}
 	_ensure_gpu_texture_imported_on_render_thread();
-	return gpu_texture_rid.is_valid();
+	if (!gpu_texture_rid.is_valid()) {
+		return false;
+	}
+	if (activates_new_generation) {
+		MutexLock lock(frame_metadata_mutex);
+		frame_metadata = prepared_metadata.frame_metadata;
+		active_gpu_frame_generation = p_output.frame_generation;
+	}
+	return true;
 }
 
 bool HTMLSurfaceHCSRBackend::_uses_async_gpu_presentation() const {
@@ -727,6 +822,11 @@ void HTMLSurfaceHCSRBackend::_destroy_renderer_on_render_thread() {
 	gpu_submission_deferred.clear();
 	gpu_submission_retry_pending.clear();
 	gpu_frame_pending.clear();
+	{
+		MutexLock lock(prepared_gpu_frame_metadata_mutex);
+		prepared_gpu_frame_metadata.clear();
+	}
+	active_gpu_frame_generation = 0;
 	if (renderer != nullptr) {
 		hcsr_renderer_destroy(renderer);
 		renderer = nullptr;
@@ -750,11 +850,18 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 		hcsr_renderer_release_gpu_frame_packet(p_packet);
 		return;
 	}
+	uint64_t packet_generation = 0;
+	if (hcsr_renderer_gpu_frame_packet_generation(p_packet, &packet_generation) != HCSR_STATUS_OK || packet_generation == 0) {
+		hcsr_renderer_release_gpu_frame_packet(p_packet);
+		_record_error("HCSR could not identify the prepared Godot GPU frame");
+		return;
+	}
 	uint8_t submission_ready = 0;
 	// Submission readiness is part of the immutable packet handoff: retain the
 	// packet unchanged until the borrowed host queue releases a frame slot.
 	if (hcsr_renderer_can_submit_gpu_frame(renderer, p_packet, &submission_ready) != HCSR_STATUS_OK) {
 		hcsr_renderer_release_gpu_frame_packet(p_packet);
+		_discard_gpu_packet_metadata(packet_generation);
 		_record_error("HCSR could not query Godot GPU submission readiness");
 		return;
 	}
@@ -782,6 +889,7 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 	hcsr_gpu_frame_t output = {};
 	output.struct_size = sizeof(output);
 	if (hcsr_renderer_submit_gpu_frame(renderer, p_packet, &output) != HCSR_STATUS_OK) {
+		_discard_gpu_packet_metadata(packet_generation);
 		_record_error("HCSR could not submit the prepared Godot GPU frame");
 		return;
 	}
@@ -870,6 +978,8 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 	}
 	gpu_follow_up_frame_requested.clear();
 	hcsr_gpu_frame_packet_t *packet = nullptr;
+	PreparedGPUFrameMetadata packet_metadata;
+	uint64_t packet_generation = 0;
 	for (int attempt = 0; attempt < 2; attempt++) {
 		packet = nullptr;
 		if (hcsr_renderer_prepare_gpu_frame(renderer, timeline_time_seconds, &packet) != HCSR_STATUS_OK || packet == nullptr) {
@@ -880,9 +990,13 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 			hcsr_renderer_release_gpu_frame_packet(packet);
 			return false;
 		}
+		if (!_read_gpu_packet_metadata(packet, packet_metadata, packet_generation)) {
+			hcsr_renderer_release_gpu_frame_packet(packet);
+			return false;
+		}
 		_retire_document_commits();
 		bool scroll_offset_changed = false;
-		if (!_clamp_scroll_offset_to_content(scroll_offset_changed)) {
+		if (!_clamp_scroll_offset_to_content(scroll_offset_changed, packet_metadata.content_width, packet_metadata.content_height)) {
 			hcsr_renderer_release_gpu_frame_packet(packet);
 			return false;
 		}
@@ -901,8 +1015,13 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 		}
 	}
 	ERR_FAIL_NULL_V(packet, false);
+	_stage_gpu_packet_metadata(packet_generation, packet_metadata);
 	if (rendering_server->is_on_render_thread()) {
+		gpu_frame_pending.set();
 		_render_gpu_frame_on_render_thread(packet);
+		if (!gpu_submission_deferred.is_set()) {
+			gpu_frame_pending.clear();
+		}
 		return gpu_render_succeeded;
 	} else {
 		const bool needs_texture_publish = !gpu_texture_rid.is_valid() || native_gpu_size != size;
@@ -924,9 +1043,6 @@ bool HTMLSurfaceHCSRBackend::_render_frame() {
 	}
 	if (render_backend != HCSR_RENDER_BACKEND_CPU) {
 		const bool rendered = _render_gpu_frame();
-		if (rendered) {
-			_read_backdrop_filter_regions();
-		}
 		return rendered;
 	}
 	hcsr_frame_t output = {};
@@ -976,8 +1092,10 @@ bool HTMLSurfaceHCSRBackend::_render_frame() {
 }
 
 void HTMLSurfaceHCSRBackend::_read_backdrop_filter_regions() {
-	frame_metadata.backdrop_filter_regions.clear();
+	HTMLFrameMetadata next_metadata;
 	if (!backdrop_filter_enabled || renderer == nullptr) {
+		MutexLock lock(frame_metadata_mutex);
+		frame_metadata = next_metadata;
 		return;
 	}
 
@@ -1010,8 +1128,10 @@ void HTMLSurfaceHCSRBackend::_read_backdrop_filter_regions() {
 			operation.amount = source.filter_operation_amounts[operation_index];
 			region.filter_operations.push_back(operation);
 		}
-		frame_metadata.backdrop_filter_regions.push_back(region);
+		next_metadata.backdrop_filter_regions.push_back(region);
 	}
+	MutexLock lock(frame_metadata_mutex);
+	frame_metadata = next_metadata;
 }
 
 void HTMLSurfaceHCSRBackend::_update_performance_profile() {
@@ -1093,7 +1213,10 @@ void HTMLSurfaceHCSRBackend::set_backdrop_filter_enabled(bool p_enabled) {
 		return;
 	}
 	backdrop_filter_enabled = p_enabled;
-	frame_metadata.backdrop_filter_regions.clear();
+	{
+		MutexLock lock(frame_metadata_mutex);
+		frame_metadata.backdrop_filter_regions.clear();
+	}
 	if (renderer != nullptr && hcsr_renderer_set_backdrop_metadata_enabled(renderer, p_enabled ? 1 : 0) != HCSR_STATUS_OK) {
 		_record_error("HCSR rejected backdrop metadata configuration");
 	}
@@ -1440,6 +1563,7 @@ bool HTMLSurfaceHCSRBackend::get_form_control_state(const StringName &p_id, HTML
 }
 
 void HTMLSurfaceHCSRBackend::get_frame_metadata(HTMLFrameMetadata &r_metadata) const {
+	MutexLock lock(frame_metadata_mutex);
 	r_metadata = frame_metadata;
 }
 
