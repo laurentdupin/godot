@@ -21,6 +21,7 @@ func _initialize() -> void:
 		backend_name = "Metal"
 
 	root.size = Vector2i(WIDTH, HEIGHT)
+	root.gui_embed_subwindows = true
 	var view := _make_view()
 	root.add_child(view)
 	await _settle(6)
@@ -54,13 +55,32 @@ func _initialize() -> void:
 	if not await _expect_pixel(Vector2i(150, 35), BASE, "view leave"):
 		return
 
-	print("HCSR Godot %s incremental-mutation hover smoke passed." % backend_name)
+	if view.set_element_inner_html(&"app", _make_page(true)) != OK:
+		_fail("%s app subtree replacement was rejected." % backend_name)
+		return
+	await _settle(5)
+
+	_send_pointer(Vector2(40, 35))
+	await _settle(5)
+	if not await _expect_pixel(Vector2i(40, 35), BACK_HOVER, "back enter after subtree replacement"):
+		return
+
+	_send_pointer(Vector2(150, 35))
+	await _settle(5)
+	if not await _expect_pixel(Vector2i(40, 35), BASE, "back leave after subtree replacement"):
+		return
+	if not await _expect_pixel(Vector2i(150, 35), VIEW_HOVER, "view enter after subtree replacement"):
+		return
+
+	_send_pointer(Vector2(420, 120))
+	await _settle(5)
+	if not await _expect_pixel(Vector2i(150, 35), BASE, "view leave after subtree replacement"):
+		return
+
+	print("HCSR Godot %s incremental-mutation and subtree-replacement hover smoke passed." % backend_name)
 	quit()
 
 func _make_view() -> HTMLView:
-	var rows := ""
-	for index in range(600):
-		rows += "<div class='row'><span>row %d</span></div>" % index
 	var html := """<!DOCTYPE html><html><head><style>
 html,body{margin:0;width:100%%;height:100%%;overflow:hidden;background:#101010}
 .toolbar{display:flex;gap:10px;padding:10px}
@@ -68,7 +88,7 @@ button{width:100px;height:50px;padding:0;border:0;background:#202020}
 .back-button:hover{background:#464646}
 .view-button:hover{background:#4678a0}
 .content{display:none}.status.active{color:#ffffff}
-</style></head><body><div class='toolbar'><button id='back' class='back-button'></button><button id='view' class='view-button'></button><span id='status' class='status'>idle</span><input id='field' value='field'/></div><div class='content'>%s</div></body></html>""" % rows
+</style></head><body><div id='app'>%s</div></body></html>""" % _make_page(false)
 	var document := HTMLDocument.new()
 	document.html = html
 	var view := HTMLView.new()
@@ -76,6 +96,16 @@ button{width:100px;height:50px;padding:0;border:0;background:#202020}
 	view.size = Vector2(WIDTH, HEIGHT)
 	view.document = document
 	return view
+
+func _make_page(replacement: bool) -> String:
+	var rows := ""
+	for index in range(200):
+		rows += "<div class='row'><span>row %d</span></div>" % index
+	var status := "updated" if replacement else "idle"
+	var status_class := "status active" if replacement else "status"
+	var disabled := " disabled='disabled'" if replacement else ""
+	var replacement_marker := "<div>replacement</div>" if replacement else ""
+	return "<main><div class='toolbar'><button id='back' class='back-button'></button><button id='view' class='view-button'></button><span id='status' class='%s'>%s</span><input id='field' value='field'%s/></div><div class='content'>%s%s</div></main>" % [status_class, status, disabled, replacement_marker, rows]
 
 func _send_pointer(position: Vector2) -> void:
 	var motion := InputEventMouseMotion.new()
@@ -86,11 +116,10 @@ func _send_pointer(position: Vector2) -> void:
 func _settle(frame_count: int) -> void:
 	for _frame in range(frame_count):
 		await process_frame
-		RenderingServer.force_draw(false)
+		RenderingServer.force_draw(true)
 	await RenderingServer.frame_post_draw
 
 func _expect_pixel(position: Vector2i, expected: Color, phase: String) -> bool:
-	await RenderingServer.frame_post_draw
 	var image := root.get_texture().get_image()
 	if image == null or image.get_width() <= position.x or image.get_height() <= position.y:
 		_fail("%s %s could not read the composed viewport." % [backend_name, phase])
