@@ -38,7 +38,8 @@
 
 #include <thirdparty/misc/smolv.h>
 
-#ifdef UNIX_ENABLED
+#if defined(UNIX_ENABLED) && !defined(MACOS_ENABLED) && !defined(APPLE_EMBEDDED_ENABLED)
+#define VULKAN_EXTERNAL_SEMAPHORE_FD_ENABLED
 #include <unistd.h>
 #endif
 
@@ -598,7 +599,7 @@ Error RenderingDeviceDriverVulkan::_initialize_device_extensions() {
 	_register_requested_device_extension(VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME, false);
 #ifdef WINDOWS_ENABLED
 	_register_requested_device_extension(VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME, false);
-#elif defined(UNIX_ENABLED)
+#elif defined(VULKAN_EXTERNAL_SEMAPHORE_FD_ENABLED)
 	_register_requested_device_extension(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME, false);
 #endif
 
@@ -3200,7 +3201,7 @@ uint64_t RenderingDeviceDriverVulkan::external_timeline_create(uint64_t p_initia
 #ifdef WINDOWS_ENABLED
 	export_info.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
 	export_supported = enabled_device_extension_names.has(VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME);
-#elif defined(UNIX_ENABLED)
+#elif defined(VULKAN_EXTERNAL_SEMAPHORE_FD_ENABLED)
 	export_info.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
 	export_supported = enabled_device_extension_names.has(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
 #endif
@@ -3220,7 +3221,7 @@ uint64_t RenderingDeviceDriverVulkan::external_timeline_import(uint64_t p_native
 	ERR_FAIL_COND_V_MSG(!timeline_semaphore_support || p_native_handle == 0, 0, "A valid native timeline semaphore handle is required.");
 #ifdef WINDOWS_ENABLED
 	ERR_FAIL_COND_V_MSG(!enabled_device_extension_names.has(VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME), 0, "Vulkan Win32 external semaphores are not supported by this device.");
-#elif defined(UNIX_ENABLED)
+#elif defined(VULKAN_EXTERNAL_SEMAPHORE_FD_ENABLED)
 	ERR_FAIL_COND_V_MSG(!enabled_device_extension_names.has(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME), 0, "Vulkan file-descriptor external semaphores are not supported by this device.");
 #else
 	ERR_FAIL_V_MSG(0, "Vulkan external semaphore handles are not supported on this platform.");
@@ -3245,7 +3246,7 @@ uint64_t RenderingDeviceDriverVulkan::external_timeline_import(uint64_t p_native
 	import_info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
 	import_info.handle = reinterpret_cast<HANDLE>(uintptr_t(p_native_handle));
 	err = vkImportSemaphoreWin32HandleKHR(vk_device, &import_info);
-#elif defined(UNIX_ENABLED)
+#elif defined(VULKAN_EXTERNAL_SEMAPHORE_FD_ENABLED)
 	VkImportSemaphoreFdInfoKHR import_info = {};
 	import_info.sType = VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR;
 	import_info.semaphore = semaphore;
@@ -3284,7 +3285,7 @@ uint64_t RenderingDeviceDriverVulkan::external_timeline_export(uint64_t p_timeli
 	VkResult err = vkGetSemaphoreWin32HandleKHR(vk_device, &handle_info, &handle);
 	ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, 0, vformat("Couldn't export Vulkan external timeline semaphore (VkResult error %d).", err));
 	return uint64_t(reinterpret_cast<uintptr_t>(handle));
-#elif defined(UNIX_ENABLED)
+#elif defined(VULKAN_EXTERNAL_SEMAPHORE_FD_ENABLED)
 	ERR_FAIL_COND_V_MSG(!enabled_device_extension_names.has(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME), 0, "Vulkan file-descriptor external semaphores are not supported by this device.");
 	VkSemaphoreGetFdInfoKHR handle_info = {};
 	handle_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
@@ -3305,7 +3306,7 @@ void RenderingDeviceDriverVulkan::external_timeline_export_free(uint64_t p_nativ
 	}
 #ifdef WINDOWS_ENABLED
 	CloseHandle(reinterpret_cast<HANDLE>(uintptr_t(p_native_handle)));
-#elif defined(UNIX_ENABLED)
+#elif defined(VULKAN_EXTERNAL_SEMAPHORE_FD_ENABLED)
 	close(int(p_native_handle));
 #endif
 }
