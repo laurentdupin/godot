@@ -1609,7 +1609,10 @@ RID TextureStorage::texture_create_from_native_handle(RSE::TextureType p_type, I
 	}
 
 	// Assumed to be a color attachment - see note above.
-	uint64_t usage_flags = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT;
+	// Explicit readback through Texture2D::get_image() is allowed for imported
+	// textures. It remains caller-driven and may flush; ordinary sampling never
+	// performs this copy.
+	uint64_t usage_flags = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT;
 
 	RID rd_texture = RD::get_singleton()->texture_create_from_extension(type, format, RD::TEXTURE_SAMPLES_1, usage_flags, p_native_handle, p_width, p_height, p_depth, p_layers, 1);
 	ERR_FAIL_COND_V(rd_texture.is_null(), RID());

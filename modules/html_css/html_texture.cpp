@@ -127,7 +127,9 @@ bool HTMLTexture2D::has_alpha() const {
 
 Ref<Image> HTMLTexture2D::get_image() const {
 	if (external_texture_rid.is_valid()) {
-		return Ref<Image>();
+		RenderingServer *rendering_server = RenderingServer::get_singleton();
+		ERR_FAIL_NULL_V(rendering_server, Ref<Image>());
+		return rendering_server->texture_2d_get(external_texture_rid);
 	}
 	return latest_image;
 }

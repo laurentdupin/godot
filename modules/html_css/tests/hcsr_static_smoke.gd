@@ -22,6 +22,18 @@ func _initialize() -> void:
 			target.free()
 			quit(1)
 			return
+		var direct_image := texture.get_image()
+		if direct_image == null or direct_image.get_size() != Vector2i(320, 180):
+			push_error("Static HCSR external GPU texture did not support explicit get_image() readback.")
+			target.free()
+			quit(1)
+			return
+		var direct_sample := direct_image.get_pixel(300, 160)
+		if direct_sample.a < 0.9 or direct_sample.r < 0.03 or direct_sample.b < 0.20:
+			push_error("Static HCSR explicit external-texture readback did not contain the expected document color.")
+			target.free()
+			quit(1)
+			return
 
 		var texture_rect := TextureRect.new()
 		texture_rect.texture = texture
