@@ -1723,10 +1723,12 @@ Ref<Image> DisplayServerMacOS::screen_get_image_rect(const Rect2i &p_rect) const
 
 	Point2i position = p_rect.position;
 	position -= screen_get_position(0); // Note: coordinates where the screen origin is in the upper-left corner of the main display and y-axis values increase downward.
-	position /= screen_get_max_scale();
+	const float scale = screen_get_max_scale();
+	position /= scale;
 
-	Size2i size = p_rect.size;
-	size /= screen_get_max_scale();
+	Size2i size;
+	size.x = p_rect.size.x > 0 ? MAX(1, int(Math::ceil(p_rect.size.x / scale))) : 0;
+	size.y = p_rect.size.y > 0 ? MAX(1, int(Math::ceil(p_rect.size.y / scale))) : 0;
 
 	Ref<Image> img;
 	CGImageRef image = CGWindowListCreateImageFromArray(CGRectMake(position.x, position.y, size.width, size.height), capture_windows, kCGWindowListOptionAll);
