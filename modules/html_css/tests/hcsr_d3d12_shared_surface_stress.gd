@@ -75,15 +75,26 @@ func _send_wheel(position: Vector2, button: MouseButton, factor: float) -> void:
 	root.push_input(wheel, true)
 
 func _wait_for_settled_frame() -> Image:
-	var deadline := Time.get_ticks_msec() + 250
+	var deadline := Time.get_ticks_msec() + 2000
 	var frame: Image
+	var previous_frame: Image
+	var stable_frame_count := 0
 	while Time.get_ticks_msec() < deadline:
 		await process_frame
 		await RenderingServer.frame_post_draw
 		frame = root.get_texture().get_image()
 		if frame == null or not _frame_has_complete_surface(frame):
-			return null
-	return frame
+			previous_frame = null
+			stable_frame_count = 0
+			continue
+		if previous_frame != null and _count_changed_pixels(previous_frame, frame) == 0:
+			stable_frame_count += 1
+			if stable_frame_count >= 3:
+				return frame
+		else:
+			stable_frame_count = 0
+		previous_frame = frame
+	return null
 
 func _frame_has_complete_surface(frame: Image) -> bool:
 	if frame.get_width() < WIDTH or frame.get_height() < HEIGHT:
