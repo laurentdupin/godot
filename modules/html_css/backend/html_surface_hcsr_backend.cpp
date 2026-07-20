@@ -1171,15 +1171,8 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 		}
 		return gpu_render_succeeded;
 	} else {
-		const bool needs_texture_publish = !gpu_texture_rid.is_valid() || native_gpu_size != size;
 		gpu_frame_pending.set();
 		rendering_server->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread_callback).bind((uint64_t)this, (uint64_t)packet));
-		if (needs_texture_publish) {
-			// Initial creation and resize publish the replacement texture atomically.
-			// Steady-state frames remain ordered without synchronizing the game thread.
-			rendering_server->sync();
-			return gpu_render_succeeded;
-		}
 	}
 	return true;
 }
