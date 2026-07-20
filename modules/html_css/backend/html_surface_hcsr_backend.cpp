@@ -30,7 +30,8 @@ static const uint64_t HCSR_REQUIRED_GODOT_GPU_CAPABILITIES =
 		HCSR_GPU_CAPABILITY_IMMUTABLE_GENERATION_METADATA |
 		HCSR_GPU_CAPABILITY_DEVICE_IDENTITY |
 		HCSR_GPU_CAPABILITY_OBSERVABLE_BATCH_CANCELLATION |
-		HCSR_GPU_CAPABILITY_SUBMISSION_COMPLETION_TOKENS;
+		HCSR_GPU_CAPABILITY_SUBMISSION_COMPLETION_TOKENS |
+		HCSR_GPU_CAPABILITY_EXPLICIT_CONSUMER_RELEASE;
 
 static String hcsr_inject_document_style(const String &p_html, const Color &p_background, const String &p_css) {
 	String style = "<style data-godot-hcsr=\"true\">html { background-color: " + hcsr_color_to_css_rgba(p_background) + "; }\n";
@@ -725,6 +726,41 @@ void HTMLSurfaceHCSRBackend::_retire_document_commits() {
 	}
 }
 
+void HTMLSurfaceHCSRBackend::_release_gpu_resource_after_retirement_callback(uint64_t p_renderer_ptr, uint64_t p_native_texture, uint64_t p_resource_generation, uint64_t p_frame_generation, uint64_t p_submission_token) {
+	const hcsr_status_t status = hcsr_renderer_release_gpu_presentation_resource(
+			(hcsr_renderer_t *)p_renderer_ptr,
+			(void *)p_native_texture,
+			p_resource_generation,
+			p_frame_generation,
+			p_submission_token);
+	if (status != HCSR_STATUS_OK && status != HCSR_STATUS_INVALID_ARGUMENT) {
+		ERR_PRINT("HCSR could not retire a Godot-consumed GPU presentation resource.");
+	}
+}
+
+void HTMLSurfaceHCSRBackend::_destroy_renderer_after_retirement_callback(uint64_t p_renderer_ptr) {
+	if (p_renderer_ptr != 0) {
+		hcsr_renderer_destroy((hcsr_renderer_t *)p_renderer_ptr);
+	}
+}
+
+void HTMLSurfaceHCSRBackend::_defer_gpu_resource_release_on_render_thread(const hcsr_gpu_frame_t &p_frame) {
+	if (renderer == nullptr || p_frame.native_texture == nullptr || p_frame.resource_generation == 0 || p_frame.frame_generation == 0 || p_frame.submission_token == 0) {
+		return;
+	}
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	RenderingDevice *rendering_device = rendering_server != nullptr ? rendering_server->get_rendering_device() : nullptr;
+	if (rendering_device == nullptr) {
+		return;
+	}
+	rendering_device->external_resource_defer_release(callable_mp_static(&HTMLSurfaceHCSRBackend::_release_gpu_resource_after_retirement_callback).bind(
+			(uint64_t)renderer,
+			(uint64_t)p_frame.native_texture,
+			p_frame.resource_generation,
+			p_frame.frame_generation,
+			p_frame.submission_token));
+}
+
 void HTMLSurfaceHCSRBackend::_ensure_gpu_texture_imported_on_render_thread() {
 	if (gpu_texture_rid.is_valid() || native_gpu_texture == nullptr || native_gpu_size.x <= 0 || native_gpu_size.y <= 0) {
 		return;
@@ -810,6 +846,7 @@ bool HTMLSurfaceHCSRBackend::_activate_queued_gpu_frame_on_render_thread(const h
 	}
 	PreparedGPUFrameMetadata prepared_metadata;
 	if (!_take_gpu_packet_metadata(p_output.frame_generation, prepared_metadata)) {
+		_defer_gpu_resource_release_on_render_thread(p_output);
 		_record_error("HCSR returned a GPU texture without matching prepared frame metadata");
 		return false;
 	}
@@ -817,6 +854,7 @@ bool HTMLSurfaceHCSRBackend::_activate_queued_gpu_frame_on_render_thread(const h
 		MutexLock lock(frame_metadata_mutex);
 		if (p_output.frame_generation <= active_gpu_frame_generation || p_output.submission_token <= active_gpu_submission_token) {
 			_release_gpu_packet_metadata(prepared_metadata);
+			_defer_gpu_resource_release_on_render_thread(p_output);
 			_record_error("HCSR returned a non-monotonic queued Godot GPU frame");
 			return false;
 		}
@@ -834,7 +872,11 @@ bool HTMLSurfaceHCSRBackend::_activate_queued_gpu_frame_on_render_thread(const h
 	_ensure_gpu_texture_imported_on_render_thread();
 	if (!gpu_texture_rid.is_valid()) {
 		_release_gpu_packet_metadata(prepared_metadata);
+		_defer_gpu_resource_release_on_render_thread(p_output);
 		return false;
+	}
+	if (active_gpu_frame.native_texture != nullptr) {
+		_defer_gpu_resource_release_on_render_thread(active_gpu_frame);
 	}
 	hcsr_hit_test_snapshot_t *retired_snapshot = nullptr;
 	{
@@ -843,6 +885,7 @@ bool HTMLSurfaceHCSRBackend::_activate_queued_gpu_frame_on_render_thread(const h
 		last_queued_frame_generation = p_output.frame_generation;
 		active_gpu_frame_generation = p_output.frame_generation;
 		active_gpu_submission_token = p_output.submission_token;
+		active_gpu_frame = p_output;
 		submitted_gpu_frame_generations.insert(p_output.submission_token, p_output.frame_generation);
 		retired_snapshot = active_hit_test_snapshot;
 		active_hit_test_snapshot = prepared_metadata.hit_test_snapshot;
@@ -958,6 +1001,10 @@ void HTMLSurfaceHCSRBackend::_destroy_renderer_on_render_thread() {
 	for (hcsr_hit_test_snapshot_t *snapshot : staged_snapshots) {
 		hcsr_hit_test_snapshot_release(snapshot);
 	}
+	if (active_gpu_frame.native_texture != nullptr) {
+		_defer_gpu_resource_release_on_render_thread(active_gpu_frame);
+		active_gpu_frame = {};
+	}
 	{
 		MutexLock lock(frame_metadata_mutex);
 		if (active_hit_test_snapshot != nullptr) {
@@ -973,8 +1020,15 @@ void HTMLSurfaceHCSRBackend::_destroy_renderer_on_render_thread() {
 	gpu_device_configured = false;
 	gpu_capabilities = {};
 	if (renderer != nullptr) {
-		hcsr_renderer_destroy(renderer);
+		hcsr_renderer_t *renderer_to_destroy = renderer;
 		renderer = nullptr;
+		RenderingServer *rendering_server = RenderingServer::get_singleton();
+		RenderingDevice *rendering_device = rendering_server != nullptr ? rendering_server->get_rendering_device() : nullptr;
+		if (render_backend != HCSR_RENDER_BACKEND_CPU && rendering_device != nullptr) {
+			rendering_device->external_resource_defer_release(callable_mp_static(&HTMLSurfaceHCSRBackend::_destroy_renderer_after_retirement_callback).bind((uint64_t)renderer_to_destroy));
+		} else {
+			hcsr_renderer_destroy(renderer_to_destroy);
+		}
 	}
 }
 

@@ -37,6 +37,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	uint64_t active_gpu_frame_generation = 0;
 	uint64_t active_gpu_submission_token = 0;
 	uint64_t completed_gpu_submission_token = 0;
+	hcsr_gpu_frame_t active_gpu_frame = {};
 	// Swapped with the texture and immutable frame metadata for the same completed generation.
 	hcsr_hit_test_snapshot_t *active_hit_test_snapshot = nullptr;
 	void *native_gpu_texture = nullptr;
@@ -95,6 +96,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool _activate_queued_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output);
 	bool _observe_completed_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output);
 	void _ensure_gpu_texture_imported_on_render_thread();
+	void _defer_gpu_resource_release_on_render_thread(const hcsr_gpu_frame_t &p_frame);
 	void _detach_gpu_texture_import();
 	void _detach_gpu_texture_import_on_render_thread();
 	void _destroy_renderer_on_render_thread();
@@ -105,6 +107,8 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	static void _retry_deferred_gpu_frame_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _poll_gpu_presentation_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _detach_gpu_texture_import_on_render_thread_callback(uint64_t p_backend_ptr);
+	static void _release_gpu_resource_after_retirement_callback(uint64_t p_renderer_ptr, uint64_t p_native_texture, uint64_t p_resource_generation, uint64_t p_frame_generation, uint64_t p_submission_token);
+	static void _destroy_renderer_after_retirement_callback(uint64_t p_renderer_ptr);
 	static void _destroy_renderer_on_render_thread_callback(uint64_t p_backend_ptr);
 	void _record_error(const String &p_context);
 	void _retire_document_commits();

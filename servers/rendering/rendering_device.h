@@ -525,6 +525,9 @@ public:
 	RID external_texture_pool_acquire_latest(RID p_pool);
 	Dictionary external_texture_pool_get_slot_status(RID p_pool, int32_t p_slot);
 	void external_texture_pool_stop(RID p_pool);
+	// Runs after the current engine frame's GPU fence retires. Same-queue native
+	// producers use this to reclaim resources without a CPU fence wait.
+	void external_resource_defer_release(const Callable &p_callback);
 	RID texture_create_shared_from_slice(const TextureView &p_view, RID p_with_texture, uint32_t p_layer, uint32_t p_mipmap, uint32_t p_mipmaps = 1, TextureSliceType p_slice_type = TEXTURE_SLICE_2D, uint32_t p_layers = 0);
 	Error texture_update(RID p_texture, uint32_t p_layer, const Vector<uint8_t> &p_data);
 	Vector<uint8_t> texture_get_data(RID p_texture, uint32_t p_layer); // CPU textures will return immediately, while GPU textures will most likely force a flush
@@ -1845,6 +1848,7 @@ private:
 		List<Texture> textures_to_dispose_of;
 		List<RID> external_texture_pools_to_dispose_of;
 		List<uint64_t> external_timelines_to_dispose_of;
+		List<Callable> external_resource_release_callbacks;
 		List<Framebuffer> framebuffers_to_dispose_of;
 		List<RDD::SamplerID> samplers_to_dispose_of;
 		List<Shader> shaders_to_dispose_of;

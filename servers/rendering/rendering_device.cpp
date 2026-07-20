@@ -2136,6 +2136,12 @@ void RenderingDevice::external_texture_pool_stop(RID p_pool) {
 	}
 }
 
+void RenderingDevice::external_resource_defer_release(const Callable &p_callback) {
+	ERR_RENDER_THREAD_GUARD();
+	ERR_FAIL_COND_MSG(!p_callback.is_valid(), "An external resource release callback must be valid.");
+	frames[frame].external_resource_release_callbacks.push_back(p_callback);
+}
+
 RID RenderingDevice::texture_create_shared_from_slice(const TextureView &p_view, RID p_with_texture, uint32_t p_layer, uint32_t p_mipmap, uint32_t p_mipmaps, TextureSliceType p_slice_type, uint32_t p_layers) {
 	Texture *src_texture = texture_owner.get_or_null(p_with_texture);
 	ERR_FAIL_NULL_V(src_texture, RID());
@@ -8310,6 +8316,12 @@ void RenderingDevice::_free_pending_resources(int p_frame) {
 		frames[p_frame].external_timelines_to_dispose_of.pop_front();
 	}
 
+	while (frames[p_frame].external_resource_release_callbacks.front()) {
+		Callable callback = frames[p_frame].external_resource_release_callbacks.front()->get();
+		frames[p_frame].external_resource_release_callbacks.pop_front();
+		callback.call();
+	}
+
 	// Buffers.
 	while (frames[p_frame].buffers_to_dispose_of.front()) {
 		Buffer &buffer = frames[p_frame].buffers_to_dispose_of.front()->get();
@@ -9426,6 +9438,7 @@ void RenderingDevice::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("external_texture_pool_acquire_latest", "pool"), &RenderingDevice::external_texture_pool_acquire_latest);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_get_slot_status", "pool", "slot"), &RenderingDevice::external_texture_pool_get_slot_status);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_stop", "pool"), &RenderingDevice::external_texture_pool_stop);
+	ClassDB::bind_method(D_METHOD("external_resource_defer_release", "callback"), &RenderingDevice::external_resource_defer_release);
 
 	ClassDB::bind_method(D_METHOD("texture_update", "texture", "layer", "data"), &RenderingDevice::texture_update);
 	ClassDB::bind_method(D_METHOD("texture_get_data", "texture", "layer"), &RenderingDevice::texture_get_data);
