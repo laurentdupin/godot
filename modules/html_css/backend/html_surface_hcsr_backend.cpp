@@ -801,7 +801,7 @@ void HTMLSurfaceHCSRBackend::_detach_gpu_texture_import_on_render_thread() {
 }
 
 bool HTMLSurfaceHCSRBackend::_activate_queued_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output) {
-	if (p_output.native_texture == nullptr || p_output.width <= 0 || p_output.height <= 0 || p_output.render_backend != render_backend || p_output.frame_generation == 0 || p_output.submission_token == 0 || p_output.producer_completed != 0) {
+	if (p_output.native_texture == nullptr || p_output.width <= 0 || p_output.height <= 0 || p_output.render_backend != render_backend || p_output.texture_format != HCSR_GPU_TEXTURE_FORMAT_RGBA8_UNORM || p_output.premultiplied_alpha == 0 || p_output.frame_generation == 0 || p_output.submission_token == 0 || p_output.producer_completed != 0) {
 		if (p_output.frame_generation != 0) {
 			_discard_gpu_packet_metadata(p_output.frame_generation);
 		}
@@ -855,7 +855,7 @@ bool HTMLSurfaceHCSRBackend::_activate_queued_gpu_frame_on_render_thread(const h
 }
 
 bool HTMLSurfaceHCSRBackend::_observe_completed_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output) {
-	if (p_output.native_texture == nullptr || p_output.render_backend != render_backend || p_output.frame_generation == 0 || p_output.submission_token == 0 || p_output.producer_completed == 0) {
+	if (p_output.native_texture == nullptr || p_output.render_backend != render_backend || p_output.texture_format != HCSR_GPU_TEXTURE_FORMAT_RGBA8_UNORM || p_output.premultiplied_alpha == 0 || p_output.frame_generation == 0 || p_output.submission_token == 0 || p_output.producer_completed == 0) {
 		_record_error("HCSR returned an invalid completed Godot GPU frame");
 		return false;
 	}
