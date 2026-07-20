@@ -8,8 +8,10 @@ html,body{margin:0;width:100vw;height:100vh;background:#172554;overflow:hidden}
 </style></head><body><div class="card"></div></body></html>"""
 
 func _initialize() -> void:
-	var backend := HTMLView.BACKEND_VULKAN if OS.get_cmdline_user_args().has("--vulkan") else HTMLView.BACKEND_D3D12
-	var backend_name := "Vulkan" if backend == HTMLView.BACKEND_VULKAN else "D3D12"
+	var use_vulkan := OS.get_cmdline_user_args().has("--vulkan")
+	var use_metal := OS.get_cmdline_user_args().has("--metal")
+	var backend := HTMLView.BACKEND_VULKAN if use_vulkan else (HTMLView.BACKEND_METAL if use_metal else HTMLView.BACKEND_D3D12)
+	var backend_name := "Vulkan" if use_vulkan else ("Metal" if use_metal else "D3D12")
 	root.size = Vector2i(WIDTH * 2, HEIGHT)
 	root.add_child(_make_view(HTMLView.BACKEND_CPU, Vector2.ZERO))
 	root.add_child(_make_view(backend, Vector2(WIDTH, 0)))

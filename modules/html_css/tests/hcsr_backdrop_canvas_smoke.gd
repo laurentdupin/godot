@@ -1,6 +1,9 @@
 extends SceneTree
 
 func _initialize() -> void:
+	var use_d3d12 := OS.get_cmdline_user_args().has("--d3d12")
+	var use_vulkan := OS.get_cmdline_user_args().has("--vulkan")
+	var use_metal := OS.get_cmdline_user_args().has("--metal")
 	var background := ColorRect.new()
 	background.color = Color(0.1, 0.8, 0.2, 1.0)
 	background.size = Vector2(320, 180)
@@ -12,7 +15,7 @@ func _initialize() -> void:
 	document.background_color = Color(0, 0, 0, 0)
 
 	var view := HTMLView.new()
-	view.backend_preference = HTMLView.BACKEND_CPU
+	view.backend_preference = HTMLView.BACKEND_D3D12 if use_d3d12 else (HTMLView.BACKEND_VULKAN if use_vulkan else (HTMLView.BACKEND_METAL if use_metal else HTMLView.BACKEND_CPU))
 	view.size = Vector2(320, 180)
 	view.backdrop_filter_enabled = true
 	view.document = document

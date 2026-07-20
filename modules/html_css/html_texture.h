@@ -38,6 +38,7 @@ class HTMLTexture2D : public Texture2D {
 	Ref<ImageTexture> texture;
 	Ref<Image> latest_image;
 	RID external_texture_rid;
+	RID proxy_texture_rid;
 	Size2i size;
 	bool alpha = true;
 
@@ -62,4 +63,5 @@ public:
 	bool is_pixel_opaque(int p_x, int p_y) const override;
 
 	HTMLTexture2D();
+	~HTMLTexture2D();
 };

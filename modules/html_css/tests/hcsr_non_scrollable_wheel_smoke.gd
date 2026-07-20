@@ -4,6 +4,9 @@ const WIDTH := 640
 const HEIGHT := 360
 
 func _initialize() -> void:
+	var use_d3d12 := OS.get_cmdline_user_args().has("--d3d12")
+	var use_vulkan := OS.get_cmdline_user_args().has("--vulkan")
+	var use_metal := OS.get_cmdline_user_args().has("--metal")
 	DisplayServer.window_set_size(Vector2i(WIDTH, HEIGHT))
 	root.size = Vector2i(WIDTH, HEIGHT)
 
@@ -20,7 +23,7 @@ html,body{margin:0;width:100vw;height:100vh;overflow:hidden;background:transpare
 	document.background_color = Color(0, 0, 0, 0)
 
 	var view := HTMLView.new()
-	view.backend_preference = HTMLView.BACKEND_D3D12
+	view.backend_preference = HTMLView.BACKEND_D3D12 if use_d3d12 else (HTMLView.BACKEND_VULKAN if use_vulkan else (HTMLView.BACKEND_METAL if use_metal else HTMLView.BACKEND_CPU))
 	view.size = Vector2(WIDTH, HEIGHT)
 	view.backdrop_filter_enabled = true
 	view.document = document

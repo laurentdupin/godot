@@ -5,8 +5,9 @@ var actions: Array[StringName] = []
 func _initialize() -> void:
 	var use_d3d12 := OS.get_cmdline_user_args().has("--d3d12")
 	var use_vulkan := OS.get_cmdline_user_args().has("--vulkan")
-	var use_gpu := use_d3d12 or use_vulkan
-	var backend := HTMLView.BACKEND_D3D12 if use_d3d12 else (HTMLView.BACKEND_VULKAN if use_vulkan else HTMLView.BACKEND_CPU)
+	var use_metal := OS.get_cmdline_user_args().has("--metal")
+	var use_gpu := use_d3d12 or use_vulkan or use_metal
+	var backend := HTMLView.BACKEND_D3D12 if use_d3d12 else (HTMLView.BACKEND_VULKAN if use_vulkan else (HTMLView.BACKEND_METAL if use_metal else HTMLView.BACKEND_CPU))
 	var document := HTMLDocument.new()
 	document.html = """<!DOCTYPE html><html><head><style>
 		body { margin: 0; background: white; }
@@ -84,7 +85,7 @@ func _initialize() -> void:
 		_fail("Higher z-index popup did not target above its fixed dismiss layer: %s" % [actions])
 		return
 
-	print("HCSR CSS border/inset geometry smoke passed (%s)." % ("D3D12" if use_d3d12 else ("Vulkan" if use_vulkan else "CPU")))
+	print("HCSR CSS border/inset geometry smoke passed (%s)." % ("D3D12" if use_d3d12 else ("Vulkan" if use_vulkan else ("Metal" if use_metal else "CPU"))))
 	quit()
 
 func _send_click(position: Vector2) -> void:

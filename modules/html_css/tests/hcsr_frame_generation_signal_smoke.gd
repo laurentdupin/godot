@@ -18,6 +18,9 @@ func _initialize() -> void:
 	elif OS.get_cmdline_user_args().has("--vulkan"):
 		backend_preference = HTMLView.BACKEND_VULKAN
 		backend_name = "Vulkan"
+	elif OS.get_cmdline_user_args().has("--metal"):
+		backend_preference = HTMLView.BACKEND_METAL
+		backend_name = "Metal"
 
 	root.size = Vector2i(WIDTH, HEIGHT)
 	var target := HTMLRenderTarget.new()

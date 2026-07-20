@@ -13,8 +13,9 @@ var actions: Array[StringName] = []
 func _initialize() -> void:
 	var use_d3d12 := OS.get_cmdline_user_args().has("--d3d12")
 	var use_vulkan := OS.get_cmdline_user_args().has("--vulkan")
-	var backend := HTMLView.BACKEND_D3D12 if use_d3d12 else (HTMLView.BACKEND_VULKAN if use_vulkan else HTMLView.BACKEND_CPU)
-	var backend_name := "D3D12" if use_d3d12 else ("Vulkan" if use_vulkan else "CPU")
+	var use_metal := OS.get_cmdline_user_args().has("--metal")
+	var backend := HTMLView.BACKEND_D3D12 if use_d3d12 else (HTMLView.BACKEND_VULKAN if use_vulkan else (HTMLView.BACKEND_METAL if use_metal else HTMLView.BACKEND_CPU))
+	var backend_name := "D3D12" if use_d3d12 else ("Vulkan" if use_vulkan else ("Metal" if use_metal else "CPU"))
 	var document := HTMLDocument.new()
 	document.html = HTML
 	var view := HTMLView.new()

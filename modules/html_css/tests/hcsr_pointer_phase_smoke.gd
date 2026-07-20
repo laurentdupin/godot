@@ -7,10 +7,11 @@ var actions: Array[StringName] = []
 func _initialize() -> void:
 	var use_d3d12 := OS.get_cmdline_user_args().has("--d3d12")
 	var use_vulkan := OS.get_cmdline_user_args().has("--vulkan")
+	var use_metal := OS.get_cmdline_user_args().has("--metal")
 	var document := HTMLDocument.new()
 	document.html = "<!DOCTYPE html><html><body style='margin:0'><button id='hold' data-godot-action='delete-model' style='width:200px;height:80px'><span id='hold-label'>Hold</span></button><input id='slider' type='range' style='display:block;width:200px;height:32px;margin-top:16px'></body></html>"
 	var view := HTMLView.new()
-	view.backend_preference = HTMLView.BACKEND_D3D12 if use_d3d12 else (HTMLView.BACKEND_VULKAN if use_vulkan else HTMLView.BACKEND_CPU)
+	view.backend_preference = HTMLView.BACKEND_D3D12 if use_d3d12 else (HTMLView.BACKEND_VULKAN if use_vulkan else (HTMLView.BACKEND_METAL if use_metal else HTMLView.BACKEND_CPU))
 	view.size = Vector2(320, 160)
 	view.document = document
 	view.element_pointer_event.connect(_on_pointer_event)
