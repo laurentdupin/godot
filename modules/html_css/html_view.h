@@ -70,6 +70,7 @@ private:
 	BackendPreference backend_preference = BACKEND_AUTO;
 	ViewportSizeMode viewport_size_mode = VIEWPORT_SIZE_CONTROL_PHYSICAL_ADJUSTED;
 	Size2i fixed_viewport_size;
+	float fixed_viewport_device_scale_factor = 0.0f;
 	bool use_document_minimum_size = false;
 	bool backdrop_filter_enabled = false;
 	StringName accept_action = "ui_accept";
@@ -180,6 +181,8 @@ public:
 
 	void set_fixed_viewport_size(const Size2i &p_fixed_viewport_size);
 	Size2i get_fixed_viewport_size() const;
+	void set_fixed_viewport_device_scale_factor(float p_device_scale_factor);
+	float get_fixed_viewport_device_scale_factor() const;
 
 	void set_use_document_minimum_size(bool p_use_document_minimum_size);
 	bool is_using_document_minimum_size() const;

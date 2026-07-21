@@ -388,8 +388,10 @@ bool HTMLSurfaceHCSRBackend::_sync_viewport() {
 	if (!_ensure_renderer()) {
 		return false;
 	}
-	if (hcsr_renderer_set_viewport(renderer, MAX(1, size.x), MAX(1, size.y)) != HCSR_STATUS_OK) {
-		_record_error("HCSR rejected the Godot viewport");
+	const int physical_width = MAX(1, (int)Math::round(size.x * device_scale_factor));
+	const int physical_height = MAX(1, (int)Math::round(size.y * device_scale_factor));
+	if (hcsr_renderer_set_viewport_metrics(renderer, MAX(1, size.x), MAX(1, size.y), device_scale_factor, physical_width, physical_height) != HCSR_STATUS_OK) {
+		_record_error("HCSR rejected the Godot viewport metrics");
 		return false;
 	}
 	viewport_dirty = false;

@@ -48,6 +48,9 @@
 		<member name="fixed_viewport_size" type="Vector2i" setter="set_fixed_viewport_size" getter="get_fixed_viewport_size" default="Vector2i(0, 0)">
 			HTML viewport size used when [member viewport_size_mode] is [constant VIEWPORT_SIZE_FIXED]. If either component is [code]0[/code], the assigned document's default size is used.
 		</member>
+		<member name="fixed_viewport_device_scale_factor" type="float" setter="set_fixed_viewport_device_scale_factor" getter="get_fixed_viewport_device_scale_factor" default="0.0">
+			Physical raster scale used with [constant VIEWPORT_SIZE_FIXED] without changing its logical CSS viewport. A value of [code]0.0[/code] automatically selects at least 1× from the Control's physical display size. Set an explicit value to request a particular HiDPI or supersampling density.
+		</member>
 		<member name="text_backspace_action" type="StringName" setter="set_text_backspace_action" getter="get_text_backspace_action" default="&amp;&quot;ui_text_backspace&quot;">
 			Godot input action translated to Blink's Backspace key.
 		</member>

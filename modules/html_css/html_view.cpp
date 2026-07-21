@@ -338,6 +338,8 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_viewport_size_mode"), &HTMLView::get_viewport_size_mode);
 	ClassDB::bind_method(D_METHOD("set_fixed_viewport_size", "fixed_viewport_size"), &HTMLView::set_fixed_viewport_size);
 	ClassDB::bind_method(D_METHOD("get_fixed_viewport_size"), &HTMLView::get_fixed_viewport_size);
+	ClassDB::bind_method(D_METHOD("set_fixed_viewport_device_scale_factor", "device_scale_factor"), &HTMLView::set_fixed_viewport_device_scale_factor);
+	ClassDB::bind_method(D_METHOD("get_fixed_viewport_device_scale_factor"), &HTMLView::get_fixed_viewport_device_scale_factor);
 	ClassDB::bind_method(D_METHOD("set_use_document_minimum_size", "use_document_minimum_size"), &HTMLView::set_use_document_minimum_size);
 	ClassDB::bind_method(D_METHOD("is_using_document_minimum_size"), &HTMLView::is_using_document_minimum_size);
 	ClassDB::bind_method(D_METHOD("set_backdrop_filter_enabled", "backdrop_filter_enabled"), &HTMLView::set_backdrop_filter_enabled);
@@ -379,6 +381,7 @@ void HTMLView::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "backend_preference", PROPERTY_HINT_ENUM, "Auto,CPU,GPU Auto,Vulkan,D3D12"), "set_backend_preference", "get_backend_preference");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "viewport_size_mode", PROPERTY_HINT_ENUM, "Control Size,Control Physical Adjusted,Fixed,Physical Size"), "set_viewport_size_mode", "get_viewport_size_mode");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2I, "fixed_viewport_size", PROPERTY_HINT_RANGE, "0,16384,1,or_greater,suffix:px"), "set_fixed_viewport_size", "get_fixed_viewport_size");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "fixed_viewport_device_scale_factor", PROPERTY_HINT_RANGE, "0,8,0.05,or_greater,suffix:x"), "set_fixed_viewport_device_scale_factor", "get_fixed_viewport_device_scale_factor");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "use_document_minimum_size"), "set_use_document_minimum_size", "is_using_document_minimum_size");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "backdrop_filter_enabled"), "set_backdrop_filter_enabled", "is_backdrop_filter_enabled");
 
@@ -844,7 +847,18 @@ Size2i HTMLView::_get_target_viewport_size() const {
 }
 
 float HTMLView::_get_target_device_scale_factor() const {
-	if (viewport_size_mode == VIEWPORT_SIZE_CONTROL || viewport_size_mode == VIEWPORT_SIZE_FIXED || viewport_size_mode == VIEWPORT_SIZE_PHYSICAL_SIZE) {
+	if (viewport_size_mode == VIEWPORT_SIZE_FIXED) {
+		if (fixed_viewport_device_scale_factor > 0.0f) {
+			return fixed_viewport_device_scale_factor;
+		}
+		const Size2i logical_size = _get_target_viewport_size();
+		const Vector2 screen_scale = _get_screen_pixel_scale();
+		const Size2 physical_control_size = get_size() * screen_scale;
+		const float scale_x = logical_size.x > 0 ? physical_control_size.x / logical_size.x : 1.0f;
+		const float scale_y = logical_size.y > 0 ? physical_control_size.y / logical_size.y : 1.0f;
+		return CLAMP(MAX(1.0f, MAX(scale_x, scale_y)), 1.0f, 8.0f);
+	}
+	if (viewport_size_mode == VIEWPORT_SIZE_CONTROL || viewport_size_mode == VIEWPORT_SIZE_PHYSICAL_SIZE) {
 		return 1.0f;
 	}
 
@@ -1367,6 +1381,20 @@ Size2i HTMLView::get_fixed_viewport_size() const {
 	return fixed_viewport_size;
 }
 
+void HTMLView::set_fixed_viewport_device_scale_factor(float p_device_scale_factor) {
+	float new_scale = Math::is_finite(p_device_scale_factor) ? p_device_scale_factor : 0.0f;
+	new_scale = CLAMP(new_scale, 0.0f, 8.0f);
+	if (Math::is_equal_approx(fixed_viewport_device_scale_factor, new_scale)) {
+		return;
+	}
+	fixed_viewport_device_scale_factor = new_scale;
+	_update_surface_size();
+}
+
+float HTMLView::get_fixed_viewport_device_scale_factor() const {
+	return fixed_viewport_device_scale_factor;
+}
+
 void HTMLView::set_use_document_minimum_size(bool p_use_document_minimum_size) {
 	if (use_document_minimum_size == p_use_document_minimum_size) {
 		return;
@@ -1734,6 +1762,6 @@ HTMLView::HTMLView() {
 	surface->set_placeholder_background(Color(0.08, 0.09, 0.1, 1.0));
 	_ensure_backdrop_filter_canvas();
 	set_focus_mode(FOCUS_CLICK);
-	set_texture_filter(CanvasItem::TEXTURE_FILTER_NEAREST);
+	set_texture_filter(CanvasItem::TEXTURE_FILTER_LINEAR);
 	set_notify_transform(true);
 }
