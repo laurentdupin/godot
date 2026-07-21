@@ -50,6 +50,7 @@ class HTMLRenderSurface : public RefCounted {
 	Ref<HTMLDocument> document;
 	HTMLSurfaceBackend *backend = nullptr;
 	Size2i size = Size2i(512, 512);
+	Size2i physical_size = Size2i(512, 512);
 	float device_scale_factor = 1.0f;
 	Color placeholder_background = Color(0.08, 0.09, 0.1, 1.0);
 	bool backdrop_filter_enabled = false;
@@ -79,6 +80,7 @@ public:
 	Size2i get_size() const;
 	bool set_device_scale_factor(float p_device_scale_factor);
 	float get_device_scale_factor() const;
+	bool set_viewport(const Size2i &p_size, float p_device_scale_factor, const Size2i &p_physical_size, bool p_render = true);
 	bool set_viewport(const Size2i &p_size, float p_device_scale_factor, bool p_render = true);
 
 	void set_placeholder_background(const Color &p_color);

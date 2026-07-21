@@ -1,7 +1,7 @@
 extends SceneTree
 
-const WIDTH := 240
-const HEIGHT := 100
+const LOGICAL_SIZE := Vector2i(2648, 1440)
+const PHYSICAL_SIZE := Vector2i(2560, 1392)
 
 var backend_preference := HTMLView.BACKEND_CPU
 var backend_name := "CPU"
@@ -20,20 +20,24 @@ func _initialize() -> void:
 		return
 
 	var viewport := SubViewport.new()
-	viewport.size = Vector2i(WIDTH, HEIGHT)
+	viewport.size = PHYSICAL_SIZE
 	viewport.transparent_bg = false
 	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	root.add_child(viewport)
 	var document := HTMLDocument.new()
-	document.html = "<!DOCTYPE html><html><style>html,body{margin:0;width:100vw;height:100vh;background:#111827}.target{position:absolute;inset:13px 17px;background:#2563eb}.new{background:#dc2626}</style><body><div id='target' class='target'></div></body></html>"
+	document.html = "<!DOCTYPE html><html><style>html,body{margin:0;width:100vw;height:100vh;background:#111827;color:#edf2f7;font:32px sans-serif}.target{position:absolute;inset:137px 173px;background:#2563eb}.target span{position:absolute;left:29px;top:31px}.new{background:#dc2626}</style><body><div id='target' class='target'><span>None (2D only) · VRAM</span></div></body></html>"
+	var transform_parent := Control.new()
+	transform_parent.scale = Vector2(
+		PHYSICAL_SIZE.x / float(LOGICAL_SIZE.x),
+		PHYSICAL_SIZE.y / float(LOGICAL_SIZE.y))
+	viewport.add_child(transform_parent)
 	var view := HTMLView.new()
 	view.backend_preference = backend_preference
-	view.viewport_size_mode = HTMLView.VIEWPORT_SIZE_FIXED
-	view.fixed_viewport_size = Vector2i(WIDTH, HEIGHT)
-	view.size = Vector2(WIDTH, HEIGHT)
+	view.viewport_size_mode = HTMLView.VIEWPORT_SIZE_CONTROL_PHYSICAL_ADJUSTED
+	view.size = Vector2(LOGICAL_SIZE)
 	view.frame_activated.connect(_on_frame_activated)
 	view.document = document
-	viewport.add_child(view)
+	transform_parent.add_child(view)
 
 	if not await _wait_for_activation(0):
 		return
@@ -56,8 +60,8 @@ func _initialize() -> void:
 		return
 	var maximum_difference := 0.0
 	var differing_pixels := 0
-	for y in range(HEIGHT):
-		for x in range(WIDTH):
+	for y in range(PHYSICAL_SIZE.y):
+		for x in range(PHYSICAL_SIZE.x):
 			var imported_pixel := imported_image.get_pixel(x, y)
 			var composed_pixel := composed_image.get_pixel(x, y)
 			var difference: float = maxf(maxf(abs(imported_pixel.r - composed_pixel.r), abs(imported_pixel.g - composed_pixel.g)), maxf(abs(imported_pixel.b - composed_pixel.b), abs(imported_pixel.a - composed_pixel.a)))

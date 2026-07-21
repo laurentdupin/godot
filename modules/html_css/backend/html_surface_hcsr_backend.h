@@ -45,6 +45,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	uint64_t native_gpu_generation = 0;
 	Size2i native_gpu_size;
 	float device_scale_factor = 1.0f;
+	Size2i physical_size = Size2i(512, 512);
 	double timeline_time_seconds = 0.0;
 	double next_begin_frame_time_seconds = 0.0;
 	Point2 pointer_position;
@@ -124,6 +125,7 @@ public:
 	virtual void mark_document_dirty() override;
 	virtual void set_size(const Size2i &p_size) override;
 	virtual void set_device_scale_factor(float p_device_scale_factor) override;
+	virtual void set_physical_size(const Size2i &p_physical_size) override;
 	virtual void set_document(const Ref<HTMLDocument> &p_document) override;
 	virtual void set_background_color(const Color &p_background_color) override;
 	virtual void set_backdrop_filter_enabled(bool p_enabled) override;

@@ -109,6 +109,7 @@ private:
 	void _update_backdrop_filter_canvas();
 	Vector2 _get_screen_pixel_scale() const;
 	Size2i _get_target_viewport_size() const;
+	Size2i _get_target_physical_size() const;
 	float _get_target_device_scale_factor() const;
 	void _update_surface_size(bool p_force_render = true);
 	Vector2 _local_to_html_position(const Vector2 &p_position) const;

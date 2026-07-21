@@ -866,8 +866,25 @@ float HTMLView::_get_target_device_scale_factor() const {
 	return CLAMP(MAX(physical_scale_x, physical_scale_y), 0.01f, 8.0f);
 }
 
+Size2i HTMLView::_get_target_physical_size() const {
+	const Size2i logical_size = _get_target_viewport_size();
+	if (viewport_size_mode == VIEWPORT_SIZE_CONTROL_PHYSICAL_ADJUSTED) {
+		const Vector2 physical_control_size = get_size() * _get_screen_pixel_scale();
+		return Size2i(
+				MAX(1, (int)Math::round(physical_control_size.x)),
+				MAX(1, (int)Math::round(physical_control_size.y)));
+	}
+	if (viewport_size_mode == VIEWPORT_SIZE_FIXED) {
+		const float device_scale = _get_target_device_scale_factor();
+		return Size2i(
+				MAX(1, (int)Math::round(logical_size.x * device_scale)),
+				MAX(1, (int)Math::round(logical_size.y * device_scale)));
+	}
+	return logical_size;
+}
+
 void HTMLView::_update_surface_size(bool p_force_render) {
-	const bool changed = surface->set_viewport(_get_target_viewport_size(), _get_target_device_scale_factor(), false);
+	const bool changed = surface->set_viewport(_get_target_viewport_size(), _get_target_device_scale_factor(), _get_target_physical_size(), false);
 	if (changed || (p_force_render && surface->get_texture().is_null())) {
 		_queue_frame_render();
 	}

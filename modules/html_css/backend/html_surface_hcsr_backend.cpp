@@ -388,8 +388,8 @@ bool HTMLSurfaceHCSRBackend::_sync_viewport() {
 	if (!_ensure_renderer()) {
 		return false;
 	}
-	const int physical_width = MAX(1, (int)Math::round(size.x * device_scale_factor));
-	const int physical_height = MAX(1, (int)Math::round(size.y * device_scale_factor));
+	const int physical_width = MAX(1, physical_size.x);
+	const int physical_height = MAX(1, physical_size.y);
 	if (hcsr_renderer_set_viewport_metrics(renderer, MAX(1, size.x), MAX(1, size.y), device_scale_factor, physical_width, physical_height) != HCSR_STATUS_OK) {
 		_record_error("HCSR rejected the Godot viewport metrics");
 		return false;
@@ -1455,6 +1455,14 @@ void HTMLSurfaceHCSRBackend::set_device_scale_factor(float p_device_scale_factor
 	const float new_scale = CLAMP(Math::is_finite(p_device_scale_factor) && p_device_scale_factor > 0.0f ? p_device_scale_factor : 1.0f, 0.01f, 8.0f);
 	if (!Math::is_equal_approx(device_scale_factor, new_scale)) {
 		device_scale_factor = new_scale;
+		viewport_dirty = true;
+	}
+}
+
+void HTMLSurfaceHCSRBackend::set_physical_size(const Size2i &p_physical_size) {
+	const Size2i new_physical_size(MAX(1, p_physical_size.x), MAX(1, p_physical_size.y));
+	if (physical_size != new_physical_size) {
+		physical_size = new_physical_size;
 		viewport_dirty = true;
 	}
 }

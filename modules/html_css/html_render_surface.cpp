@@ -164,6 +164,7 @@ void HTMLRenderSurface::_sync_backend_state() {
 	Color background_color = document.is_valid() ? document->get_background_color() : Color(0, 0, 0, 0);
 	backend->set_size(size);
 	backend->set_device_scale_factor(device_scale_factor);
+	backend->set_physical_size(physical_size);
 	backend->set_document(document);
 	backend->set_transparent_background(background_color.a < 1.0);
 	backend->set_background_color(background_color);
@@ -285,16 +286,25 @@ float HTMLRenderSurface::get_device_scale_factor() const {
 }
 
 bool HTMLRenderSurface::set_viewport(const Size2i &p_size, float p_device_scale_factor, bool p_render) {
+	const Size2i derived_physical_size(
+			MAX(1, (int)Math::round(p_size.x * p_device_scale_factor)),
+			MAX(1, (int)Math::round(p_size.y * p_device_scale_factor)));
+	return set_viewport(p_size, p_device_scale_factor, derived_physical_size, p_render);
+}
+
+bool HTMLRenderSurface::set_viewport(const Size2i &p_size, float p_device_scale_factor, const Size2i &p_physical_size, bool p_render) {
 	Size2i new_size = Size2i(MAX(1, p_size.x), MAX(1, p_size.y));
+	Size2i new_physical_size = Size2i(MAX(1, p_physical_size.x), MAX(1, p_physical_size.y));
 	float new_device_scale_factor = p_device_scale_factor;
 	if (!Math::is_finite(new_device_scale_factor) || new_device_scale_factor <= 0.0f) {
 		new_device_scale_factor = 1.0f;
 	}
 	new_device_scale_factor = CLAMP(new_device_scale_factor, 0.01f, 8.0f);
-	if (size == new_size && Math::is_equal_approx(device_scale_factor, new_device_scale_factor)) {
+	if (size == new_size && physical_size == new_physical_size && Math::is_equal_approx(device_scale_factor, new_device_scale_factor)) {
 		return false;
 	}
 	size = new_size;
+	physical_size = new_physical_size;
 	device_scale_factor = new_device_scale_factor;
 	frame_metadata = HTMLFrameMetadata();
 	gpu_backdrop_frame.clear();
