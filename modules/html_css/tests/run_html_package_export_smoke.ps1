@@ -18,6 +18,13 @@ $successPack = Join-Path $outputRoot "success.pck"
 $linuxPack = Join-Path $outputRoot "success-linux.pck"
 $failurePack = Join-Path $outputRoot "failure.pck"
 
+foreach ($project in @($successProject, $failureProject)) {
+    $projectCache = Join-Path $project ".godot"
+    if (Test-Path -LiteralPath $projectCache) {
+        Remove-Item -LiteralPath $projectCache -Recurse -Force
+    }
+}
+
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 try {
     & $editor --headless --path $successProject --export-pack "HCSR Package Smoke" $successPack
