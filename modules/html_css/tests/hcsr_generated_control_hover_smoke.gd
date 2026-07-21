@@ -27,6 +27,12 @@ func _initialize() -> void:
 	var initial := await _capture()
 	if initial == null:
 		return
+	if not _pixel_is_close(initial.get_pixel(30, 75), Color8(100, 40, 40)):
+		_fail("%s did not paint the authored range track color." % backend_name)
+		return
+	if not _pixel_is_close(initial.get_pixel(128, 75), Color8(200, 80, 80)):
+		_fail("%s did not paint the authored range thumb color independently." % backend_name)
+		return
 
 	var regions := [
 		Rect2i(16, 16, 26, 26),
@@ -68,6 +74,9 @@ html,body{margin:0;width:100%%;height:100%%;background:#f1f5f9}
 input{position:absolute}input:hover{border-color:#2563eb}
 #checkbox{left:20px;top:20px}#radio{left:60px;top:20px}
 #range{left:20px;top:65px;width:170px;height:20px}
+#range::-webkit-slider-runnable-track{background:rgb(100,40,40);height:6px;border-radius:3px}
+#range::-webkit-slider-thumb{background:rgb(200,80,80);width:18px;height:18px;border-radius:9px}
+#range:hover::-webkit-slider-thumb{background:rgb(255,255,255)}
 </style></head><body><input id='checkbox' type='checkbox'><input id='radio' type='radio'><input id='range' type='range' value='65'></body></html>"""
 	var result := HTMLView.new()
 	result.backend_preference = backend_preference
@@ -102,6 +111,9 @@ func _count_non_background_pixels(image: Image, region: Rect2i) -> int:
 			if abs(pixel.r - BACKGROUND.r) > 0.02 or abs(pixel.g - BACKGROUND.g) > 0.02 or abs(pixel.b - BACKGROUND.b) > 0.02:
 				count += 1
 	return count
+
+func _pixel_is_close(actual: Color, expected: Color) -> bool:
+	return abs(actual.r - expected.r) < 0.025 and abs(actual.g - expected.g) < 0.025 and abs(actual.b - expected.b) < 0.025
 
 func _fail(message: String) -> void:
 	push_error(message)
