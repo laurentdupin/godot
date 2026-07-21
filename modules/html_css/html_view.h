@@ -86,6 +86,8 @@ private:
 	Vector2 pointer_last_html_position;
 	bool frame_render_pending = false;
 	int frame_render_delay = 0;
+	uint64_t frame_render_request_generation = 0;
+	uint64_t frame_render_serviced_generation = 0;
 	uint64_t input_trace_sequence = 0;
 	uint64_t pending_input_trace_sequence = 0;
 	ColorRect *backdrop_filter_rect = nullptr;

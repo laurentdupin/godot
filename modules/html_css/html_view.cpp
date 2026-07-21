@@ -475,7 +475,6 @@ void HTMLView::_notification(int p_what) {
 				break;
 			}
 
-			frame_render_pending = false;
 			bool waiting_for_async_completion = false;
 			const bool poll_changed = surface->poll_pending_output(&waiting_for_async_completion);
 			if (poll_changed) {
@@ -487,6 +486,7 @@ void HTMLView::_notification(int p_what) {
 				set_process_internal(true);
 				break;
 			}
+			const uint64_t servicing_request_generation = frame_render_request_generation;
 
 			bool needs_output = true;
 			bool needs_begin_frame = false;
@@ -532,7 +532,8 @@ void HTMLView::_notification(int p_what) {
 			if (trace_sequence != 0 && needs_begin_frame) {
 				pending_input_trace_sequence = trace_sequence;
 			}
-			frame_render_pending = needs_begin_frame;
+			frame_render_serviced_generation = servicing_request_generation;
+			frame_render_pending = needs_begin_frame || frame_render_request_generation != frame_render_serviced_generation;
 			set_process_internal(frame_render_pending);
 		} break;
 
@@ -1197,12 +1198,11 @@ void HTMLView::_call_bound_action(const StringName &p_action, const Dictionary &
 }
 
 void HTMLView::_queue_frame_render() {
-	if (frame_render_pending) {
-		return;
-	}
-
+	frame_render_request_generation++;
 	frame_render_pending = true;
-	frame_render_delay = 1;
+	if (frame_render_delay == 0) {
+		frame_render_delay = 1;
+	}
 	if (is_inside_tree()) {
 		set_process_internal(true);
 	}
