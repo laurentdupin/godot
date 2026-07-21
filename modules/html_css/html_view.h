@@ -116,8 +116,8 @@ private:
 	bool _same_activation_target(const HTMLElementHit &p_pressed, const HTMLElementHit &p_released) const;
 	void _emit_activation(const HTMLElementHit &p_hit, const Vector2 &p_html_position, MouseButton p_button);
 	void _emit_pointer_phase(const StringName &p_phase, const HTMLElementHit &p_hit, const Vector2 &p_html_position, MouseButton p_button);
-	bool _drain_surface_pointer_events();
-	void _emit_surface_pointer_event(const HTMLPointerEvent &p_event);
+	bool _drain_surface_pointer_events(bool *r_activation_emitted = nullptr);
+	bool _emit_surface_pointer_event(const HTMLPointerEvent &p_event);
 	void _cancel_pointer_interaction(const StringName &p_phase);
 	bool _send_action_key_event(const Ref<InputEvent> &p_event);
 	bool _send_key_event(const Ref<InputEventKey> &p_event);

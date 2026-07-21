@@ -102,16 +102,19 @@ ordering and never waits for a fence on the game or render thread. HCSR's
 opaque submission token correlates the queued frame with later nonblocking
 producer-completion polling. It is not exposed as a native D3D12, Vulkan, or
 Metal synchronization object and must not be CPU-waited. Godot keeps sampling
-the last active texture while a newer packet is pending; completion advances
-resource-retirement state without pretending that pixels changed or forcing a
-redraw. Each activated native resource remains borrowed until the engine frame
-that last sampled it retires on the GPU. `RenderingDevice` then returns its
-exact handle, resource generation, logical frame generation, and submission
-token through HCSR's consumer-release API. The callback runs as part of normal
-frame-resource reclamation; it adds no render-thread fence wait or queue flush.
-Resize, presentation reset, and renderer teardown retain old producer
-generations until those callbacks run. D3D12, Vulkan, and Metal use this same
-public lifecycle contract.
+the last active texture while a newer packet is pending. A submitted packet is
+retained with its metadata and hit-test snapshot but is not imported or exposed
+to rendering until producer completion identifies the same generation and
+submission token. Godot then atomically activates that texture, metadata, and
+snapshot; superseded submissions are retired without becoming visible. Each
+activated native resource remains borrowed until the engine frame that last
+sampled it retires on the GPU. `RenderingDevice` then returns its exact handle,
+resource generation, logical frame generation, and submission token through
+HCSR's consumer-release API. The callback runs as part of normal frame-resource
+reclamation; it adds no render-thread fence wait or queue flush. Resize,
+presentation reset, and renderer teardown retain old producer generations until
+those callbacks run. D3D12, Vulkan, and Metal use this same public lifecycle
+contract.
 
 To prepare Unix packages explicitly before invoking SCons, run one of:
 

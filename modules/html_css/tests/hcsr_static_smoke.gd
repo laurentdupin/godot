@@ -11,11 +11,16 @@ func _initialize() -> void:
 	document.background_color = Color("123456")
 
 	var target := HTMLRenderTarget.new()
+	root.add_child(target)
 	target.backend_preference = HTMLView.BACKEND_D3D12 if use_d3d12 else (HTMLView.BACKEND_VULKAN if use_vulkan else (HTMLView.BACKEND_METAL if use_metal else HTMLView.BACKEND_CPU))
 	target.size = Vector2i(320, 180)
 	target.document = document
 	target.render_now()
 	if use_gpu:
+		for _frame in range(20):
+			if target.get_texture() != null:
+				break
+			await process_frame
 		var texture := target.get_texture()
 		if texture == null or texture.get_width() != 320 or texture.get_height() != 180:
 			push_error("Static HCSR did not return the expected host-device GPU texture.")

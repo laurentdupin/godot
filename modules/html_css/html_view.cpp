@@ -1007,7 +1007,7 @@ void HTMLView::_emit_pointer_phase(const StringName &p_phase, const HTMLElementH
 	emit_signal(SNAME("element_pointer_event"), p_phase, activation.element_id, activation.action, (int)p_button, activation.payload);
 }
 
-void HTMLView::_emit_surface_pointer_event(const HTMLPointerEvent &p_event) {
+bool HTMLView::_emit_surface_pointer_event(const HTMLPointerEvent &p_event) {
 	StringName phase;
 	switch (p_event.type) {
 		case HTML_POINTER_EVENT_ENTER: phase = SNAME("enter"); break;
@@ -1053,15 +1053,21 @@ void HTMLView::_emit_surface_pointer_event(const HTMLPointerEvent &p_event) {
 		emit_signal(SNAME("element_clicked"), activated_element_id, (int)button);
 		emit_signal(SNAME("action_requested"), activation.action, activation.payload);
 		_call_bound_action(activation.action, activation.payload);
+		return true;
 	}
+	return false;
 }
 
-bool HTMLView::_drain_surface_pointer_events() {
+bool HTMLView::_drain_surface_pointer_events(bool *r_activation_emitted) {
 	bool consumed = false;
+	bool activation_emitted = false;
 	HTMLPointerEvent pointer_event;
 	while (surface->poll_pointer_event(pointer_event)) {
 		consumed = true;
-		_emit_surface_pointer_event(pointer_event);
+		activation_emitted = _emit_surface_pointer_event(pointer_event) || activation_emitted;
+	}
+	if (r_activation_emitted != nullptr) {
+		*r_activation_emitted = activation_emitted;
 	}
 	return consumed;
 }
@@ -1624,9 +1630,14 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 			const Error down_err = surface->mouse_down(html_position, html_button, _modifiers_from_event(mb, button_index, true), mb->is_double_click() ? 2 : 1);
 			const bool used_surface_dispatch = _drain_surface_pointer_events();
 			const bool has_press_hit = _hit_test(html_position, pointer_press_hit);
-			if (!used_surface_dispatch && has_press_hit && !pointer_press_hit.disabled) {
+			if (has_press_hit && !pointer_press_hit.disabled) {
+				// Retain the target from the presentation generation visible at press
+				// time. Native pointer phases can target a newer DOM generation while
+				// asynchronous GPU presentation is still sampling the old one.
 				pointer_press_active = true;
-				_emit_pointer_phase(SNAME("down"), pointer_press_hit, html_position, button_index);
+				if (!used_surface_dispatch) {
+					_emit_pointer_phase(SNAME("down"), pointer_press_hit, html_position, button_index);
+				}
 			}
 			html_view_input_trace(vformat("seq=%d mouse_down accepted local=%s html=%s button=%d err=%d press_hit=%s element_id=%s elapsed_ms=%.3f",
 					(int64_t)trace_sequence,
@@ -1656,14 +1667,15 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 		const uint64_t trace_sequence = ++input_trace_sequence;
 		const uint64_t input_start_usec = html_view_input_trace_enabled() && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 		const Error up_err = surface->mouse_up(html_position, html_button, _modifiers_from_event(mb, button_index, false), mb->is_double_click() ? 2 : 1);
-		const bool used_surface_dispatch = _drain_surface_pointer_events();
+		bool native_activation_emitted = false;
+		const bool used_surface_dispatch = _drain_surface_pointer_events(&native_activation_emitted);
 		HTMLElementHit release_hit;
 		const bool has_release_hit = _hit_test(html_position, release_hit);
 		if (!used_surface_dispatch && pointer_press_active && pointer_press_button == button_index) {
 			_emit_pointer_phase(SNAME("up"), pointer_press_hit, html_position, button_index);
 		}
 		bool activation_emitted = false;
-		if (!used_surface_dispatch && button_index == MouseButton::LEFT && pointer_press_active && pointer_press_button == button_index && has_release_hit && _same_activation_target(pointer_press_hit, release_hit)) {
+		if (!native_activation_emitted && button_index == MouseButton::LEFT && pointer_press_active && pointer_press_button == button_index && has_release_hit && _same_activation_target(pointer_press_hit, release_hit)) {
 			_emit_activation(release_hit, html_position, button_index);
 			activation_emitted = true;
 		}

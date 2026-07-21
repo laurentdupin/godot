@@ -836,7 +836,9 @@ void HTMLSurfaceHCSRBackend::_detach_gpu_texture_import_on_render_thread() {
 	gpu_texture_rid = RID();
 }
 
-bool HTMLSurfaceHCSRBackend::_activate_queued_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output) {
+bool HTMLSurfaceHCSRBackend::_record_submitted_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output) {
+	// Submission transfers ownership, but the texture is not sampleable until the
+	// producer completion poll publishes the matching generation and token.
 	if (p_output.native_texture == nullptr || p_output.width <= 0 || p_output.height <= 0 || p_output.render_backend != render_backend || p_output.texture_format != HCSR_GPU_TEXTURE_FORMAT_RGBA8_UNORM || p_output.premultiplied_alpha == 0 || p_output.frame_generation == 0 || p_output.submission_token == 0 || p_output.producer_completed != 0) {
 		if (p_output.frame_generation != 0) {
 			_discard_gpu_packet_metadata(p_output.frame_generation);
@@ -844,35 +846,96 @@ bool HTMLSurfaceHCSRBackend::_activate_queued_gpu_frame_on_render_thread(const h
 		_record_error("HCSR returned an invalid queued Godot GPU frame");
 		return false;
 	}
-	PreparedGPUFrameMetadata prepared_metadata;
-	if (!_take_gpu_packet_metadata(p_output.frame_generation, prepared_metadata)) {
+	{
+		MutexLock metadata_lock(prepared_gpu_frame_metadata_mutex);
+		if (!prepared_gpu_frame_metadata.has(p_output.frame_generation)) {
+			_defer_gpu_resource_release_on_render_thread(p_output);
+			_record_error("HCSR returned a GPU texture without matching prepared frame metadata");
+			return false;
+		}
+	}
+	MutexLock lock(frame_metadata_mutex);
+	if (p_output.frame_generation <= last_queued_frame_generation || p_output.submission_token <= latest_submitted_gpu_submission_token || submitted_gpu_frames.has(p_output.submission_token)) {
+		_discard_gpu_packet_metadata(p_output.frame_generation);
 		_defer_gpu_resource_release_on_render_thread(p_output);
+		_record_error("HCSR returned a non-monotonic queued Godot GPU frame");
+		return false;
+	}
+	last_queued_frame_generation = p_output.frame_generation;
+	latest_submitted_gpu_submission_token = p_output.submission_token;
+	submitted_gpu_frame_generations.insert(p_output.submission_token, p_output.frame_generation);
+	submitted_gpu_frames.insert(p_output.submission_token, p_output);
+	return true;
+}
+
+bool HTMLSurfaceHCSRBackend::_activate_completed_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output) {
+	if (p_output.native_texture == nullptr || p_output.width <= 0 || p_output.height <= 0 || p_output.render_backend != render_backend || p_output.texture_format != HCSR_GPU_TEXTURE_FORMAT_RGBA8_UNORM || p_output.premultiplied_alpha == 0 || p_output.frame_generation == 0 || p_output.submission_token == 0 || p_output.producer_completed == 0) {
+		_record_error("HCSR returned an invalid completed Godot GPU frame");
+		return false;
+	}
+
+	hcsr_gpu_frame_t completed_frame = {};
+	Vector<hcsr_gpu_frame_t> superseded_frames;
+	Vector<uint64_t> superseded_generations;
+	{
+		MutexLock lock(frame_metadata_mutex);
+		const uint64_t *submitted_generation = submitted_gpu_frame_generations.getptr(p_output.submission_token);
+		const hcsr_gpu_frame_t *submitted_frame = submitted_gpu_frames.getptr(p_output.submission_token);
+		if (submitted_generation == nullptr || submitted_frame == nullptr || *submitted_generation != p_output.frame_generation || p_output.submission_token <= completed_gpu_submission_token || p_output.submission_token > latest_submitted_gpu_submission_token) {
+			_record_error("HCSR returned an uncorrelated Godot GPU completion");
+			return false;
+		}
+		completed_frame = *submitted_frame;
+		for (const KeyValue<uint64_t, hcsr_gpu_frame_t> &entry : submitted_gpu_frames) {
+			if (entry.key < p_output.submission_token) {
+				superseded_frames.push_back(entry.value);
+				superseded_generations.push_back(entry.value.frame_generation);
+			}
+		}
+		for (const hcsr_gpu_frame_t &frame : superseded_frames) {
+			submitted_gpu_frames.erase(frame.submission_token);
+			submitted_gpu_frame_generations.erase(frame.submission_token);
+		}
+		submitted_gpu_frames.erase(p_output.submission_token);
+		submitted_gpu_frame_generations.erase(p_output.submission_token);
+		completed_gpu_submission_token = p_output.submission_token;
+	}
+	for (uint64_t generation : superseded_generations) {
+		_discard_gpu_packet_metadata(generation);
+	}
+	for (const hcsr_gpu_frame_t &frame : superseded_frames) {
+		_defer_gpu_resource_release_on_render_thread(frame);
+	}
+
+	PreparedGPUFrameMetadata prepared_metadata;
+	if (!_take_gpu_packet_metadata(completed_frame.frame_generation, prepared_metadata)) {
+		_defer_gpu_resource_release_on_render_thread(completed_frame);
 		_record_error("HCSR returned a GPU texture without matching prepared frame metadata");
 		return false;
 	}
 	{
 		MutexLock lock(frame_metadata_mutex);
-		if (p_output.frame_generation <= active_gpu_frame_generation || p_output.submission_token <= active_gpu_submission_token) {
+		if (completed_frame.frame_generation <= active_gpu_frame_generation) {
 			_release_gpu_packet_metadata(prepared_metadata);
-			_defer_gpu_resource_release_on_render_thread(p_output);
-			_record_error("HCSR returned a non-monotonic queued Godot GPU frame");
+			_defer_gpu_resource_release_on_render_thread(completed_frame);
+			_record_error("HCSR returned a non-monotonic completed Godot GPU frame");
 			return false;
 		}
 	}
-	if (native_gpu_texture != p_output.native_texture || native_gpu_generation != p_output.resource_generation || native_gpu_size != Size2i(p_output.width, p_output.height)) {
-		if (_uses_presentation_texture_import_cache() && native_gpu_size == Size2i(p_output.width, p_output.height)) {
+	if (native_gpu_texture != completed_frame.native_texture || native_gpu_generation != completed_frame.resource_generation || native_gpu_size != Size2i(completed_frame.width, completed_frame.height)) {
+		if (_uses_presentation_texture_import_cache() && native_gpu_size == Size2i(completed_frame.width, completed_frame.height)) {
 			gpu_texture_rid = RID();
 		} else {
 			_detach_gpu_texture_import_on_render_thread();
 		}
-		native_gpu_texture = p_output.native_texture;
-		native_gpu_generation = p_output.resource_generation;
-		native_gpu_size = Size2i(p_output.width, p_output.height);
+		native_gpu_texture = completed_frame.native_texture;
+		native_gpu_generation = completed_frame.resource_generation;
+		native_gpu_size = Size2i(completed_frame.width, completed_frame.height);
 	}
 	_ensure_gpu_texture_imported_on_render_thread();
 	if (!gpu_texture_rid.is_valid()) {
 		_release_gpu_packet_metadata(prepared_metadata);
-		_defer_gpu_resource_release_on_render_thread(p_output);
+		_defer_gpu_resource_release_on_render_thread(completed_frame);
 		return false;
 	}
 	if (active_gpu_frame.native_texture != nullptr) {
@@ -882,11 +945,8 @@ bool HTMLSurfaceHCSRBackend::_activate_queued_gpu_frame_on_render_thread(const h
 	{
 		MutexLock lock(frame_metadata_mutex);
 		frame_metadata = prepared_metadata.frame_metadata;
-		last_queued_frame_generation = p_output.frame_generation;
-		active_gpu_frame_generation = p_output.frame_generation;
-		active_gpu_submission_token = p_output.submission_token;
-		active_gpu_frame = p_output;
-		submitted_gpu_frame_generations.insert(p_output.submission_token, p_output.frame_generation);
+		active_gpu_frame_generation = completed_frame.frame_generation;
+		active_gpu_frame = completed_frame;
 		retired_snapshot = active_hit_test_snapshot;
 		active_hit_test_snapshot = prepared_metadata.hit_test_snapshot;
 		prepared_metadata.hit_test_snapshot = nullptr;
@@ -894,31 +954,6 @@ bool HTMLSurfaceHCSRBackend::_activate_queued_gpu_frame_on_render_thread(const h
 	if (retired_snapshot != nullptr) {
 		hcsr_hit_test_snapshot_release(retired_snapshot);
 	}
-	return true;
-}
-
-bool HTMLSurfaceHCSRBackend::_observe_completed_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output) {
-	if (p_output.native_texture == nullptr || p_output.render_backend != render_backend || p_output.texture_format != HCSR_GPU_TEXTURE_FORMAT_RGBA8_UNORM || p_output.premultiplied_alpha == 0 || p_output.frame_generation == 0 || p_output.submission_token == 0 || p_output.producer_completed == 0) {
-		_record_error("HCSR returned an invalid completed Godot GPU frame");
-		return false;
-	}
-
-	MutexLock lock(frame_metadata_mutex);
-	const uint64_t *submitted_generation = submitted_gpu_frame_generations.getptr(p_output.submission_token);
-	if (submitted_generation == nullptr || *submitted_generation != p_output.frame_generation || p_output.submission_token <= completed_gpu_submission_token || p_output.submission_token > active_gpu_submission_token) {
-		_record_error("HCSR returned an uncorrelated Godot GPU completion");
-		return false;
-	}
-	Vector<uint64_t> retired_tokens;
-	for (const KeyValue<uint64_t, uint64_t> &entry : submitted_gpu_frame_generations) {
-		if (entry.key <= p_output.submission_token) {
-			retired_tokens.push_back(entry.key);
-		}
-	}
-	for (uint64_t token : retired_tokens) {
-		submitted_gpu_frame_generations.erase(token);
-	}
-	completed_gpu_submission_token = p_output.submission_token;
 	return true;
 }
 
@@ -952,7 +987,7 @@ void HTMLSurfaceHCSRBackend::_poll_gpu_presentation_on_render_thread() {
 		gpu_presentation_work_pending.clear();
 	}
 	if (updated != 0) {
-		_observe_completed_gpu_frame_on_render_thread(output);
+		_activate_completed_gpu_frame_on_render_thread(output);
 	}
 }
 
@@ -1005,17 +1040,25 @@ void HTMLSurfaceHCSRBackend::_destroy_renderer_on_render_thread() {
 		_defer_gpu_resource_release_on_render_thread(active_gpu_frame);
 		active_gpu_frame = {};
 	}
+	Vector<hcsr_gpu_frame_t> submitted_frames;
 	{
 		MutexLock lock(frame_metadata_mutex);
+		for (const KeyValue<uint64_t, hcsr_gpu_frame_t> &entry : submitted_gpu_frames) {
+			submitted_frames.push_back(entry.value);
+		}
+		submitted_gpu_frames.clear();
 		if (active_hit_test_snapshot != nullptr) {
 			hcsr_hit_test_snapshot_release(active_hit_test_snapshot);
 			active_hit_test_snapshot = nullptr;
 		}
 		active_gpu_frame_generation = 0;
 		last_queued_frame_generation = 0;
-		active_gpu_submission_token = 0;
+		latest_submitted_gpu_submission_token = 0;
 		completed_gpu_submission_token = 0;
 		submitted_gpu_frame_generations.clear();
+	}
+	for (const hcsr_gpu_frame_t &frame : submitted_frames) {
+		_defer_gpu_resource_release_on_render_thread(frame);
 	}
 	gpu_device_configured = false;
 	gpu_capabilities = {};
@@ -1093,7 +1136,7 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 		return;
 	}
 	_update_performance_profile();
-	gpu_render_succeeded = _activate_queued_gpu_frame_on_render_thread(output);
+	gpu_render_succeeded = _record_submitted_gpu_frame_on_render_thread(output);
 	if (_uses_async_gpu_presentation()) {
 		gpu_presentation_work_pending.set();
 	}
@@ -1446,7 +1489,6 @@ bool HTMLSurfaceHCSRBackend::poll_pending_output(bool *r_waiting_for_completion)
 	const bool follow_up_requested = gpu_follow_up_frame_requested.is_set();
 	if (_uses_async_gpu_presentation()
 			&& gpu_presentation_work_pending.is_set()
-			&& !gpu_frame_pending.is_set()
 			&& !gpu_presentation_poll_pending.is_set()) {
 		RenderingServer *rendering_server = RenderingServer::get_singleton();
 		if (rendering_server != nullptr) {
