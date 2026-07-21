@@ -1,0 +1,5 @@
+[gd_resource type="HTMLDocument" format=3]
+
+[resource]
+html_file = "res://Entry.html"
+resource_root = "res://"

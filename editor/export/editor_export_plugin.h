@@ -54,6 +54,7 @@ class EditorExportPlugin : public RefCounted {
 	};
 	Vector<ExtraFile> extra_files;
 	bool skipped = false;
+	Error export_error = OK;
 
 	Vector<String> apple_embedded_platform_frameworks;
 	Vector<String> apple_embedded_platform_embedded_frameworks;
@@ -69,6 +70,10 @@ class EditorExportPlugin : public RefCounted {
 		shared_objects.clear();
 		extra_files.clear();
 		skipped = false;
+	}
+
+	_FORCE_INLINE_ void _clear_export_error() {
+		export_error = OK;
 	}
 
 	_FORCE_INLINE_ void _export_end_clear() {
@@ -89,6 +94,12 @@ class EditorExportPlugin : public RefCounted {
 	String _has_valid_export_configuration(const Ref<EditorExportPlatform> &p_export_platform, const Ref<EditorExportPreset> &p_preset);
 
 protected:
+	void fail_export(Error p_error) {
+		if (export_error == OK && p_error != OK) {
+			export_error = p_error;
+		}
+	}
+
 	void set_export_base_path(const String &p_export_base_path);
 	const String &get_export_base_path() const;
 	void set_export_preset(const Ref<EditorExportPreset> &p_preset);

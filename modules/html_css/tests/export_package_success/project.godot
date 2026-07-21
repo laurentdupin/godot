@@ -1,0 +1,5 @@
+[application]
+config/name="HCSR Export Package Success Smoke"
+
+[rendering]
+renderer/rendering_method="gl_compatibility"

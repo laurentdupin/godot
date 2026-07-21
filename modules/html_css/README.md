@@ -20,6 +20,16 @@ macOS, plus Android ARM64 and x86_64. A Windows editor can be built with:
 python -m SCons platform=windows target=editor module_html_css_renderer=hcsr
 ```
 
+An HCSR-enabled Linux release template must select the provider explicitly:
+
+```bash
+scons platform=linuxbsd target=template_release production=yes module_html_css_renderer=hcsr -j8
+```
+
+Omitting `module_html_css_renderer=hcsr` intentionally builds the module without
+an external renderer provider and is not a valid packaged-player template for an
+HCSR project.
+
 For Android, set `ANDROID_HOME` to an SDK containing Godot's pinned NDK
 `29.0.14206865`, set `JAVA_HOME`, and run:
 
@@ -146,6 +156,8 @@ After packaging, validate the static C ABI, system-font path, and raster-image
 codec without Godot:
 
 ```bash
+bash thirdparty/hcsr/tools/run-linux-static-smoke.sh --architecture x86_64
+bash thirdparty/hcsr/tools/run-linux-static-smoke.sh --architecture arm64
 bash thirdparty/hcsr/tools/run-macos-static-smoke.sh --architecture arm64
 bash thirdparty/hcsr/tools/run-macos-static-smoke.sh --architecture x86_64
 bash thirdparty/hcsr/tools/run-macos-metal-static-smoke.sh --architecture arm64
@@ -165,12 +177,28 @@ Author pages as ordinary browser-compatible `.html` and `.css` files. Standard
 can be opened directly in Chromium while it is being edited. Editor and debug
 builds load those raw files and preserve immediate reload behavior.
 
-During a release export, the HCSR export plugin compiles each HTML entry into a
-versioned `.hcsrpkg`, embeds only the compiled DOM, parsed CSS/animation data,
-and referenced local assets, and skips the original HTML and CSS files. Release
-runtime code derives `res://page.hcsrpkg` from `res://page.html`; no loose HTML
-or CSS is required in the PCK or beside the executable. Set
+During a release export, the HCSR export plugin compiles selected HTML entry
+documents into versioned `.hcsrpkg` files. An `HTMLDocument` resource explicitly
+identifies its `html_file` as an entry. A selected standalone `.html` or `.htm`
+file is also an entry when it is a complete document rooted at `<html>`, with an
+optional doctype. HTML fragments and `<template>` catalogs are auxiliary source,
+not renderable entries. This distinction supports projects that load template
+source at runtime without trying to compile placeholders as document markup.
+
+The export plugin only processes files selected by the export preset. Selected
+HTML and CSS source remains in the exported package, including auxiliary source,
+and each entry receives a sibling `.hcsrpkg`. Release runtime code derives
+`res://page.hcsrpkg` from `res://page.html`. A failure to compile a selected entry
+is an export error rather than a successful but incomplete package. Set
 `HTMLDocument.package_file` to test a specific package explicitly in the editor.
+
+The focused export regression exercises preset selection, a complete entry,
+an auxiliary template catalog, package contents, and fatal compilation errors:
+
+```powershell
+modules/html_css/tests/run_html_package_export_smoke.ps1 `
+  -EditorPath bin/godot.windows.editor.x86_64.mono.console.exe
+```
 
 ## Blink C API link modes
 

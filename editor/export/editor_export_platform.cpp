@@ -804,6 +804,7 @@ EditorExportPlatform::ExportNotifier::ExportNotifier(EditorExportPlatform &p_pla
 	Vector<Ref<EditorExportPlugin>> export_plugins = EditorExport::get_singleton()->get_export_plugins();
 	//initial export plugin callback
 	for (int i = 0; i < export_plugins.size(); i++) {
+		export_plugins.write[i]->_clear_export_error();
 		export_plugins.write[i]->set_export_preset(p_preset);
 		if (GDVIRTUAL_IS_OVERRIDDEN_PTR(export_plugins[i], _export_begin)) {
 			PackedStringArray features_psa;
@@ -1417,6 +1418,9 @@ Error EditorExportPlatform::export_project_files(const Ref<EditorExportPreset> &
 
 	auto add_shared_objects_and_extra_files_from_export_plugins = [&]() {
 		for (int i = 0; i < export_plugins.size(); i++) {
+			if (export_plugins[i]->export_error != OK) {
+				return export_plugins[i]->export_error;
+			}
 			if (p_so_func) {
 				for (int j = 0; j < export_plugins[i]->shared_objects.size(); j++) {
 					err = p_so_func(p_preset, p_udata, export_plugins[i]->shared_objects[j]);
@@ -1546,6 +1550,9 @@ Error EditorExportPlatform::export_project_files(const Ref<EditorExportPreset> &
 				export_plugins.write[i]->_export_file_script(path, type, features_psa);
 			} else {
 				export_plugins.write[i]->_export_file(path, type, features);
+			}
+			if (export_plugins[i]->export_error != OK) {
+				return export_plugins[i]->export_error;
 			}
 			if (p_so_func) {
 				for (int j = 0; j < export_plugins[i]->shared_objects.size(); j++) {
