@@ -33,10 +33,17 @@ func _initialize() -> void:
 	if not _pixel_is_close(initial.get_pixel(128, 75), Color8(200, 80, 80)):
 		_fail("%s did not paint the authored range thumb color independently." % backend_name)
 		return
+	if not _pixel_is_close(initial.get_pixel(30, 30), Color8(32, 32, 32)) or not _pixel_is_close(initial.get_pixel(30, 20), Color8(128, 128, 128)):
+		_fail("%s did not paint the authored unchecked checkbox background and border." % backend_name)
+		return
+	if not _pixel_is_close(initial.get_pixel(102, 22), Color8(255, 128, 0)):
+		_fail("%s did not preserve checked checkbox accent painting." % backend_name)
+		return
 
 	var regions := [
 		Rect2i(16, 16, 26, 26),
 		Rect2i(56, 16, 26, 26),
+		Rect2i(92, 16, 28, 28),
 		Rect2i(16, 62, 180, 30),
 	]
 	for region in regions:
@@ -72,12 +79,13 @@ func _make_view() -> HTMLView:
 	document.html = """<!DOCTYPE html><html><head><style>
 html,body{margin:0;width:100%%;height:100%%;background:#f1f5f9}
 input{position:absolute}input:hover{border-color:#2563eb}
-#checkbox{left:20px;top:20px}#radio{left:60px;top:20px}
+#checkbox,#checked{top:20px;width:20px;height:20px;margin:0;background:rgb(32,32,32);border:2px solid rgb(128,128,128);border-radius:3px;accent-color:rgb(255,128,0)}
+#checkbox{left:20px}#radio{left:60px;top:20px}#checked{left:100px}
 #range{left:20px;top:65px;width:170px;height:20px}
 #range::-webkit-slider-runnable-track{background:rgb(100,40,40);height:6px;border-radius:3px}
 #range::-webkit-slider-thumb{background:rgb(200,80,80);width:18px;height:18px;border-radius:9px}
 #range:hover::-webkit-slider-thumb{background:rgb(255,255,255)}
-</style></head><body><input id='checkbox' type='checkbox'><input id='radio' type='radio'><input id='range' type='range' value='65'></body></html>"""
+</style></head><body><input id='checkbox' type='checkbox'><input id='radio' type='radio'><input id='checked' type='checkbox' checked><input id='range' type='range' value='65'></body></html>"""
 	var result := HTMLView.new()
 	result.backend_preference = backend_preference
 	result.size = Vector2(WIDTH, HEIGHT)
