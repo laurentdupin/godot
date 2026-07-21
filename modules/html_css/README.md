@@ -179,11 +179,13 @@ builds load those raw files and preserve immediate reload behavior.
 
 During a release export, the HCSR export plugin compiles selected HTML entry
 documents into versioned `.hcsrpkg` files. An `HTMLDocument` resource explicitly
-identifies its `html_file` as an entry. A selected standalone `.html` or `.htm`
-file is also an entry when it is a complete document rooted at `<html>`, with an
-optional doctype. HTML fragments and `<template>` catalogs are auxiliary source,
-not renderable entries. This distinction supports projects that load template
-source at runtime without trying to compile placeholders as document markup.
+identifies its `html_file` as an entry. GDScript code that constructs an
+`HTMLDocument` identifies a selected entry through a literal `html_file`
+assignment or `set_html_file()` call; a named string constant may supply that
+path. Other selected `.html` and `.htm` files are auxiliary source regardless of
+whether they are syntactically complete documents. This distinction supports
+projects that load complete `<template>` catalogs at runtime without compiling
+their placeholders as document markup.
 
 The export plugin only processes files selected by the export preset. Selected
 HTML and CSS source remains in the exported package, including auxiliary source,
@@ -192,8 +194,9 @@ and each entry receives a sibling `.hcsrpkg`. Release runtime code derives
 is an export error rather than a successful but incomplete package. Set
 `HTMLDocument.package_file` to test a specific package explicitly in the editor.
 
-The focused export regression exercises preset selection, a complete entry,
-an auxiliary template catalog, package contents, and fatal compilation errors:
+The focused export regression exercises preset selection, resource-owned and
+programmatically constructed entries, a complete-document auxiliary template
+catalog, package contents, and fatal compilation errors:
 
 ```powershell
 modules/html_css/tests/run_html_package_export_smoke.ps1 `

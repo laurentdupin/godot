@@ -1,10 +1,21 @@
 extends Node
 
+const PROGRAMMATIC_DOCUMENT_PATH := "res://ProgrammaticEntry.html"
+
+
+func _make_programmatic_document() -> HTMLDocument:
+	var document := HTMLDocument.new()
+	document.html_file = PROGRAMMATIC_DOCUMENT_PATH
+	return document
+
+
 func _ready() -> void:
 	var expected_files := [
 		"res://Entry.html",
 		"res://Entry.css",
 		"res://Entry.hcsrpkg",
+		"res://ProgrammaticEntry.html",
+		"res://ProgrammaticEntry.hcsrpkg",
 		"res://RuntimeTemplates.html",
 	]
 	for path in expected_files:

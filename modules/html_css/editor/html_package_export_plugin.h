@@ -13,8 +13,10 @@ class HTMLPackageExportPlugin : public EditorExportPlugin {
 
 	bool debug_export = false;
 	HashSet<String> compiled_documents;
+	HashSet<String> inspected_resources;
 	bool _compile_package(const String &p_path);
-	static bool _is_complete_html_document(const String &p_path);
+	void _compile_script_document_entries(const String &p_path);
+	void _inspect_resource_dependencies(const String &p_path);
 
 protected:
 	virtual void _export_begin(const HashSet<String> &p_features, bool p_debug, const String &p_path, int p_flags) override;
