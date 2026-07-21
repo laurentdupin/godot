@@ -2,6 +2,10 @@ extends SceneTree
 
 var backend_preference := HTMLView.BACKEND_CPU
 var backend_name := "CPU"
+var expected_physical_size := Vector2i(2560, 1392)
+var activated_size_error := ""
+var tested_view: HTMLView
+var monitor_activated_size := false
 
 
 func _initialize() -> void:
@@ -23,13 +27,16 @@ func _initialize() -> void:
 	document.html_file = "res://thirdparty/hcsr/Examples/DeepDesktopQuickStart/DeepDesktopQuickStart.html"
 	document.resource_root = "res://thirdparty/hcsr/Examples/DeepDesktopQuickStart"
 	var view := HTMLView.new()
+	tested_view = view
 	view.backend_preference = backend_preference
 	view.viewport_size_mode = HTMLView.VIEWPORT_SIZE_CONTROL_PHYSICAL_ADJUSTED
 	view.size = Vector2(2648, 1440)
+	view.frame_activated.connect(_on_frame_activated)
 	transform_parent.scale = Vector2(2560.0 / 2648.0, 1392.0 / 1440.0)
 	view.document = document
 	transform_parent.add_child(view)
 	await _wait_frames()
+	monitor_activated_size = true
 
 	if view.set_form_control_value(&"quick-gpu", "1") != OK \
 			or view.set_form_control_value(&"quick-model", "10") != OK:
@@ -45,6 +52,7 @@ func _initialize() -> void:
 	for resize_step in resize_steps:
 		var logical_size: Vector2i = resize_step[0]
 		var physical_size: Vector2i = resize_step[1]
+		expected_physical_size = physical_size
 		viewport.size = physical_size
 		view.size = Vector2(logical_size)
 		transform_parent.scale = Vector2(physical_size) / Vector2(logical_size)
@@ -59,6 +67,45 @@ func _initialize() -> void:
 			_fail("%s resize changed Quick Start form state: gpu=%s model=%s." % [backend_name, gpu, model])
 			return
 
+	# Exercise the completion race rather than waiting for every size to settle.
+	for resize_step in resize_steps:
+		var logical_size: Vector2i = resize_step[0]
+		var physical_size: Vector2i = resize_step[1]
+		expected_physical_size = physical_size
+		viewport.size = physical_size
+		view.size = Vector2(logical_size)
+		transform_parent.scale = Vector2(physical_size) / Vector2(logical_size)
+		await process_frame
+	if not activated_size_error.is_empty():
+		_fail(activated_size_error)
+		return
+	await _wait_frames()
+	if not activated_size_error.is_empty():
+		_fail(activated_size_error)
+		return
+
+	var clean_document := HTMLDocument.new()
+	clean_document.html_file = document.html_file
+	clean_document.resource_root = document.resource_root
+	var clean_view := HTMLView.new()
+	clean_view.backend_preference = backend_preference
+	clean_view.viewport_size_mode = HTMLView.VIEWPORT_SIZE_CONTROL_PHYSICAL_ADJUSTED
+	clean_view.size = view.size
+	clean_view.scale = transform_parent.scale
+	clean_view.document = clean_document
+	viewport.add_child(clean_view)
+	await _wait_frames()
+	if clean_view.set_form_control_value(&"quick-gpu", "1") != OK \
+			or clean_view.set_form_control_value(&"quick-model", "10") != OK:
+		_fail("%s clean resize oracle could not establish matching form state." % backend_name)
+		return
+	await _wait_frames()
+	var resized_image := view.get_texture().get_image()
+	var clean_image := clean_view.get_texture().get_image()
+	if resized_image == null or clean_image == null or resized_image.get_size() != clean_image.get_size() or resized_image.get_data() != clean_image.get_data():
+		_fail("%s post-resize pixels differed from a clean surface at the same logical and physical metrics." % backend_name)
+		return
+
 	print("HCSR physical-adjusted resize/state smoke passed on %s." % backend_name)
 	quit()
 
@@ -66,6 +113,14 @@ func _initialize() -> void:
 func _wait_frames() -> void:
 	for _frame in range(16):
 		await process_frame
+
+
+func _on_frame_activated(_generation: int) -> void:
+	if not monitor_activated_size or tested_view == null:
+		return
+	var texture := tested_view.get_texture()
+	if texture != null and Vector2i(texture.get_size()) != expected_physical_size:
+		activated_size_error = "%s activated stale physical texture %s while the view required %s." % [backend_name, texture.get_size(), expected_physical_size]
 
 
 func _fail(message: String) -> void:

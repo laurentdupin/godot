@@ -563,6 +563,20 @@ bool HTMLSurfaceHCSRBackend::_read_gpu_packet_metadata(hcsr_gpu_frame_packet_t *
 	}
 
 	r_generation = source.frame_generation;
+	if (source.css_viewport_width <= 0 || source.css_viewport_height <= 0 || source.physical_width <= 0 || source.physical_height <= 0 || !Math::is_finite(source.device_scale) || source.device_scale <= 0.0) {
+		_record_error("HCSR returned invalid immutable GPU packet viewport metadata");
+		return false;
+	}
+	r_metadata.css_viewport_size = Size2i(source.css_viewport_width, source.css_viewport_height);
+	r_metadata.physical_size = Size2i(source.physical_width, source.physical_height);
+	r_metadata.device_scale_factor = source.device_scale;
+	r_metadata.viewport_revision = viewport_revision.get();
+	if (r_metadata.css_viewport_size != size
+			|| r_metadata.physical_size != physical_size
+			|| !Math::is_equal_approx(r_metadata.device_scale_factor, device_scale_factor)) {
+		_record_error("HCSR prepared a GPU packet for stale viewport metrics");
+		return false;
+	}
 	r_metadata.content_width = source.content_width;
 	r_metadata.content_height = source.content_height;
 	for (uint32_t region_index = 0; region_index < source.backdrop_filter_region_count; region_index++) {
@@ -913,6 +927,13 @@ bool HTMLSurfaceHCSRBackend::_activate_completed_gpu_frame_on_render_thread(cons
 	if (!_take_gpu_packet_metadata(completed_frame.frame_generation, prepared_metadata)) {
 		_defer_gpu_resource_release_on_render_thread(completed_frame);
 		_record_error("HCSR returned a GPU texture without matching prepared frame metadata");
+		return false;
+	}
+	if (prepared_metadata.viewport_revision != viewport_revision.get()
+			|| prepared_metadata.physical_size != Size2i(completed_frame.width, completed_frame.height)) {
+		_release_gpu_packet_metadata(prepared_metadata);
+		_defer_gpu_resource_release_on_render_thread(completed_frame);
+		gpu_follow_up_frame_requested.set();
 		return false;
 	}
 	{
@@ -1447,6 +1468,7 @@ void HTMLSurfaceHCSRBackend::set_size(const Size2i &p_size) {
 	if (size == new_size) {
 		return;
 	}
+	viewport_revision.increment();
 	HTMLSurfaceCPUBackend::set_size(new_size);
 	viewport_dirty = true;
 }
@@ -1454,6 +1476,7 @@ void HTMLSurfaceHCSRBackend::set_size(const Size2i &p_size) {
 void HTMLSurfaceHCSRBackend::set_device_scale_factor(float p_device_scale_factor) {
 	const float new_scale = CLAMP(Math::is_finite(p_device_scale_factor) && p_device_scale_factor > 0.0f ? p_device_scale_factor : 1.0f, 0.01f, 8.0f);
 	if (!Math::is_equal_approx(device_scale_factor, new_scale)) {
+		viewport_revision.increment();
 		device_scale_factor = new_scale;
 		viewport_dirty = true;
 	}
@@ -1462,6 +1485,7 @@ void HTMLSurfaceHCSRBackend::set_device_scale_factor(float p_device_scale_factor
 void HTMLSurfaceHCSRBackend::set_physical_size(const Size2i &p_physical_size) {
 	const Size2i new_physical_size(MAX(1, p_physical_size.x), MAX(1, p_physical_size.y));
 	if (physical_size != new_physical_size) {
+		viewport_revision.increment();
 		physical_size = new_physical_size;
 		viewport_dirty = true;
 	}

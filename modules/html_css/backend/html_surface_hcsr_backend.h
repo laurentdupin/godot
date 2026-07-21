@@ -15,6 +15,10 @@
 
 class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	struct PreparedGPUFrameMetadata {
+		Size2i css_viewport_size;
+		Size2i physical_size;
+		float device_scale_factor = 1.0f;
+		uint64_t viewport_revision = 0;
 		int content_width = 0;
 		int content_height = 0;
 		HTMLFrameMetadata frame_metadata;
@@ -64,6 +68,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	SafeFlag gpu_presentation_poll_pending;
 	SafeFlag gpu_presentation_work_pending;
 	SafeFlag gpu_presentation_changed;
+	SafeNumeric<uint64_t> viewport_revision;
 	Vector<uint64_t> pending_document_commits;
 	bool backdrop_filter_enabled = false;
 	bool begin_frame_requested = false;
