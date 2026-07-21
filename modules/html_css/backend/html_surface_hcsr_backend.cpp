@@ -570,6 +570,10 @@ bool HTMLSurfaceHCSRBackend::_read_gpu_packet_metadata(hcsr_gpu_frame_packet_t *
 	r_metadata.css_viewport_size = Size2i(source.css_viewport_width, source.css_viewport_height);
 	r_metadata.physical_size = Size2i(source.physical_width, source.physical_height);
 	r_metadata.device_scale_factor = source.device_scale;
+	r_metadata.frame_metadata.logical_size = r_metadata.css_viewport_size;
+	r_metadata.frame_metadata.physical_size = r_metadata.physical_size;
+	r_metadata.frame_metadata.device_scale_factor = r_metadata.device_scale_factor;
+	r_metadata.frame_metadata.generation = source.frame_generation;
 	r_metadata.viewport_revision = viewport_revision.get();
 	if (r_metadata.css_viewport_size != size
 			|| r_metadata.physical_size != physical_size
@@ -1073,7 +1077,7 @@ void HTMLSurfaceHCSRBackend::_detach_gpu_texture_import() {
 
 void HTMLSurfaceHCSRBackend::_destroy_renderer_on_render_thread() {
 	if (deferred_gpu_packet != nullptr) {
-		hcsr_renderer_release_gpu_frame_packet(deferred_gpu_packet);
+		_abandon_gpu_frame_packet(deferred_gpu_packet);
 		deferred_gpu_packet = nullptr;
 	}
 	gpu_submission_deferred.clear();
@@ -1132,6 +1136,21 @@ void HTMLSurfaceHCSRBackend::_destroy_renderer_on_render_thread() {
 	}
 }
 
+void HTMLSurfaceHCSRBackend::_abandon_gpu_frame_packet(hcsr_gpu_frame_packet_t *p_packet) {
+	if (p_packet == nullptr) {
+		return;
+	}
+	if (renderer == nullptr) {
+		hcsr_renderer_release_gpu_frame_packet(p_packet);
+		return;
+	}
+	uint32_t canceled_packet_count = 0;
+	if (hcsr_renderer_cancel_gpu_frame_packet(renderer, p_packet, &canceled_packet_count) != HCSR_STATUS_OK || canceled_packet_count == 0) {
+		hcsr_renderer_release_gpu_frame_packet(p_packet);
+		_record_error("HCSR could not roll back an abandoned prepared GPU frame");
+	}
+}
+
 void HTMLSurfaceHCSRBackend::_destroy_renderer_on_render_thread_callback(uint64_t p_backend_ptr) {
 	HTMLSurfaceHCSRBackend *backend = (HTMLSurfaceHCSRBackend *)p_backend_ptr;
 	if (backend != nullptr) {
@@ -1151,7 +1170,7 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 	}
 	uint64_t packet_generation = 0;
 	if (hcsr_renderer_gpu_frame_packet_generation(p_packet, &packet_generation) != HCSR_STATUS_OK || packet_generation == 0) {
-		hcsr_renderer_release_gpu_frame_packet(p_packet);
+		_abandon_gpu_frame_packet(p_packet);
 		_record_error("HCSR could not identify the prepared Godot GPU frame");
 		return;
 	}
@@ -1159,7 +1178,7 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 	// Submission readiness is part of the immutable packet handoff: retain the
 	// packet unchanged until the borrowed host queue releases a frame slot.
 	if (hcsr_renderer_can_submit_gpu_frame(renderer, p_packet, &submission_ready) != HCSR_STATUS_OK) {
-		hcsr_renderer_release_gpu_frame_packet(p_packet);
+		_abandon_gpu_frame_packet(p_packet);
 		_discard_gpu_packet_metadata(packet_generation);
 		_record_error("HCSR could not query Godot GPU submission readiness");
 		return;
@@ -1273,18 +1292,18 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 			return false;
 		}
 		if (!_update_frame_schedule()) {
-			hcsr_renderer_release_gpu_frame_packet(packet);
+			_abandon_gpu_frame_packet(packet);
 			return false;
 		}
 		if (!_read_gpu_packet_metadata(packet, packet_metadata, packet_generation)) {
-			hcsr_renderer_release_gpu_frame_packet(packet);
+			_abandon_gpu_frame_packet(packet);
 			return false;
 		}
 		_retire_document_commits();
 		bool scroll_offset_changed = false;
 		if (!_clamp_scroll_offset_to_content(scroll_offset_changed, packet_metadata.content_width, packet_metadata.content_height)) {
 			_release_gpu_packet_metadata(packet_metadata);
-			hcsr_renderer_release_gpu_frame_packet(packet);
+			_abandon_gpu_frame_packet(packet);
 			return false;
 		}
 		if (!scroll_offset_changed) {
@@ -1295,7 +1314,7 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 		// submit a packet after clamping changed the host scroll state: doing so
 		// presents one frame translated by an offset the document cannot reach.
 		_release_gpu_packet_metadata(packet_metadata);
-		hcsr_renderer_release_gpu_frame_packet(packet);
+		_abandon_gpu_frame_packet(packet);
 		packet = nullptr;
 		if (attempt > 0) {
 			_record_error("HCSR document scroll state did not stabilize while preparing a GPU frame");
@@ -1380,6 +1399,10 @@ bool HTMLSurfaceHCSRBackend::_render_frame() {
 
 void HTMLSurfaceHCSRBackend::_read_backdrop_filter_regions() {
 	HTMLFrameMetadata next_metadata;
+	next_metadata.logical_size = size;
+	next_metadata.physical_size = physical_size;
+	next_metadata.device_scale_factor = device_scale_factor;
+	next_metadata.generation = active_gpu_frame_generation;
 	if (!backdrop_filter_enabled || renderer == nullptr) {
 		MutexLock lock(frame_metadata_mutex);
 		frame_metadata = next_metadata;

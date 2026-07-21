@@ -306,7 +306,6 @@ bool HTMLRenderSurface::set_viewport(const Size2i &p_size, float p_device_scale_
 	size = new_size;
 	physical_size = new_physical_size;
 	device_scale_factor = new_device_scale_factor;
-	frame_metadata = HTMLFrameMetadata();
 	gpu_backdrop_frame.clear();
 	if (backend != nullptr) {
 		_sync_backend_state();

@@ -97,6 +97,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	void _configure_metal_device_on_render_thread();
 	bool _validate_gpu_capabilities();
 	bool _render_gpu_frame();
+	void _abandon_gpu_frame_packet(hcsr_gpu_frame_packet_t *p_packet);
 	void _render_gpu_frame_on_render_thread(hcsr_gpu_frame_packet_t *p_packet);
 	void _retry_deferred_gpu_frame_on_render_thread();
 	void _schedule_deferred_gpu_submission();

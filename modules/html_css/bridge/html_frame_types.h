@@ -197,6 +197,10 @@ struct HTMLBackdropFilterRegion {
 };
 
 struct HTMLFrameMetadata {
+	Size2i logical_size;
+	Size2i physical_size;
+	float device_scale_factor = 1.0f;
+	uint64_t generation = 0;
 	Vector<HTMLElementHit> hits;
 	Vector<HTMLBackdropFilterRegion> backdrop_filter_regions;
 
