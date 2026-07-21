@@ -47,14 +47,21 @@ func _initialize() -> void:
 		_fail("%s follow-up smoke could not read the composed viewport." % backend_name)
 		return
 
-	var changed := 0
-	for y in range(HEIGHT):
-		for x in range(WIDTH):
-			if viewport_image.get_pixel(x, y) != viewport_image.get_pixel(x + WIDTH, y):
-				changed += 1
+	var changed := _count_different_pixels(viewport_image)
 	if changed != 0:
 		_fail("%s dropped or partially presented the queued replacement frame; %d pixels differ from a fresh final render." % [backend_name, changed])
 		return
+
+	# A stable document must remain internally consistent on every published
+	# pool slot, not merely converge to a correct final slot after corruption.
+	for sample_index in range(16):
+		await process_frame
+		RenderingServer.force_draw(false)
+		viewport_image = root.get_texture().get_image()
+		changed = _count_different_pixels(viewport_image)
+		if changed != 0:
+			_fail("%s published an inconsistent steady frame at sample %d; %d pixels differ from the clean peer." % [backend_name, sample_index, changed])
+			return
 
 	print("HCSR Godot %s queued follow-up frame smoke passed." % backend_name)
 	quit()
@@ -67,6 +74,16 @@ func _make_view(body: String) -> HTMLView:
 	view.size = Vector2(WIDTH, HEIGHT)
 	view.document = document
 	return view
+
+func _count_different_pixels(image: Image) -> int:
+	if image == null or image.get_width() < WIDTH * 2 or image.get_height() < HEIGHT:
+		return WIDTH * HEIGHT
+	var changed := 0
+	for y in range(HEIGHT):
+		for x in range(WIDTH):
+			if image.get_pixel(x, y) != image.get_pixel(x + WIDTH, y):
+				changed += 1
+	return changed
 
 func _fail(message: String) -> void:
 	push_error(message)
