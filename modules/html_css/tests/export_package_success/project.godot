@@ -1,5 +1,6 @@
 [application]
 config/name="HCSR Export Package Success Smoke"
+run/main_scene="res://verify_export.tscn"
 
 [rendering]
 renderer/rendering_method="gl_compatibility"

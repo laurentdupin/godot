@@ -18,6 +18,26 @@ $successPack = Join-Path $outputRoot "success.pck"
 $linuxPack = Join-Path $outputRoot "success-linux.pck"
 $failurePack = Join-Path $outputRoot "failure.pck"
 
+function Invoke-PackageConsumer([string]$PackPath) {
+    if ($consumer -eq $editor) {
+        & $consumer --headless --main-pack $PackPath | Out-Host
+        return $LASTEXITCODE
+    }
+
+    $consumerMain = $consumer.Replace(".console.exe", ".exe")
+    if (-not (Test-Path -LiteralPath $consumerMain)) {
+        throw "Release consumer main executable is missing: $consumerMain"
+    }
+    $packagedMain = Join-Path $outputRoot "hcsr_package_consumer.exe"
+    $packagedConsole = Join-Path $outputRoot "hcsr_package_consumer.console.exe"
+    $packagedPck = Join-Path $outputRoot "hcsr_package_consumer.pck"
+    Copy-Item -LiteralPath $consumerMain -Destination $packagedMain -Force
+    Copy-Item -LiteralPath $consumer -Destination $packagedConsole -Force
+    Copy-Item -LiteralPath $PackPath -Destination $packagedPck -Force
+    & $packagedConsole --headless | Out-Host
+    return $LASTEXITCODE
+}
+
 foreach ($project in @($successProject, $failureProject)) {
     $projectCache = Join-Path $project ".godot"
     if (Test-Path -LiteralPath $projectCache) {
@@ -32,9 +52,9 @@ try {
         throw "Successful HCSR package export returned exit code $LASTEXITCODE."
     }
 
-    & $consumer --headless --main-pack $successPack --script res://verify_export.gd
-    if ($LASTEXITCODE -ne 0) {
-        throw "HCSR package consumer verification returned exit code $LASTEXITCODE."
+    $consumerExitCode = Invoke-PackageConsumer $successPack
+    if ($consumerExitCode -ne 0) {
+        throw "HCSR package consumer verification returned exit code $consumerExitCode."
     }
 
     & $editor --headless --path $successProject --export-pack "HCSR Package Linux Cross Smoke" $linuxPack
@@ -42,9 +62,9 @@ try {
         throw "Windows-to-Linux HCSR package export returned exit code $LASTEXITCODE."
     }
 
-    & $consumer --headless --main-pack $linuxPack --script res://verify_export.gd
-    if ($LASTEXITCODE -ne 0) {
-        throw "Windows-to-Linux HCSR package consumer verification returned exit code $LASTEXITCODE."
+    $consumerExitCode = Invoke-PackageConsumer $linuxPack
+    if ($consumerExitCode -ne 0) {
+        throw "Windows-to-Linux HCSR package consumer verification returned exit code $consumerExitCode."
     }
 
     & $editor --headless --path $failureProject --export-pack "HCSR Package Failure Smoke" $failurePack
