@@ -1,10 +1,15 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$EditorPath
+    [string]$EditorPath,
+    [string]$ConsumerPath = ""
 )
 
 $ErrorActionPreference = "Stop"
 $editor = (Resolve-Path -LiteralPath $EditorPath).Path
+$consumer = $editor
+if ($ConsumerPath) {
+    $consumer = (Resolve-Path -LiteralPath $ConsumerPath).Path
+}
 $testsRoot = $PSScriptRoot
 $successProject = Join-Path $testsRoot "export_package_success"
 $failureProject = Join-Path $testsRoot "export_package_failure"
@@ -20,9 +25,9 @@ try {
         throw "Successful HCSR package export returned exit code $LASTEXITCODE."
     }
 
-    & $editor --headless --main-pack $successPack --script res://verify_export.gd
+    & $consumer --headless --main-pack $successPack --script res://verify_export.gd
     if ($LASTEXITCODE -ne 0) {
-        throw "HCSR package contents verification returned exit code $LASTEXITCODE."
+        throw "HCSR package consumer verification returned exit code $LASTEXITCODE."
     }
 
     & $editor --headless --path $successProject --export-pack "HCSR Package Linux Cross Smoke" $linuxPack
@@ -30,9 +35,9 @@ try {
         throw "Windows-to-Linux HCSR package export returned exit code $LASTEXITCODE."
     }
 
-    & $editor --headless --main-pack $linuxPack --script res://verify_export.gd
+    & $consumer --headless --main-pack $linuxPack --script res://verify_export.gd
     if ($LASTEXITCODE -ne 0) {
-        throw "Windows-to-Linux HCSR package contents verification returned exit code $LASTEXITCODE."
+        throw "Windows-to-Linux HCSR package consumer verification returned exit code $LASTEXITCODE."
     }
 
     & $editor --headless --path $failureProject --export-pack "HCSR Package Failure Smoke" $failurePack
