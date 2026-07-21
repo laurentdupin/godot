@@ -370,6 +370,10 @@ uint64_t HTMLRenderSurface::get_active_frame_generation() const {
 	return backend != nullptr ? backend->get_active_frame_generation() : 0;
 }
 
+bool HTMLRenderSurface::uses_generation_bound_input() const {
+	return backend != nullptr && backend->uses_generation_bound_input();
+}
+
 Error HTMLRenderSurface::update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame) {
 	_ensure_backend();
 	bool needs_output = true;

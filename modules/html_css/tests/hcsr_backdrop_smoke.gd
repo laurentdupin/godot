@@ -10,11 +10,16 @@ func _initialize() -> void:
 	document.background_color = Color(0, 0, 0, 0)
 
 	var target := HTMLRenderTarget.new()
+	root.add_child(target)
 	target.backend_preference = HTMLView.BACKEND_D3D12 if use_d3d12 else (HTMLView.BACKEND_VULKAN if use_vulkan else (HTMLView.BACKEND_METAL if use_metal else HTMLView.BACKEND_CPU))
 	target.size = Vector2i(320, 180)
 	target.backdrop_filter_enabled = true
 	target.document = document
 	target.render_now()
+	if not await _wait_for_initial_frame(target):
+		target.free()
+		quit(1)
+		return
 	if not _validate_frame(target, Vector2i(320, 180), "initial"):
 		target.free()
 		quit(1)
@@ -39,6 +44,14 @@ func _initialize() -> void:
 	print("Static HCSR Godot %s backdrop metadata and resize smoke passed." % ("D3D12" if use_d3d12 else ("Vulkan" if use_vulkan else ("Metal" if use_metal else "CPU"))))
 	target.free()
 	quit()
+
+func _wait_for_initial_frame(target: HTMLRenderTarget) -> bool:
+	for _frame in range(120):
+		await process_frame
+		if target.get_texture() != null and target.get_backdrop_filter_regions().size() == 1:
+			return true
+	push_error("HCSR did not asynchronously activate the initial backdrop packet within 120 frames.")
+	return false
 
 func _validate_frame(target: HTMLRenderTarget, expected_size: Vector2i, phase: String, expected_bounds := Rect2(40, 30, 160, 90)) -> bool:
 	var regions := target.get_backdrop_filter_regions()

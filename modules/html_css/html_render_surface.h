@@ -93,6 +93,7 @@ public:
 	void set_frame_activated_callback(const Callable &p_callback);
 	uint64_t get_last_queued_frame_generation() const;
 	uint64_t get_active_frame_generation() const;
+	bool uses_generation_bound_input() const;
 	Error update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame = nullptr);
 	void render_now(const String &p_marker);
 	bool poll_pending_output(bool *r_waiting_for_completion = nullptr);

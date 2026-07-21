@@ -116,6 +116,11 @@ presentation reset, and renderer teardown retain old producer generations until
 those callbacks run. D3D12, Vulkan, and Metal use this same public lifecycle
 contract.
 
+The render-thread activation edge is published back to the scene-thread surface
+as a one-shot changed flag. Consuming that flag refreshes the cached texture and
+frame metadata before `frame_activated` observers use them; a completion racing
+the poll remains set for the following engine frame.
+
 To prepare Unix packages explicitly before invoking SCons, run one of:
 
 ```bash

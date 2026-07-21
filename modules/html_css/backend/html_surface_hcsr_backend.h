@@ -62,6 +62,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	SafeFlag gpu_follow_up_frame_requested;
 	SafeFlag gpu_presentation_poll_pending;
 	SafeFlag gpu_presentation_work_pending;
+	SafeFlag gpu_presentation_changed;
 	Vector<uint64_t> pending_document_commits;
 	bool backdrop_filter_enabled = false;
 	bool begin_frame_requested = false;
@@ -132,6 +133,7 @@ public:
 	virtual bool has_pending_output() const override;
 	virtual uint64_t get_last_queued_frame_generation() const override;
 	virtual uint64_t get_active_frame_generation() const override;
+	virtual bool uses_generation_bound_input() const override;
 	virtual bool is_begin_frame_requested() const override;
 	virtual bool has_terminal_render_failure() const override;
 	virtual String get_terminal_render_failure_reason() const override;

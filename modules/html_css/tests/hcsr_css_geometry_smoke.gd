@@ -24,6 +24,7 @@ func _initialize() -> void:
 	</body></html>"""
 
 	var target := HTMLRenderTarget.new()
+	root.add_child(target)
 	target.backend_preference = backend
 	target.size = Vector2i(320, 180)
 	target.document = document
@@ -31,7 +32,12 @@ func _initialize() -> void:
 	var image: Image
 	var texture_rect: TextureRect
 	if use_gpu:
-		var texture := target.get_texture()
+		var texture: Texture2D = null
+		for _frame in range(120):
+			await process_frame
+			texture = target.get_texture()
+			if texture != null:
+				break
 		if texture == null:
 			_fail("CSS geometry GPU smoke did not produce a host-device texture")
 			return
@@ -69,8 +75,8 @@ func _initialize() -> void:
 	view.document = document
 	view.action_requested.connect(func(action: StringName, _payload: Dictionary) -> void: actions.append(action))
 	root.add_child(view)
-	await process_frame
-	await process_frame
+	for _frame in range(8):
+		await process_frame
 
 	_send_click(Vector2(250, 140))
 	await process_frame

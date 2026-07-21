@@ -1,6 +1,7 @@
 extends SceneTree
 
 var actions: Array[StringName] = []
+var activated_generation := 0
 
 func _initialize() -> void:
 	var document := HTMLDocument.new()
@@ -24,9 +25,10 @@ func _initialize() -> void:
 	view.size = Vector2(240, 140)
 	view.document = document
 	view.action_requested.connect(func(action: StringName, _payload: Dictionary) -> void: actions.append(action))
+	view.frame_activated.connect(func(generation: int) -> void: activated_generation = generation)
 	root.add_child(view)
-	await process_frame
-	await process_frame
+	if not await _wait_for_activation_after(0):
+		return
 
 	_send_click(Vector2(60, 60))
 	await process_frame
@@ -40,22 +42,30 @@ func _initialize() -> void:
 	if actions != [&"override"]:
 		_fail("Explicit pointer-events:auto descendant was not targetable: %s" % [actions])
 		return
+	for _frame in range(4):
+		await process_frame
 
 	if view.set_element_attribute(&"cover", &"class", "cover blocking") != OK:
 		_fail("Could not mutate the cover to pointer-events:auto")
 		return
-	await process_frame
+	var previous_generation := activated_generation
+	if not await _wait_for_activation_after(previous_generation):
+		return
 	actions.clear()
 	_send_click(Vector2(60, 60))
 	await process_frame
 	if not actions.is_empty():
 		_fail("Retained pointer-events:auto mutation still activated the covered Back button: %s" % [actions])
 		return
+	for _frame in range(4):
+		await process_frame
 
 	if view.set_element_attribute(&"cover", &"class", "cover pass-through") != OK:
 		_fail("Could not restore the cover to pointer-events:none")
 		return
-	await process_frame
+	previous_generation = activated_generation
+	if not await _wait_for_activation_after(previous_generation):
+		return
 	actions.clear()
 	_send_click(Vector2(60, 60))
 	await process_frame
@@ -65,6 +75,14 @@ func _initialize() -> void:
 
 	print("HCSR HTMLView pointer-events smoke passed.")
 	quit()
+
+func _wait_for_activation_after(generation: int) -> bool:
+	for _frame in range(120):
+		await process_frame
+		if activated_generation > generation:
+			return true
+	_fail("HCSR pointer-events smoke timed out waiting for activation after generation %d." % generation)
+	return false
 
 func _send_click(position: Vector2) -> void:
 	var down := InputEventMouseButton.new()

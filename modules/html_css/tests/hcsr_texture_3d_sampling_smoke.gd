@@ -13,12 +13,18 @@ func _initialize() -> void:
 	var document := HTMLDocument.new()
 	document.html = "<!DOCTYPE html><html><body id='surface' style='margin:0;background:#123456'></body></html>"
 	var target := HTMLRenderTarget.new()
+	root.add_child(target)
 	target.backend_preference = backend
 	target.size = SIZE
 	target.document = document
 	target.render_now()
 
-	var texture := target.get_texture()
+	var texture: Texture2D = null
+	for _frame in range(120):
+		await process_frame
+		texture = target.get_texture()
+		if texture != null:
+			break
 	if texture == null:
 		_fail("%s did not expose the HTML presentation as a Texture2D." % backend_name, target)
 		return

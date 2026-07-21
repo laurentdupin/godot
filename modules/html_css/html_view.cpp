@@ -1630,7 +1630,8 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 			const Error down_err = surface->mouse_down(html_position, html_button, _modifiers_from_event(mb, button_index, true), mb->is_double_click() ? 2 : 1);
 			const bool used_surface_dispatch = _drain_surface_pointer_events();
 			const bool has_press_hit = _hit_test(html_position, pointer_press_hit);
-			if (has_press_hit && !pointer_press_hit.disabled) {
+			const bool generation_bound_input = surface->uses_generation_bound_input();
+			if ((!used_surface_dispatch || generation_bound_input) && has_press_hit && !pointer_press_hit.disabled) {
 				// Retain the target from the presentation generation visible at press
 				// time. Native pointer phases can target a newer DOM generation while
 				// asynchronous GPU presentation is still sampling the old one.
@@ -1675,7 +1676,7 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 			_emit_pointer_phase(SNAME("up"), pointer_press_hit, html_position, button_index);
 		}
 		bool activation_emitted = false;
-		if (!native_activation_emitted && button_index == MouseButton::LEFT && pointer_press_active && pointer_press_button == button_index && has_release_hit && _same_activation_target(pointer_press_hit, release_hit)) {
+		if ((!used_surface_dispatch || (surface->uses_generation_bound_input() && !native_activation_emitted)) && button_index == MouseButton::LEFT && pointer_press_active && pointer_press_button == button_index && has_release_hit && _same_activation_target(pointer_press_hit, release_hit)) {
 			_emit_activation(release_hit, html_position, button_index);
 			activation_emitted = true;
 		}

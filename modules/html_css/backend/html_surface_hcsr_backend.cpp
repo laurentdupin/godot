@@ -923,16 +923,48 @@ bool HTMLSurfaceHCSRBackend::_activate_completed_gpu_frame_on_render_thread(cons
 		}
 	}
 	if (native_gpu_texture != completed_frame.native_texture || native_gpu_generation != completed_frame.resource_generation || native_gpu_size != Size2i(completed_frame.width, completed_frame.height)) {
-		if (_uses_presentation_texture_import_cache() && native_gpu_size == Size2i(completed_frame.width, completed_frame.height)) {
-			gpu_texture_rid = RID();
-		} else {
-			_detach_gpu_texture_import_on_render_thread();
-		}
+		void *previous_native_texture = native_gpu_texture;
+		const uint64_t previous_native_generation = native_gpu_generation;
+		const Size2i previous_native_size = native_gpu_size;
+		const RID previous_texture_rid = gpu_texture_rid;
+		const bool size_changed = previous_native_size != Size2i(completed_frame.width, completed_frame.height);
 		native_gpu_texture = completed_frame.native_texture;
 		native_gpu_generation = completed_frame.resource_generation;
 		native_gpu_size = Size2i(completed_frame.width, completed_frame.height);
+		gpu_texture_rid = RID();
+		if (size_changed) {
+			gpu_texture_import_cache.erase((uint64_t)native_gpu_texture);
+		}
+		_ensure_gpu_texture_imported_on_render_thread();
+		if (!gpu_texture_rid.is_valid()) {
+			native_gpu_texture = previous_native_texture;
+			native_gpu_generation = previous_native_generation;
+			native_gpu_size = previous_native_size;
+			gpu_texture_rid = previous_texture_rid;
+			_release_gpu_packet_metadata(prepared_metadata);
+			_defer_gpu_resource_release_on_render_thread(completed_frame);
+			return false;
+		}
+		RenderingServer *rendering_server = RenderingServer::get_singleton();
+		if (rendering_server != nullptr && size_changed) {
+			Vector<uint64_t> obsolete_handles;
+			for (const KeyValue<uint64_t, RID> &entry : gpu_texture_import_cache) {
+				if (entry.key != (uint64_t)native_gpu_texture) {
+					rendering_server->free_rid(entry.value);
+					obsolete_handles.push_back(entry.key);
+				}
+			}
+			for (uint64_t handle : obsolete_handles) {
+				gpu_texture_import_cache.erase(handle);
+			}
+			if (previous_texture_rid.is_valid() && previous_texture_rid != gpu_texture_rid
+					&& (!_uses_presentation_texture_import_cache() || previous_native_texture == native_gpu_texture)) {
+				rendering_server->free_rid(previous_texture_rid);
+			}
+		}
+	} else {
+		_ensure_gpu_texture_imported_on_render_thread();
 	}
-	_ensure_gpu_texture_imported_on_render_thread();
 	if (!gpu_texture_rid.is_valid()) {
 		_release_gpu_packet_metadata(prepared_metadata);
 		_defer_gpu_resource_release_on_render_thread(completed_frame);
@@ -954,6 +986,7 @@ bool HTMLSurfaceHCSRBackend::_activate_completed_gpu_frame_on_render_thread(cons
 	if (retired_snapshot != nullptr) {
 		hcsr_hit_test_snapshot_release(retired_snapshot);
 	}
+	gpu_presentation_changed.set();
 	return true;
 }
 
@@ -1023,6 +1056,7 @@ void HTMLSurfaceHCSRBackend::_destroy_renderer_on_render_thread() {
 	gpu_submission_deferred.clear();
 	gpu_submission_retry_pending.clear();
 	gpu_frame_pending.clear();
+	gpu_presentation_changed.clear();
 	Vector<hcsr_hit_test_snapshot_t *> staged_snapshots;
 	{
 		MutexLock lock(prepared_gpu_frame_metadata_mutex);
@@ -1115,19 +1149,6 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 	}
 	deferred_gpu_packet = nullptr;
 	gpu_submission_deferred.clear();
-	// Metal imports hold an independent retain on the HCSR texture, while persistent
-	// glyph-atlas pages remain owned by the renderer. Keep the presentation import
-	// visible until submission returns a valid replacement so a failed resized frame
-	// cannot expose an empty external texture.
-	if (render_backend != HCSR_RENDER_BACKEND_METAL && gpu_texture_rid.is_valid() && native_gpu_size != size) {
-		// Keep presenting the previous texture while the resized logical frame is
-		// prepared. Release it only here, immediately before the replacement native
-		// resource is created and imported in this same render-thread callback.
-		_detach_gpu_texture_import_on_render_thread();
-		native_gpu_texture = nullptr;
-		native_gpu_generation = 0;
-		native_gpu_size = Size2i();
-	}
 	hcsr_gpu_frame_t output = {};
 	output.struct_size = sizeof(output);
 	if (hcsr_renderer_submit_gpu_frame(renderer, p_packet, &output) != HCSR_STATUS_OK) {
@@ -1507,7 +1528,7 @@ bool HTMLSurfaceHCSRBackend::poll_pending_output(bool *r_waiting_for_completion)
 				|| gpu_presentation_work_pending.is_set()
 				|| gpu_presentation_poll_pending.is_set();
 	}
-	return false;
+	return gpu_presentation_changed.clear_if_set();
 }
 
 bool HTMLSurfaceHCSRBackend::has_pending_output() const {
@@ -1527,6 +1548,10 @@ uint64_t HTMLSurfaceHCSRBackend::get_last_queued_frame_generation() const {
 uint64_t HTMLSurfaceHCSRBackend::get_active_frame_generation() const {
 	MutexLock lock(frame_metadata_mutex);
 	return active_gpu_frame_generation;
+}
+
+bool HTMLSurfaceHCSRBackend::uses_generation_bound_input() const {
+	return _uses_async_gpu_presentation();
 }
 
 bool HTMLSurfaceHCSRBackend::is_begin_frame_requested() const {
