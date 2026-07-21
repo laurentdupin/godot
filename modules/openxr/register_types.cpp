@@ -152,7 +152,9 @@ void initialize_openxr_module(ModuleInitializationLevel p_level) {
 	}
 
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SERVERS) {
-		if (OpenXRAPI::openxr_is_enabled(false)) {
+		const XRServer::XRMode xr_mode = XRServer::get_xr_mode();
+		const bool openxr_available = bool(GLOBAL_GET("xr/openxr/enabled")) || xr_mode == XRServer::XRMODE_ON;
+		if (openxr_available) {
 			// Always register our extension wrappers even if we don't initialize OpenXR.
 			// Some of these wrappers will add functionality to our editor.
 #ifdef ANDROID_ENABLED
@@ -238,14 +240,15 @@ void initialize_openxr_module(ModuleInitializationLevel p_level) {
 			if (GLOBAL_GET("xr/openxr/binding_modifiers/dpad_binding")) {
 				OpenXRAPI::register_extension_wrapper(memnew(OpenXRDPadBindingExtension));
 			}
-		}
 
-		if (OpenXRAPI::openxr_is_enabled()) {
 			openxr_interaction_profile_metadata = memnew(OpenXRInteractionProfileMetadata);
 			ERR_FAIL_NULL(openxr_interaction_profile_metadata);
 			openxr_api = memnew(OpenXRAPI);
 			ERR_FAIL_NULL(openxr_api);
+		}
 
+		const bool initialize_on_startup = xr_mode == XRServer::XRMODE_ON || bool(GLOBAL_GET("xr/openxr/initialize_on_startup"));
+		if (openxr_available && OpenXRAPI::openxr_is_enabled() && initialize_on_startup) {
 			if (!openxr_api->initialize(OS::get_singleton()->get_current_rendering_driver_name())) {
 				const char *init_error_message =
 						"OpenXR was requested but failed to start.\n"
@@ -266,8 +269,6 @@ void initialize_openxr_module(ModuleInitializationLevel p_level) {
 					OS::get_singleton()->alert(init_error_message);
 				}
 
-				memdelete(openxr_api);
-				openxr_api = nullptr;
 				return;
 			}
 		}

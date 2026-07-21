@@ -1,0 +1,14 @@
+[application]
+config/name="OpenXR Lazy Initialization Smoke"
+
+[display]
+window/size/viewport_width=320
+window/size/viewport_height=180
+
+[rendering]
+renderer/rendering_method="gl_compatibility"
+
+[xr/openxr]
+enabled=true
+initialize_on_startup=false
+startup_alert=false

@@ -40,6 +40,7 @@
 #include "core/io/resource_loader.h"
 #include "core/io/resource_saver.h"
 #include "core/object/class_db.h"
+#include "core/os/os.h"
 #include "servers/display/display_server.h"
 #include "servers/rendering/rendering_server_types.h"
 
@@ -688,7 +689,9 @@ bool OpenXRInterface::initialize() {
 	if (openxr_api == nullptr) {
 		return false;
 	} else if (!openxr_api->is_initialized()) {
-		return false;
+		if (!openxr_api->initialize(OS::get_singleton()->get_current_rendering_driver_name())) {
+			return false;
+		}
 	} else if (initialized) {
 		return true;
 	}
