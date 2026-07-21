@@ -852,19 +852,18 @@ float HTMLView::_get_target_device_scale_factor() const {
 		if (fixed_viewport_device_scale_factor > 0.0f) {
 			return fixed_viewport_device_scale_factor;
 		}
-		const Size2i logical_size = _get_target_viewport_size();
-		const Vector2 screen_scale = _get_screen_pixel_scale();
-		const Size2 physical_control_size = get_size() * screen_scale;
-		const float scale_x = logical_size.x > 0 ? physical_control_size.x / logical_size.x : 1.0f;
-		const float scale_y = logical_size.y > 0 ? physical_control_size.y / logical_size.y : 1.0f;
-		return CLAMP(MAX(1.0f, MAX(scale_x, scale_y)), 1.0f, 8.0f);
+		return 1.0f;
 	}
 	if (viewport_size_mode == VIEWPORT_SIZE_CONTROL || viewport_size_mode == VIEWPORT_SIZE_PHYSICAL_SIZE) {
 		return 1.0f;
 	}
 
-	const Vector2 scale = _get_screen_pixel_scale();
-	return CLAMP(MAX(scale.x, scale.y), 1.0f, 8.0f);
+	const Size2i logical_size = _get_target_viewport_size();
+	const Vector2 screen_scale = _get_screen_pixel_scale();
+	const Size2 physical_control_size = get_size() * screen_scale;
+	const float physical_scale_x = logical_size.x > 0 ? physical_control_size.x / logical_size.x : 1.0f;
+	const float physical_scale_y = logical_size.y > 0 ? physical_control_size.y / logical_size.y : 1.0f;
+	return CLAMP(MAX(physical_scale_x, physical_scale_y), 0.01f, 8.0f);
 }
 
 void HTMLView::_update_surface_size(bool p_force_render) {
