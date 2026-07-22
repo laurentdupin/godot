@@ -1849,6 +1849,7 @@ void RendererSceneRenderRD::init() {
 	bool can_use_storage = _render_buffers_can_be_storage();
 	bool can_use_vrs = is_vrs_supported();
 	BitField<RendererRD::CopyEffects::RasterEffects> raster_effects = {};
+	raster_effects.set_flag(RendererRD::CopyEffects::RASTER_EFFECT_ALPHA_WEIGHTED_SRGB_MIPMAP);
 	if (!can_use_storage) {
 		raster_effects.set_flag(RendererRD::CopyEffects::RASTER_EFFECT_COPY);
 		raster_effects.set_flag(RendererRD::CopyEffects::RASTER_EFFECT_GAUSSIAN_BLUR);

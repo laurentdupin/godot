@@ -49,7 +49,7 @@ CopyEffects::CopyEffects(BitField<RasterEffects> p_raster_effects) {
 	singleton = this;
 	raster_effects = p_raster_effects;
 
-	if (raster_effects.has_flag(RASTER_EFFECT_GAUSSIAN_BLUR)) {
+	if (raster_effects.has_flag(RASTER_EFFECT_GAUSSIAN_BLUR) || raster_effects.has_flag(RASTER_EFFECT_ALPHA_WEIGHTED_SRGB_MIPMAP)) {
 		// init blur shader (on compute use copy shader)
 
 		Vector<String> blur_modes;
@@ -355,7 +355,7 @@ CopyEffects::~CopyEffects() {
 		copy.pipelines[i].free();
 	}
 
-	if (raster_effects.has_flag(RASTER_EFFECT_GAUSSIAN_BLUR)) {
+	if (raster_effects.has_flag(RASTER_EFFECT_GAUSSIAN_BLUR) || raster_effects.has_flag(RASTER_EFFECT_ALPHA_WEIGHTED_SRGB_MIPMAP)) {
 		blur_raster.shader.version_free(blur_raster.shader_version);
 		RD::get_singleton()->free_rid(blur_raster.glow_sampler);
 	}
@@ -982,7 +982,9 @@ void CopyEffects::make_mipmap(RID p_source_rd_texture, RID p_dest_texture, const
 }
 
 void CopyEffects::make_mipmap_raster(RID p_source_rd_texture, RID p_dest_texture, const Size2i &p_size, bool p_alpha_weighted_srgb) {
-	ERR_FAIL_COND_MSG(!raster_effects.has_flag(RASTER_EFFECT_COPY), "Can't use the raster version of mipmap.");
+	const bool supports_raster_mipmap = raster_effects.has_flag(RASTER_EFFECT_COPY)
+			|| (p_alpha_weighted_srgb && raster_effects.has_flag(RASTER_EFFECT_ALPHA_WEIGHTED_SRGB_MIPMAP));
+	ERR_FAIL_COND_MSG(!supports_raster_mipmap, "Can't use the requested raster version of mipmap.");
 
 	RID dest_framebuffer = FramebufferCacheRD::get_singleton()->get_cache(p_dest_texture);
 
