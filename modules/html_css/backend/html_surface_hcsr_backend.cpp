@@ -1453,6 +1453,10 @@ void HTMLSurfaceHCSRBackend::_update_performance_profile() {
 	profile.struct_size = sizeof(profile);
 	if (hcsr_renderer_get_performance_profile(renderer, &profile) == HCSR_STATUS_OK) {
 		HCSRPerformanceMonitor::update((uint64_t)this, profile);
+		RenderingServer *rendering_server = RenderingServer::get_singleton();
+		if (rendering_server == nullptr || !rendering_server->is_on_render_thread()) {
+			HCSRPerformanceMonitor::publish_frame_data();
+		}
 	}
 #endif
 }
@@ -1563,6 +1567,7 @@ void HTMLSurfaceHCSRBackend::render_placeholder(const String &p_marker) {
 }
 
 bool HTMLSurfaceHCSRBackend::poll_pending_output(bool *r_waiting_for_completion) {
+	HCSRPerformanceMonitor::publish_frame_data();
 	_schedule_deferred_gpu_submission();
 	const bool follow_up_requested = gpu_follow_up_frame_requested.is_set();
 	if (_uses_async_gpu_presentation()
