@@ -138,6 +138,11 @@ public:
 	Error load_asset(const String &p_uri, HTMLAssetResource &r_asset, String *r_error = nullptr) const;
 	Ref<Texture2D> get_texture() const;
 	Ref<HTMLTexture2D> get_html_texture() const;
+	uint64_t create_presentation_output(const Size2i &p_size);
+	Error resize_presentation_output(uint64_t p_output_id, const Size2i &p_size);
+	void destroy_presentation_output(uint64_t p_output_id);
+	Ref<Texture2D> get_presentation_output_texture(uint64_t p_output_id) const;
+	uint64_t get_presentation_output_generation(uint64_t p_output_id) const;
 
 	HTMLRenderSurface();
 	~HTMLRenderSurface();

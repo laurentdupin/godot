@@ -45,6 +45,9 @@
 		<member name="input_enabled" type="bool" setter="set_input_enabled" getter="is_input_enabled" default="true">
 			If [code]true[/code], the view accepts pointer, wheel, key, text, and mapped action input for HTML interaction.
 		</member>
+		<member name="logical_size" type="Vector2i" setter="set_logical_size" getter="get_logical_size" default="Vector2i(0, 0)">
+			Explicit CSS layout and input coordinate size shared by the automatic Control presentation and every secondary [HTMLViewOutput]. [code]Vector2i(0, 0)[/code] keeps the viewport-mode-derived size. Changing this value performs one shared layout; it does not create independent document state per output.
+		</member>
 		<member name="fixed_viewport_size" type="Vector2i" setter="set_fixed_viewport_size" getter="get_fixed_viewport_size" default="Vector2i(0, 0)">
 			HTML viewport size used when [member viewport_size_mode] is [constant VIEWPORT_SIZE_FIXED]. If either component is [code]0[/code], the assigned document's default size is used.
 		</member>
@@ -112,6 +115,13 @@
 		</signal>
 	</signals>
 	<methods>
+		<method name="create_output">
+			<return type="HTMLViewOutput" />
+			<param index="0" name="size" type="Vector2i" />
+			<description>
+				Creates a presentation-only output of the shared logical frame at the requested physical raster size. Set [member logical_size] explicitly first. The output shares DOM, CSS layout, animation, scrolling, focus, and interaction state with this view. Input remains in [member logical_size] coordinates. The initial contract requires the output and logical viewport aspect ratios to match.
+			</description>
+		</method>
 		<method name="cancel_pointer_interaction">
 			<return type="void" />
 			<description>
@@ -137,6 +147,12 @@
 			<return type="Texture2D" />
 			<description>
 				Returns the current render texture.
+			</description>
+		</method>
+		<method name="get_generation" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns the latest shared frame generation activated by the automatic Control presentation.
 			</description>
 		</method>
 		<method name="get_backdrop_filter_regions">

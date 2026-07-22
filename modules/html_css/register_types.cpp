@@ -34,6 +34,7 @@
 #include "html_render_target.h"
 #include "html_texture.h"
 #include "html_view.h"
+#include "html_view_output.h"
 
 #include "core/object/class_db.h"
 
@@ -66,6 +67,7 @@ void initialize_html_css_module(ModuleInitializationLevel p_level) {
 	GDREGISTER_CLASS(HTMLTexture2D);
 	GDREGISTER_CLASS(HTMLRenderTarget);
 	GDREGISTER_CLASS(HTMLView);
+	GDREGISTER_CLASS(HTMLViewOutput);
 #ifndef _3D_DISABLED
 	GDREGISTER_CLASS(HTMLSurface3D);
 #endif

@@ -346,6 +346,10 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("is_backdrop_filter_enabled"), &HTMLView::is_backdrop_filter_enabled);
 	ClassDB::bind_method(D_METHOD("get_backdrop_filter_regions"), &HTMLView::get_backdrop_filter_regions);
 	ClassDB::bind_method(D_METHOD("get_texture"), &HTMLView::get_texture);
+	ClassDB::bind_method(D_METHOD("get_generation"), &HTMLView::get_generation);
+	ClassDB::bind_method(D_METHOD("set_logical_size", "logical_size"), &HTMLView::set_logical_size);
+	ClassDB::bind_method(D_METHOD("get_logical_size"), &HTMLView::get_logical_size);
+	ClassDB::bind_method(D_METHOD("create_output", "size"), &HTMLView::create_output);
 	ClassDB::bind_method(D_METHOD("local_to_html_position", "position"), &HTMLView::local_to_html_position);
 	ClassDB::bind_method(D_METHOD("set_element_text", "id", "text"), &HTMLView::set_element_text);
 	ClassDB::bind_method(D_METHOD("set_element_inner_html", "id", "html_fragment"), &HTMLView::set_element_inner_html);
@@ -372,6 +376,7 @@ void HTMLView::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::PACKED_STRING_ARRAY, "css_files"), "set_css_files", "get_css_files");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "input_enabled"), "set_input_enabled", "is_input_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "focus_on_click"), "set_focus_on_click", "is_focus_on_click_enabled");
+	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2I, "logical_size", PROPERTY_HINT_NONE, "suffix:px"), "set_logical_size", "get_logical_size");
 	ADD_PROPERTY(PropertyInfo(Variant::STRING_NAME, "accept_action"), "set_accept_action", "get_accept_action");
 	ADD_PROPERTY(PropertyInfo(Variant::STRING_NAME, "focus_next_action"), "set_focus_next_action", "get_focus_next_action");
 	ADD_PROPERTY(PropertyInfo(Variant::STRING_NAME, "focus_previous_action"), "set_focus_previous_action", "get_focus_previous_action");
@@ -826,6 +831,9 @@ Vector2 HTMLView::_get_screen_pixel_scale() const {
 }
 
 Size2i HTMLView::_get_target_viewport_size() const {
+	if (logical_size.x > 0 && logical_size.y > 0) {
+		return logical_size;
+	}
 	const Size2 control_size = get_size();
 	Size2i target_size;
 
@@ -857,6 +865,77 @@ Size2i HTMLView::_get_target_viewport_size() const {
 	return Size2i(MAX(1, target_size.x), MAX(1, target_size.y));
 }
 
+void HTMLView::set_logical_size(const Size2i &p_logical_size) {
+	ERR_FAIL_COND_MSG((p_logical_size.x == 0) != (p_logical_size.y == 0), "HTMLView logical_size must either be automatic (0, 0) or have two positive dimensions.");
+	ERR_FAIL_COND_MSG(p_logical_size.x < 0 || p_logical_size.y < 0, "HTMLView logical_size cannot be negative.");
+	if (logical_size == p_logical_size) {
+		return;
+	}
+	ERR_FAIL_COND_MSG(!outputs.is_empty() && (p_logical_size.x <= 0 || p_logical_size.y <= 0), "HTMLView logical_size must remain explicit while secondary outputs exist.");
+	for (const KeyValue<uint64_t, Ref<HTMLViewOutput>> &entry : outputs) {
+		const Size2i output_size = entry.value->get_size();
+		ERR_FAIL_COND_MSG((int64_t)output_size.x * p_logical_size.y != (int64_t)output_size.y * p_logical_size.x, "HTMLView logical_size cannot change to a different aspect ratio while secondary outputs exist.");
+	}
+	logical_size = p_logical_size;
+	if (is_inside_tree() && get_size().x > 0.0f && get_size().y > 0.0f) {
+		_update_surface_size();
+	}
+}
+
+Size2i HTMLView::get_logical_size() const {
+	return _get_target_viewport_size();
+}
+
+uint64_t HTMLView::get_generation() const {
+	return surface->get_active_frame_generation();
+}
+
+Ref<HTMLViewOutput> HTMLView::create_output(const Size2i &p_size) {
+	ERR_FAIL_COND_V_MSG(p_size.x <= 0 || p_size.y <= 0, Ref<HTMLViewOutput>(), "HTMLView output dimensions must be positive.");
+	ERR_FAIL_COND_V_MSG(logical_size.x <= 0 || logical_size.y <= 0, Ref<HTMLViewOutput>(), "Set HTMLView.logical_size explicitly before creating a secondary output.");
+	const Size2i current_logical_size = _get_target_viewport_size();
+	const int64_t aspect_cross_a = (int64_t)p_size.x * current_logical_size.y;
+	const int64_t aspect_cross_b = (int64_t)p_size.y * current_logical_size.x;
+	ERR_FAIL_COND_V_MSG(aspect_cross_a != aspect_cross_b, Ref<HTMLViewOutput>(), "The initial multi-output contract requires output and logical viewport aspect ratios to match.");
+	const uint64_t output_id = surface->create_presentation_output(p_size);
+	ERR_FAIL_COND_V_MSG(output_id == 0, Ref<HTMLViewOutput>(), "The active HTML renderer backend does not support secondary outputs.");
+	Ref<HTMLViewOutput> output;
+	output.instantiate();
+	output->initialize(this, output_id, p_size);
+	outputs.insert(output_id, output);
+	_queue_frame_render();
+	return output;
+}
+
+Error HTMLView::_resize_output(uint64_t p_output_id, const Size2i &p_size) {
+	ERR_FAIL_COND_V(!outputs.has(p_output_id), ERR_DOES_NOT_EXIST);
+	const Size2i current_logical_size = _get_target_viewport_size();
+	ERR_FAIL_COND_V((int64_t)p_size.x * current_logical_size.y != (int64_t)p_size.y * current_logical_size.x, ERR_INVALID_PARAMETER);
+	const Error error = surface->resize_presentation_output(p_output_id, p_size);
+	if (error == OK) {
+		_queue_frame_render();
+	}
+	return error;
+}
+
+void HTMLView::_release_output(uint64_t p_output_id) {
+	Ref<HTMLViewOutput> *output = outputs.getptr(p_output_id);
+	if (output == nullptr) {
+		return;
+	}
+	(*output)->detach_owner();
+	outputs.erase(p_output_id);
+	surface->destroy_presentation_output(p_output_id);
+}
+
+Ref<Texture2D> HTMLView::_get_output_texture(uint64_t p_output_id) const {
+	return outputs.has(p_output_id) ? surface->get_presentation_output_texture(p_output_id) : Ref<Texture2D>();
+}
+
+uint64_t HTMLView::_get_output_generation(uint64_t p_output_id) const {
+	return outputs.has(p_output_id) ? surface->get_presentation_output_generation(p_output_id) : 0;
+}
+
 float HTMLView::_get_target_device_scale_factor() const {
 	if (viewport_size_mode == VIEWPORT_SIZE_FIXED) {
 		if (fixed_viewport_device_scale_factor > 0.0f) {
@@ -868,16 +947,16 @@ float HTMLView::_get_target_device_scale_factor() const {
 		return 1.0f;
 	}
 
-	const Size2i logical_size = _get_target_viewport_size();
+	const Size2i target_logical_size = _get_target_viewport_size();
 	const Vector2 screen_scale = _get_screen_pixel_scale();
 	const Size2 physical_control_size = get_size() * screen_scale;
-	const float physical_scale_x = logical_size.x > 0 ? physical_control_size.x / logical_size.x : 1.0f;
-	const float physical_scale_y = logical_size.y > 0 ? physical_control_size.y / logical_size.y : 1.0f;
+	const float physical_scale_x = target_logical_size.x > 0 ? physical_control_size.x / target_logical_size.x : 1.0f;
+	const float physical_scale_y = target_logical_size.y > 0 ? physical_control_size.y / target_logical_size.y : 1.0f;
 	return CLAMP(MAX(physical_scale_x, physical_scale_y), 0.01f, 8.0f);
 }
 
 Size2i HTMLView::_get_target_physical_size() const {
-	const Size2i logical_size = _get_target_viewport_size();
+	const Size2i target_logical_size = _get_target_viewport_size();
 	if (viewport_size_mode == VIEWPORT_SIZE_CONTROL_PHYSICAL_ADJUSTED) {
 		const Vector2 physical_control_size = get_size() * _get_screen_pixel_scale();
 		return Size2i(
@@ -887,10 +966,10 @@ Size2i HTMLView::_get_target_physical_size() const {
 	if (viewport_size_mode == VIEWPORT_SIZE_FIXED) {
 		const float device_scale = _get_target_device_scale_factor();
 		return Size2i(
-				MAX(1, (int)Math::round(logical_size.x * device_scale)),
-				MAX(1, (int)Math::round(logical_size.y * device_scale)));
+				MAX(1, (int)Math::round(target_logical_size.x * device_scale)),
+				MAX(1, (int)Math::round(target_logical_size.y * device_scale)));
 	}
-	return logical_size;
+	return target_logical_size;
 }
 
 void HTMLView::_update_surface_size(bool p_force_render) {
@@ -1798,4 +1877,16 @@ HTMLView::HTMLView() {
 	set_focus_mode(FOCUS_CLICK);
 	set_texture_filter(CanvasItem::TEXTURE_FILTER_LINEAR);
 	set_notify_transform(true);
+}
+
+HTMLView::~HTMLView() {
+	Vector<uint64_t> output_ids;
+	for (const KeyValue<uint64_t, Ref<HTMLViewOutput>> &entry : outputs) {
+		entry.value->detach_owner();
+		output_ids.push_back(entry.key);
+	}
+	outputs.clear();
+	for (uint64_t output_id : output_ids) {
+		surface->destroy_presentation_output(output_id);
+	}
 }

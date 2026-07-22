@@ -758,6 +758,42 @@ void HTMLSurfaceHCSRBackend::_release_gpu_resource_after_retirement_callback(uin
 	}
 }
 
+void HTMLSurfaceHCSRBackend::_release_presentation_output_resource_after_retirement_callback(uint64_t p_renderer_ptr, uint64_t p_output_ptr, uint64_t p_native_texture, uint64_t p_resource_generation, uint64_t p_frame_generation, uint64_t p_submission_token, uint64_t p_render_backend, uint64_t p_width, uint64_t p_height) {
+	hcsr_gpu_frame_t frame = {};
+	frame.struct_size = sizeof(frame);
+	frame.render_backend = (hcsr_render_backend_t)p_render_backend;
+	frame.native_texture = (void *)p_native_texture;
+	frame.width = (int32_t)p_width;
+	frame.height = (int32_t)p_height;
+	frame.resource_generation = p_resource_generation;
+	frame.frame_generation = p_frame_generation;
+	frame.submission_token = p_submission_token;
+	frame.texture_format = HCSR_GPU_TEXTURE_FORMAT_RGBA8_UNORM;
+	frame.producer_completed = 1;
+	frame.premultiplied_alpha = 1;
+	const hcsr_status_t status = hcsr_renderer_release_presentation_output_resource(
+			(hcsr_renderer_t *)p_renderer_ptr,
+			(hcsr_presentation_output_t *)p_output_ptr,
+			&frame);
+	if (status != HCSR_STATUS_OK && status != HCSR_STATUS_INVALID_ARGUMENT) {
+		ERR_PRINT("HCSR could not retire a Godot-consumed secondary presentation resource.");
+	}
+}
+
+void HTMLSurfaceHCSRBackend::_destroy_presentation_output_after_retirement_callback(uint64_t p_renderer_ptr, uint64_t p_output_ptr) {
+	if (p_renderer_ptr != 0 && p_output_ptr != 0) {
+		hcsr_renderer_destroy_presentation_output((hcsr_renderer_t *)p_renderer_ptr, (hcsr_presentation_output_t *)p_output_ptr);
+	}
+}
+
+void HTMLSurfaceHCSRBackend::_destroy_presentation_output_state_on_render_thread_callback(uint64_t p_backend_ptr, uint64_t p_state_ptr) {
+	HTMLSurfaceHCSRBackend *backend = (HTMLSurfaceHCSRBackend *)p_backend_ptr;
+	PresentationOutputState *state = (PresentationOutputState *)p_state_ptr;
+	if (backend != nullptr && state != nullptr) {
+		backend->_destroy_presentation_output_state_on_render_thread(state);
+	}
+}
+
 void HTMLSurfaceHCSRBackend::_destroy_renderer_after_retirement_callback(uint64_t p_renderer_ptr) {
 	if (p_renderer_ptr != 0) {
 		hcsr_renderer_destroy((hcsr_renderer_t *)p_renderer_ptr);
@@ -779,6 +815,240 @@ void HTMLSurfaceHCSRBackend::_defer_gpu_resource_release_on_render_thread(const 
 			p_frame.resource_generation,
 			p_frame.frame_generation,
 			p_frame.submission_token));
+}
+
+void HTMLSurfaceHCSRBackend::_defer_presentation_output_resource_release_on_render_thread(hcsr_presentation_output_t *p_output, const hcsr_gpu_frame_t &p_frame) {
+	if (renderer == nullptr || p_output == nullptr || p_frame.native_texture == nullptr || p_frame.submission_token == 0) {
+		return;
+	}
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	RenderingDevice *rendering_device = rendering_server != nullptr ? rendering_server->get_rendering_device() : nullptr;
+	if (rendering_device == nullptr) {
+		return;
+	}
+	rendering_device->external_resource_defer_release(callable_mp_static(&HTMLSurfaceHCSRBackend::_release_presentation_output_resource_after_retirement_callback).bind(
+			(uint64_t)renderer,
+			(uint64_t)p_output,
+			(uint64_t)p_frame.native_texture,
+			p_frame.resource_generation,
+			p_frame.frame_generation,
+			p_frame.submission_token,
+			(uint64_t)p_frame.render_backend,
+			(uint64_t)p_frame.width,
+			(uint64_t)p_frame.height));
+}
+
+void HTMLSurfaceHCSRBackend::_detach_presentation_output_on_render_thread(PresentationOutputState *p_state) {
+	ERR_FAIL_NULL(p_state);
+	if (p_state->texture.is_valid()) {
+		p_state->texture->clear_external_texture();
+	}
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	if (rendering_server != nullptr) {
+		for (const KeyValue<uint64_t, RID> &entry : p_state->import_cache) {
+			if (entry.value.is_valid()) {
+				rendering_server->free_rid(entry.value);
+			}
+		}
+		if (p_state->texture_rid.is_valid() && !p_state->import_cache.has((uint64_t)p_state->native_texture)) {
+			rendering_server->free_rid(p_state->texture_rid);
+		}
+	}
+	p_state->import_cache.clear();
+	p_state->texture_rid = RID();
+	if (p_state->active_frame.native_texture != nullptr) {
+		_defer_presentation_output_resource_release_on_render_thread(p_state->output, p_state->active_frame);
+		p_state->active_frame = {};
+	}
+}
+
+void HTMLSurfaceHCSRBackend::_destroy_presentation_output_state_on_render_thread(PresentationOutputState *p_state) {
+	ERR_FAIL_NULL(p_state);
+	_detach_presentation_output_on_render_thread(p_state);
+	if (renderer != nullptr && p_state->output != nullptr) {
+		RenderingServer *rendering_server = RenderingServer::get_singleton();
+		RenderingDevice *rendering_device = rendering_server != nullptr ? rendering_server->get_rendering_device() : nullptr;
+		if (rendering_device != nullptr) {
+			rendering_device->external_resource_defer_release(callable_mp_static(&HTMLSurfaceHCSRBackend::_destroy_presentation_output_after_retirement_callback).bind((uint64_t)renderer, (uint64_t)p_state->output));
+		} else {
+			hcsr_renderer_destroy_presentation_output(renderer, p_state->output);
+		}
+	}
+	memdelete(p_state);
+}
+
+bool HTMLSurfaceHCSRBackend::_ensure_presentation_outputs_on_render_thread() {
+	bool topology_changed = false;
+	MutexLock lock(presentation_outputs_mutex);
+	for (const KeyValue<uint64_t, PresentationOutputState *> &entry : presentation_outputs) {
+		PresentationOutputState *state = entry.value;
+		if (state == nullptr) {
+			continue;
+		}
+		if (state->output != nullptr && state->resize_pending) {
+			if (state->active_frame.native_texture != nullptr) {
+				_detach_presentation_output_on_render_thread(state);
+			}
+			uint8_t resized = 0;
+			if (hcsr_renderer_resize_presentation_output(renderer, state->output, state->requested_size.x, state->requested_size.y, &resized) != HCSR_STATUS_OK || resized == 0) {
+				return false;
+			}
+			state->resize_pending = false;
+			topology_changed = true;
+			continue;
+		}
+		if (state->output != nullptr) {
+			continue;
+		}
+		if (hcsr_renderer_create_presentation_output(renderer, state->requested_size.x, state->requested_size.y, &state->output) != HCSR_STATUS_OK || state->output == nullptr) {
+			_record_error("HCSR could not create a secondary presentation output");
+			return false;
+		}
+		topology_changed = true;
+	}
+	return !topology_changed;
+}
+
+bool HTMLSurfaceHCSRBackend::_activate_presentation_output_on_render_thread(PresentationOutputState *p_state, const hcsr_gpu_frame_t &p_frame) {
+	ERR_FAIL_NULL_V(p_state, false);
+	if (p_frame.native_texture == nullptr || p_frame.width <= 0 || p_frame.height <= 0 || p_frame.render_backend != render_backend || p_frame.texture_format != HCSR_GPU_TEXTURE_FORMAT_RGBA8_UNORM || p_frame.premultiplied_alpha == 0 || p_frame.producer_completed == 0 || p_frame.frame_generation < p_state->active_generation) {
+		_record_error("HCSR returned an invalid secondary presentation frame");
+		return false;
+	}
+	const Size2i frame_size(p_frame.width, p_frame.height);
+	if (frame_size != p_state->requested_size) {
+		_defer_presentation_output_resource_release_on_render_thread(p_state->output, p_frame);
+		return false;
+	}
+	if (p_state->texture.is_null()) {
+		p_state->texture.instantiate();
+	}
+	if (p_state->native_texture != p_frame.native_texture || p_state->native_generation != p_frame.resource_generation || p_state->native_size != frame_size) {
+		RenderingServer *rendering_server = RenderingServer::get_singleton();
+		ERR_FAIL_NULL_V(rendering_server, false);
+		const uint64_t native_handle = (uint64_t)p_frame.native_texture;
+		const RID *cached = p_state->import_cache.getptr(native_handle);
+		RID imported = cached != nullptr ? *cached : RID();
+		if (!imported.is_valid()) {
+#if defined(MACOS_ENABLED) && defined(METAL_ENABLED)
+			MTL::Texture *retained_metal_texture = nullptr;
+			if (render_backend == HCSR_RENDER_BACKEND_METAL) {
+				retained_metal_texture = reinterpret_cast<MTL::Texture *>(p_frame.native_texture);
+				retained_metal_texture->retain();
+			}
+#endif
+			imported = rendering_server->texture_create_from_native_handle(
+					RenderingServerEnums::TEXTURE_TYPE_2D,
+					Image::FORMAT_RGBA8,
+					native_handle,
+					frame_size.x,
+					frame_size.y,
+					1,
+					1);
+			if (!imported.is_valid()) {
+#if defined(MACOS_ENABLED) && defined(METAL_ENABLED)
+				if (retained_metal_texture != nullptr) {
+					retained_metal_texture->release();
+				}
+#endif
+				_defer_presentation_output_resource_release_on_render_thread(p_state->output, p_frame);
+				_record_error("Godot could not import an HCSR secondary presentation texture");
+				return false;
+			}
+			p_state->import_cache.insert(native_handle, imported);
+		}
+		p_state->texture_rid = imported;
+		p_state->native_texture = p_frame.native_texture;
+		p_state->native_generation = p_frame.resource_generation;
+		p_state->native_size = frame_size;
+		p_state->texture->set_external_texture(imported, frame_size, true);
+	}
+	if (p_state->active_frame.native_texture != nullptr) {
+		_defer_presentation_output_resource_release_on_render_thread(p_state->output, p_state->active_frame);
+	}
+	p_state->active_frame = p_frame;
+	p_state->active_generation = p_frame.frame_generation;
+	gpu_presentation_changed.set();
+	return true;
+}
+
+void HTMLSurfaceHCSRBackend::_poll_presentation_outputs_on_render_thread() {
+	MutexLock lock(presentation_outputs_mutex);
+	for (const KeyValue<uint64_t, PresentationOutputState *> &entry : presentation_outputs) {
+		PresentationOutputState *state = entry.value;
+		if (state == nullptr || state->output == nullptr) {
+			continue;
+		}
+		hcsr_gpu_frame_t frame = {};
+		frame.struct_size = sizeof(frame);
+		uint8_t updated = 0;
+		uint8_t pending = 0;
+		if (hcsr_renderer_poll_presentation_output(renderer, state->output, &frame, &updated, &pending) != HCSR_STATUS_OK) {
+			_record_error("HCSR could not poll a secondary presentation output");
+			continue;
+		}
+		if (updated != 0) {
+			_activate_presentation_output_on_render_thread(state, frame);
+		}
+		if (pending != 0) {
+			gpu_presentation_work_pending.set();
+		}
+	}
+}
+
+void HTMLSurfaceHCSRBackend::_poll_cpu_presentation_outputs() {
+	MutexLock lock(presentation_outputs_mutex);
+	for (const KeyValue<uint64_t, PresentationOutputState *> &entry : presentation_outputs) {
+		PresentationOutputState *state = entry.value;
+		if (state == nullptr || state->output == nullptr) {
+			continue;
+		}
+		hcsr_frame_t output = {};
+		output.struct_size = sizeof(output);
+		uint8_t updated = 0;
+		if (hcsr_renderer_poll_cpu_presentation_output(renderer, state->output, &output, &updated) != HCSR_STATUS_OK) {
+			_record_error("HCSR could not poll a CPU secondary presentation output");
+			continue;
+		}
+		if (updated == 0) {
+			continue;
+		}
+		if (output.pixels == nullptr || output.width <= 0 || output.height <= 0 || output.stride < output.width * 4 || Size2i(output.width, output.height) != state->requested_size || output.generation < state->active_generation) {
+			_record_error("HCSR returned an invalid CPU secondary presentation frame");
+			continue;
+		}
+
+		HTMLCPUFrame frame;
+		frame.size = Size2i(output.width, output.height);
+		frame.stride = output.stride;
+		frame.pixel_format = HTML_FRAME_PIXEL_FORMAT_BGRA8;
+		frame.premultiplied_alpha = output.premultiplied_alpha != 0;
+		frame.damage.full_frame = true;
+		frame.pixels.resize(output.stride * output.height);
+		memcpy(frame.pixels.ptrw(), output.pixels, frame.pixels.size());
+
+		const int row_bytes = frame.size.x * 4;
+		Vector<uint8_t> rgba;
+		rgba.resize(row_bytes * frame.size.y);
+		for (int y = 0; y < frame.size.y; y++) {
+			const uint8_t *source = frame.pixels.ptr() + int64_t(frame.stride) * y;
+			uint8_t *destination = rgba.ptrw() + int64_t(row_bytes) * y;
+			for (int x = 0; x < frame.size.x; x++) {
+				destination[x * 4 + 0] = source[x * 4 + 2];
+				destination[x * 4 + 1] = source[x * 4 + 1];
+				destination[x * 4 + 2] = source[x * 4 + 0];
+				destination[x * 4 + 3] = source[x * 4 + 3];
+			}
+		}
+		Ref<Image> image = Image::create_from_data(frame.size.x, frame.size.y, false, Image::FORMAT_RGBA8, rgba);
+		if (image.is_null() || image->is_empty()) {
+			_record_error("Godot could not create an image for a CPU secondary presentation output");
+			continue;
+		}
+		state->texture->update_from_image(image);
+		state->active_generation = output.generation;
+		state->native_size = frame.size;
+	}
 }
 
 void HTMLSurfaceHCSRBackend::_ensure_gpu_texture_imported_on_render_thread() {
@@ -1049,6 +1319,7 @@ void HTMLSurfaceHCSRBackend::_poll_gpu_presentation_on_render_thread() {
 	if (updated != 0) {
 		_activate_completed_gpu_frame_on_render_thread(output);
 	}
+	_poll_presentation_outputs_on_render_thread();
 }
 
 void HTMLSurfaceHCSRBackend::_detach_gpu_texture_import_on_render_thread_callback(uint64_t p_backend_ptr) {
@@ -1084,6 +1355,17 @@ void HTMLSurfaceHCSRBackend::_destroy_renderer_on_render_thread() {
 	gpu_submission_retry_pending.clear();
 	gpu_frame_pending.clear();
 	gpu_presentation_changed.clear();
+	Vector<PresentationOutputState *> outputs_to_destroy;
+	{
+		MutexLock lock(presentation_outputs_mutex);
+		for (const KeyValue<uint64_t, PresentationOutputState *> &entry : presentation_outputs) {
+			outputs_to_destroy.push_back(entry.value);
+		}
+		presentation_outputs.clear();
+	}
+	for (PresentationOutputState *state : outputs_to_destroy) {
+		_destroy_presentation_output_state_on_render_thread(state);
+	}
 	Vector<hcsr_hit_test_snapshot_t *> staged_snapshots;
 	{
 		MutexLock lock(prepared_gpu_frame_metadata_mutex);
@@ -1166,6 +1448,11 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 	}
 	if (renderer == nullptr) {
 		hcsr_renderer_release_gpu_frame_packet(p_packet);
+		return;
+	}
+	if (!_ensure_presentation_outputs_on_render_thread()) {
+		_abandon_gpu_frame_packet(p_packet);
+		gpu_follow_up_frame_requested.set();
 		return;
 	}
 	uint64_t packet_generation = 0;
@@ -1345,6 +1632,7 @@ bool HTMLSurfaceHCSRBackend::_render_frame() {
 		const bool rendered = _render_gpu_frame();
 		return rendered;
 	}
+	_ensure_presentation_outputs_on_render_thread();
 	hcsr_frame_t output = {};
 	for (int attempt = 0; attempt < 2; attempt++) {
 		output = {};
@@ -1387,6 +1675,7 @@ bool HTMLSurfaceHCSRBackend::_render_frame() {
 	hcsr_renderer_release_frame(renderer, &output);
 	const bool rendered = submit_cpu_frame(frame) == OK;
 	if (rendered) {
+		_poll_cpu_presentation_outputs();
 		{
 			MutexLock lock(frame_metadata_mutex);
 			last_queued_frame_generation = frame_generation;
@@ -1921,6 +2210,77 @@ Ref<Texture2D> HTMLSurfaceHCSRBackend::get_texture() const {
 
 Ref<HTMLTexture2D> HTMLSurfaceHCSRBackend::get_html_texture() const {
 	return render_backend == HCSR_RENDER_BACKEND_CPU ? HTMLSurfaceCPUBackend::get_html_texture() : gpu_texture;
+}
+
+uint64_t HTMLSurfaceHCSRBackend::create_presentation_output(const Size2i &p_size) {
+	if (p_size.x <= 0 || p_size.y <= 0) {
+		return 0;
+	}
+	PresentationOutputState *state = memnew(PresentationOutputState);
+	state->requested_size = p_size;
+	state->texture.instantiate();
+	MutexLock lock(presentation_outputs_mutex);
+	const uint64_t output_id = next_presentation_output_id++;
+	presentation_outputs.insert(output_id, state);
+	if (render_backend == HCSR_RENDER_BACKEND_CPU) {
+		begin_frame_requested = true;
+	} else {
+		gpu_follow_up_frame_requested.set();
+	}
+	return output_id;
+}
+
+Error HTMLSurfaceHCSRBackend::resize_presentation_output(uint64_t p_output_id, const Size2i &p_size) {
+	ERR_FAIL_COND_V(p_size.x <= 0 || p_size.y <= 0, ERR_INVALID_PARAMETER);
+	PresentationOutputState *state = nullptr;
+	{
+		MutexLock lock(presentation_outputs_mutex);
+		PresentationOutputState *const *found = presentation_outputs.getptr(p_output_id);
+		ERR_FAIL_NULL_V(found, ERR_DOES_NOT_EXIST);
+		state = *found;
+		if (state->requested_size == p_size) {
+			return OK;
+		}
+		state->requested_size = p_size;
+		state->resize_pending = true;
+	}
+	if (render_backend == HCSR_RENDER_BACKEND_CPU) {
+		begin_frame_requested = true;
+	} else {
+		gpu_follow_up_frame_requested.set();
+	}
+	return OK;
+}
+
+void HTMLSurfaceHCSRBackend::destroy_presentation_output(uint64_t p_output_id) {
+	PresentationOutputState *state = nullptr;
+	{
+		MutexLock lock(presentation_outputs_mutex);
+		PresentationOutputState *const *found = presentation_outputs.getptr(p_output_id);
+		if (found == nullptr) {
+			return;
+		}
+		state = *found;
+		presentation_outputs.erase(p_output_id);
+	}
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	if (rendering_server == nullptr || rendering_server->is_on_render_thread()) {
+		_destroy_presentation_output_state_on_render_thread(state);
+	} else {
+		rendering_server->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRBackend::_destroy_presentation_output_state_on_render_thread_callback).bind((uint64_t)this, (uint64_t)state));
+	}
+}
+
+Ref<Texture2D> HTMLSurfaceHCSRBackend::get_presentation_output_texture(uint64_t p_output_id) const {
+	MutexLock lock(presentation_outputs_mutex);
+	PresentationOutputState *const *found = presentation_outputs.getptr(p_output_id);
+	return found != nullptr ? Ref<Texture2D>((*found)->texture) : Ref<Texture2D>();
+}
+
+uint64_t HTMLSurfaceHCSRBackend::get_presentation_output_generation(uint64_t p_output_id) const {
+	MutexLock lock(presentation_outputs_mutex);
+	PresentationOutputState *const *found = presentation_outputs.getptr(p_output_id);
+	return found != nullptr ? (*found)->active_generation : 0;
 }
 
 HTMLSurfaceHCSRBackend::HTMLSurfaceHCSRBackend(hcsr_render_backend_t p_render_backend) :

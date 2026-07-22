@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="HTMLViewOutput" inherits="RefCounted" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		A physical presentation of an [HTMLView]'s shared logical frame.
+	</brief_description>
+	<description>
+		Exposes a stable [Texture2D] that can be used by 2D or 3D consumers while the owning [HTMLView] renders the same document generation at an independent physical resolution. It does not own separate DOM, layout, input, scroll, focus, or animation state.
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="content_rect" type="Rect2i" setter="" getter="get_content_rect">
+			The output-pixel rectangle containing the logical frame. It currently covers the full output because output and logical aspect ratios must match.
+		</member>
+		<member name="generation" type="int" setter="" getter="get_generation">
+			The latest shared frame generation activated by this output. Outputs can complete asynchronously and therefore briefly expose different last-completed generations.
+		</member>
+		<member name="size" type="Vector2i" setter="set_size" getter="get_size">
+			Physical raster dimensions. Resizing preserves the public [member texture] object and does not change the owning view's logical layout.
+		</member>
+		<member name="texture" type="Texture2D" setter="" getter="get_texture">
+			Stable texture proxy for the latest completed output frame. It remains safe to assign to a material across frame and resource rotations and output resizes.
+		</member>
+	</members>
+	<methods>
+		<method name="is_valid" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns [code]true[/code] while this output remains attached to its owning [HTMLView].
+			</description>
+		</method>
+		<method name="logical_to_output" qualifiers="const">
+			<return type="Vector2" />
+			<param index="0" name="position" type="Vector2" />
+			<description>
+				Maps a shared logical HTML position to output pixels.
+			</description>
+		</method>
+		<method name="output_to_logical" qualifiers="const">
+			<return type="Vector2" />
+			<param index="0" name="position" type="Vector2" />
+			<description>
+				Maps output pixels to the owning view's shared logical HTML coordinates.
+			</description>
+		</method>
+		<method name="release">
+			<return type="void" />
+			<description>
+				Detaches the output. This is idempotent and does not wait for GPU work. Destroying the owning view also safely releases all outputs.
+			</description>
+		</method>
+	</methods>
+</class>

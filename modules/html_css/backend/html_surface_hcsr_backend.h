@@ -14,6 +14,19 @@
 #include "hcsr_renderer.h"
 
 class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
+	struct PresentationOutputState {
+		hcsr_presentation_output_t *output = nullptr;
+		Size2i requested_size;
+		bool resize_pending = false;
+		Ref<HTMLTexture2D> texture;
+		RID texture_rid;
+		HashMap<uint64_t, RID> import_cache;
+		hcsr_gpu_frame_t active_frame = {};
+		uint64_t active_generation = 0;
+		void *native_texture = nullptr;
+		uint64_t native_generation = 0;
+		Size2i native_size;
+	};
 	struct PreparedGPUFrameMetadata {
 		Size2i css_viewport_size;
 		Size2i physical_size;
@@ -70,6 +83,9 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	SafeFlag gpu_presentation_changed;
 	SafeNumeric<uint64_t> viewport_revision;
 	Vector<uint64_t> pending_document_commits;
+	HashMap<uint64_t, PresentationOutputState *> presentation_outputs;
+	mutable Mutex presentation_outputs_mutex;
+	uint64_t next_presentation_output_id = 1;
 	bool backdrop_filter_enabled = false;
 	bool begin_frame_requested = false;
 	String terminal_failure_reason;
@@ -109,6 +125,13 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	void _detach_gpu_texture_import();
 	void _detach_gpu_texture_import_on_render_thread();
 	void _destroy_renderer_on_render_thread();
+	void _poll_presentation_outputs_on_render_thread();
+	void _poll_cpu_presentation_outputs();
+	bool _ensure_presentation_outputs_on_render_thread();
+	bool _activate_presentation_output_on_render_thread(PresentationOutputState *p_state, const hcsr_gpu_frame_t &p_frame);
+	void _detach_presentation_output_on_render_thread(PresentationOutputState *p_state);
+	void _destroy_presentation_output_state_on_render_thread(PresentationOutputState *p_state);
+	void _defer_presentation_output_resource_release_on_render_thread(hcsr_presentation_output_t *p_output, const hcsr_gpu_frame_t &p_frame);
 	static void _configure_d3d12_device_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _configure_vulkan_device_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _configure_metal_device_on_render_thread_callback(uint64_t p_backend_ptr);
@@ -119,6 +142,9 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	static void _release_gpu_resource_after_retirement_callback(uint64_t p_renderer_ptr, uint64_t p_native_texture, uint64_t p_resource_generation, uint64_t p_frame_generation, uint64_t p_submission_token);
 	static void _destroy_renderer_after_retirement_callback(uint64_t p_renderer_ptr);
 	static void _destroy_renderer_on_render_thread_callback(uint64_t p_backend_ptr);
+	static void _release_presentation_output_resource_after_retirement_callback(uint64_t p_renderer_ptr, uint64_t p_output_ptr, uint64_t p_native_texture, uint64_t p_resource_generation, uint64_t p_frame_generation, uint64_t p_submission_token, uint64_t p_render_backend, uint64_t p_width, uint64_t p_height);
+	static void _destroy_presentation_output_after_retirement_callback(uint64_t p_renderer_ptr, uint64_t p_output_ptr);
+	static void _destroy_presentation_output_state_on_render_thread_callback(uint64_t p_backend_ptr, uint64_t p_state_ptr);
 	void _record_error(const String &p_context);
 	void _retire_document_commits();
 	void _update_performance_profile();
@@ -170,6 +196,11 @@ public:
 	virtual void get_frame_metadata(HTMLFrameMetadata &r_metadata) const override;
 	virtual Ref<Texture2D> get_texture() const override;
 	virtual Ref<HTMLTexture2D> get_html_texture() const override;
+	virtual uint64_t create_presentation_output(const Size2i &p_size) override;
+	virtual Error resize_presentation_output(uint64_t p_output_id, const Size2i &p_size) override;
+	virtual void destroy_presentation_output(uint64_t p_output_id) override;
+	virtual Ref<Texture2D> get_presentation_output_texture(uint64_t p_output_id) const override;
+	virtual uint64_t get_presentation_output_generation(uint64_t p_output_id) const override;
 
 	HTMLSurfaceHCSRBackend(hcsr_render_backend_t p_render_backend = HCSR_RENDER_BACKEND_CPU);
 	~HTMLSurfaceHCSRBackend();

@@ -885,6 +885,7 @@ env_html_css.add_source_files(env.modules_sources, "html_render_target.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_render_surface.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_texture.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_view.cpp")
+env_html_css.add_source_files(env.modules_sources, "html_view_output.cpp")
 env_html_css.add_source_files(env.modules_sources, "register_types.cpp")
 
 if not env["disable_3d"]:

@@ -32,6 +32,7 @@
 
 #include "html_document.h"
 #include "html_render_surface.h"
+#include "html_view_output.h"
 
 #include "core/templates/hash_map.h"
 #include "core/variant/array.h"
@@ -64,6 +65,8 @@ public:
 
 private:
 	Ref<HTMLRenderSurface> surface;
+	HashMap<uint64_t, Ref<HTMLViewOutput>> outputs;
+	Size2i logical_size;
 	HashMap<StringName, Callable> action_bindings;
 	bool input_enabled = true;
 	bool focus_on_click = true;
@@ -195,6 +198,14 @@ public:
 	Array get_backdrop_filter_regions() const;
 
 	Ref<Texture2D> get_texture() const;
+	uint64_t get_generation() const;
+	void set_logical_size(const Size2i &p_logical_size);
+	Size2i get_logical_size() const;
+	Ref<HTMLViewOutput> create_output(const Size2i &p_size);
+	Error _resize_output(uint64_t p_output_id, const Size2i &p_size);
+	void _release_output(uint64_t p_output_id);
+	Ref<Texture2D> _get_output_texture(uint64_t p_output_id) const;
+	uint64_t _get_output_generation(uint64_t p_output_id) const;
 	Vector2 local_to_html_position(const Vector2 &p_position) const;
 	Error set_element_text(const StringName &p_id, const String &p_text);
 	Error set_element_inner_html(const StringName &p_id, const String &p_html_fragment);
@@ -218,6 +229,7 @@ public:
 	Size2 get_minimum_size() const override;
 
 	HTMLView();
+	~HTMLView();
 };
 
 VARIANT_ENUM_CAST(HTMLView::BackendPreference);
