@@ -214,7 +214,43 @@ func _validate_mipmapped_frame(output: HTMLViewOutput, expected_size: Vector2i, 
 	if image == null or image.is_empty() or image.get_size() != expected_size or not image.has_mipmaps():
 		_fail("%s did not expose a complete mipmapped texture at %s." % [phase, expected_size])
 		return false
+	if not _validate_mipmap_alpha_areas(image, phase):
+		return false
 	return true
+
+func _validate_mipmap_alpha_areas(chain: Image, phase: String) -> bool:
+	var previous: Image = _extract_mipmap(chain, 0)
+	for level in range(1, chain.get_mipmap_count() + 1):
+		var current: Image = _extract_mipmap(chain, level)
+		for y in range(current.get_height()):
+			var source_top := float(y * previous.get_height()) / current.get_height()
+			var source_bottom := float((y + 1) * previous.get_height()) / current.get_height()
+			for x in range(current.get_width()):
+				var source_left := float(x * previous.get_width()) / current.get_width()
+				var source_right := float((x + 1) * previous.get_width()) / current.get_width()
+				var weighted_alpha := 0.0
+				var total_area := 0.0
+				for source_y in range(int(floor(source_top)), int(ceil(source_bottom))):
+					var overlap_y: float = maxf(0.0, minf(source_bottom, float(source_y + 1)) - maxf(source_top, float(source_y)))
+					for source_x in range(int(floor(source_left)), int(ceil(source_right))):
+						var overlap_x: float = maxf(0.0, minf(source_right, float(source_x + 1)) - maxf(source_left, float(source_x)))
+						var area: float = overlap_x * overlap_y
+						weighted_alpha += previous.get_pixel(source_x, source_y).a * area
+						total_area += area
+				var expected_alpha := weighted_alpha / total_area if total_area > 0.0 else 0.0
+				var actual_alpha := current.get_pixel(x, y).a
+				if abs(actual_alpha - expected_alpha) > (2.0 / 255.0):
+					_fail("%s mip %d alpha footprint diverged at %s: expected %.6f, got %.6f." % [phase, level, Vector2i(x, y), expected_alpha, actual_alpha])
+					return false
+		previous = current
+	return true
+
+func _extract_mipmap(chain: Image, level: int) -> Image:
+	var width: int = maxi(1, chain.get_width() >> level)
+	var height: int = maxi(1, chain.get_height() >> level)
+	var offset: int = chain.get_mipmap_offset(level)
+	var byte_count: int = width * height * 4
+	return Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, chain.get_data().slice(offset, offset + byte_count))
 
 func _maximum_channel_difference(left: Color, right: Color) -> float:
 	return max(abs(left.r - right.r), abs(left.g - right.g), abs(left.b - right.b), abs(left.a - right.a))

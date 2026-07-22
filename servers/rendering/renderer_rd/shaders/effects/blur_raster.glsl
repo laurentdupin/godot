@@ -138,20 +138,35 @@ void main() {
 	// We do not apply our color scale for our mobile renderer here, we'll leave our colors at half brightness and apply scale in the tonemap raster.
 
 #ifdef MODE_MIPMAP
-
-	vec2 pix_size = blur.dest_pixel_size;
-	vec4 color = texture(source_color, uv_interp + vec2(-0.5, -0.5) * pix_size);
-	vec4 color_1 = texture(source_color, uv_interp + vec2(0.5, -0.5) * pix_size);
-	vec4 color_2 = texture(source_color, uv_interp + vec2(0.5, 0.5) * pix_size);
-	vec4 color_3 = texture(source_color, uv_interp + vec2(-0.5, 0.5) * pix_size);
+	ivec2 source_size = textureSize(source_color, 0);
+	ivec2 destination_size = ivec2(round(1.0 / blur.dest_pixel_size));
+	ivec2 destination_coordinate = ivec2(gl_FragCoord.xy);
+	vec2 source_min = vec2(destination_coordinate) * vec2(source_size) / vec2(destination_size);
+	vec2 source_max = vec2(destination_coordinate + ivec2(1)) * vec2(source_size) / vec2(destination_size);
+	ivec2 first_source = clamp(ivec2(floor(source_min)), ivec2(0), source_size - ivec2(1));
+	ivec2 last_source = clamp(ivec2(ceil(source_max)) - ivec2(1), ivec2(0), source_size - ivec2(1));
+	vec4 area_sum = vec4(0.0);
+	vec3 alpha_weighted_rgb_sum = vec3(0.0);
+	float alpha_area_sum = 0.0;
+	float total_area = 0.0;
+	for (int source_y = first_source.y; source_y <= last_source.y; ++source_y) {
+		float overlap_y = max(0.0, min(source_max.y, float(source_y + 1)) - max(source_min.y, float(source_y)));
+		for (int source_x = first_source.x; source_x <= last_source.x; ++source_x) {
+			float overlap_x = max(0.0, min(source_max.x, float(source_x + 1)) - max(source_min.x, float(source_x)));
+			float sample_area = overlap_x * overlap_y;
+			vec4 sample_color = texelFetch(source_color, ivec2(source_x, source_y), 0);
+			area_sum += sample_color * sample_area;
+			alpha_weighted_rgb_sum += sample_color.rgb * sample_color.a * sample_area;
+			alpha_area_sum += sample_color.a * sample_area;
+			total_area += sample_area;
+		}
+	}
 #ifdef MODE_ALPHA_WEIGHTED_SRGB_MIPMAP
-	float alpha_sum = color.a + color_1.a + color_2.a + color_3.a;
-	vec3 weighted_rgb = color.rgb * color.a + color_1.rgb * color_1.a + color_2.rgb * color_2.a + color_3.rgb * color_3.a;
-	vec3 linear_rgb = alpha_sum > 0.000001 ? weighted_rgb / alpha_sum : vec3(0.0);
+	vec3 linear_rgb = alpha_area_sum > 0.000001 ? alpha_weighted_rgb_sum / alpha_area_sum : vec3(0.0);
 	vec3 encoded_rgb = mix(12.92 * linear_rgb, 1.055 * pow(max(linear_rgb, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055, greaterThan(linear_rgb, vec3(0.0031308)));
-	frag_color = vec4(encoded_rgb, alpha_sum * 0.25);
+	frag_color = vec4(encoded_rgb, total_area > 0.0 ? alpha_area_sum / total_area : 0.0);
 #else
-	frag_color = (color + color_1 + color_2 + color_3) / 4.0;
+	frag_color = total_area > 0.0 ? area_sum / total_area : vec4(0.0);
 #endif
 
 #endif
