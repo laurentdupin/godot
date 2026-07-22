@@ -145,6 +145,9 @@ private:
 	XrSession session = XR_NULL_HANDLE;
 	XrSessionState session_state = XR_SESSION_STATE_UNKNOWN;
 	bool running = false;
+	bool quiet_if_unavailable = false;
+	XrResult last_initialization_result = XR_SUCCESS;
+	bool rendering_extensions_registered = false;
 	XrFrameState frame_state = { XR_TYPE_FRAME_STATE, nullptr, 0, 0, false };
 	double render_target_size_multiplier = 1.0;
 	Rect2i render_region;
@@ -187,6 +190,7 @@ private:
 
 	bool load_layer_properties();
 	bool load_supported_extensions();
+	bool handle_initialization_result(XrResult p_result, const String &p_message);
 	bool is_extension_supported(const String &p_extension) const;
 	bool is_any_extension_enabled(const String &p_extensions) const;
 
@@ -430,6 +434,7 @@ public:
 	bool interaction_profile_supports_io_path(const String &p_ip_path, const String &p_io_path);
 
 	static bool openxr_is_enabled(bool p_check_run_in_editor = true);
+	static bool is_runtime_manifest_available();
 	_FORCE_INLINE_ static OpenXRAPI *get_singleton() { return singleton; }
 
 	XrResult try_get_instance_proc_addr(const char *p_name, PFN_xrVoidFunction *p_addr);
@@ -467,8 +472,10 @@ public:
 
 	bool is_initialized();
 	bool is_running();
-	bool initialize(const String &p_rendering_driver);
+	bool initialize(const String &p_rendering_driver, bool p_quiet_if_unavailable = false);
+	bool was_last_initialization_unavailable() const;
 	bool initialize_session();
+	void uninitialize_session();
 	void finish();
 
 	_FORCE_INLINE_ XrSpace get_play_space() const { return play_space; }

@@ -5,7 +5,7 @@
 	</brief_description>
 	<description>
 		The OpenXR interface allows Godot to interact with OpenXR runtimes and make it possible to create XR experiences and games.
-		Due to the needs of OpenXR this interface works slightly different than other plugin based XR interfaces. It needs to be initialized when Godot starts. You need to enable OpenXR, settings for this can be found in your games project settings under the XR heading. You do need to mark a viewport for use with XR in order for Godot to know which render result should be output to the headset.
+		Enable OpenXR in the project settings under the XR heading. The interface can be initialized automatically at startup or later with [method XRInterface.initialize]. Call [method XRInterface.uninitialize] to stop the session; the same interface can be initialized again later. You need to mark a viewport for use with XR in order for Godot to know which render result should be output to the headset.
 	</description>
 	<tutorials>
 		<link title="Setting up XR">$DOCS_URL/tutorials/xr/setting_up_xr.html</link>
@@ -117,6 +117,12 @@
 			<description>
 				Returns [code]true[/code] if OpenXR's hand interaction profile is supported and enabled.
 				[b]Note:[/b] This only returns a valid value after OpenXR has been initialized.
+			</description>
+		</method>
+		<method name="is_hmd_available">
+			<return type="bool" />
+			<description>
+				Returns [code]true[/code] when an OpenXR runtime and HMD form factor are available. This probe may create the OpenXR instance but does not create a session, allocate swapchains, make OpenXR primary, or begin XR rendering. It is safe to call before [method XRInterface.initialize].
 			</description>
 		</method>
 		<method name="is_hand_tracking_supported">

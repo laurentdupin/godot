@@ -36,15 +36,17 @@
 
 #include "core/config/engine.h"
 #include "core/config/project_settings.h"
+#include "core/io/file_access.h"
 #include "core/object/callable_mp.h"
 #include "core/os/memory.h"
+#include "core/os/os.h"
 #include "core/profiling/profiling.h"
 #include "core/version.h"
 #include "servers/rendering/rendering_server.h"
 #include "servers/rendering/rendering_server_globals.h"
 
-#ifdef ANDROID_ENABLED
-#include "core/os/os.h"
+#ifdef WINDOWS_ENABLED
+#include <windows.h>
 #endif
 
 #include "openxr_platform_inc.h" // IWYU pragma: keep.
@@ -313,6 +315,42 @@ bool OpenXRAPI::openxr_is_enabled(bool p_check_run_in_editor) {
 	}
 }
 
+bool OpenXRAPI::is_runtime_manifest_available() {
+	OS *os = OS::get_singleton();
+	const String runtime_override = os->get_environment("XR_RUNTIME_JSON");
+	if (!runtime_override.is_empty()) {
+		return FileAccess::exists(runtime_override);
+	}
+
+#ifdef WINDOWS_ENABLED
+	wchar_t runtime_path[32768];
+	DWORD runtime_path_size = sizeof(runtime_path);
+	const LSTATUS result = RegGetValueW(
+			HKEY_LOCAL_MACHINE,
+			L"SOFTWARE\\Khronos\\OpenXR\\1",
+			L"ActiveRuntime",
+			RRF_RT_REG_SZ,
+			nullptr,
+			runtime_path,
+			&runtime_path_size);
+	if (result != ERROR_SUCCESS) {
+		return false;
+	}
+	return FileAccess::exists(String::utf16((const char16_t *)runtime_path));
+#elif defined(LINUXBSD_ENABLED)
+	const String config_home = os->get_environment("XDG_CONFIG_HOME");
+	if (!config_home.is_empty() && FileAccess::exists(config_home.path_join("openxr/1/active_runtime.json"))) {
+		return true;
+	}
+	const String home = os->get_environment("HOME");
+	return (!home.is_empty() && FileAccess::exists(home.path_join(".config/openxr/1/active_runtime.json")))
+			|| FileAccess::exists("/etc/openxr/1/active_runtime.json")
+			|| FileAccess::exists("/usr/share/openxr/1/active_runtime.json");
+#else
+	return true;
+#endif
+}
+
 String OpenXRAPI::get_default_action_map_resource_name() {
 	String name = GLOBAL_GET("xr/openxr/default_action_map");
 
@@ -397,7 +435,9 @@ bool OpenXRAPI::load_layer_properties() {
 	// Note, instance is not yet setup so we can't use get_error_string to retrieve our error
 	uint32_t num_layer_properties = 0;
 	XrResult result = xrEnumerateApiLayerProperties(0, &num_layer_properties, nullptr);
-	ERR_FAIL_COND_V_MSG(XR_FAILED(result), false, "OpenXR: Failed to enumerate number of api layer properties");
+	if (!handle_initialization_result(result, "OpenXR: Failed to enumerate number of API layer properties")) {
+		return false;
+	}
 
 	layer_properties.resize(num_layer_properties);
 	for (XrApiLayerProperties &layer : layer_properties) {
@@ -406,7 +446,9 @@ bool OpenXRAPI::load_layer_properties() {
 	}
 
 	result = xrEnumerateApiLayerProperties(num_layer_properties, &num_layer_properties, layer_properties.ptr());
-	ERR_FAIL_COND_V_MSG(XR_FAILED(result), false, "OpenXR: Failed to enumerate api layer properties");
+	if (!handle_initialization_result(result, "OpenXR: Failed to enumerate API layer properties")) {
+		return false;
+	}
 
 	for (const XrApiLayerProperties &layer : layer_properties) {
 		print_verbose(vformat("OpenXR: Found OpenXR layer %s.", layer.layerName));
@@ -426,7 +468,9 @@ bool OpenXRAPI::load_supported_extensions() {
 	// Note, instance is not yet setup so we can't use get_error_string to retrieve our error
 	uint32_t num_supported_extensions = 0;
 	XrResult result = xrEnumerateInstanceExtensionProperties(nullptr, 0, &num_supported_extensions, nullptr);
-	ERR_FAIL_COND_V_MSG(XR_FAILED(result), false, "OpenXR: Failed to enumerate number of extension properties");
+	if (!handle_initialization_result(result, "OpenXR: Failed to enumerate number of extension properties")) {
+		return false;
+	}
 
 	supported_extensions.resize(num_supported_extensions);
 
@@ -436,7 +480,9 @@ bool OpenXRAPI::load_supported_extensions() {
 		extension.next = nullptr;
 	}
 	result = xrEnumerateInstanceExtensionProperties(nullptr, num_supported_extensions, &num_supported_extensions, supported_extensions.ptr());
-	ERR_FAIL_COND_V_MSG(XR_FAILED(result), false, "OpenXR: Failed to enumerate extension properties");
+	if (!handle_initialization_result(result, "OpenXR: Failed to enumerate extension properties")) {
+		return false;
+	}
 
 	for (const XrExtensionProperties &extension : supported_extensions) {
 		print_verbose(vformat("OpenXR: Found OpenXR extension %s.", extension.extensionName));
@@ -685,7 +731,9 @@ bool OpenXRAPI::create_instance() {
 		init_version = XR_API_VERSION_1_0;
 		result = attempt_create_instance(init_version);
 	}
-	ERR_FAIL_COND_V_MSG(XR_FAILED(result), false, "Failed to create XR instance [" + get_error_string(result) + "].");
+	if (!handle_initialization_result(result, "OpenXR: Failed to create XR instance")) {
+		return false;
+	}
 
 	XrInstanceProperties instanceProps = {
 		XR_TYPE_INSTANCE_PROPERTIES, // type;
@@ -734,7 +782,7 @@ bool OpenXRAPI::get_system_info() {
 
 	XrResult result = xrGetSystem(instance, &system_get_info, &system_id);
 	if (XR_FAILED(result)) {
-		print_line("OpenXR: Failed to get system for our form factor [", get_error_string(result), "]");
+		handle_initialization_result(result, "OpenXR: Failed to get system for the requested form factor");
 		return false;
 	}
 
@@ -1705,8 +1753,10 @@ XrResult OpenXRAPI::get_instance_proc_addr(const char *p_name, PFN_xrVoidFunctio
 	return result;
 }
 
-bool OpenXRAPI::initialize(const String &p_rendering_driver) {
+bool OpenXRAPI::initialize(const String &p_rendering_driver, bool p_quiet_if_unavailable) {
 	ERR_FAIL_COND_V_MSG(instance != XR_NULL_HANDLE, false, "OpenXR instance was already created");
+	quiet_if_unavailable = p_quiet_if_unavailable;
+	last_initialization_result = XR_SUCCESS;
 
 	if (!openxr_loader_init()) {
 		return false;
@@ -1748,9 +1798,12 @@ bool OpenXRAPI::initialize(const String &p_rendering_driver) {
 		ERR_FAIL_V_MSG(false, "OpenXR: Unsupported rendering device.");
 	}
 
-	// Also register our rendering extensions
-	register_extension_wrapper(memnew(OpenXRFBUpdateSwapchainExtension(p_rendering_driver)));
-	register_extension_wrapper(memnew(OpenXRFBFoveationExtension(p_rendering_driver)));
+	// Rendering extensions live for the lifetime of the API and must not be duplicated after an unavailable-runtime probe.
+	if (!rendering_extensions_registered) {
+		register_extension_wrapper(memnew(OpenXRFBUpdateSwapchainExtension(p_rendering_driver)));
+		register_extension_wrapper(memnew(OpenXRFBFoveationExtension(p_rendering_driver)));
+		rendering_extensions_registered = true;
+	}
 
 	// initialize
 	for (OpenXRExtensionWrapper *wrapper : registered_extension_wrappers) {
@@ -1800,6 +1853,24 @@ bool OpenXRAPI::initialize(const String &p_rendering_driver) {
 	return true;
 }
 
+bool OpenXRAPI::handle_initialization_result(XrResult p_result, const String &p_message) {
+	if (XR_SUCCEEDED(p_result)) {
+		return true;
+	}
+
+	last_initialization_result = p_result;
+	if (quiet_if_unavailable && was_last_initialization_unavailable()) {
+		return false;
+	}
+
+	ERR_PRINT(p_message + " [" + get_error_string(p_result) + "].");
+	return false;
+}
+
+bool OpenXRAPI::was_last_initialization_unavailable() const {
+	return last_initialization_result == XR_ERROR_RUNTIME_UNAVAILABLE || last_initialization_result == XR_ERROR_FORM_FACTOR_UNAVAILABLE;
+}
+
 bool OpenXRAPI::initialize_session() {
 	if (!create_session()) {
 		destroy_session();
@@ -1829,6 +1900,10 @@ bool OpenXRAPI::initialize_session() {
 	allocate_view_buffers(view_configuration_views.size(), submit_depth_buffer);
 
 	return true;
+}
+
+void OpenXRAPI::uninitialize_session() {
+	destroy_session();
 }
 
 void OpenXRAPI::finish() {

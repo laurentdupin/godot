@@ -12,6 +12,10 @@ func _initialize() -> void:
 		return
 
 	print("OPENXR_LAZY_STARTUP_READY")
+	if OS.get_cmdline_user_args().has("--probe"):
+		var first_probe: bool = interface.call("is_hmd_available")
+		var second_probe: bool = interface.call("is_hmd_available")
+		print("OPENXR_LAZY_PROBE_RESULTS=%s,%s;initialized=%s" % [first_probe, second_probe, interface.is_initialized()])
 	if OS.get_cmdline_user_args().has("--initialize"):
 		var initialized := interface.initialize()
 		print("OPENXR_LAZY_INITIALIZE_RESULT=%s" % initialized)

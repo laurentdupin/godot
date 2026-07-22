@@ -1,0 +1,15 @@
+[application]
+config/name="OpenXR Optional Startup Smoke"
+
+[display]
+window/size/viewport_width=320
+window/size/viewport_height=180
+
+[rendering]
+renderer/rendering_method="mobile"
+renderer/rendering_method.mobile="mobile"
+
+[xr/openxr]
+enabled=true
+initialize_on_startup=true
+startup_alert=false

@@ -63,6 +63,7 @@ void OpenXRInterface::_bind_methods() {
 
 	// State
 	ClassDB::bind_method(D_METHOD("get_session_state"), &OpenXRInterface::get_session_state);
+	ClassDB::bind_method(D_METHOD("is_hmd_available"), &OpenXRInterface::is_hmd_available);
 
 	// User presence
 	ADD_SIGNAL(MethodInfo("user_presence_changed", PropertyInfo(Variant::BOOL, "is_user_present")));
@@ -678,6 +679,19 @@ bool OpenXRInterface::initialize_on_startup() const {
 	}
 }
 
+bool OpenXRInterface::is_hmd_available() {
+	if (openxr_api == nullptr) {
+		return false;
+	}
+	if (openxr_api->is_initialized()) {
+		return true;
+	}
+	if (!OpenXRAPI::is_runtime_manifest_available()) {
+		return false;
+	}
+	return openxr_api->initialize(OS::get_singleton()->get_current_rendering_driver_name(), true);
+}
+
 bool OpenXRInterface::is_initialized() const {
 	return initialized;
 }
@@ -700,6 +714,8 @@ bool OpenXRInterface::initialize() {
 	_load_action_map();
 
 	if (!openxr_api->initialize_session()) {
+		free_interaction_profiles();
+		free_action_sets();
 		return false;
 	}
 
@@ -730,26 +746,29 @@ bool OpenXRInterface::initialize() {
 }
 
 void OpenXRInterface::uninitialize() {
-	// Our OpenXR driver will clean itself up properly when Godot exits, so we just do some basic stuff here
+	if (!initialized) {
+		return;
+	}
 
-	// end the session if we need to?
-
-	// cleanup stuff
-	free_trackers();
-	free_interaction_profiles();
-	free_action_sets();
+	initialized = false;
+	DisplayServer::get_singleton()->unregister_additional_output(this);
 
 	XRServer *xr_server = XRServer::get_singleton();
 	if (xr_server) {
-		if (head.is_valid()) {
-			xr_server->remove_tracker(head);
-			head.unref();
+		if (xr_server->get_primary_interface() == this) {
+			xr_server->set_primary_interface(nullptr);
 		}
 	}
 
-	DisplayServer::get_singleton()->unregister_additional_output(this);
+	openxr_api->uninitialize_session();
 
-	initialized = false;
+	free_trackers();
+	free_interaction_profiles();
+	free_action_sets();
+	if (xr_server && head.is_valid()) {
+		xr_server->remove_tracker(head);
+		head.unref();
+	}
 }
 
 Dictionary OpenXRInterface::get_system_info() {

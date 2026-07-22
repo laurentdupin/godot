@@ -26,6 +26,18 @@ try {
     }
 
     $ErrorActionPreference = "Continue"
+    $probeOutput = (& $editor --headless --path $project --script res://verify_lazy_initialization.gd -- --probe 2>&1 | Out-String)
+    $probeExitCode = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    if ($probeExitCode -ne 0 -or -not $probeOutput.Contains("OPENXR_LAZY_PROBE_RESULTS=false,false;initialized=false")) {
+        throw "Repeatable OpenXR availability probe failed.`n$probeOutput"
+    }
+    $probeDiagnostics = $probeOutput.Replace("OPENXR_LAZY_STARTUP_READY", "").Replace("OPENXR_LAZY_PROBE_RESULTS=false,false;initialized=false", "")
+    if ($probeDiagnostics -match "OpenXR|XR_ERROR|XR_RUNTIME_JSON") {
+        throw "Unavailable OpenXR probe emitted diagnostics.`n$probeOutput"
+    }
+
+    $ErrorActionPreference = "Continue"
     $initializeOutput = (& $editor --headless --path $project --script res://verify_lazy_initialization.gd -- --initialize 2>&1 | Out-String)
     $initializeExitCode = $LASTEXITCODE
     $ErrorActionPreference = "Stop"

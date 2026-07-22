@@ -247,9 +247,17 @@ void initialize_openxr_module(ModuleInitializationLevel p_level) {
 			ERR_FAIL_NULL(openxr_api);
 		}
 
-		const bool initialize_on_startup = xr_mode == XRServer::XRMODE_ON || bool(GLOBAL_GET("xr/openxr/initialize_on_startup"));
+		const bool explicit_startup = xr_mode == XRServer::XRMODE_ON;
+		const bool optional_automatic_startup = xr_mode == XRServer::XRMODE_DEFAULT && bool(GLOBAL_GET("xr/openxr/initialize_on_startup"));
+		const bool initialize_on_startup = explicit_startup || optional_automatic_startup;
 		if (openxr_available && OpenXRAPI::openxr_is_enabled() && initialize_on_startup) {
-			if (!openxr_api->initialize(OS::get_singleton()->get_current_rendering_driver_name())) {
+			if (optional_automatic_startup && !OpenXRAPI::is_runtime_manifest_available()) {
+				return;
+			}
+			if (!openxr_api->initialize(OS::get_singleton()->get_current_rendering_driver_name(), optional_automatic_startup)) {
+				if (optional_automatic_startup && openxr_api->was_last_initialization_unavailable()) {
+					return;
+				}
 				const char *init_error_message =
 						"OpenXR was requested but failed to start.\n"
 						"HMD was not detected or a required feature was not supported.\n\n"
