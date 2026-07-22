@@ -22,11 +22,12 @@ func _run() -> void:
 	view.backend_preference = backend
 	view.logical_size = Vector2i(320, 180)
 	view.size = Vector2(320, 180)
-	view.html = "<html><head><style>html,body{margin:0;background:#123456}.card{position:absolute;left:40px;top:30px;width:80px;height:50px;background:#20c060}.card:hover{background:#e03030}</style></head><body><div id='card' class='card'></div></body></html>"
+	view.html = "<html><head><style>html,body{margin:0;background:#123456}.card{position:absolute;left:40px;top:30px;width:80px;height:50px;background:#20c060;border:2px solid #8fe0b0;border-radius:9px}.card:hover{background:#e03030}.label{position:absolute;left:145px;top:42px;color:white;font:20px 'Segoe UI Emoji','Segoe UI',sans-serif}</style></head><body><div id='card' class='card'></div><span class='label'>Output 🎬</span></body></html>"
 	root.add_child(view)
 
+	var same_size_output: HTMLViewOutput = view.create_output(Vector2i(320, 180))
 	var output: HTMLViewOutput = view.create_output(Vector2i(640, 360))
-	if output == null or not output.is_valid():
+	if same_size_output == null or not same_size_output.is_valid() or output == null or not output.is_valid():
 		_fail("Could not create the secondary output.")
 		return
 	var stable_texture := output.texture
@@ -39,17 +40,13 @@ func _run() -> void:
 	if view.get_generation() != output.generation:
 		_fail("Automatic and secondary outputs activated different shared generations: %d versus %d." % [view.get_generation(), output.generation])
 		return
+	if not await _wait_for_matching_generation(view, same_size_output):
+		return
+	if not _validate_exact_images(view.get_texture(), same_size_output.texture, "initial same-size primary/secondary"):
+		return
 	if not _validate_frame(view.get_texture(), Vector2i(320, 180), Vector2i(80, 55), Color8(32, 192, 96), "primary initial"):
 		return
 	if not _validate_frame(output.texture, Vector2i(640, 360), Vector2i(160, 110), Color8(32, 192, 96), "secondary initial"):
-		return
-
-	var primary_before := view.get_texture().get_image()
-	var output_before := output.get_texture().get_image()
-	if primary_before == null or output_before == null:
-		_fail("Could not capture multi-output initial frames.")
-		return
-	if not _validate_scaled_solid_geometry(primary_before, output_before):
 		return
 
 	var material_viewport := _create_3d_material_viewport(stable_texture)
@@ -67,6 +64,10 @@ func _run() -> void:
 	if not _validate_frame(view.get_texture(), Vector2i(320, 180), Vector2i(80, 55), Color8(224, 48, 48), "primary hover"):
 		return
 	if not _validate_frame(output.texture, Vector2i(640, 360), Vector2i(160, 110), Color8(224, 48, 48), "secondary hover"):
+		return
+	if not await _wait_for_matching_generation(view, same_size_output):
+		return
+	if not _validate_exact_images(view.get_texture(), same_size_output.texture, "hover same-size primary/secondary"):
 		return
 
 	output.size = Vector2i(960, 540)
@@ -113,6 +114,14 @@ func _wait_for_output_generation(output: HTMLViewOutput, after: int) -> bool:
 	_fail("Timed out waiting for a secondary output generation after %d." % after)
 	return false
 
+func _wait_for_matching_generation(view: HTMLView, output: HTMLViewOutput) -> bool:
+	for _frame in range(240):
+		await process_frame
+		if output.generation == view.get_generation() and output.generation > 0:
+			return true
+	_fail("Timed out waiting for matching primary and secondary generations: %d versus %d." % [view.get_generation(), output.generation])
+	return false
+
 func _wait_for_output_size(output: HTMLViewOutput, expected_size: Vector2i) -> bool:
 	for _frame in range(240):
 		await process_frame
@@ -135,16 +144,15 @@ func _validate_frame(texture: Texture2D, expected_size: Vector2i, sample: Vector
 		return false
 	return true
 
-func _validate_scaled_solid_geometry(primary: Image, secondary: Image) -> bool:
-	for y in range(180):
-		for x in range(320):
-			var expected := primary.get_pixel(x, y)
-			for offset_y in range(2):
-				for offset_x in range(2):
-					var actual := secondary.get_pixel(x * 2 + offset_x, y * 2 + offset_y)
-					if _maximum_channel_difference(expected, actual) > 0.04:
-						_fail("Secondary output changed logical solid geometry at primary pixel (%d, %d)." % [x, y])
-						return false
+func _validate_exact_images(primary_texture: Texture2D, secondary_texture: Texture2D, phase: String) -> bool:
+	var primary := primary_texture.get_image() if primary_texture != null else null
+	var secondary := secondary_texture.get_image() if secondary_texture != null else null
+	if primary == null or secondary == null or primary.is_empty() or secondary.is_empty():
+		_fail("%s images could not be captured." % phase)
+		return false
+	if primary.get_size() != secondary.get_size() or primary.get_data() != secondary.get_data():
+		_fail("%s pixels differ despite identical logical and physical metrics." % phase)
+		return false
 	return true
 
 func _maximum_channel_difference(left: Color, right: Color) -> float:
