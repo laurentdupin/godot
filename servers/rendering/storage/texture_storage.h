@@ -72,7 +72,7 @@ public:
 	virtual void texture_proxy_initialize(RID p_texture, RID p_base) = 0; //all slices, then all the mipmaps, must be coherent
 	virtual void texture_drawable_initialize(RID p_texture, int p_width, int p_height, RSE::TextureDrawableFormat p_format, const Color &p_color, bool p_with_mipmaps) = 0;
 
-	virtual RID texture_create_from_native_handle(RSE::TextureType p_type, Image::Format p_format, uint64_t p_native_handle, int p_width, int p_height, int p_depth, int p_layers = 1, RSE::TextureLayeredType p_layered_type = RSE::TEXTURE_LAYERED_2D_ARRAY) = 0;
+	virtual RID texture_create_from_native_handle(RSE::TextureType p_type, Image::Format p_format, uint64_t p_native_handle, int p_width, int p_height, int p_depth, int p_layers = 1, RSE::TextureLayeredType p_layered_type = RSE::TEXTURE_LAYERED_2D_ARRAY, bool p_srgb = false) = 0;
 
 	virtual void texture_2d_update(RID p_texture, const Ref<Image> &p_image, int p_layer = 0) = 0;
 	virtual void texture_3d_update(RID p_texture, const Vector<Ref<Image>> &p_data) = 0;

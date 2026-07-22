@@ -2266,7 +2266,7 @@ void RenderingServer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("texture_2d_layered_create", "layers", "layered_type"), &RenderingServer::_texture_2d_layered_create);
 	ClassDB::bind_method(D_METHOD("texture_3d_create", "format", "width", "height", "depth", "mipmaps", "data"), &RenderingServer::_texture_3d_create);
 	ClassDB::bind_method(D_METHOD("texture_proxy_create", "base"), &RenderingServer::texture_proxy_create);
-	ClassDB::bind_method(D_METHOD("texture_create_from_native_handle", "type", "format", "native_handle", "width", "height", "depth", "layers", "layered_type"), &RenderingServer::texture_create_from_native_handle, DEFVAL(1), DEFVAL(RSE::TEXTURE_LAYERED_2D_ARRAY));
+	ClassDB::bind_method(D_METHOD("texture_create_from_native_handle", "type", "format", "native_handle", "width", "height", "depth", "layers", "layered_type", "srgb"), &RenderingServer::texture_create_from_native_handle, DEFVAL(1), DEFVAL(RSE::TEXTURE_LAYERED_2D_ARRAY), DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("texture_drawable_create", "width", "height", "format", "color", "with_mipmaps"), &RenderingServer::texture_drawable_create, DEFVAL(Color(1, 1, 1, 1)), DEFVAL(false));
 
 	ClassDB::bind_method(D_METHOD("texture_2d_update", "texture", "image", "layer"), &RenderingServer::texture_2d_update);

@@ -22,7 +22,7 @@ func _run() -> void:
 	view.backend_preference = backend
 	view.logical_size = Vector2i(320, 180)
 	view.size = Vector2(320, 180)
-	view.html = "<html><head><style>html,body{margin:0;background:#123456}.card{position:absolute;left:40px;top:30px;width:80px;height:50px;background:#20c060;border:2px solid #8fe0b0;border-radius:9px}.card:hover{background:#e03030}.label{position:absolute;left:145px;top:42px;color:white;font:20px 'Segoe UI Emoji','Segoe UI',sans-serif}</style></head><body><div id='card' class='card'></div><span class='label'>Output 🎬</span></body></html>"
+	view.html = "<html><head><style>html,body{margin:0;background:transparent}.card{position:absolute;left:40px;top:30px;width:80px;height:50px;background:#20c060;border:2px solid #8fe0b0;border-radius:9px}.card:hover{background:#e03030}.alpha{position:absolute;left:120px;top:65px;width:80px;height:50px;background:rgba(50,50,50,.7)}.label{position:absolute;left:145px;top:42px;color:white;font:20px 'Segoe UI Emoji','Segoe UI',sans-serif}</style></head><body><div id='card' class='card'></div><div class='alpha'></div><span class='label'>Output 🎬</span></body></html>"
 	root.add_child(view)
 
 	var same_size_output: HTMLViewOutput = view.create_output(Vector2i(320, 180))
@@ -49,9 +49,12 @@ func _run() -> void:
 	if not _validate_frame(output.texture, Vector2i(640, 360), Vector2i(160, 110), Color8(32, 192, 96), "secondary initial"):
 		return
 
+	var reference_image := output.get_texture().get_image()
+	var reference_texture := ImageTexture.create_from_image(reference_image)
 	var material_viewport := _create_3d_material_viewport(stable_texture)
-	if not await _wait_for_3d_color(material_viewport, func(color: Color) -> bool: return color.b > 0.30 and color.g > 0.15 and color.r < 0.40):
-		_fail("%s secondary output was not sampled by a 3D material; center=%s." % [backend_name, last_3d_sample])
+	var reference_viewport := _create_3d_material_viewport(reference_texture)
+	if not await _wait_for_3d_match(material_viewport, reference_viewport):
+		_fail("%s secondary output did not match normal sRGB ImageTexture sampling; secondary=%s." % [backend_name, last_3d_sample])
 		return
 
 	var output_generation := output.generation
@@ -78,8 +81,8 @@ func _run() -> void:
 		return
 	if not _validate_frame(output.texture, Vector2i(960, 540), Vector2i(240, 165), Color8(224, 48, 48), "secondary resized hover"):
 		return
-	if not await _wait_for_3d_color(material_viewport, func(color: Color) -> bool: return color.b > 0.30 and color.g > 0.15 and color.r < 0.40):
-		_fail("%s stable secondary Texture2D stopped sampling after resize; center=%s." % [backend_name, last_3d_sample])
+	if not await _wait_for_3d_color(material_viewport, func(color: Color) -> bool: return color.a > 0.65 and color.a < 0.75 and color.r > 0.12 and color.r < 0.22):
+		_fail("%s stable secondary Texture2D lost its straight-alpha sRGB sample after resize; center=%s." % [backend_name, last_3d_sample])
 		return
 
 	output.release()
@@ -162,6 +165,7 @@ func _create_3d_material_viewport(texture: Texture2D) -> SubViewport:
 	var viewport := SubViewport.new()
 	viewport.size = Vector2i(320, 180)
 	viewport.own_world_3d = true
+	viewport.transparent_bg = true
 	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	get_root().add_child(viewport)
 	var camera := Camera3D.new()
@@ -172,6 +176,7 @@ func _create_3d_material_viewport(texture: Texture2D) -> SubViewport:
 	quad.size = Vector2(2.0, 1.125)
 	var material := StandardMaterial3D.new()
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	material.albedo_texture = texture
 	var mesh := MeshInstance3D.new()
@@ -179,6 +184,19 @@ func _create_3d_material_viewport(texture: Texture2D) -> SubViewport:
 	mesh.material_override = material
 	viewport.add_child(mesh)
 	return viewport
+
+func _wait_for_3d_match(actual_viewport: SubViewport, reference_viewport: SubViewport) -> bool:
+	for _frame in range(120):
+		await process_frame
+		await RenderingServer.frame_post_draw
+		var actual_image := actual_viewport.get_texture().get_image()
+		var reference_image := reference_viewport.get_texture().get_image()
+		if actual_image != null and reference_image != null and not actual_image.is_empty() and not reference_image.is_empty():
+			last_3d_sample = actual_image.get_pixel(actual_image.get_width() / 2, actual_image.get_height() / 2)
+			var reference := reference_image.get_pixel(reference_image.get_width() / 2, reference_image.get_height() / 2)
+			if _maximum_channel_difference(last_3d_sample, reference) <= 0.02 and last_3d_sample.a > 0.65 and last_3d_sample.a < 0.75:
+				return true
+	return false
 
 func _wait_for_3d_color(viewport: SubViewport, predicate: Callable) -> bool:
 	for _frame in range(120):

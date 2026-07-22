@@ -3956,8 +3956,10 @@
 			<param index="5" name="depth" type="int" />
 			<param index="6" name="layers" type="int" default="1" />
 			<param index="7" name="layered_type" type="int" enum="RenderingServer.TextureLayeredType" default="0" />
+			<param index="8" name="srgb" type="bool" default="false" />
 			<description>
 				Creates a texture based on a native handle that was created outside of Godot's renderer.
+				If [param srgb] is [code]true[/code], a separate sRGB sampling view is exposed for color textures used by 3D materials. The producer must have created the native resource with compatible mutable/typeless format support. The underlying storage and data/readback view remain in the format specified by [param format].
 				[b]Note:[/b] If using only the rendering device renderer, it's recommend to use [method RenderingDevice.texture_create_from_extension] together with [method RenderingServer.texture_rd_create], rather than this method. This way, the texture's format and usage can be controlled more effectively.
 			</description>
 		</method>

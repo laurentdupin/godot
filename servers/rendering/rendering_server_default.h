@@ -219,8 +219,8 @@ public:
 	FUNCRIDTEX5(texture_drawable, int, int, RSE::TextureDrawableFormat, const Color &, bool)
 
 	// Called directly, not through the command queue.
-	virtual RID texture_create_from_native_handle(RSE::TextureType p_type, Image::Format p_format, uint64_t p_native_handle, int p_width, int p_height, int p_depth, int p_layers = 1, RSE::TextureLayeredType p_layered_type = RSE::TEXTURE_LAYERED_2D_ARRAY) override {
-		return RSG::texture_storage->texture_create_from_native_handle(p_type, p_format, p_native_handle, p_width, p_height, p_depth, p_layers, p_layered_type);
+	virtual RID texture_create_from_native_handle(RSE::TextureType p_type, Image::Format p_format, uint64_t p_native_handle, int p_width, int p_height, int p_depth, int p_layers = 1, RSE::TextureLayeredType p_layered_type = RSE::TEXTURE_LAYERED_2D_ARRAY, bool p_srgb = false) override {
+		return RSG::texture_storage->texture_create_from_native_handle(p_type, p_format, p_native_handle, p_width, p_height, p_depth, p_layers, p_layered_type, p_srgb);
 	}
 
 	//these go through command queue if they are in another thread

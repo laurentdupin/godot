@@ -1413,7 +1413,7 @@ void TextureStorage::texture_drawable_initialize(RID p_texture, int p_width, int
 
 // Note: We make some big assumptions about format and usage. If developers need more control,
 // they should use RD::texture_create_from_extension() instead.
-RID TextureStorage::texture_create_from_native_handle(RSE::TextureType p_type, Image::Format p_format, uint64_t p_native_handle, int p_width, int p_height, int p_depth, int p_layers, RSE::TextureLayeredType p_layered_type) {
+RID TextureStorage::texture_create_from_native_handle(RSE::TextureType p_type, Image::Format p_format, uint64_t p_native_handle, int p_width, int p_height, int p_depth, int p_layers, RSE::TextureLayeredType p_layered_type, bool p_srgb) {
 	RD::TextureType type;
 	switch (p_type) {
 		case RSE::TEXTURE_TYPE_2D:
@@ -1676,6 +1676,19 @@ RID TextureStorage::texture_create_from_native_handle(RSE::TextureType p_type, I
 	tex.rd_format_srgb = RD::DATA_FORMAT_MAX;
 	tex.rd_view = rd_view;
 	tex.rd_texture = rd_texture;
+	if (p_srgb) {
+		if (imfmt.rd_format_srgb == RD::DATA_FORMAT_MAX) {
+			RD::get_singleton()->free_rid(rd_texture);
+			ERR_FAIL_V_MSG(RID(), "The requested native texture format has no sRGB sampling view.");
+		}
+		rd_view.format_override = imfmt.rd_format_srgb == format ? RD::DATA_FORMAT_MAX : imfmt.rd_format_srgb;
+		tex.rd_format_srgb = imfmt.rd_format_srgb;
+		tex.rd_texture_srgb = RD::get_singleton()->texture_create_shared(rd_view, rd_texture);
+		if (tex.rd_texture_srgb.is_null()) {
+			RD::get_singleton()->free_rid(rd_texture);
+			ERR_FAIL_V_MSG(RID(), "The native texture does not support its requested sRGB sampling view.");
+		}
+	}
 	tex.width_2d = tex.width;
 	tex.height_2d = tex.height;
 	tex.is_render_target = false;

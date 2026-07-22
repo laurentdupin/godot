@@ -114,7 +114,7 @@ public:
 	virtual RID texture_proxy_create(RID p_base) = 0;
 	virtual RID texture_drawable_create(int p_width, int p_height, RSE::TextureDrawableFormat p_format, const Color &p_color = Color(1, 1, 1, 1), bool p_with_mipmaps = false) = 0;
 
-	virtual RID texture_create_from_native_handle(RSE::TextureType p_type, Image::Format p_format, uint64_t p_native_handle, int p_width, int p_height, int p_depth, int p_layers = 1, RSE::TextureLayeredType p_layered_type = RSE::TEXTURE_LAYERED_2D_ARRAY) = 0;
+	virtual RID texture_create_from_native_handle(RSE::TextureType p_type, Image::Format p_format, uint64_t p_native_handle, int p_width, int p_height, int p_depth, int p_layers = 1, RSE::TextureLayeredType p_layered_type = RSE::TEXTURE_LAYERED_2D_ARRAY, bool p_srgb = false) = 0;
 
 	virtual void texture_2d_update(RID p_texture, const Ref<Image> &p_image, int p_layer = 0) = 0;
 	virtual void texture_3d_update(RID p_texture, const Vector<Ref<Image>> &p_data) = 0;

@@ -770,7 +770,7 @@ void HTMLSurfaceHCSRBackend::_release_presentation_output_resource_after_retirem
 	frame.submission_token = p_submission_token;
 	frame.texture_format = HCSR_GPU_TEXTURE_FORMAT_RGBA8_UNORM;
 	frame.producer_completed = 1;
-	frame.premultiplied_alpha = 1;
+	frame.premultiplied_alpha = 0;
 	const hcsr_status_t status = hcsr_renderer_release_presentation_output_resource(
 			(hcsr_renderer_t *)p_renderer_ptr,
 			(hcsr_presentation_output_t *)p_output_ptr,
@@ -911,7 +911,7 @@ bool HTMLSurfaceHCSRBackend::_ensure_presentation_outputs_on_render_thread() {
 
 bool HTMLSurfaceHCSRBackend::_activate_presentation_output_on_render_thread(PresentationOutputState *p_state, const hcsr_gpu_frame_t &p_frame) {
 	ERR_FAIL_NULL_V(p_state, false);
-	if (p_frame.native_texture == nullptr || p_frame.width <= 0 || p_frame.height <= 0 || p_frame.render_backend != render_backend || p_frame.texture_format != HCSR_GPU_TEXTURE_FORMAT_RGBA8_UNORM || p_frame.premultiplied_alpha == 0 || p_frame.producer_completed == 0 || p_frame.frame_generation < p_state->active_generation) {
+	if (p_frame.native_texture == nullptr || p_frame.width <= 0 || p_frame.height <= 0 || p_frame.render_backend != render_backend || p_frame.texture_format != HCSR_GPU_TEXTURE_FORMAT_RGBA8_UNORM || p_frame.premultiplied_alpha != 0 || p_frame.producer_completed == 0 || p_frame.frame_generation < p_state->active_generation) {
 		_record_error("HCSR returned an invalid secondary presentation frame");
 		return false;
 	}
@@ -944,7 +944,9 @@ bool HTMLSurfaceHCSRBackend::_activate_presentation_output_on_render_thread(Pres
 					frame_size.x,
 					frame_size.y,
 					1,
-					1);
+					1,
+					RenderingServerEnums::TEXTURE_LAYERED_2D_ARRAY,
+					true);
 			if (!imported.is_valid()) {
 #if defined(MACOS_ENABLED) && defined(METAL_ENABLED)
 				if (retained_metal_texture != nullptr) {
@@ -1088,7 +1090,9 @@ void HTMLSurfaceHCSRBackend::_ensure_gpu_texture_imported_on_render_thread() {
 			native_gpu_size.x,
 			native_gpu_size.y,
 			1,
-			1);
+			1,
+			RenderingServerEnums::TEXTURE_LAYERED_2D_ARRAY,
+			true);
 	if (!gpu_texture_rid.is_valid()) {
 #if defined(MACOS_ENABLED) && defined(METAL_ENABLED)
 		if (retained_metal_texture != nullptr) {
@@ -1129,7 +1133,7 @@ void HTMLSurfaceHCSRBackend::_detach_gpu_texture_import_on_render_thread() {
 bool HTMLSurfaceHCSRBackend::_record_submitted_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output) {
 	// Submission transfers ownership, but the texture is not sampleable until the
 	// producer completion poll publishes the matching generation and token.
-	if (p_output.native_texture == nullptr || p_output.width <= 0 || p_output.height <= 0 || p_output.render_backend != render_backend || p_output.texture_format != HCSR_GPU_TEXTURE_FORMAT_RGBA8_UNORM || p_output.premultiplied_alpha == 0 || p_output.frame_generation == 0 || p_output.submission_token == 0 || p_output.producer_completed != 0) {
+	if (p_output.native_texture == nullptr || p_output.width <= 0 || p_output.height <= 0 || p_output.render_backend != render_backend || p_output.texture_format != HCSR_GPU_TEXTURE_FORMAT_RGBA8_UNORM || p_output.premultiplied_alpha != 0 || p_output.frame_generation == 0 || p_output.submission_token == 0 || p_output.producer_completed != 0) {
 		if (p_output.frame_generation != 0) {
 			_discard_gpu_packet_metadata(p_output.frame_generation);
 		}
@@ -1159,7 +1163,7 @@ bool HTMLSurfaceHCSRBackend::_record_submitted_gpu_frame_on_render_thread(const 
 }
 
 bool HTMLSurfaceHCSRBackend::_activate_completed_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output) {
-	if (p_output.native_texture == nullptr || p_output.width <= 0 || p_output.height <= 0 || p_output.render_backend != render_backend || p_output.texture_format != HCSR_GPU_TEXTURE_FORMAT_RGBA8_UNORM || p_output.premultiplied_alpha == 0 || p_output.frame_generation == 0 || p_output.submission_token == 0 || p_output.producer_completed == 0) {
+	if (p_output.native_texture == nullptr || p_output.width <= 0 || p_output.height <= 0 || p_output.render_backend != render_backend || p_output.texture_format != HCSR_GPU_TEXTURE_FORMAT_RGBA8_UNORM || p_output.premultiplied_alpha != 0 || p_output.frame_generation == 0 || p_output.submission_token == 0 || p_output.producer_completed == 0) {
 		_record_error("HCSR returned an invalid completed Godot GPU frame");
 		return false;
 	}

@@ -1267,7 +1267,8 @@ void TextureStorage::texture_drawable_initialize(RID p_texture, int p_width, int
 	texture_set_data(p_texture, image);
 }
 
-RID TextureStorage::texture_create_from_native_handle(RSE::TextureType p_type, Image::Format p_format, uint64_t p_native_handle, int p_width, int p_height, int p_depth, int p_layers, RSE::TextureLayeredType p_layered_type) {
+RID TextureStorage::texture_create_from_native_handle(RSE::TextureType p_type, Image::Format p_format, uint64_t p_native_handle, int p_width, int p_height, int p_depth, int p_layers, RSE::TextureLayeredType p_layered_type, bool p_srgb) {
+	ERR_FAIL_COND_V_MSG(p_srgb, RID(), "Native sRGB sampling views are unavailable in the OpenGL renderer.");
 	Texture texture;
 	texture.active = true;
 	texture.is_from_native_handle = true;
