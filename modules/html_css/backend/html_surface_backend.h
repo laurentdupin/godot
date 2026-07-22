@@ -89,6 +89,7 @@ public:
 		return false;
 	}
 	virtual bool has_pending_output() const { return false; }
+	virtual bool has_pending_frame_request() const { return false; }
 	virtual uint64_t get_last_queued_frame_generation() const { return 0; }
 	virtual uint64_t get_active_frame_generation() const { return 0; }
 	virtual bool uses_generation_bound_input() const { return false; }

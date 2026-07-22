@@ -433,6 +433,10 @@ bool HTMLRenderSurface::has_pending_output() const {
 	return backend != nullptr && backend->has_pending_output();
 }
 
+bool HTMLRenderSurface::has_pending_frame_request() const {
+	return backend != nullptr && backend->has_pending_frame_request();
+}
+
 bool HTMLRenderSurface::is_begin_frame_requested() const {
 	return backend != nullptr && backend->is_begin_frame_requested();
 }

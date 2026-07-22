@@ -488,11 +488,17 @@ void HTMLView::_notification(int p_what) {
 				set_process_internal(true);
 				break;
 			}
+			const bool has_explicit_render_request = frame_render_request_generation != frame_render_serviced_generation;
+			const bool has_backend_render_request = surface->has_pending_frame_request();
+			if (!has_explicit_render_request && !has_backend_render_request && !surface->is_begin_frame_requested()) {
+				frame_render_pending = surface->has_pending_output();
+				set_process_internal(frame_render_pending);
+				break;
+			}
 			const uint64_t servicing_request_generation = frame_render_request_generation;
 
 			bool needs_output = true;
 			bool needs_begin_frame = false;
-			const bool had_pending_output = surface->has_pending_output();
 			const uint64_t trace_sequence = pending_input_trace_sequence;
 			if (trace_sequence != 0) {
 				pending_input_trace_sequence = 0;
@@ -514,16 +520,13 @@ void HTMLView::_notification(int p_what) {
 				needs_begin_frame = false;
 			}
 
-			const bool should_render = needs_output || had_pending_output;
+			const bool should_render = needs_output;
 			if (should_render) {
 				if (trace_sequence != 0) {
 					html_view_input_trace(vformat("seq=%d render_now begin reason=%s", (int64_t)trace_sequence, needs_output ? "needs_output" : "pending_output"));
 				}
 				const uint64_t render_start_usec = trace_sequence != 0 && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 				surface->render_now("HTMLView");
-				if (surface->has_pending_output() || surface->is_begin_frame_requested()) {
-					needs_begin_frame = true;
-				}
 				if (trace_sequence != 0) {
 					html_view_input_trace(vformat("seq=%d render_now end pending_output=%s elapsed_ms=%.3f", (int64_t)trace_sequence, surface->has_pending_output() ? "true" : "false", html_view_elapsed_ms(render_start_usec)));
 				}
@@ -534,8 +537,13 @@ void HTMLView::_notification(int p_what) {
 			if (trace_sequence != 0 && needs_begin_frame) {
 				pending_input_trace_sequence = trace_sequence;
 			}
-			frame_render_serviced_generation = servicing_request_generation;
-			frame_render_pending = needs_begin_frame || frame_render_request_generation != frame_render_serviced_generation;
+			if (has_explicit_render_request) {
+				frame_render_serviced_generation = servicing_request_generation;
+			}
+			frame_render_pending = needs_begin_frame
+					|| frame_render_request_generation != frame_render_serviced_generation
+					|| surface->has_pending_frame_request()
+					|| surface->has_pending_output();
 			set_process_internal(frame_render_pending);
 		} break;
 
@@ -1516,6 +1524,10 @@ Error HTMLView::replace_stylesheet_text(const StringName &p_style_id, const Stri
 }
 
 Error HTMLView::set_form_control_value(const StringName &p_id, const String &p_value) {
+	HTMLFormControlState current_state;
+	if (surface->get_form_control_state(p_id, current_state) && current_state.value == p_value) {
+		return OK;
+	}
 	Error err = surface->set_form_control_value(p_id, p_value);
 	if (err == OK) {
 		_queue_frame_render();
@@ -1524,6 +1536,10 @@ Error HTMLView::set_form_control_value(const StringName &p_id, const String &p_v
 }
 
 Error HTMLView::set_form_control_checked(const StringName &p_id, bool p_checked) {
+	HTMLFormControlState current_state;
+	if (surface->get_form_control_state(p_id, current_state) && current_state.checked == p_checked) {
+		return OK;
+	}
 	Error err = surface->set_form_control_checked(p_id, p_checked);
 	if (err == OK) {
 		_queue_frame_render();

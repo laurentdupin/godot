@@ -33,7 +33,14 @@ func _initialize() -> void:
 		quit(1)
 		return
 
-	for _frame in range(20):
+	# Host form synchronization is deliberately idempotent. Repeating the
+	# already-committed value must not create an unbounded GPU frame backlog or
+	# leave the selected generation behind older prepared frames.
+	for _frame in range(120):
+		if retained_view.set_form_control_value(&"choice", "alternate") != OK:
+			push_error("The retained select rejected an idempotent synchronized value.")
+			quit(1)
+			return
 		await process_frame
 	var retained_image: Image = retained_view.get_texture().get_image()
 	var clean_image: Image = clean_view.get_texture().get_image()

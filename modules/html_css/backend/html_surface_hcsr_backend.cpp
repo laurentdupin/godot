@@ -1597,6 +1597,10 @@ bool HTMLSurfaceHCSRBackend::has_pending_output() const {
 			|| gpu_presentation_poll_pending.is_set();
 }
 
+bool HTMLSurfaceHCSRBackend::has_pending_frame_request() const {
+	return gpu_follow_up_frame_requested.is_set();
+}
+
 uint64_t HTMLSurfaceHCSRBackend::get_last_queued_frame_generation() const {
 	MutexLock lock(frame_metadata_mutex);
 	return last_queued_frame_generation;

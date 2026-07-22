@@ -168,7 +168,8 @@ void HTMLRenderTarget::_notification(int p_what) {
 		return;
 	}
 
-	if (frame_render_requested) {
+	const bool backend_frame_requested = surface->has_pending_frame_request();
+	if (frame_render_requested || backend_frame_requested || surface->is_begin_frame_requested()) {
 		frame_render_requested = false;
 		bool needs_output = true;
 		bool needs_begin_frame = false;
@@ -179,7 +180,7 @@ void HTMLRenderTarget::_notification(int p_what) {
 		frame_render_requested = needs_begin_frame;
 	}
 
-	set_process_internal(frame_render_requested || surface->has_pending_output());
+	set_process_internal(frame_render_requested || surface->has_pending_frame_request() || surface->has_pending_output());
 }
 
 void HTMLRenderTarget::set_document(const Ref<HTMLDocument> &p_document) {
