@@ -2,6 +2,11 @@ extends SceneTree
 
 
 func _initialize() -> void:
+	_run.call_deferred()
+
+
+func _run() -> void:
+	await process_frame
 	var openxr := XRServer.find_interface("OpenXR")
 	if openxr == null:
 		push_error("OpenXR interface is not registered.")

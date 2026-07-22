@@ -109,6 +109,16 @@ void OpenXRD3D12Extension::cleanup_device() {
 XrGraphicsBindingD3D12KHR OpenXRD3D12Extension::graphics_binding_d3d12;
 
 void *OpenXRD3D12Extension::set_session_create_and_get_next_pointer(void *p_next_pointer) {
+	if (!graphics_device || !command_queue) {
+		RenderingServer *rendering_server = RenderingServer::get_singleton();
+		ERR_FAIL_NULL_V(rendering_server, p_next_pointer);
+		RenderingDevice *rendering_device = rendering_server->get_rendering_device();
+		ERR_FAIL_NULL_V(rendering_device, p_next_pointer);
+		graphics_device = reinterpret_cast<ID3D12Device *>(rendering_device->get_driver_resource(RD::DRIVER_RESOURCE_LOGICAL_DEVICE));
+		command_queue = reinterpret_cast<ID3D12CommandQueue *>(rendering_device->get_driver_resource(RD::DRIVER_RESOURCE_COMMAND_QUEUE));
+	}
+	(void)get_feature_level();
+
 	DEV_ASSERT(graphics_device && "Graphics Device was not specified yet.");
 	DEV_ASSERT(command_queue && "Command queue was not specified yet.");
 

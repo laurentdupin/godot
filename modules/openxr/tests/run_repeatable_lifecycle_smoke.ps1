@@ -8,7 +8,7 @@ $editor = (Resolve-Path -LiteralPath $EditorPath).Path
 $project = Join-Path $PSScriptRoot "lazy_initialization"
 
 $ErrorActionPreference = "Continue"
-$output = (& $editor --headless --path $project --script res://verify_repeatable_lifecycle.gd 2>&1 | Out-String)
+$output = (& $editor --rendering-method mobile --rendering-driver d3d12 --path $project --script res://verify_repeatable_lifecycle.gd 2>&1 | Out-String)
 $exitCode = $LASTEXITCODE
 $ErrorActionPreference = "Stop"
 

@@ -239,6 +239,23 @@ bool OpenXRVulkanExtension::use_subsampled_images() {
 XrGraphicsBindingVulkanKHR OpenXRVulkanExtension::graphics_binding_vulkan;
 
 void *OpenXRVulkanExtension::set_session_create_and_get_next_pointer(void *p_next_pointer) {
+	if (vulkan_instance == nullptr || vulkan_physical_device == nullptr || vulkan_device == nullptr || vulkan_queue_family_index == UINT32_MAX || vulkan_queue_index == UINT32_MAX) {
+		RenderingServer *rendering_server = RenderingServer::get_singleton();
+		ERR_FAIL_NULL_V(rendering_server, p_next_pointer);
+		RenderingDevice *rendering_device = rendering_server->get_rendering_device();
+		ERR_FAIL_NULL_V(rendering_device, p_next_pointer);
+		vulkan_instance = (VkInstance)rendering_device->get_driver_resource(RD::DRIVER_RESOURCE_TOPMOST_OBJECT);
+		vulkan_physical_device = (VkPhysicalDevice)rendering_device->get_driver_resource(RD::DRIVER_RESOURCE_PHYSICAL_DEVICE);
+		vulkan_device = (VkDevice)rendering_device->get_driver_resource(RD::DRIVER_RESOURCE_LOGICAL_DEVICE);
+		vulkan_queue_family_index = rendering_device->get_driver_resource(RD::DRIVER_RESOURCE_QUEUE_FAMILY);
+		vulkan_queue_index = 0;
+	}
+	VkPhysicalDeviceProperties physical_device_properties;
+	vkGetPhysicalDeviceProperties(vulkan_physical_device, &physical_device_properties);
+	if (!check_graphics_api_support(physical_device_properties.apiVersion)) {
+		return p_next_pointer;
+	}
+
 	DEV_ASSERT(vulkan_queue_family_index < UINT32_MAX && "Direct queue family index was not specified yet.");
 	DEV_ASSERT(vulkan_queue_index < UINT32_MAX && "Direct queue index was not specified yet.");
 

@@ -714,6 +714,7 @@ bool OpenXRInterface::initialize() {
 	_load_action_map();
 
 	if (!openxr_api->initialize_session()) {
+		free_trackers();
 		free_interaction_profiles();
 		free_action_sets();
 		return false;
