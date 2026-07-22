@@ -349,7 +349,7 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_generation"), &HTMLView::get_generation);
 	ClassDB::bind_method(D_METHOD("set_logical_size", "logical_size"), &HTMLView::set_logical_size);
 	ClassDB::bind_method(D_METHOD("get_logical_size"), &HTMLView::get_logical_size);
-	ClassDB::bind_method(D_METHOD("create_output", "size"), &HTMLView::create_output);
+	ClassDB::bind_method(D_METHOD("create_output", "size", "mipmaps"), &HTMLView::create_output, DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("local_to_html_position", "position"), &HTMLView::local_to_html_position);
 	ClassDB::bind_method(D_METHOD("set_element_text", "id", "text"), &HTMLView::set_element_text);
 	ClassDB::bind_method(D_METHOD("set_element_inner_html", "id", "html_fragment"), &HTMLView::set_element_inner_html);
@@ -890,18 +890,18 @@ uint64_t HTMLView::get_generation() const {
 	return surface->get_active_frame_generation();
 }
 
-Ref<HTMLViewOutput> HTMLView::create_output(const Size2i &p_size) {
+Ref<HTMLViewOutput> HTMLView::create_output(const Size2i &p_size, bool p_mipmaps) {
 	ERR_FAIL_COND_V_MSG(p_size.x <= 0 || p_size.y <= 0, Ref<HTMLViewOutput>(), "HTMLView output dimensions must be positive.");
 	ERR_FAIL_COND_V_MSG(logical_size.x <= 0 || logical_size.y <= 0, Ref<HTMLViewOutput>(), "Set HTMLView.logical_size explicitly before creating a secondary output.");
 	const Size2i current_logical_size = _get_target_viewport_size();
 	const int64_t aspect_cross_a = (int64_t)p_size.x * current_logical_size.y;
 	const int64_t aspect_cross_b = (int64_t)p_size.y * current_logical_size.x;
 	ERR_FAIL_COND_V_MSG(aspect_cross_a != aspect_cross_b, Ref<HTMLViewOutput>(), "The initial multi-output contract requires output and logical viewport aspect ratios to match.");
-	const uint64_t output_id = surface->create_presentation_output(p_size);
+	const uint64_t output_id = surface->create_presentation_output(p_size, p_mipmaps);
 	ERR_FAIL_COND_V_MSG(output_id == 0, Ref<HTMLViewOutput>(), "The active HTML renderer backend does not support secondary outputs.");
 	Ref<HTMLViewOutput> output;
 	output.instantiate();
-	output->initialize(this, output_id, p_size);
+	output->initialize(this, output_id, p_size, p_mipmaps);
 	outputs.insert(output_id, output);
 	_queue_frame_render();
 	return output;

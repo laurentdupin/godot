@@ -82,11 +82,26 @@ void main() {
 #ifdef MODE_MIPMAP
 
 	ivec2 base_pos = (pos + params.section.xy) << 1;
+
+#ifdef MODE_ALPHA_WEIGHTED_SRGB_MIPMAP
+	ivec2 maximum_pos = textureSize(source_color, 0) - ivec2(1);
+	vec4 samples[4] = vec4[](
+			texelFetch(source_color, min(base_pos, maximum_pos), 0),
+			texelFetch(source_color, min(base_pos + ivec2(0, 1), maximum_pos), 0),
+			texelFetch(source_color, min(base_pos + ivec2(1, 0), maximum_pos), 0),
+			texelFetch(source_color, min(base_pos + ivec2(1, 1), maximum_pos), 0));
+	float alpha_sum = samples[0].a + samples[1].a + samples[2].a + samples[3].a;
+	vec3 weighted_rgb = samples[0].rgb * samples[0].a + samples[1].rgb * samples[1].a + samples[2].rgb * samples[2].a + samples[3].rgb * samples[3].a;
+	vec3 linear_rgb = alpha_sum > 0.000001 ? weighted_rgb / alpha_sum : vec3(0.0);
+	vec3 encoded_rgb = mix(12.92 * linear_rgb, 1.055 * pow(max(linear_rgb, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055, greaterThan(linear_rgb, vec3(0.0031308)));
+	vec4 color = vec4(encoded_rgb, alpha_sum * 0.25);
+#else
 	vec4 color = texelFetch(source_color, base_pos, 0);
 	color += texelFetch(source_color, base_pos + ivec2(0, 1), 0);
 	color += texelFetch(source_color, base_pos + ivec2(1, 0), 0);
 	color += texelFetch(source_color, base_pos + ivec2(1, 1), 0);
 	color /= 4.0;
+#endif
 	color = mix(color, vec4(100.0, 100.0, 100.0, 1.0), isinf(color));
 	color = mix(color, vec4(100.0, 100.0, 100.0, 1.0), isnan(color));
 

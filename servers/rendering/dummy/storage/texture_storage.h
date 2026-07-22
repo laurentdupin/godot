@@ -99,6 +99,7 @@ public:
 	virtual void texture_proxy_update(RID p_proxy, RID p_base) override {}
 
 	virtual void texture_drawable_blit_rect(const TypedArray<RID> &p_textures, const Rect2i &p_rect, RID p_material, const Color &p_modulate, const TypedArray<RID> &p_source_textures, int p_to_mipmap) override {}
+	virtual void texture_drawable_copy_level_zero(RID p_source, RID p_destination) override {}
 
 	//these two APIs can be used together or in combination with the others.
 	virtual void texture_2d_placeholder_initialize(RID p_texture) override {}
@@ -113,7 +114,7 @@ public:
 	virtual Ref<Image> texture_2d_layer_get(RID p_texture, int p_layer) const override { return Ref<Image>(); }
 	virtual Vector<Ref<Image>> texture_3d_get(RID p_texture) const override { return Vector<Ref<Image>>(); }
 
-	virtual void texture_drawable_generate_mipmaps(RID p_texture) override {}
+	virtual void texture_drawable_generate_mipmaps(RID p_texture, bool p_alpha_weighted_srgb = false) override {}
 	virtual RID texture_drawable_get_default_material() const override { return RID(); }
 
 	virtual void texture_replace(RID p_texture, RID p_by_texture) override { texture_free(p_by_texture); }

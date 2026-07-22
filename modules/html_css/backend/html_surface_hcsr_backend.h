@@ -17,9 +17,11 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	struct PresentationOutputState {
 		hcsr_presentation_output_t *output = nullptr;
 		Size2i requested_size;
+		bool mipmaps = false;
 		bool resize_pending = false;
 		Ref<HTMLTexture2D> texture;
 		RID texture_rid;
+		RID mipmapped_texture_rid;
 		HashMap<uint64_t, RID> import_cache;
 		hcsr_gpu_frame_t active_frame = {};
 		uint64_t active_generation = 0;
@@ -196,7 +198,7 @@ public:
 	virtual void get_frame_metadata(HTMLFrameMetadata &r_metadata) const override;
 	virtual Ref<Texture2D> get_texture() const override;
 	virtual Ref<HTMLTexture2D> get_html_texture() const override;
-	virtual uint64_t create_presentation_output(const Size2i &p_size) override;
+	virtual uint64_t create_presentation_output(const Size2i &p_size, bool p_mipmaps) override;
 	virtual Error resize_presentation_output(uint64_t p_output_id, const Size2i &p_size) override;
 	virtual void destroy_presentation_output(uint64_t p_output_id) override;
 	virtual Ref<Texture2D> get_presentation_output_texture(uint64_t p_output_id) const override;

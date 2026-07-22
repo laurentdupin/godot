@@ -122,6 +122,7 @@ public:
 	virtual void texture_proxy_update(RID p_texture, RID p_proxy_to) = 0;
 
 	virtual void texture_drawable_blit_rect(const TypedArray<RID> &p_textures, const Rect2i &p_rect, RID p_material, const Color &p_modulate, const TypedArray<RID> &p_source_textures, int p_to_mipmap = 0) = 0;
+	virtual void texture_drawable_copy_level_zero(RID p_source, RID p_destination) = 0;
 
 	// These two APIs can be used together or in combination with the others.
 	virtual RID texture_2d_placeholder_create() = 0;
@@ -138,7 +139,7 @@ public:
 	virtual void texture_set_path(RID p_texture, const String &p_path) = 0;
 	virtual String texture_get_path(RID p_texture) const = 0;
 
-	virtual void texture_drawable_generate_mipmaps(RID p_texture) = 0; // Update mipmaps if modified
+	virtual void texture_drawable_generate_mipmaps(RID p_texture, bool p_alpha_weighted_srgb = false) = 0; // Update mipmaps if modified
 	virtual RID texture_drawable_get_default_material() const = 0; // To use with simplified functions in DrawableTexture2D
 
 	virtual Image::Format texture_get_format(RID p_texture) const = 0;

@@ -1821,10 +1821,15 @@ Vector<Ref<Image>> TextureStorage::texture_3d_get(RID p_texture) const {
 	return ret;
 }
 
-void TextureStorage::texture_drawable_generate_mipmaps(RID p_texture) {
+void TextureStorage::texture_drawable_generate_mipmaps(RID p_texture, bool p_alpha_weighted_srgb) {
+	ERR_FAIL_COND_MSG(p_alpha_weighted_srgb, "Alpha-weighted sRGB drawable mipmaps are not supported by the OpenGL renderer.");
 	Texture *texture = get_texture(p_texture);
 	Vector3i size = texture_get_size(p_texture);
 	CopyEffects::get_singleton()->bilinear_blur(texture->tex_id, texture->mipmaps, Rect2i(0, 0, size.x, size.y));
+}
+
+void TextureStorage::texture_drawable_copy_level_zero(RID p_source, RID p_destination) {
+	ERR_FAIL_MSG("Drawable level-zero texture copies are not supported by the GLES renderer.");
 }
 
 RID TextureStorage::texture_drawable_get_default_material() const {

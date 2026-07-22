@@ -628,9 +628,9 @@ Ref<HTMLTexture2D> HTMLRenderSurface::get_html_texture() const {
 	return backend != nullptr ? backend->get_html_texture() : Ref<HTMLTexture2D>();
 }
 
-uint64_t HTMLRenderSurface::create_presentation_output(const Size2i &p_size) {
+uint64_t HTMLRenderSurface::create_presentation_output(const Size2i &p_size, bool p_mipmaps) {
 	_ensure_backend();
-	return backend != nullptr ? backend->create_presentation_output(p_size) : 0;
+	return backend != nullptr ? backend->create_presentation_output(p_size, p_mipmaps) : 0;
 }
 
 Error HTMLRenderSurface::resize_presentation_output(uint64_t p_output_id, const Size2i &p_size) {

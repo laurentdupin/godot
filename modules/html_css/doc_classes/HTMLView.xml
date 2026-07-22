@@ -118,8 +118,9 @@
 		<method name="create_output">
 			<return type="HTMLViewOutput" />
 			<param index="0" name="size" type="Vector2i" />
+			<param index="1" name="mipmaps" type="bool" default="false" />
 			<description>
-				Creates a presentation-only output of the shared logical frame at the requested physical raster size. Set [member logical_size] explicitly first. The output shares DOM, CSS layout, animation, scrolling, focus, and interaction state with this view. Input remains in [member logical_size] coordinates. The initial contract requires the output and logical viewport aspect ratios to match.
+				Creates a presentation-only output of the shared logical frame at the requested physical raster size. Set [member logical_size] explicitly first. The output shares DOM, CSS layout, animation, scrolling, focus, and interaction state with this view. Input remains in [member logical_size] coordinates. The initial contract requires the output and logical viewport aspect ratios to match. When [param mipmaps] is [code]true[/code], each completed frame is copied to an sRGB, alpha-weighted mip chain suitable for trilinear or anisotropic 3D material sampling. This does not change level-zero dimensions or logical layout.
 			</description>
 		</method>
 		<method name="cancel_pointer_interaction">

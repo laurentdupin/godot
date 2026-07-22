@@ -230,6 +230,7 @@ public:
 	FUNC2(texture_proxy_update, RID, RID)
 
 	FUNC6(texture_drawable_blit_rect, const TypedArray<RID> &, const Rect2i &, RID, const Color &, const TypedArray<RID> &, int)
+	FUNC2(texture_drawable_copy_level_zero, RID, RID)
 
 	//these also go pass-through
 	FUNCRIDTEX0(texture_2d_placeholder)
@@ -240,7 +241,7 @@ public:
 	FUNC2RC(Ref<Image>, texture_2d_layer_get, RID, int)
 	FUNC1RC(Vector<Ref<Image>>, texture_3d_get, RID)
 
-	FUNC1(texture_drawable_generate_mipmaps, RID)
+	FUNC2(texture_drawable_generate_mipmaps, RID, bool)
 	FUNC0RC(RID, texture_drawable_get_default_material)
 
 	FUNC2(texture_replace, RID, RID)

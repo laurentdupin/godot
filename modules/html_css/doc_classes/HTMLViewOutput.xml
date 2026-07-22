@@ -9,6 +9,9 @@
 	<tutorials>
 	</tutorials>
 	<members>
+		<member name="mipmaps" type="bool" setter="" getter="has_mipmaps">
+			Whether the output publishes an alpha-weighted sRGB mip chain. Select a mipmapped or anisotropic texture filter on the consuming material to use it.
+		</member>
 		<member name="content_rect" type="Rect2i" setter="" getter="get_content_rect">
 			The output-pixel rectangle containing the logical frame. It currently covers the full output because output and logical aspect ratios must match.
 		</member>

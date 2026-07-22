@@ -845,6 +845,9 @@ void HTMLSurfaceHCSRBackend::_detach_presentation_output_on_render_thread(Presen
 	}
 	RenderingServer *rendering_server = RenderingServer::get_singleton();
 	if (rendering_server != nullptr) {
+		if (p_state->mipmapped_texture_rid.is_valid()) {
+			rendering_server->free_rid(p_state->mipmapped_texture_rid);
+		}
 		for (const KeyValue<uint64_t, RID> &entry : p_state->import_cache) {
 			if (entry.value.is_valid()) {
 				rendering_server->free_rid(entry.value);
@@ -856,6 +859,7 @@ void HTMLSurfaceHCSRBackend::_detach_presentation_output_on_render_thread(Presen
 	}
 	p_state->import_cache.clear();
 	p_state->texture_rid = RID();
+	p_state->mipmapped_texture_rid = RID();
 	if (p_state->active_frame.native_texture != nullptr) {
 		_defer_presentation_output_resource_release_on_render_thread(p_state->output, p_state->active_frame);
 		p_state->active_frame = {};
@@ -963,8 +967,25 @@ bool HTMLSurfaceHCSRBackend::_activate_presentation_output_on_render_thread(Pres
 		p_state->native_texture = p_frame.native_texture;
 		p_state->native_generation = p_frame.resource_generation;
 		p_state->native_size = frame_size;
-		p_state->texture->set_external_texture(imported, frame_size, true);
 	}
+	RID published_texture = p_state->texture_rid;
+	if (p_state->mipmaps) {
+		RenderingServer *rendering_server = RenderingServer::get_singleton();
+		ERR_FAIL_NULL_V(rendering_server, false);
+		if (!p_state->mipmapped_texture_rid.is_valid()) {
+			p_state->mipmapped_texture_rid = rendering_server->texture_drawable_create(
+					frame_size.x,
+					frame_size.y,
+					RenderingServerEnums::TEXTURE_DRAWABLE_FORMAT_RGBA8_SRGB,
+					Color(0, 0, 0, 0),
+					true);
+			ERR_FAIL_COND_V_MSG(!p_state->mipmapped_texture_rid.is_valid(), false, "Godot could not create an HCSR mipmapped output texture.");
+		}
+		rendering_server->texture_drawable_copy_level_zero(p_state->texture_rid, p_state->mipmapped_texture_rid);
+		rendering_server->texture_drawable_generate_mipmaps(p_state->mipmapped_texture_rid, true);
+		published_texture = p_state->mipmapped_texture_rid;
+	}
+	p_state->texture->set_external_texture(published_texture, frame_size, true);
 	if (p_state->active_frame.native_texture != nullptr) {
 		_defer_presentation_output_resource_release_on_render_thread(p_state->output, p_state->active_frame);
 	}
@@ -2216,12 +2237,13 @@ Ref<HTMLTexture2D> HTMLSurfaceHCSRBackend::get_html_texture() const {
 	return render_backend == HCSR_RENDER_BACKEND_CPU ? HTMLSurfaceCPUBackend::get_html_texture() : gpu_texture;
 }
 
-uint64_t HTMLSurfaceHCSRBackend::create_presentation_output(const Size2i &p_size) {
+uint64_t HTMLSurfaceHCSRBackend::create_presentation_output(const Size2i &p_size, bool p_mipmaps) {
 	if (p_size.x <= 0 || p_size.y <= 0) {
 		return 0;
 	}
 	PresentationOutputState *state = memnew(PresentationOutputState);
 	state->requested_size = p_size;
+	state->mipmaps = p_mipmaps;
 	state->texture.instantiate();
 	MutexLock lock(presentation_outputs_mutex);
 	const uint64_t output_id = next_presentation_output_id++;

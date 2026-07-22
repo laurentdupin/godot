@@ -2283,7 +2283,7 @@ void RenderingServer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("texture_2d_layer_get", "texture", "layer"), &RenderingServer::texture_2d_layer_get);
 	ClassDB::bind_method(D_METHOD("texture_3d_get", "texture"), &RenderingServer::_texture_3d_get);
 
-	ClassDB::bind_method(D_METHOD("texture_drawable_generate_mipmaps", "texture"), &RenderingServer::texture_drawable_generate_mipmaps);
+	ClassDB::bind_method(D_METHOD("texture_drawable_generate_mipmaps", "texture", "alpha_weighted_srgb"), &RenderingServer::texture_drawable_generate_mipmaps, DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("texture_drawable_get_default_material"), &RenderingServer::texture_drawable_get_default_material);
 
 	ClassDB::bind_method(D_METHOD("texture_replace", "texture", "by_texture"), &RenderingServer::texture_replace);

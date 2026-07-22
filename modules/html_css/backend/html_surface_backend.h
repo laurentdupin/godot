@@ -128,7 +128,7 @@ public:
 	virtual bool hit_test(const Point2 &, HTMLElementHit &) const { return false; }
 	virtual Ref<Texture2D> get_texture() const = 0;
 	virtual Ref<HTMLTexture2D> get_html_texture() const = 0;
-	virtual uint64_t create_presentation_output(const Size2i &) { return 0; }
+	virtual uint64_t create_presentation_output(const Size2i &, bool) { return 0; }
 	virtual Error resize_presentation_output(uint64_t, const Size2i &) { return ERR_UNAVAILABLE; }
 	virtual void destroy_presentation_output(uint64_t) {}
 	virtual Ref<Texture2D> get_presentation_output_texture(uint64_t) const { return Ref<Texture2D>(); }

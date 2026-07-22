@@ -141,10 +141,18 @@ void main() {
 
 	vec2 pix_size = blur.dest_pixel_size;
 	vec4 color = texture(source_color, uv_interp + vec2(-0.5, -0.5) * pix_size);
-	color += texture(source_color, uv_interp + vec2(0.5, -0.5) * pix_size);
-	color += texture(source_color, uv_interp + vec2(0.5, 0.5) * pix_size);
-	color += texture(source_color, uv_interp + vec2(-0.5, 0.5) * pix_size);
-	frag_color = color / 4.0;
+	vec4 color_1 = texture(source_color, uv_interp + vec2(0.5, -0.5) * pix_size);
+	vec4 color_2 = texture(source_color, uv_interp + vec2(0.5, 0.5) * pix_size);
+	vec4 color_3 = texture(source_color, uv_interp + vec2(-0.5, 0.5) * pix_size);
+#ifdef MODE_ALPHA_WEIGHTED_SRGB_MIPMAP
+	float alpha_sum = color.a + color_1.a + color_2.a + color_3.a;
+	vec3 weighted_rgb = color.rgb * color.a + color_1.rgb * color_1.a + color_2.rgb * color_2.a + color_3.rgb * color_3.a;
+	vec3 linear_rgb = alpha_sum > 0.000001 ? weighted_rgb / alpha_sum : vec3(0.0);
+	vec3 encoded_rgb = mix(12.92 * linear_rgb, 1.055 * pow(max(linear_rgb, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055, greaterThan(linear_rgb, vec3(0.0031308)));
+	frag_color = vec4(encoded_rgb, alpha_sum * 0.25);
+#else
+	frag_color = (color + color_1 + color_2 + color_3) / 4.0;
+#endif
 
 #endif
 

@@ -27,7 +27,8 @@ func _run() -> void:
 
 	var same_size_output: HTMLViewOutput = view.create_output(Vector2i(320, 180))
 	var output: HTMLViewOutput = view.create_output(Vector2i(640, 360))
-	if same_size_output == null or not same_size_output.is_valid() or output == null or not output.is_valid():
+	var mipmapped_output: HTMLViewOutput = view.create_output(Vector2i(640, 360), true)
+	if same_size_output == null or not same_size_output.is_valid() or output == null or not output.is_valid() or mipmapped_output == null or not mipmapped_output.is_valid() or not mipmapped_output.mipmaps:
 		_fail("Could not create the secondary output.")
 		return
 	var stable_texture := output.texture
@@ -48,6 +49,13 @@ func _run() -> void:
 		return
 	if not _validate_frame(output.texture, Vector2i(640, 360), Vector2i(160, 110), Color8(32, 192, 96), "secondary initial"):
 		return
+	if not await _wait_for_output_generation(mipmapped_output, 0):
+		return
+	if not _validate_mipmapped_frame(mipmapped_output, Vector2i(640, 360), "mipmapped secondary initial"):
+		return
+	if not _validate_exact_images(output.texture, mipmapped_output.texture, "initial regular/mipmapped secondary level zero"):
+		return
+	var stable_mipmapped_texture := mipmapped_output.texture
 
 	var reference_image := output.get_texture().get_image()
 	var reference_texture := ImageTexture.create_from_image(reference_image)
@@ -68,10 +76,28 @@ func _run() -> void:
 		return
 	if not _validate_frame(output.texture, Vector2i(640, 360), Vector2i(160, 110), Color8(224, 48, 48), "secondary hover"):
 		return
+	if not await _wait_for_output_generation(mipmapped_output, output_generation):
+		return
+	if not _validate_mipmapped_frame(mipmapped_output, Vector2i(640, 360), "mipmapped secondary hover"):
+		return
+	if not _validate_exact_images(output.texture, mipmapped_output.texture, "hover regular/mipmapped secondary level zero"):
+		return
 	if not await _wait_for_matching_generation(view, same_size_output):
 		return
 	if not _validate_exact_images(view.get_texture(), same_size_output.texture, "hover same-size primary/secondary"):
 		return
+
+	for transition in range(8):
+		var previous_generation := output.generation
+		motion.position = Vector2(250, 150) if transition % 2 == 0 else Vector2(80, 55)
+		motion.global_position = motion.position
+		get_root().push_input(motion, true)
+		if not await _wait_for_output_generation(output, previous_generation):
+			return
+		if not await _wait_for_output_generation(mipmapped_output, previous_generation):
+			return
+		if not _validate_exact_images(output.texture, mipmapped_output.texture, "retained transition %d regular/mipmapped secondary level zero" % transition):
+			return
 
 	output.size = Vector2i(960, 540)
 	if not await _wait_for_output_size(output, Vector2i(960, 540)):
@@ -83,6 +109,15 @@ func _run() -> void:
 		return
 	if not await _wait_for_3d_color(material_viewport, func(color: Color) -> bool: return color.a > 0.65 and color.a < 0.75 and color.r > 0.12 and color.r < 0.22):
 		_fail("%s stable secondary Texture2D lost its straight-alpha sRGB sample after resize; center=%s." % [backend_name, last_3d_sample])
+		return
+
+	mipmapped_output.size = Vector2i(960, 540)
+	if not await _wait_for_output_size(mipmapped_output, Vector2i(960, 540)):
+		return
+	if mipmapped_output.texture != stable_mipmapped_texture or not _validate_mipmapped_frame(mipmapped_output, Vector2i(960, 540), "mipmapped secondary resized"):
+		_fail("Mipmapped secondary output did not preserve its stable texture identity and mip chain across resize.")
+		return
+	if not _validate_exact_images(output.texture, mipmapped_output.texture, "resized regular/mipmapped secondary level zero"):
 		return
 
 	output.release()
@@ -153,8 +188,31 @@ func _validate_exact_images(primary_texture: Texture2D, secondary_texture: Textu
 	if primary == null or secondary == null or primary.is_empty() or secondary.is_empty():
 		_fail("%s images could not be captured." % phase)
 		return false
-	if primary.get_size() != secondary.get_size() or primary.get_data() != secondary.get_data():
-		_fail("%s pixels differ despite identical logical and physical metrics." % phase)
+	if primary.get_size() != secondary.get_size():
+		_fail("%s image sizes differ." % phase)
+		return false
+	var level_zero_rect := Rect2i(Vector2i.ZERO, primary.get_size())
+	var primary_level_zero := primary.get_region(level_zero_rect)
+	var secondary_level_zero := secondary.get_region(level_zero_rect)
+	if primary_level_zero.get_data() != secondary_level_zero.get_data():
+		var differing_pixels := 0
+		var maximum_difference := 0.0
+		for y in range(primary.get_height()):
+			for x in range(primary.get_width()):
+				var difference := _maximum_channel_difference(primary.get_pixel(x, y), secondary.get_pixel(x, y))
+				if difference > 0.0:
+					differing_pixels += 1
+					maximum_difference = max(maximum_difference, difference)
+		if differing_pixels > 0:
+			_fail("%s pixels differ despite identical logical and physical metrics: %d pixels, maximum channel difference %.6f." % [phase, differing_pixels, maximum_difference])
+			return false
+	return true
+
+func _validate_mipmapped_frame(output: HTMLViewOutput, expected_size: Vector2i, phase: String) -> bool:
+	var texture := output.texture
+	var image := texture.get_image() if texture != null else null
+	if image == null or image.is_empty() or image.get_size() != expected_size or not image.has_mipmaps():
+		_fail("%s did not expose a complete mipmapped texture at %s." % [phase, expected_size])
 		return false
 	return true
 
@@ -179,6 +237,7 @@ func _create_3d_material_viewport(texture: Texture2D) -> SubViewport:
 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	material.albedo_texture = texture
+	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
 	var mesh := MeshInstance3D.new()
 	mesh.mesh = quad
 	mesh.material_override = material

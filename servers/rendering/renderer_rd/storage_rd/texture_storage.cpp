@@ -1369,7 +1369,10 @@ void TextureStorage::texture_drawable_initialize(RID p_texture, int p_width, int
 		rd_format.texture_type = texture.rd_type;
 		rd_format.samples = RD::TEXTURE_SAMPLES_1;
 		// The Color Attachment Usage bit here is what differentiates a DrawableTexture from a regular Texture2D
-		rd_format.usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_CAN_UPDATE_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT | RD::TEXTURE_USAGE_STORAGE_BIT;
+		rd_format.usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_CAN_UPDATE_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT;
+		if (p_format != RSE::TEXTURE_DRAWABLE_FORMAT_RGBA8_SRGB) {
+			rd_format.usage_bits |= RD::TEXTURE_USAGE_STORAGE_BIT;
+		}
 		if (texture.rd_format_srgb != RD::DATA_FORMAT_MAX) {
 			rd_format.shareable_formats.push_back(texture.rd_format);
 			rd_format.shareable_formats.push_back(texture.rd_format_srgb);
@@ -2074,31 +2077,65 @@ Vector<Ref<Image>> TextureStorage::texture_3d_get(RID p_texture) const {
 	return ret;
 }
 
-void TextureStorage::texture_drawable_generate_mipmaps(RID p_texture) {
+void TextureStorage::texture_drawable_generate_mipmaps(RID p_texture, bool p_alpha_weighted_srgb) {
 	Texture *tex = get_texture(p_texture);
+	ERR_FAIL_NULL(tex);
 	CopyEffects *copy_effects = CopyEffects::get_singleton();
 	ERR_FAIL_NULL(copy_effects);
+	ERR_FAIL_COND_MSG(p_alpha_weighted_srgb && tex->rd_format_srgb == RD::DATA_FORMAT_MAX, "Alpha-weighted sRGB mipmaps require an sRGB-capable drawable texture.");
 
 	uint32_t mipmaps = tex->mipmaps;
 	int width = tex->width;
 	int height = tex->height;
 
-	RID source = tex->rd_texture;
-	RID dest = tex->cached_rd_slices[0];
-
 	for (uint32_t m = 1; m < mipmaps; m++) {
 		width = MAX(1, width >> 1);
 		height = MAX(1, height >> 1);
-
-		source = dest;
-		dest = RD::get_singleton()->texture_create_shared_from_slice(RD::TextureView(), source, 0, m, 1, RD::TEXTURE_SLICE_2D);
-
-		if (copy_effects->get_raster_effects().has_flag(CopyEffects::RASTER_EFFECT_COPY)) {
-			copy_effects->make_mipmap_raster(source, dest, Size2i(width, height));
+		RID source;
+		RID dest;
+		if (p_alpha_weighted_srgb) {
+			RD::TextureView srgb_view;
+			srgb_view.format_override = tex->rd_format_srgb;
+			source = RD::get_singleton()->texture_create_shared_from_slice(srgb_view, tex->rd_texture, 0, m - 1, 1, RD::TEXTURE_SLICE_2D);
+			dest = RD::get_singleton()->texture_create_shared_from_slice(
+					RD::TextureView(),
+					tex->rd_texture,
+					0,
+					m,
+					1,
+					RD::TEXTURE_SLICE_2D);
 		} else {
-			copy_effects->make_mipmap(source, dest, Size2i(width, height));
+			source = RD::get_singleton()->texture_create_shared_from_slice(RD::TextureView(), tex->rd_texture, 0, m - 1, 1, RD::TEXTURE_SLICE_2D);
+			dest = RD::get_singleton()->texture_create_shared_from_slice(RD::TextureView(), tex->rd_texture, 0, m, 1, RD::TEXTURE_SLICE_2D);
 		}
+		if (p_alpha_weighted_srgb || copy_effects->get_raster_effects().has_flag(CopyEffects::RASTER_EFFECT_COPY)) {
+			copy_effects->make_mipmap_raster(source, dest, Size2i(width, height), p_alpha_weighted_srgb);
+		} else {
+			copy_effects->make_mipmap(source, dest, Size2i(width, height), p_alpha_weighted_srgb);
+		}
+		RD::get_singleton()->free_rid(source);
+		RD::get_singleton()->free_rid(dest);
 	}
+}
+
+void TextureStorage::texture_drawable_copy_level_zero(RID p_source, RID p_destination) {
+	Texture *source = get_texture(p_source);
+	Texture *destination = get_texture(p_destination);
+	ERR_FAIL_NULL(source);
+	ERR_FAIL_NULL(destination);
+	ERR_FAIL_COND_MSG(source->width != destination->width || source->height != destination->height, "Drawable level-zero copies require equal source and destination dimensions.");
+	ERR_FAIL_COND_MSG(!source->rd_texture.is_valid() || !destination->rd_texture.is_valid(), "Drawable level-zero copies require valid RenderingDevice textures.");
+	const Error error = RD::get_singleton()->texture_copy(
+			source->rd_texture,
+			destination->rd_texture,
+			Vector3(),
+			Vector3(),
+			Vector3(source->width, source->height, 1),
+			0,
+			0,
+			0,
+			0);
+	ERR_FAIL_COND_MSG(error != OK, "RenderingDevice rejected a drawable level-zero texture copy.");
 }
 
 RID TextureStorage::texture_drawable_get_default_material() const {

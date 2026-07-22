@@ -563,6 +563,7 @@ public:
 	void texture_remap_proxies(RID p_from_texture, RID p_to_texture);
 
 	virtual void texture_drawable_blit_rect(const TypedArray<RID> &p_textures, const Rect2i &p_rect, RID p_material, const Color &p_modulate, const TypedArray<RID> &p_source_textures, int p_to_mipmap) override;
+	virtual void texture_drawable_copy_level_zero(RID p_source, RID p_destination) override;
 
 	Ref<Image> texture_2d_placeholder;
 	Vector<Ref<Image>> texture_2d_array_placeholder;
@@ -578,7 +579,7 @@ public:
 	virtual Ref<Image> texture_2d_layer_get(RID p_texture, int p_layer) const override;
 	virtual Vector<Ref<Image>> texture_3d_get(RID p_texture) const override;
 
-	virtual void texture_drawable_generate_mipmaps(RID p_texture) override;
+	virtual void texture_drawable_generate_mipmaps(RID p_texture, bool p_alpha_weighted_srgb = false) override;
 	virtual RID texture_drawable_get_default_material() const override;
 
 	virtual void texture_replace(RID p_texture, RID p_by_texture) override;

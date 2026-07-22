@@ -201,7 +201,7 @@ public:
 	uint64_t get_generation() const;
 	void set_logical_size(const Size2i &p_logical_size);
 	Size2i get_logical_size() const;
-	Ref<HTMLViewOutput> create_output(const Size2i &p_size);
+	Ref<HTMLViewOutput> create_output(const Size2i &p_size, bool p_mipmaps = false);
 	Error _resize_output(uint64_t p_output_id, const Size2i &p_size);
 	void _release_output(uint64_t p_output_id);
 	Ref<Texture2D> _get_output_texture(uint64_t p_output_id) const;

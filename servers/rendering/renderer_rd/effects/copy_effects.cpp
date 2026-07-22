@@ -54,6 +54,7 @@ CopyEffects::CopyEffects(BitField<RasterEffects> p_raster_effects) {
 
 		Vector<String> blur_modes;
 		blur_modes.push_back("\n#define MODE_MIPMAP\n"); // BLUR_MIPMAP
+		blur_modes.push_back("\n#define MODE_MIPMAP\n#define MODE_ALPHA_WEIGHTED_SRGB_MIPMAP\n");
 		blur_modes.push_back("\n#define MODE_GAUSSIAN_BLUR\n"); // BLUR_MODE_GAUSSIAN_BLUR
 		blur_modes.push_back("\n#define MODE_GLOW_GATHER\n"); // BLUR_MODE_GAUSSIAN_GLOW_GATHER
 		blur_modes.push_back("\n#define MODE_GLOW_DOWNSAMPLE\n"); // BLUR_MODE_GAUSSIAN_GLOW_DOWNSAMPLE
@@ -97,6 +98,7 @@ CopyEffects::CopyEffects(BitField<RasterEffects> p_raster_effects) {
 		copy_modes.push_back("\n#define MODE_SET_COLOR\n");
 		copy_modes.push_back("\n#define MODE_SET_COLOR\n#define DST_IMAGE_8BIT\n");
 		copy_modes.push_back("\n#define MODE_MIPMAP\n");
+		copy_modes.push_back("\n#define MODE_MIPMAP\n#define MODE_ALPHA_WEIGHTED_SRGB_MIPMAP\n");
 		copy_modes.push_back("\n#define MODE_LINEARIZE_DEPTH_COPY\n");
 		copy_modes.push_back("\n#define MODE_OCTMAP_TO_PANORAMA\n");
 		copy_modes.push_back("\n#define MODE_OCTMAP_ARRAY_TO_PANORAMA\n");
@@ -945,7 +947,7 @@ void CopyEffects::gaussian_glow_upsample_raster(RID p_source_rd_texture, RID p_d
 	RD::get_singleton()->draw_list_end();
 }
 
-void CopyEffects::make_mipmap(RID p_source_rd_texture, RID p_dest_texture, const Size2i &p_size) {
+void CopyEffects::make_mipmap(RID p_source_rd_texture, RID p_dest_texture, const Size2i &p_size, bool p_alpha_weighted_srgb) {
 	ERR_FAIL_COND_MSG(raster_effects.has_flag(RASTER_EFFECT_COPY), "Can't use the compute version of the make_mipmap shader.");
 
 	UniformSetCacheRD *uniform_set_cache = UniformSetCacheRD::get_singleton();
@@ -966,7 +968,7 @@ void CopyEffects::make_mipmap(RID p_source_rd_texture, RID p_dest_texture, const
 	RD::Uniform u_source_rd_texture(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ default_sampler, p_source_rd_texture }));
 	RD::Uniform u_dest_texture(RD::UNIFORM_TYPE_IMAGE, 0, p_dest_texture);
 
-	CopyMode mode = COPY_MODE_MIPMAP;
+	CopyMode mode = p_alpha_weighted_srgb ? COPY_MODE_ALPHA_WEIGHTED_SRGB_MIPMAP : COPY_MODE_MIPMAP;
 	RID shader = copy.shader.version_get_shader(copy.shader_version, mode);
 	ERR_FAIL_COND(shader.is_null());
 
@@ -979,7 +981,7 @@ void CopyEffects::make_mipmap(RID p_source_rd_texture, RID p_dest_texture, const
 	RD::get_singleton()->compute_list_end();
 }
 
-void CopyEffects::make_mipmap_raster(RID p_source_rd_texture, RID p_dest_texture, const Size2i &p_size) {
+void CopyEffects::make_mipmap_raster(RID p_source_rd_texture, RID p_dest_texture, const Size2i &p_size, bool p_alpha_weighted_srgb) {
 	ERR_FAIL_COND_MSG(!raster_effects.has_flag(RASTER_EFFECT_COPY), "Can't use the raster version of mipmap.");
 
 	RID dest_framebuffer = FramebufferCacheRD::get_singleton()->get_cache(p_dest_texture);
@@ -991,7 +993,7 @@ void CopyEffects::make_mipmap_raster(RID p_source_rd_texture, RID p_dest_texture
 
 	memset(&blur_raster.push_constant, 0, sizeof(BlurRasterPushConstant));
 
-	BlurRasterMode mode = BLUR_MIPMAP;
+	BlurRasterMode mode = p_alpha_weighted_srgb ? BLUR_ALPHA_WEIGHTED_SRGB_MIPMAP : BLUR_MIPMAP;
 
 	blur_raster.push_constant.dest_pixel_size[0] = 1.0 / float(p_size.x);
 	blur_raster.push_constant.dest_pixel_size[1] = 1.0 / float(p_size.y);
