@@ -1310,13 +1310,6 @@ void Window::_update_window_size() {
 void Window::_update_viewport_size() {
 	//update the viewport part
 
-#ifndef XR_DISABLED
-	// If `use_xr` set, we should skip this logic.
-	if (is_using_xr()) {
-		return;
-	}
-#endif // XR_DISABLED
-
 	Size2i final_size;
 	Size2 final_size_override;
 	Rect2i attach_to_screen_rect(Point2i(), size);
@@ -1434,6 +1427,21 @@ void Window::_update_viewport_size() {
 	}
 
 	bool allocate = is_inside_tree() && visible && (window_id != DisplayServerEnums::INVALID_WINDOW_ID || embedder != nullptr);
+	// XR owns the render-target dimensions, but desktop Controls and input still
+	// use the Window's ordinary content-scale contract.
+	desktop_stretch_transform = Transform2D();
+	if (is_size_2d_override_stretch_enabled() && final_size_override.x > 0.0 && final_size_override.y > 0.0) {
+		desktop_stretch_transform.scale(Size2(final_size) / final_size_override);
+	}
+
+#ifndef XR_DISABLED
+	if (is_using_xr()) {
+		_set_size(_get_size(), _get_view_count(), final_size_override, _is_size_allocated());
+		notification(NOTIFICATION_WM_SIZE_CHANGED);
+		return;
+	}
+#endif // XR_DISABLED
+
 	_set_size(final_size, 1, final_size_override, allocate);
 
 	if (window_id != DisplayServerEnums::INVALID_WINDOW_ID) {
@@ -1452,6 +1460,10 @@ void Window::_update_viewport_size() {
 		RS::get_singleton()->viewport_set_size(get_viewport_rid(), s.width, s.height, 1);
 		embedder->_sub_window_update(this);
 	}
+}
+
+void Window::_use_xr_changed() {
+	_update_viewport_size();
 }
 
 void Window::_update_window_callbacks() {
@@ -3253,6 +3265,17 @@ Transform2D Window::get_final_transform() const {
 	return window_transform * stretch_transform * global_canvas_transform;
 }
 
+Transform2D Window::get_input_transform() const {
+	ERR_READ_THREAD_GUARD_V(Transform2D());
+#ifndef XR_DISABLED
+	if (is_using_xr()) {
+		// Do not interpret desktop-window coordinates through the per-eye XR scale.
+		return window_transform * desktop_stretch_transform * global_canvas_transform;
+	}
+#endif
+	return get_final_transform();
+}
+
 Transform2D Window::get_screen_transform_internal(bool p_absolute_position) const {
 	ERR_READ_THREAD_GUARD_V(Transform2D());
 	Transform2D embedder_transform;
@@ -3262,7 +3285,7 @@ Transform2D Window::get_screen_transform_internal(bool p_absolute_position) cons
 	} else if (p_absolute_position) {
 		embedder_transform.translate_local(get_position());
 	}
-	return embedder_transform * get_final_transform();
+	return embedder_transform * get_input_transform();
 }
 
 Transform2D Window::get_popup_base_transform_native() const {

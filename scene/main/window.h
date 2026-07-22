@@ -181,6 +181,7 @@ private:
 	bool _try_parent_dialog(Node *p_from_node);
 
 	Size2i max_size_used;
+	Transform2D desktop_stretch_transform;
 
 	Rect2i nonclient_area;
 
@@ -188,6 +189,7 @@ private:
 	Size2i _clamp_window_size(const Size2i &p_size);
 	void _validate_limit_size();
 	void _update_viewport_size();
+	virtual void _use_xr_changed() override;
 	void _update_window_size();
 
 	void _propagate_window_notification(Node *p_node, int p_notification);
@@ -545,6 +547,7 @@ public:
 	int get_theme_default_font_size() const;
 
 	virtual Transform2D get_final_transform() const override;
+	virtual Transform2D get_input_transform() const override;
 	virtual Transform2D get_screen_transform_internal(bool p_absolute_position = false) const override;
 	virtual Transform2D get_popup_base_transform() const override;
 	virtual Transform2D get_popup_base_transform_native() const override;

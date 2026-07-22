@@ -519,6 +519,7 @@ private:
 protected:
 	bool _set_size(const Size2i &p_size, const int p_view_count, const Size2 &p_size_2d_override, bool p_allocated);
 	void _check_xr_size();
+	virtual void _use_xr_changed() {}
 
 	Size2i _get_size() const;
 	Size2 _get_size_2d_override() const;
@@ -561,6 +562,7 @@ public:
 
 	Transform2D get_stretch_transform() const;
 	virtual Transform2D get_final_transform() const;
+	virtual Transform2D get_input_transform() const;
 
 	void gui_set_root_order_dirty();
 

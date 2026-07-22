@@ -1220,7 +1220,7 @@ void Viewport::_check_xr_size() {
 			Size2 xr_size = xr_interface->get_render_target_size();
 			int xr_view_count = xr_interface->get_view_count();
 
-			_set_size((Size2i)xr_size, xr_view_count, Size2i(0, 0), true);
+			_set_size((Size2i)xr_size, xr_view_count, _get_size_2d_override(), true);
 		} else {
 			// Set to default and prevent rendering for now (unless in editor, so we get a preview).
 			bool is_editor = Engine::get_singleton()->is_editor_hint();
@@ -1404,6 +1404,10 @@ Transform2D Viewport::get_final_transform() const {
 	return stretch_transform * global_canvas_transform;
 }
 
+Transform2D Viewport::get_input_transform() const {
+	return get_final_transform();
+}
+
 void Viewport::_update_canvas_items(Node *p_node) {
 	if (p_node != this) {
 		Window *w = Object::cast_to<Window>(p_node);
@@ -1480,7 +1484,7 @@ Ref<InputEvent> Viewport::_make_input_local(const Ref<InputEvent> &ev) {
 		return ev; // No transformation defined for null event
 	}
 
-	Transform2D ai = get_final_transform().affine_inverse();
+	Transform2D ai = get_input_transform().affine_inverse();
 	Ref<InputEventMouse> me = ev;
 	if (me.is_valid()) {
 		me = me->xformed_by(ai);
@@ -5046,6 +5050,7 @@ void Viewport::set_use_xr(bool p_use_xr) {
 			RSG::texture_storage->render_target_set_override(rt, RID(), RID(), RID(), RID());
 		}
 
+		_use_xr_changed();
 		notify_property_list_changed();
 	}
 }
