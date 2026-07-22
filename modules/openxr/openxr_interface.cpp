@@ -377,8 +377,8 @@ void OpenXRInterface::_load_action_map() {
 				openxr_api->interaction_profile_suggest_bindings(ip);
 
 				// And record it in our array so we can clean it up later on
-				if (interaction_profile_array.has(ip)) {
-					interaction_profile_array.push_back(ip);
+				if (!interaction_profiles.has(ip)) {
+					interaction_profiles.push_back(ip);
 				}
 			}
 		}

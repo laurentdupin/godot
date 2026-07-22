@@ -493,6 +493,10 @@ void OpenXRSpatialMarkerTrackingCapability::on_session_created(const XrSession p
 }
 
 void OpenXRSpatialMarkerTrackingCapability::on_session_destroyed() {
+	if (!spatial_marker_tracking_ext) {
+		return;
+	}
+
 	OpenXRSpatialEntityExtension *se_extension = OpenXRSpatialEntityExtension::get_singleton();
 	ERR_FAIL_NULL(se_extension);
 	XRServer *xr_server = XRServer::get_singleton();
