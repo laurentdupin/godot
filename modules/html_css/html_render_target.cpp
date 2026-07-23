@@ -177,7 +177,7 @@ void HTMLRenderTarget::_notification(int p_what) {
 		if (surface->update_compositor(timeline_time_seconds, &needs_output, &needs_begin_frame) == OK && needs_output) {
 			surface->render_now("HTMLRenderTarget");
 		}
-		frame_render_requested = needs_begin_frame;
+		frame_render_requested = needs_begin_frame || surface->is_begin_frame_requested();
 	}
 
 	set_process_internal(frame_render_requested || surface->has_pending_frame_request() || surface->has_pending_output());

@@ -546,6 +546,7 @@ void HTMLView::_notification(int p_what) {
 				frame_render_serviced_generation = servicing_request_generation;
 			}
 			frame_render_pending = needs_begin_frame
+					|| surface->is_begin_frame_requested()
 					|| frame_render_request_generation != frame_render_serviced_generation
 					|| surface->has_pending_frame_request()
 					|| surface->has_pending_output();
