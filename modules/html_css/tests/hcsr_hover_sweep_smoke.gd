@@ -7,7 +7,16 @@ const BUTTON_GAP := 12
 const BUTTON_LEFT := 20
 const BUTTON_TOP := 40
 
+var backend := HTMLView.BACKEND_D3D12
+var backend_name := "D3D12"
+
 func _initialize() -> void:
+	if "--cpu" in OS.get_cmdline_user_args():
+		backend = HTMLView.BACKEND_CPU
+		backend_name = "CPU"
+	elif "--vulkan" in OS.get_cmdline_user_args():
+		backend = HTMLView.BACKEND_VULKAN
+		backend_name = "Vulkan"
 	call_deferred("_run")
 
 func _run() -> void:
@@ -16,7 +25,7 @@ func _run() -> void:
 	get_root().add_child(root)
 
 	var view := HTMLView.new()
-	view.backend_preference = HTMLView.BACKEND_D3D12
+	view.backend_preference = backend
 	view.logical_size = Vector2i(720, 180)
 	view.size = Vector2(720, 180)
 	view.html = _fixture_html()
@@ -76,7 +85,7 @@ func _run() -> void:
 		push_error("Rapid hover published only %d primary generations for 180 pointer transitions." % published_generations)
 		quit(1)
 		return
-	print("HCSR rapid-hover sweep passed with %d published primary generations." % published_generations)
+	print("HCSR rapid-hover sweep passed on %s with %d published primary generations." % [backend_name, published_generations])
 	quit(0)
 
 func _fixture_html() -> String:
