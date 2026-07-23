@@ -58,7 +58,8 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	uint64_t latest_submitted_gpu_submission_token = 0;
 	uint64_t completed_gpu_submission_token = 0;
 	hcsr_gpu_frame_t active_gpu_frame = {};
-	// Swapped with the texture and immutable frame metadata for the same completed generation.
+	// Swapped atomically with the texture and immutable metadata for the active generation.
+	// Engine-queue-ordered frames activate at submission; private-queue frames activate at completion.
 	hcsr_hit_test_snapshot_t *active_hit_test_snapshot = nullptr;
 	void *native_gpu_texture = nullptr;
 	uint64_t native_gpu_generation = 0;
@@ -121,6 +122,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	void _schedule_deferred_gpu_submission();
 	void _poll_gpu_presentation_on_render_thread();
 	bool _record_submitted_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output);
+	bool _activate_engine_ordered_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output);
 	bool _activate_completed_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output);
 	void _ensure_gpu_texture_imported_on_render_thread();
 	void _defer_gpu_resource_release_on_render_thread(const hcsr_gpu_frame_t &p_frame);

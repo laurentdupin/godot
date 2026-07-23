@@ -711,12 +711,11 @@ Error HTMLSurfaceHCSRBackend::_apply_dom_mutation(hcsr_dom_mutation_operation_ki
 	mutation.value_utf8 = normalized_value.is_empty() ? "" : value_utf8.ptr();
 	mutation.child_index = -1;
 
-	uint64_t commit_id = 0;
-	if (hcsr_renderer_queue_dom_mutations(renderer, &mutation, 1, &commit_id) != HCSR_STATUS_OK || commit_id == 0) {
-		_record_error("HCSR could not queue a Godot DOM mutation");
+	uint8_t changed = 0;
+	if (hcsr_renderer_apply_dom_mutations(renderer, &mutation, 1, &changed) != HCSR_STATUS_OK) {
+		_record_error("HCSR could not apply a Godot DOM mutation");
 		return FAILED;
 	}
-	pending_document_commits.push_back(commit_id);
 	return OK;
 }
 
@@ -1183,6 +1182,64 @@ bool HTMLSurfaceHCSRBackend::_record_submitted_gpu_frame_on_render_thread(const 
 	return true;
 }
 
+bool HTMLSurfaceHCSRBackend::_activate_engine_ordered_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output) {
+	ERR_FAIL_COND_V(gpu_capabilities.synchronization_mode != HCSR_GPU_SYNCHRONIZATION_ENGINE_QUEUE_ORDERED, false);
+
+	PreparedGPUFrameMetadata prepared_metadata;
+	if (!_take_gpu_packet_metadata(p_output.frame_generation, prepared_metadata)) {
+		_record_error("HCSR returned an engine-ordered GPU texture without matching prepared frame metadata");
+		return false;
+	}
+	if (prepared_metadata.viewport_revision != viewport_revision.get()
+			|| prepared_metadata.physical_size != Size2i(p_output.width, p_output.height)) {
+		_release_gpu_packet_metadata(prepared_metadata);
+		gpu_follow_up_frame_requested.set();
+		return false;
+	}
+
+	if (native_gpu_texture != p_output.native_texture
+			|| native_gpu_generation != p_output.resource_generation
+			|| native_gpu_size != Size2i(p_output.width, p_output.height)) {
+		native_gpu_texture = p_output.native_texture;
+		native_gpu_generation = p_output.resource_generation;
+		native_gpu_size = Size2i(p_output.width, p_output.height);
+		gpu_texture_rid = RID();
+		_ensure_gpu_texture_imported_on_render_thread();
+	} else {
+		_ensure_gpu_texture_imported_on_render_thread();
+	}
+	if (!gpu_texture_rid.is_valid()) {
+		_release_gpu_packet_metadata(prepared_metadata);
+		return false;
+	}
+
+	hcsr_hit_test_snapshot_t *retired_snapshot = nullptr;
+	hcsr_gpu_frame_t retired_frame = {};
+	{
+		MutexLock lock(frame_metadata_mutex);
+		if (p_output.frame_generation <= active_gpu_frame_generation) {
+			_release_gpu_packet_metadata(prepared_metadata);
+			_record_error("HCSR returned a non-monotonic engine-ordered Godot GPU frame");
+			return false;
+		}
+		frame_metadata = prepared_metadata.frame_metadata;
+		active_gpu_frame_generation = p_output.frame_generation;
+		retired_frame = active_gpu_frame;
+		active_gpu_frame = p_output;
+		retired_snapshot = active_hit_test_snapshot;
+		active_hit_test_snapshot = prepared_metadata.hit_test_snapshot;
+		prepared_metadata.hit_test_snapshot = nullptr;
+	}
+	if (retired_snapshot != nullptr) {
+		hcsr_hit_test_snapshot_release(retired_snapshot);
+	}
+	if (retired_frame.native_texture != nullptr) {
+		_defer_gpu_resource_release_on_render_thread(retired_frame);
+	}
+	gpu_presentation_changed.set();
+	return true;
+}
+
 bool HTMLSurfaceHCSRBackend::_activate_completed_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output) {
 	if (p_output.native_texture == nullptr || p_output.width <= 0 || p_output.height <= 0 || p_output.render_backend != render_backend || p_output.texture_format != HCSR_GPU_TEXTURE_FORMAT_RGBA8_UNORM || p_output.premultiplied_alpha != 0 || p_output.frame_generation == 0 || p_output.submission_token == 0 || p_output.producer_completed == 0) {
 		_record_error("HCSR returned an invalid completed Godot GPU frame");
@@ -1217,6 +1274,9 @@ bool HTMLSurfaceHCSRBackend::_activate_completed_gpu_frame_on_render_thread(cons
 	}
 	for (uint64_t generation : superseded_generations) {
 		_discard_gpu_packet_metadata(generation);
+	}
+	if (gpu_capabilities.synchronization_mode == HCSR_GPU_SYNCHRONIZATION_ENGINE_QUEUE_ORDERED) {
+		return true;
 	}
 	for (const hcsr_gpu_frame_t &frame : superseded_frames) {
 		_defer_gpu_resource_release_on_render_thread(frame);
@@ -1512,6 +1572,10 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 	}
 	_update_performance_profile();
 	gpu_render_succeeded = _record_submitted_gpu_frame_on_render_thread(output);
+	if (gpu_render_succeeded
+			&& gpu_capabilities.synchronization_mode == HCSR_GPU_SYNCHRONIZATION_ENGINE_QUEUE_ORDERED) {
+		gpu_render_succeeded = _activate_engine_ordered_gpu_frame_on_render_thread(output);
+	}
 	if (_uses_async_gpu_presentation()) {
 		gpu_presentation_work_pending.set();
 	}

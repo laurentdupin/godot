@@ -1311,9 +1311,10 @@ void HTMLView::_call_bound_action(const StringName &p_action, const Dictionary &
 }
 
 void HTMLView::_queue_frame_render() {
+	const bool was_pending = frame_render_pending;
 	frame_render_request_generation++;
 	frame_render_pending = true;
-	if (frame_render_delay == 0) {
+	if (!was_pending && frame_render_delay == 0) {
 		frame_render_delay = 1;
 	}
 	if (is_inside_tree()) {
