@@ -96,5 +96,55 @@ func _run() -> void:
 		push_error("%s secondary-output hover transition published only %d distinct colors: %s" % [backend_name, secondary_distinct_colors, secondary_colors])
 		quit(1)
 		return
-	print("HCSR hover transition cadence passed on %s with %d primary generations and %d secondary colors." % [backend_name, generations.size(), secondary_distinct_colors])
+	if colors.is_empty() or secondary_colors.is_empty() \
+			or _maximum_channel_difference(colors[-1], Color8(110, 110, 110)) > 0.04 \
+			or _maximum_channel_difference(secondary_colors[-1], Color8(110, 110, 110)) > 0.04:
+		push_error("%s hover transition did not reach its authored primary/secondary enter endpoint." % backend_name)
+		quit(1)
+		return
+
+	get_root().push_input(outside_motion, true)
+	Input.warp_mouse(Vector2(300, 160))
+	var leave_colors: Array[Color] = []
+	var leave_secondary_colors: Array[Color] = []
+	started = Time.get_ticks_msec()
+	next_sample = started
+	observed_frames = 0
+	while Time.get_ticks_msec() - started < 350 and observed_frames < 240:
+		await process_frame
+		observed_frames += 1
+		if Time.get_ticks_msec() < next_sample:
+			continue
+		if view.get_texture() != null:
+			var leave_primary_image := view.get_texture().get_image()
+			if leave_primary_image != null:
+				leave_colors.append(leave_primary_image.get_pixel(60, 60))
+		if secondary_output.texture != null and secondary_output.generation > 0:
+			var leave_secondary_image := secondary_output.texture.get_image()
+			if leave_secondary_image != null:
+				leave_secondary_colors.append(leave_secondary_image.get_pixel(120, 120))
+		next_sample += 20
+	if _count_distinct_colors(leave_colors) < 6 or _count_distinct_colors(leave_secondary_colors) < 6:
+		push_error("%s hover leave transition did not publish enough distinct primary/secondary frames." % backend_name)
+		quit(1)
+		return
+	if leave_colors.is_empty() or leave_secondary_colors.is_empty() \
+			or _maximum_channel_difference(leave_colors[-1], Color8(50, 50, 50)) > 0.04 \
+			or _maximum_channel_difference(leave_secondary_colors[-1], Color8(50, 50, 50)) > 0.04:
+		push_error("%s hover leave transition did not return primary/secondary output to its authored endpoint." % backend_name)
+		quit(1)
+		return
+	print("HCSR hover enter/leave cadence passed on %s with %d primary generations." % [backend_name, generations.size()])
 	quit(0)
+
+func _count_distinct_colors(colors: Array[Color]) -> int:
+	var count := 0
+	var previous := Color(-1, -1, -1, -1)
+	for color in colors:
+		if previous.r < 0.0 or not color.is_equal_approx(previous):
+			count += 1
+			previous = color
+	return count
+
+func _maximum_channel_difference(left: Color, right: Color) -> float:
+	return max(abs(left.r - right.r), abs(left.g - right.g), abs(left.b - right.b), abs(left.a - right.a))
