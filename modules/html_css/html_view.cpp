@@ -347,6 +347,8 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_backdrop_filter_regions"), &HTMLView::get_backdrop_filter_regions);
 	ClassDB::bind_method(D_METHOD("get_texture"), &HTMLView::get_texture);
 	ClassDB::bind_method(D_METHOD("get_generation"), &HTMLView::get_generation);
+	ClassDB::bind_method(D_METHOD("get_host_frame_number"), &HTMLView::get_host_frame_number);
+	ClassDB::bind_method(D_METHOD("get_timeline_time_seconds"), &HTMLView::get_timeline_time_seconds);
 	ClassDB::bind_method(D_METHOD("set_logical_size", "logical_size"), &HTMLView::set_logical_size);
 	ClassDB::bind_method(D_METHOD("get_logical_size"), &HTMLView::get_logical_size);
 	ClassDB::bind_method(D_METHOD("create_output", "size", "mipmaps"), &HTMLView::create_output, DEFVAL(false));
@@ -898,6 +900,14 @@ bool HTMLView::_is_output_aspect_compatible(const Size2i &p_logical_size, const 
 
 uint64_t HTMLView::get_generation() const {
 	return surface->get_active_frame_generation();
+}
+
+uint64_t HTMLView::get_host_frame_number() const {
+	return surface->get_frame_metadata().host_frame_number;
+}
+
+double HTMLView::get_timeline_time_seconds() const {
+	return surface->get_frame_metadata().timeline_time_seconds;
 }
 
 Ref<HTMLViewOutput> HTMLView::create_output(const Size2i &p_size, bool p_mipmaps) {

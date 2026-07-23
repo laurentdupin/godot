@@ -200,6 +200,8 @@ public:
 
 	Ref<Texture2D> get_texture() const;
 	uint64_t get_generation() const;
+	uint64_t get_host_frame_number() const;
+	double get_timeline_time_seconds() const;
 	void set_logical_size(const Size2i &p_logical_size);
 	Size2i get_logical_size() const;
 	Ref<HTMLViewOutput> create_output(const Size2i &p_size, bool p_mipmaps = false);

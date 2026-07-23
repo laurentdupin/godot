@@ -201,6 +201,8 @@ struct HTMLFrameMetadata {
 	Size2i physical_size;
 	float device_scale_factor = 1.0f;
 	uint64_t generation = 0;
+	uint64_t host_frame_number = 0;
+	double timeline_time_seconds = 0.0;
 	Vector<HTMLElementHit> hits;
 	Vector<HTMLBackdropFilterRegion> backdrop_filter_regions;
 

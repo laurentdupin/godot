@@ -8,6 +8,7 @@
 #include "../bridge/html_asset_provider.h"
 
 #include "core/config/project_settings.h"
+#include "core/config/engine.h"
 #include "core/math/math_funcs.h"
 #include "core/object/callable_mp.h"
 #include "servers/rendering/rendering_device.h"
@@ -574,6 +575,8 @@ bool HTMLSurfaceHCSRBackend::_read_gpu_packet_metadata(hcsr_gpu_frame_packet_t *
 	r_metadata.frame_metadata.physical_size = r_metadata.physical_size;
 	r_metadata.frame_metadata.device_scale_factor = r_metadata.device_scale_factor;
 	r_metadata.frame_metadata.generation = source.frame_generation;
+	r_metadata.frame_metadata.host_frame_number = source.host_frame_number;
+	r_metadata.frame_metadata.timeline_time_seconds = source.timeline_time_seconds;
 	r_metadata.viewport_revision = viewport_revision.get();
 	if (r_metadata.css_viewport_size != size
 			|| r_metadata.physical_size != physical_size
@@ -620,6 +623,20 @@ bool HTMLSurfaceHCSRBackend::_read_gpu_packet_metadata(hcsr_gpu_frame_packet_t *
 	if (hcsr_gpu_frame_packet_retain_hit_test_snapshot(p_packet, &r_metadata.hit_test_snapshot) != HCSR_STATUS_OK || r_metadata.hit_test_snapshot == nullptr) {
 		_release_gpu_packet_metadata(r_metadata);
 		_record_error("HCSR could not provide the GPU packet hit-test snapshot");
+		return false;
+	}
+	return true;
+}
+
+bool HTMLSurfaceHCSRBackend::_set_host_frame_context() {
+	hcsr_host_frame_context_t context = {};
+	context.struct_size = sizeof(context);
+	// HCSR reserves zero for hosts without frame identity. Godot's process-frame
+	// counter begins at zero, so publish it as a one-based opaque identity.
+	context.host_frame_number = Engine::get_singleton() != nullptr ? Engine::get_singleton()->get_process_frames() + 1 : 0;
+	context.timeline_time_seconds = timeline_time_seconds;
+	if (hcsr_renderer_set_host_frame_context(renderer, &context) != HCSR_STATUS_OK) {
+		_record_error("HCSR rejected the Godot host-frame context");
 		return false;
 	}
 	return true;
@@ -1714,7 +1731,7 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 }
 
 bool HTMLSurfaceHCSRBackend::_render_frame() {
-	if (!_sync_viewport() || !_sync_document() || _set_input() != OK) {
+	if (!_sync_viewport() || !_sync_document() || _set_input() != OK || !_set_host_frame_context()) {
 		return false;
 	}
 	if (render_backend != HCSR_RENDER_BACKEND_CPU) {
@@ -1781,6 +1798,15 @@ void HTMLSurfaceHCSRBackend::_read_backdrop_filter_regions() {
 	next_metadata.physical_size = physical_size;
 	next_metadata.device_scale_factor = device_scale_factor;
 	next_metadata.generation = active_gpu_frame_generation;
+	if (renderer != nullptr) {
+		hcsr_frame_evidence_t evidence = {};
+		evidence.struct_size = sizeof(evidence);
+		if (hcsr_renderer_get_frame_evidence(renderer, &evidence) == HCSR_STATUS_OK
+				&& evidence.logical_frame_generation == next_metadata.generation) {
+			next_metadata.host_frame_number = evidence.host_frame_number;
+			next_metadata.timeline_time_seconds = evidence.timeline_time_seconds;
+		}
+	}
 	if (!backdrop_filter_enabled || renderer == nullptr) {
 		MutexLock lock(frame_metadata_mutex);
 		frame_metadata = next_metadata;
