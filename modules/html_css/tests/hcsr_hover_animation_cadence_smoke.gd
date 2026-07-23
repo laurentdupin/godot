@@ -22,6 +22,7 @@ func _run() -> void:
 	view.size = Vector2(320, 180)
 	view.html = "<html><head><style>html,body{margin:0;background:#101010}.card{position:absolute;left:40px;top:30px;width:180px;height:100px;background:rgb(50,50,50);border:4px solid rgb(80,80,80);transition:background-color .2s,border-color .2s,transform .2s}.card:hover{background:rgb(110,110,110);border-color:rgb(160,160,160);transform:scale(1.02)}</style></head><body><button class='card'>Hover</button></body></html>"
 	root.add_child(view)
+	var secondary_output := view.create_output(Vector2i(640, 360))
 	print("HCSR cadence fixture waiting for initial frame on %s." % backend_name)
 	for _frame in range(240):
 		await process_frame
@@ -46,6 +47,7 @@ func _run() -> void:
 	Input.warp_mouse(Vector2(100, 80))
 	var generations: Array[int] = []
 	var colors: Array[Color] = []
+	var secondary_colors: Array[Color] = []
 	var started := Time.get_ticks_msec()
 	var next_sample := started
 	var last_generation := -1
@@ -55,6 +57,8 @@ func _run() -> void:
 		observed_frames += 1
 		if Time.get_ticks_msec() >= next_sample and view.get_texture() != null:
 			colors.append(view.get_texture().get_image().get_pixel(60, 60))
+			if secondary_output.texture != null:
+				secondary_colors.append(secondary_output.texture.get_image().get_pixel(120, 120))
 			next_sample += 20
 		if view.get_generation() == last_generation or view.get_texture() == null:
 			continue
@@ -70,5 +74,15 @@ func _run() -> void:
 		push_error("%s hover transition published only %d distinct colors: %s" % [backend_name, distinct_colors, colors])
 		quit(1)
 		return
-	print("HCSR hover transition cadence passed on %s with %d generations." % [backend_name, generations.size()])
+	var secondary_distinct_colors := 0
+	previous = Color(-1, -1, -1, -1)
+	for color in secondary_colors:
+		if previous.r < 0.0 or not color.is_equal_approx(previous):
+			secondary_distinct_colors += 1
+			previous = color
+	if secondary_distinct_colors < 6:
+		push_error("%s secondary-output hover transition published only %d distinct colors: %s" % [backend_name, secondary_distinct_colors, secondary_colors])
+		quit(1)
+		return
+	print("HCSR hover transition cadence passed on %s with %d primary generations and %d secondary colors." % [backend_name, generations.size(), secondary_distinct_colors])
 	quit(0)
