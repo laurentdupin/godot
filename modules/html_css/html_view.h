@@ -93,6 +93,8 @@ private:
 	uint64_t frame_render_serviced_generation = 0;
 	uint64_t input_trace_sequence = 0;
 	uint64_t pending_input_trace_sequence = 0;
+	uint64_t pending_visual_input_usec = 0;
+	uint64_t pending_visual_input_after_generation = 0;
 	ColorRect *backdrop_filter_rect = nullptr;
 	Viewport *viewport_size_changed_viewport = nullptr;
 	Ref<Shader> backdrop_filter_shader;
@@ -104,6 +106,7 @@ private:
 	void _surface_changed();
 	void _surface_frame_queued(uint64_t p_generation);
 	void _surface_frame_activated(uint64_t p_generation);
+	void _note_visual_input();
 	void _connect_viewport_size_changed();
 	void _disconnect_viewport_size_changed();
 	void _viewport_size_changed();

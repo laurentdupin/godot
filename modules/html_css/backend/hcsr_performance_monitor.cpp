@@ -11,6 +11,8 @@
 Mutex HCSRPerformanceMonitor::mutex;
 HashMap<uint64_t, hcsr_performance_profile_t> HCSRPerformanceMonitor::profiles;
 Vector<hcsr_performance_profile_t> HCSRPerformanceMonitor::pending_profiler_profiles;
+Vector<double> HCSRPerformanceMonitor::pending_input_to_visible_milliseconds;
+double HCSRPerformanceMonitor::latest_input_to_visible_milliseconds = 0.0;
 
 struct HCSRMonitorDefinition {
 	const char *name;
@@ -43,6 +45,15 @@ void HCSRPerformanceMonitor::initialize() {
 		{ "HCSR/Paint Chunks Reused", MONITOR_PAINT_CHUNKS_REUSED, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Paint Chunks Rebuilt", MONITOR_PAINT_CHUNKS_REBUILT, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Updated Pixels", MONITOR_UPDATED_PIXELS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Input To Visible Time", MONITOR_INPUT_TO_VISIBLE_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/Resolved Updates", MONITOR_RESOLVED_UPDATES, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Draw Batches", MONITOR_DRAW_BATCHES, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Clear Operations", MONITOR_CLEAR_OPERATIONS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Copy Operations", MONITOR_COPY_OPERATIONS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Resolved Copied Bytes", MONITOR_RESOLVED_COPIED_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Executed Display Commands", MONITOR_EXECUTED_DISPLAY_COMMANDS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Executed Glyphs", MONITOR_EXECUTED_GLYPHS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/GPU Dispatches", MONITOR_GPU_DISPATCHES, Performance::MONITOR_TYPE_QUANTITY },
 	};
 
 	for (const HCSRMonitorDefinition &definition : definitions) {
@@ -75,6 +86,15 @@ void HCSRPerformanceMonitor::finalize() {
 			"HCSR/Paint Chunks Reused",
 			"HCSR/Paint Chunks Rebuilt",
 			"HCSR/Updated Pixels",
+			"HCSR/Input To Visible Time",
+			"HCSR/Resolved Updates",
+			"HCSR/Draw Batches",
+			"HCSR/Clear Operations",
+			"HCSR/Copy Operations",
+			"HCSR/Resolved Copied Bytes",
+			"HCSR/Executed Display Commands",
+			"HCSR/Executed Glyphs",
+			"HCSR/GPU Dispatches",
 		};
 		for (const char *monitor_name : monitor_names) {
 			const StringName name(monitor_name);
@@ -87,6 +107,14 @@ void HCSRPerformanceMonitor::finalize() {
 	MutexLock lock(mutex);
 	profiles.clear();
 	pending_profiler_profiles.clear();
+	pending_input_to_visible_milliseconds.clear();
+	latest_input_to_visible_milliseconds = 0.0;
+}
+
+void HCSRPerformanceMonitor::record_input_to_visible(double p_milliseconds) {
+	MutexLock lock(mutex);
+	latest_input_to_visible_milliseconds = p_milliseconds;
+	pending_input_to_visible_milliseconds.push_back(p_milliseconds);
 }
 
 void HCSRPerformanceMonitor::update(uint64_t p_instance_id, const hcsr_performance_profile_t &p_profile) {
@@ -101,16 +129,20 @@ void HCSRPerformanceMonitor::publish_frame_data() {
 	if (!EngineDebugger::is_profiling("servers")) {
 		MutexLock lock(mutex);
 		pending_profiler_profiles.clear();
+		pending_input_to_visible_milliseconds.clear();
 		return;
 	}
 
 	Vector<hcsr_performance_profile_t> frame_profiles;
+	Vector<double> frame_input_to_visible_milliseconds;
 	{
 		MutexLock lock(mutex);
 		frame_profiles = pending_profiler_profiles;
 		pending_profiler_profiles.clear();
+		frame_input_to_visible_milliseconds = pending_input_to_visible_milliseconds;
+		pending_input_to_visible_milliseconds.clear();
 	}
-	if (frame_profiles.is_empty()) {
+	if (frame_profiles.is_empty() && frame_input_to_visible_milliseconds.is_empty()) {
 		return;
 	}
 
@@ -170,6 +202,12 @@ void HCSRPerformanceMonitor::publish_frame_data() {
 	values.push_back(frame_profile.retained_checkpoint_restore_milliseconds / 1000.0);
 	values.push_back("native_unclassified");
 	values.push_back(unclassified_native_milliseconds / 1000.0);
+	double input_to_visible_milliseconds = 0.0;
+	for (double sample : frame_input_to_visible_milliseconds) {
+		input_to_visible_milliseconds = MAX(input_to_visible_milliseconds, sample);
+	}
+	values.push_back("input_to_visible");
+	values.push_back(input_to_visible_milliseconds / 1000.0);
 	EngineDebugger::profiler_add_frame_data("servers", values);
 }
 
@@ -237,6 +275,33 @@ double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
 				break;
 			case MONITOR_UPDATED_PIXELS:
 				value += profile.surface_updated_pixel_area;
+				break;
+			case MONITOR_INPUT_TO_VISIBLE_TIME:
+				value = latest_input_to_visible_milliseconds / 1000.0;
+				break;
+			case MONITOR_RESOLVED_UPDATES:
+				value += profile.resolved_update_count;
+				break;
+			case MONITOR_DRAW_BATCHES:
+				value += profile.draw_batch_count;
+				break;
+			case MONITOR_CLEAR_OPERATIONS:
+				value += profile.clear_operation_count;
+				break;
+			case MONITOR_COPY_OPERATIONS:
+				value += profile.copy_operation_count;
+				break;
+			case MONITOR_RESOLVED_COPIED_BYTES:
+				value += profile.resolved_copied_bytes;
+				break;
+			case MONITOR_EXECUTED_DISPLAY_COMMANDS:
+				value += profile.executed_display_command_count;
+				break;
+			case MONITOR_EXECUTED_GLYPHS:
+				value += profile.executed_glyph_count;
+				break;
+			case MONITOR_GPU_DISPATCHES:
+				value += profile.gpu_dispatch_count;
 				break;
 		}
 	}

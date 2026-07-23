@@ -31,6 +31,7 @@
 #include "html_view.h"
 
 #include "bridge/html_activation_engine.h"
+#include "backend/hcsr_performance_monitor.h"
 
 #include "core/input/input_event.h"
 #include "core/math/math_funcs.h"
@@ -603,7 +604,23 @@ void HTMLView::_surface_frame_queued(uint64_t p_generation) {
 }
 
 void HTMLView::_surface_frame_activated(uint64_t p_generation) {
+	if (pending_visual_input_usec != 0 && p_generation > pending_visual_input_after_generation) {
+		const uint64_t now_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
+		if (now_usec >= pending_visual_input_usec) {
+			HCSRPerformanceMonitor::record_input_to_visible((now_usec - pending_visual_input_usec) / 1000.0);
+		}
+		pending_visual_input_usec = 0;
+		pending_visual_input_after_generation = 0;
+	}
 	emit_signal(SNAME("frame_activated"), p_generation);
+}
+
+void HTMLView::_note_visual_input() {
+	if (pending_visual_input_usec != 0 || OS::get_singleton() == nullptr) {
+		return;
+	}
+	pending_visual_input_usec = OS::get_singleton()->get_ticks_usec();
+	pending_visual_input_after_generation = surface.is_valid() ? get_generation() : 0;
 }
 
 void HTMLView::_connect_viewport_size_changed() {
@@ -1225,6 +1242,7 @@ void HTMLView::_cancel_pointer_interaction(const StringName &p_phase) {
 		pointer_press_active = false;
 		pointer_press_button = MouseButton::NONE;
 		pointer_press_hit = HTMLElementHit();
+		_note_visual_input();
 		_queue_frame_render();
 		return;
 	}
@@ -1705,6 +1723,7 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 		if (scrollbar_interaction_active) {
 			bool consumed = false;
 			if (surface->update_scrollbar_interaction(html_position, consumed) == OK && consumed) {
+				_note_visual_input();
 				_queue_frame_render();
 			}
 			accept_event();
@@ -1714,6 +1733,7 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 		if (surface->mouse_move(html_position, _modifiers_from_event(mm), visual_state_changed) == OK) {
 			_drain_surface_pointer_events();
 			if (visual_state_changed) {
+				_note_visual_input();
 				_queue_frame_render();
 			}
 		}
@@ -1749,6 +1769,7 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 		if (!wheel_delta.is_zero_approx()) {
 			if (mb->is_pressed()) {
 				if (surface->wheel(html_position, wheel_delta) == OK) {
+					_note_visual_input();
 					_queue_frame_render();
 					html_view_input_trace(vformat("wheel accepted local=%s html=%s delta=%s button=%d", mb->get_position(), html_position, wheel_delta, (int)button_index));
 				} else {
@@ -1778,6 +1799,7 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 					pointer_press_active = false;
 					pointer_press_button = MouseButton::NONE;
 					pointer_press_hit = HTMLElementHit();
+					_note_visual_input();
 					_queue_frame_render();
 					accept_event();
 					return;
@@ -1820,6 +1842,7 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 			bool consumed = false;
 			surface->end_scrollbar_interaction(consumed);
 			scrollbar_interaction_active = false;
+			_note_visual_input();
 			_queue_frame_render();
 			accept_event();
 			return;
