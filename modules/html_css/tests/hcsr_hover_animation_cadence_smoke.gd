@@ -32,6 +32,14 @@ func _run() -> void:
 		push_error("%s cadence fixture did not produce an initial generation." % backend_name)
 		quit(1)
 		return
+	for _frame in range(240):
+		await process_frame
+		if secondary_output.generation > 0:
+			break
+	if secondary_output.generation <= 0:
+		push_error("%s cadence fixture did not publish its initial secondary output." % backend_name)
+		quit(1)
+		return
 	print("HCSR cadence fixture dispatching hover at generation %d." % view.get_generation())
 	await process_frame
 	var outside_motion := InputEventMouseMotion.new()
@@ -56,9 +64,13 @@ func _run() -> void:
 		await process_frame
 		observed_frames += 1
 		if Time.get_ticks_msec() >= next_sample and view.get_texture() != null:
-			colors.append(view.get_texture().get_image().get_pixel(60, 60))
-			if secondary_output.texture != null:
-				secondary_colors.append(secondary_output.texture.get_image().get_pixel(120, 120))
+			var primary_image := view.get_texture().get_image()
+			if primary_image != null:
+				colors.append(primary_image.get_pixel(60, 60))
+			if secondary_output.texture != null and secondary_output.generation > 0:
+				var secondary_image := secondary_output.texture.get_image()
+				if secondary_image != null:
+					secondary_colors.append(secondary_image.get_pixel(120, 120))
 			next_sample += 20
 		if view.get_generation() == last_generation or view.get_texture() == null:
 			continue
