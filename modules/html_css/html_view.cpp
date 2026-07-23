@@ -874,7 +874,7 @@ void HTMLView::set_logical_size(const Size2i &p_logical_size) {
 	ERR_FAIL_COND_MSG(!outputs.is_empty() && (p_logical_size.x <= 0 || p_logical_size.y <= 0), "HTMLView logical_size must remain explicit while secondary outputs exist.");
 	for (const KeyValue<uint64_t, Ref<HTMLViewOutput>> &entry : outputs) {
 		const Size2i output_size = entry.value->get_size();
-		ERR_FAIL_COND_MSG((int64_t)output_size.x * p_logical_size.y != (int64_t)output_size.y * p_logical_size.x, "HTMLView logical_size cannot change to a different aspect ratio while secondary outputs exist.");
+		ERR_FAIL_COND_MSG(!_is_output_aspect_compatible(p_logical_size, output_size), "HTMLView logical_size cannot change to a different aspect ratio while secondary outputs exist.");
 	}
 	logical_size = p_logical_size;
 	if (is_inside_tree() && get_size().x > 0.0f && get_size().y > 0.0f) {
@@ -886,6 +886,15 @@ Size2i HTMLView::get_logical_size() const {
 	return _get_target_viewport_size();
 }
 
+bool HTMLView::_is_output_aspect_compatible(const Size2i &p_logical_size, const Size2i &p_output_size) {
+	if (p_logical_size.x <= 0 || p_logical_size.y <= 0 || p_output_size.x <= 0 || p_output_size.y <= 0) {
+		return false;
+	}
+	const int64_t rounded_width = ((int64_t)p_output_size.y * p_logical_size.x + p_logical_size.y / 2) / p_logical_size.y;
+	const int64_t rounded_height = ((int64_t)p_output_size.x * p_logical_size.y + p_logical_size.x / 2) / p_logical_size.x;
+	return p_output_size.x == rounded_width || p_output_size.y == rounded_height;
+}
+
 uint64_t HTMLView::get_generation() const {
 	return surface->get_active_frame_generation();
 }
@@ -894,9 +903,7 @@ Ref<HTMLViewOutput> HTMLView::create_output(const Size2i &p_size, bool p_mipmaps
 	ERR_FAIL_COND_V_MSG(p_size.x <= 0 || p_size.y <= 0, Ref<HTMLViewOutput>(), "HTMLView output dimensions must be positive.");
 	ERR_FAIL_COND_V_MSG(logical_size.x <= 0 || logical_size.y <= 0, Ref<HTMLViewOutput>(), "Set HTMLView.logical_size explicitly before creating a secondary output.");
 	const Size2i current_logical_size = _get_target_viewport_size();
-	const int64_t aspect_cross_a = (int64_t)p_size.x * current_logical_size.y;
-	const int64_t aspect_cross_b = (int64_t)p_size.y * current_logical_size.x;
-	ERR_FAIL_COND_V_MSG(aspect_cross_a != aspect_cross_b, Ref<HTMLViewOutput>(), "The initial multi-output contract requires output and logical viewport aspect ratios to match.");
+	ERR_FAIL_COND_V_MSG(!_is_output_aspect_compatible(current_logical_size, p_size), Ref<HTMLViewOutput>(), "HTMLView output dimensions must be the nearest integer realization of the logical viewport aspect ratio.");
 	const uint64_t output_id = surface->create_presentation_output(p_size, p_mipmaps);
 	ERR_FAIL_COND_V_MSG(output_id == 0, Ref<HTMLViewOutput>(), "The active HTML renderer backend does not support secondary outputs.");
 	Ref<HTMLViewOutput> output;
@@ -910,7 +917,7 @@ Ref<HTMLViewOutput> HTMLView::create_output(const Size2i &p_size, bool p_mipmaps
 Error HTMLView::_resize_output(uint64_t p_output_id, const Size2i &p_size) {
 	ERR_FAIL_COND_V(!outputs.has(p_output_id), ERR_DOES_NOT_EXIST);
 	const Size2i current_logical_size = _get_target_viewport_size();
-	ERR_FAIL_COND_V((int64_t)p_size.x * current_logical_size.y != (int64_t)p_size.y * current_logical_size.x, ERR_INVALID_PARAMETER);
+	ERR_FAIL_COND_V(!_is_output_aspect_compatible(current_logical_size, p_size), ERR_INVALID_PARAMETER);
 	const Error error = surface->resize_presentation_output(p_output_id, p_size);
 	if (error == OK) {
 		_queue_frame_render();

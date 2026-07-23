@@ -27,8 +27,9 @@ func _run() -> void:
 
 	var same_size_output: HTMLViewOutput = view.create_output(Vector2i(320, 180))
 	var output: HTMLViewOutput = view.create_output(Vector2i(640, 360))
+	var rounded_output: HTMLViewOutput = view.create_output(Vector2i(853, 480))
 	var mipmapped_output: HTMLViewOutput = view.create_output(Vector2i(640, 360), true)
-	if same_size_output == null or not same_size_output.is_valid() or output == null or not output.is_valid() or mipmapped_output == null or not mipmapped_output.is_valid() or not mipmapped_output.mipmaps:
+	if same_size_output == null or not same_size_output.is_valid() or output == null or not output.is_valid() or rounded_output == null or not rounded_output.is_valid() or mipmapped_output == null or not mipmapped_output.is_valid() or not mipmapped_output.mipmaps:
 		_fail("Could not create the secondary output.")
 		return
 	var stable_texture := output.texture
@@ -48,6 +49,10 @@ func _run() -> void:
 	if not _validate_frame(view.get_texture(), Vector2i(320, 180), Vector2i(80, 55), Color8(32, 192, 96), "primary initial"):
 		return
 	if not _validate_frame(output.texture, Vector2i(640, 360), Vector2i(160, 110), Color8(32, 192, 96), "secondary initial"):
+		return
+	if not await _wait_for_output_generation(rounded_output, 0):
+		return
+	if not _validate_frame(rounded_output.texture, Vector2i(853, 480), Vector2i(213, 147), Color8(32, 192, 96), "rounded-aspect secondary initial"):
 		return
 	if not await _wait_for_output_generation(mipmapped_output, 0):
 		return
