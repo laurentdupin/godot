@@ -1680,13 +1680,21 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 	uint64_t packet_generation = 0;
 	for (int attempt = 0; attempt < 2; attempt++) {
 		packet = nullptr;
-		if (hcsr_renderer_prepare_gpu_frame(renderer, timeline_time_seconds, &packet) != HCSR_STATUS_OK || packet == nullptr) {
+		if (hcsr_renderer_prepare_gpu_frame(renderer, timeline_time_seconds, &packet) != HCSR_STATUS_OK) {
 			_record_error("HCSR could not prepare the Godot GPU frame");
 			return false;
 		}
 		if (!_update_frame_schedule()) {
-			_abandon_gpu_frame_packet(packet);
+			if (packet != nullptr) {
+				_abandon_gpu_frame_packet(packet);
+			}
 			return false;
+		}
+		if (packet == nullptr) {
+			// A successful null packet is an explicit idle frame. Keep the last
+			// completed texture active and do not enqueue redundant GPU work.
+			_retire_document_commits();
+			return true;
 		}
 		if (!_read_gpu_packet_metadata(packet, packet_metadata, packet_generation)) {
 			_abandon_gpu_frame_packet(packet);
