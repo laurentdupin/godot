@@ -69,6 +69,8 @@ func _run() -> void:
 	if not await _wait_for_3d_match(material_viewport, reference_viewport):
 		_fail("%s secondary output did not match normal sRGB ImageTexture sampling; secondary=%s." % [backend_name, last_3d_sample])
 		return
+	if not await _capture_combined_frame_evidence(view, same_size_output, material_viewport):
+		return
 
 	var output_generation := output.generation
 	var motion := InputEventMouseMotion.new()
@@ -308,6 +310,68 @@ func _wait_for_3d_color(viewport: SubViewport, predicate: Callable) -> bool:
 			if predicate.call(last_3d_sample):
 				return true
 	return false
+
+func _capture_combined_frame_evidence(view: HTMLView, output: HTMLViewOutput, material_viewport: SubViewport) -> bool:
+	for _frame in range(3):
+		await process_frame
+	await RenderingServer.frame_post_draw
+	var generation_before := view.get_generation()
+	if generation_before <= 0 or output.generation != generation_before:
+		_fail("Combined capture did not begin on one primary/secondary generation.")
+		return false
+	var raw_primary := view.get_texture().get_image() if view.get_texture() != null else null
+	var raw_secondary := output.texture.get_image() if output.texture != null else null
+	var canvas_full := get_root().get_texture().get_image()
+	var composed_3d := material_viewport.get_texture().get_image()
+	var generation_after := view.get_generation()
+	if generation_after != generation_before or output.generation != generation_before:
+		_fail("A logical generation changed while capturing combined frame evidence.")
+		return false
+	if raw_primary == null or raw_secondary == null or canvas_full == null or composed_3d == null:
+		_fail("One or more combined frame evidence images could not be captured.")
+		return false
+	if raw_primary.is_empty() or raw_secondary.is_empty() or canvas_full.is_empty() or composed_3d.is_empty():
+		_fail("One or more combined frame evidence images were empty.")
+		return false
+	if raw_primary.get_size() != Vector2i(320, 180) or raw_secondary.get_size() != Vector2i(320, 180):
+		_fail("Combined raw primary/secondary evidence used unexpected dimensions.")
+		return false
+	var canvas := canvas_full.get_region(Rect2i(Vector2i.ZERO, Vector2i(320, 180)))
+	var output_directory := ProjectSettings.globalize_path("user://hcsr_combined_frame_evidence/%s" % backend_name.to_lower())
+	if DirAccess.make_dir_recursive_absolute(output_directory) != OK:
+		_fail("Could not create the combined frame evidence directory.")
+		return false
+	var paths := {
+		"raw_primary": output_directory.path_join("raw-primary.png"),
+		"raw_secondary": output_directory.path_join("raw-secondary.png"),
+		"canvas": output_directory.path_join("canvas.png"),
+		"composed_3d": output_directory.path_join("composed-3d.png"),
+	}
+	if raw_primary.save_png(paths.raw_primary) != OK \
+			or raw_secondary.save_png(paths.raw_secondary) != OK \
+			or canvas.save_png(paths.canvas) != OK \
+			or composed_3d.save_png(paths.composed_3d) != OK:
+		_fail("Could not save combined frame evidence images.")
+		return false
+	var evidence := {
+		"backend": backend_name,
+		"logical_generation": generation_before,
+		"secondary_generation": output.generation,
+		"host_frame_number": view.get_host_frame_number(),
+		"timeline_time_seconds": view.get_timeline_time_seconds(),
+		"raw_primary_sha256": FileAccess.get_sha256(paths.raw_primary),
+		"raw_secondary_sha256": FileAccess.get_sha256(paths.raw_secondary),
+		"canvas_sha256": FileAccess.get_sha256(paths.canvas),
+		"composed_3d_sha256": FileAccess.get_sha256(paths.composed_3d),
+	}
+	var evidence_file := FileAccess.open(output_directory.path_join("frame.json"), FileAccess.WRITE)
+	if evidence_file == null:
+		_fail("Could not write the combined frame evidence record.")
+		return false
+	evidence_file.store_string(JSON.stringify(evidence, "\t"))
+	evidence_file.close()
+	print("HCSR_COMBINED_FRAME_EVIDENCE %s" % JSON.stringify(evidence))
+	return true
 
 func _fail(message: String) -> void:
 	push_error(message)
