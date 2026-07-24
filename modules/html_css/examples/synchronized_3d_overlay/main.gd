@@ -10,6 +10,12 @@ var projected_cube_center := Vector2.ZERO
 var validation_enabled := false
 var validated_frame_count := 0
 var validation_warmup_frames := 0
+var validation_started := false
+var validation_budget_miss := {}
+var maximum_frame_budget_milliseconds := 0.0
+var last_validated_generation := 0
+var last_validated_cube_center := Vector2.ZERO
+var cumulative_projected_motion := 0.0
 
 
 func _ready() -> void:
@@ -17,6 +23,7 @@ func _ready() -> void:
 	_build_html_overlay()
 	validation_enabled = "--validate" in OS.get_cmdline_user_args()
 	if validation_enabled:
+		html_view.frame_budget_missed.connect(_record_frame_budget_miss)
 		RenderingServer.frame_post_draw.connect(_validate_composed_frame)
 
 
@@ -82,11 +89,38 @@ func _validate_composed_frame() -> void:
 			)
 			get_tree().quit(1)
 		return
+	if not validation_started:
+		validation_started = true
+		last_validated_generation = html_view.get_generation()
+		last_validated_cube_center = cube_center
+		html_view.frame_budget_milliseconds = 33.333
+		return
+	if html_view.get_generation() <= last_validated_generation:
+		return
+	cumulative_projected_motion += last_validated_cube_center.distance_to(cube_center)
+	last_validated_cube_center = cube_center
+	last_validated_generation = html_view.get_generation()
+	var budget_result := html_view.get_last_frame_budget_result()
+	if int(budget_result.get("generation", 0)) == html_view.get_generation():
+		maximum_frame_budget_milliseconds = maxf(maximum_frame_budget_milliseconds, float(budget_result.get("elapsed_milliseconds", 0.0)))
+	if not validation_budget_miss.is_empty():
+		push_error("The synchronized HTML overlay missed its 33.333 ms frame budget: %s." % validation_budget_miss)
+		get_tree().quit(1)
+		return
 	validated_frame_count += 1
-	if validated_frame_count >= 30:
+	if validated_frame_count >= 120 and cumulative_projected_motion >= 150.0:
 		validation_enabled = false
-		print("SYNCHRONIZED_HTML_3D_ALIGNMENT_OK frames=%d max_error_px=1.5" % validated_frame_count)
+		print("SYNCHRONIZED_HTML_3D_ALIGNMENT_OK generations=%d motion_px=%.3f max_error_px=1.5 max_request_to_activation_ms=%.3f" % [validated_frame_count, cumulative_projected_motion, maximum_frame_budget_milliseconds])
 		get_tree().quit(0)
+
+func _record_frame_budget_miss(generation: int, elapsed_milliseconds: float, budget_milliseconds: float, stage: StringName) -> void:
+	if validation_started:
+		validation_budget_miss = {
+			"generation": generation,
+			"elapsed_milliseconds": elapsed_milliseconds,
+			"budget_milliseconds": budget_milliseconds,
+			"stage": stage,
+		}
 
 
 func _find_color_bounds(image: Image, bounds: Rect2i, predicate: Callable) -> Rect2i:
