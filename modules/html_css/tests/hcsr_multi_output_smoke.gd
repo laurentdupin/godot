@@ -80,7 +80,7 @@ func _run() -> void:
 	motion.position = Vector2(80, 55)
 	motion.global_position = motion.position
 	get_root().push_input(motion, true)
-	if not await _wait_for_output_generation(output, output_generation):
+	if not await _wait_for_synchronized_generation(view, [same_size_output, output, rounded_output, mipmapped_output], output_generation):
 		return
 	if not _validate_frame(view.get_texture(), Vector2i(320, 180), Vector2i(80, 55), Color8(224, 48, 48), "primary hover"):
 		return
@@ -102,9 +102,7 @@ func _run() -> void:
 		motion.position = Vector2(250, 150) if transition % 2 == 0 else Vector2(80, 55)
 		motion.global_position = motion.position
 		get_root().push_input(motion, true)
-		if not await _wait_for_output_generation(output, previous_generation):
-			return
-		if not await _wait_for_output_generation(mipmapped_output, previous_generation):
+		if not await _wait_for_synchronized_generation(view, [same_size_output, output, rounded_output, mipmapped_output], previous_generation):
 			return
 		if not _validate_exact_images(output.texture, mipmapped_output.texture, "retained transition %d regular/mipmapped secondary level zero" % transition):
 			return
@@ -168,6 +166,21 @@ func _wait_for_matching_generation(view: HTMLView, output: HTMLViewOutput) -> bo
 		if output.generation == view.get_generation() and output.generation > 0:
 			return true
 	_fail("Timed out waiting for matching primary and secondary generations: %d versus %d." % [view.get_generation(), output.generation])
+	return false
+
+func _wait_for_synchronized_generation(view: HTMLView, outputs: Array, after: int) -> bool:
+	for _frame in range(240):
+		await process_frame
+		var primary_generation := view.get_generation()
+		var all_advanced := primary_generation > after
+		for output: HTMLViewOutput in outputs:
+			if output.generation != primary_generation:
+				_fail("A synchronized output group exposed mixed generations during one engine frame: primary=%d, secondary=%d." % [primary_generation, output.generation])
+				return false
+			all_advanced = all_advanced and output.generation > after
+		if all_advanced:
+			return true
+	_fail("Timed out waiting for a synchronized output group generation after %d." % after)
 	return false
 
 func _wait_for_output_size(output: HTMLViewOutput, expected_size: Vector2i) -> bool:
