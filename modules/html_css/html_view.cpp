@@ -353,6 +353,7 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_frame_budget_milliseconds", "frame_budget_milliseconds"), &HTMLView::set_frame_budget_milliseconds);
 	ClassDB::bind_method(D_METHOD("get_frame_budget_milliseconds"), &HTMLView::get_frame_budget_milliseconds);
 	ClassDB::bind_method(D_METHOD("get_last_frame_budget_result"), &HTMLView::get_last_frame_budget_result);
+	ClassDB::bind_method(D_METHOD("get_frame_scheduler_diagnostics"), &HTMLView::get_frame_scheduler_diagnostics);
 	ClassDB::bind_method(D_METHOD("set_logical_size", "logical_size"), &HTMLView::set_logical_size);
 	ClassDB::bind_method(D_METHOD("get_logical_size"), &HTMLView::get_logical_size);
 	ClassDB::bind_method(D_METHOD("create_output", "size", "mipmaps"), &HTMLView::create_output, DEFVAL(false));
@@ -494,21 +495,33 @@ void HTMLView::_notification(int p_what) {
 				_update_backdrop_filter_canvas();
 				queue_redraw();
 			}
+			const bool has_explicit_render_request = frame_render_request_generation != frame_render_serviced_generation;
+			const bool has_backend_render_request = surface->has_pending_frame_request();
+			const bool has_due_render_request = has_explicit_render_request
+					|| has_backend_render_request
+					|| surface->is_begin_frame_requested();
+			if (has_due_render_request) {
+				_note_frame_budget_request();
+			}
 			if (pending_state.producer_blocked) {
+				if (has_due_render_request && frame_budget_request_usec != 0) {
+					frame_budget_physical_pool_blocked = true;
+				}
+				if (has_due_render_request && scheduler_last_blocked_request_generation != frame_render_request_generation) {
+					scheduler_last_blocked_request_generation = frame_render_request_generation;
+					scheduler_physical_pool_blocked_count++;
+				}
 				surface->schedule_retirement_service();
 				frame_render_pending = true;
 				set_process_internal(true);
 				break;
 			}
-			const bool has_explicit_render_request = frame_render_request_generation != frame_render_serviced_generation;
-			const bool has_backend_render_request = surface->has_pending_frame_request();
 			if (!has_explicit_render_request && !has_backend_render_request && !surface->is_begin_frame_requested()) {
 				surface->schedule_retirement_service();
 				frame_render_pending = surface->has_pending_output();
 				set_process_internal(frame_render_pending);
 				break;
 			}
-			_note_frame_budget_request();
 			const uint64_t servicing_request_generation = frame_render_request_generation;
 
 			bool needs_output = true;
@@ -530,6 +543,7 @@ void HTMLView::_notification(int p_what) {
 						html_view_elapsed_ms(update_start_usec)));
 			}
 			if (update_err != OK) {
+				scheduler_preparation_failed_count++;
 				needs_output = true;
 				needs_begin_frame = false;
 			}
@@ -541,6 +555,9 @@ void HTMLView::_notification(int p_what) {
 				}
 				const uint64_t render_start_usec = trace_sequence != 0 && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 				surface->render_now("HTMLView");
+				if (surface->has_terminal_render_failure()) {
+					scheduler_submission_failed_count++;
+				}
 				if (trace_sequence != 0) {
 					html_view_input_trace(vformat("seq=%d render_now end pending_output=%s elapsed_ms=%.3f", (int64_t)trace_sequence, surface->has_pending_output() ? "true" : "false", html_view_elapsed_ms(render_start_usec)));
 				}
@@ -556,6 +573,9 @@ void HTMLView::_notification(int p_what) {
 				pending_input_trace_sequence = trace_sequence;
 			}
 			if (has_explicit_render_request) {
+				if (servicing_request_generation > frame_render_serviced_generation + 1) {
+					scheduler_superseded_count += servicing_request_generation - frame_render_serviced_generation - 1;
+				}
 				frame_render_serviced_generation = servicing_request_generation;
 			}
 			frame_render_pending = needs_begin_frame
@@ -610,6 +630,7 @@ void HTMLView::_surface_changed() {
 }
 
 void HTMLView::_surface_frame_queued(uint64_t p_generation) {
+	scheduler_submitted_count++;
 	if (frame_budget_request_usec != 0 && p_generation > frame_budget_request_after_generation) {
 		frame_budget_queued_generation = p_generation;
 		const uint64_t now_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
@@ -650,6 +671,7 @@ void HTMLView::_note_frame_budget_request() {
 	frame_budget_request_after_generation = surface.is_valid() ? get_generation() : 0;
 	frame_budget_queued_generation = 0;
 	frame_budget_queue_missed = false;
+	frame_budget_physical_pool_blocked = false;
 }
 
 void HTMLView::_finish_frame_budget_request(uint64_t p_generation, const StringName &p_default_stage) {
@@ -661,7 +683,14 @@ void HTMLView::_finish_frame_budget_request(uint64_t p_generation, const StringN
 	last_frame_budget_elapsed_milliseconds = now_usec >= frame_budget_request_usec ? (now_usec - frame_budget_request_usec) / 1000.0 : 0.0;
 	last_frame_budget_milliseconds = frame_budget_milliseconds;
 	last_frame_budget_missed = last_frame_budget_elapsed_milliseconds > frame_budget_milliseconds;
-	last_frame_budget_stage = frame_budget_queue_missed && frame_budget_queued_generation == p_generation ? SNAME("prepare_submit") : p_default_stage;
+	last_frame_budget_stage = frame_budget_physical_pool_blocked
+			? SNAME("physical_pool_blocked")
+			: frame_budget_queue_missed && frame_budget_queued_generation == p_generation
+			? SNAME("prepare_submit")
+			: p_default_stage;
+	if (p_default_stage == SNAME("no_visual_output")) {
+		scheduler_no_visual_output_count++;
+	}
 	if (last_frame_budget_missed) {
 		emit_signal(SNAME("frame_budget_missed"), p_generation, last_frame_budget_elapsed_milliseconds, frame_budget_milliseconds, last_frame_budget_stage);
 	}
@@ -669,6 +698,7 @@ void HTMLView::_finish_frame_budget_request(uint64_t p_generation, const StringN
 	frame_budget_request_after_generation = 0;
 	frame_budget_queued_generation = 0;
 	frame_budget_queue_missed = false;
+	frame_budget_physical_pool_blocked = false;
 }
 
 void HTMLView::_connect_viewport_size_changed() {
@@ -983,6 +1013,7 @@ void HTMLView::set_frame_budget_milliseconds(double p_budget_milliseconds) {
 		frame_budget_request_after_generation = 0;
 		frame_budget_queued_generation = 0;
 		frame_budget_queue_missed = false;
+		frame_budget_physical_pool_blocked = false;
 	}
 }
 
@@ -997,6 +1028,17 @@ Dictionary HTMLView::get_last_frame_budget_result() const {
 	result[SNAME("budget_milliseconds")] = last_frame_budget_milliseconds;
 	result[SNAME("missed")] = last_frame_budget_missed;
 	result[SNAME("stage")] = last_frame_budget_stage;
+	return result;
+}
+
+Dictionary HTMLView::get_frame_scheduler_diagnostics() const {
+	Dictionary result;
+	result[SNAME("submitted")] = scheduler_submitted_count;
+	result[SNAME("no_visual_output")] = scheduler_no_visual_output_count;
+	result[SNAME("superseded_by_newer_revision")] = scheduler_superseded_count;
+	result[SNAME("physical_pool_blocked")] = scheduler_physical_pool_blocked_count;
+	result[SNAME("preparation_failed")] = scheduler_preparation_failed_count;
+	result[SNAME("submission_failed")] = scheduler_submission_failed_count;
 	return result;
 }
 

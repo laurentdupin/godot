@@ -10,6 +10,7 @@
 
 Mutex HCSRPerformanceMonitor::mutex;
 HashMap<uint64_t, hcsr_performance_profile_t> HCSRPerformanceMonitor::profiles;
+HashMap<uint64_t, HCSRPerformanceMonitor::IntegrationCounters> HCSRPerformanceMonitor::integration_counters;
 Vector<hcsr_performance_profile_t> HCSRPerformanceMonitor::pending_profiler_profiles;
 Vector<double> HCSRPerformanceMonitor::pending_input_to_visible_milliseconds;
 double HCSRPerformanceMonitor::latest_input_to_visible_milliseconds = 0.0;
@@ -54,6 +55,10 @@ void HCSRPerformanceMonitor::initialize() {
 		{ "HCSR/Executed Display Commands", MONITOR_EXECUTED_DISPLAY_COMMANDS, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Executed Glyphs", MONITOR_EXECUTED_GLYPHS, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/GPU Dispatches", MONITOR_GPU_DISPATCHES, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Texture Resource Creates", MONITOR_TEXTURE_RESOURCE_CREATES, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Texture Resource Frees", MONITOR_TEXTURE_RESOURCE_FREES, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Presentation Lock Busy", MONITOR_PRESENTATION_LOCK_BUSY, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Capacity Probe Cancellations", MONITOR_CAPACITY_PROBE_CANCELLATIONS, Performance::MONITOR_TYPE_QUANTITY },
 	};
 
 	for (const HCSRMonitorDefinition &definition : definitions) {
@@ -95,6 +100,10 @@ void HCSRPerformanceMonitor::finalize() {
 			"HCSR/Executed Display Commands",
 			"HCSR/Executed Glyphs",
 			"HCSR/GPU Dispatches",
+			"HCSR/Texture Resource Creates",
+			"HCSR/Texture Resource Frees",
+			"HCSR/Presentation Lock Busy",
+			"HCSR/Capacity Probe Cancellations",
 		};
 		for (const char *monitor_name : monitor_names) {
 			const StringName name(monitor_name);
@@ -106,6 +115,7 @@ void HCSRPerformanceMonitor::finalize() {
 
 	MutexLock lock(mutex);
 	profiles.clear();
+	integration_counters.clear();
 	pending_profiler_profiles.clear();
 	pending_input_to_visible_milliseconds.clear();
 	latest_input_to_visible_milliseconds = 0.0;
@@ -123,6 +133,11 @@ void HCSRPerformanceMonitor::update(uint64_t p_instance_id, const hcsr_performan
 		profiles.insert(p_instance_id, p_profile);
 		pending_profiler_profiles.push_back(p_profile);
 	}
+}
+
+void HCSRPerformanceMonitor::update_integration(uint64_t p_instance_id, const IntegrationCounters &p_counters) {
+	MutexLock lock(mutex);
+	integration_counters.insert(p_instance_id, p_counters);
 }
 
 void HCSRPerformanceMonitor::publish_frame_data() {
@@ -214,11 +229,33 @@ void HCSRPerformanceMonitor::publish_frame_data() {
 void HCSRPerformanceMonitor::remove(uint64_t p_instance_id) {
 	MutexLock lock(mutex);
 	profiles.erase(p_instance_id);
+	integration_counters.erase(p_instance_id);
 }
 
 double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
 	double value = 0.0;
 	MutexLock lock(mutex);
+	if (p_monitor >= MONITOR_TEXTURE_RESOURCE_CREATES) {
+		for (const KeyValue<uint64_t, IntegrationCounters> &entry : integration_counters) {
+			switch ((Monitor)p_monitor) {
+				case MONITOR_TEXTURE_RESOURCE_CREATES:
+					value += entry.value.texture_resource_creates;
+					break;
+				case MONITOR_TEXTURE_RESOURCE_FREES:
+					value += entry.value.texture_resource_frees;
+					break;
+				case MONITOR_PRESENTATION_LOCK_BUSY:
+					value += entry.value.presentation_lock_busy;
+					break;
+				case MONITOR_CAPACITY_PROBE_CANCELLATIONS:
+					value += entry.value.capacity_probe_cancellations;
+					break;
+				default:
+					break;
+			}
+		}
+		return value;
+	}
 	for (const KeyValue<uint64_t, hcsr_performance_profile_t> &entry : profiles) {
 		const hcsr_performance_profile_t &profile = entry.value;
 		switch ((Monitor)p_monitor) {

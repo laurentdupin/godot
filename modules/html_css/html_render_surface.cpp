@@ -475,6 +475,14 @@ bool HTMLRenderSurface::has_pending_frame_request() const {
 	return backend != nullptr && backend->has_pending_frame_request();
 }
 
+bool HTMLRenderSurface::has_terminal_render_failure() const {
+	return backend != nullptr && backend->has_terminal_render_failure();
+}
+
+String HTMLRenderSurface::get_terminal_render_failure_reason() const {
+	return backend != nullptr ? backend->get_terminal_render_failure_reason() : String();
+}
+
 bool HTMLRenderSurface::is_begin_frame_requested() const {
 	return backend != nullptr && backend->is_begin_frame_requested();
 }

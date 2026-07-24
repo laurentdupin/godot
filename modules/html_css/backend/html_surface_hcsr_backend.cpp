@@ -642,6 +642,38 @@ bool HTMLSurfaceHCSRBackend::_set_host_frame_context() {
 	return true;
 }
 
+#ifdef DEBUG_ENABLED
+bool HTMLSurfaceHCSRBackend::_diagnostic_is_capacity_blocked() {
+	if (diagnostic_capacity_block_after_submissions <= 0 || diagnostic_capacity_block_frames <= 0) {
+		return false;
+	}
+	ProjectSettings *project_settings = ProjectSettings::get_singleton();
+	const int requested_arm = project_settings != nullptr ? int(project_settings->get_setting(
+			"rendering/html_css/hcsr/testing/capacity_block_arm",
+			0)) : 0;
+	if (requested_arm <= 0) {
+		return false;
+	}
+	if (requested_arm != diagnostic_capacity_block_arm) {
+		diagnostic_capacity_block_arm = requested_arm;
+		diagnostic_capacity_block_submission_baseline = diagnostic_successful_submissions;
+		diagnostic_capacity_block_until_frame = 0;
+		diagnostic_capacity_block_triggered = false;
+	}
+	const uint64_t host_frame = Engine::get_singleton() != nullptr ? Engine::get_singleton()->get_process_frames() + 1 : 0;
+	if (!diagnostic_capacity_block_triggered
+			&& diagnostic_successful_submissions - diagnostic_capacity_block_submission_baseline >= diagnostic_capacity_block_after_submissions) {
+		diagnostic_capacity_block_triggered = true;
+		diagnostic_capacity_block_until_frame = host_frame + diagnostic_capacity_block_frames;
+	}
+	return diagnostic_capacity_block_triggered && host_frame < diagnostic_capacity_block_until_frame;
+}
+
+void HTMLSurfaceHCSRBackend::_diagnostic_note_successful_submission() {
+	diagnostic_successful_submissions++;
+}
+#endif
+
 void HTMLSurfaceHCSRBackend::_release_gpu_packet_metadata(PreparedGPUFrameMetadata &r_metadata) {
 	if (r_metadata.hit_test_snapshot != nullptr) {
 		hcsr_hit_test_snapshot_release(r_metadata.hit_test_snapshot);
@@ -900,16 +932,20 @@ void HTMLSurfaceHCSRBackend::_detach_presentation_output_on_render_thread(Presen
 	if (rendering_server != nullptr) {
 		if (p_state->mipmapped_texture_rid.is_valid()) {
 			rendering_server->free_rid(p_state->mipmapped_texture_rid);
+			integration_counters.texture_resource_frees++;
 		}
 		for (const KeyValue<uint64_t, RID> &entry : p_state->import_cache) {
 			if (entry.value.is_valid()) {
 				rendering_server->free_rid(entry.value);
+				integration_counters.texture_resource_frees++;
 			}
 		}
 		if (p_state->texture_rid.is_valid() && !p_state->import_cache.has((uint64_t)p_state->native_texture)) {
 			rendering_server->free_rid(p_state->texture_rid);
+			integration_counters.texture_resource_frees++;
 		}
 	}
+	_publish_integration_counters();
 	p_state->import_cache.clear();
 	p_state->submitted_generations.clear();
 	p_state->texture_rid = RID();
@@ -1064,6 +1100,8 @@ bool HTMLSurfaceHCSRBackend::_activate_presentation_output_on_render_thread(Pres
 				_record_error("Godot could not import an HCSR secondary presentation texture");
 				return false;
 			}
+			integration_counters.texture_resource_creates++;
+			_publish_integration_counters();
 			p_state->import_cache.insert(native_handle, imported);
 		}
 		p_state->texture_rid = imported;
@@ -1084,6 +1122,8 @@ bool HTMLSurfaceHCSRBackend::_activate_presentation_output_on_render_thread(Pres
 					Color(0, 0, 0, 0),
 					true);
 			ERR_FAIL_COND_V_MSG(!p_state->mipmapped_texture_rid.is_valid(), false, "Godot could not create an HCSR mipmapped output texture.");
+			integration_counters.texture_resource_creates++;
+			_publish_integration_counters();
 		}
 		rendering_server->texture_drawable_copy_level_zero(p_state->texture_rid, p_state->mipmapped_texture_rid);
 		rendering_server->texture_drawable_generate_mipmaps(p_state->mipmapped_texture_rid, true);
@@ -1205,6 +1245,10 @@ void HTMLSurfaceHCSRBackend::_poll_cpu_presentation_outputs() {
 						RenderingServerEnums::TEXTURE_DRAWABLE_FORMAT_RGBA8_SRGB,
 						Color(0, 0, 0, 0),
 						true);
+				if (state->mipmapped_texture_rid.is_valid()) {
+					integration_counters.texture_resource_creates++;
+					_publish_integration_counters();
+				}
 			}
 			ERR_CONTINUE_MSG(!state->mipmapped_texture_rid.is_valid(), "Godot could not create an HCSR CPU mipmapped output texture.");
 			rendering_server->texture_drawable_copy_level_zero(state->texture->get_rid(), state->mipmapped_texture_rid);
@@ -1265,6 +1309,8 @@ void HTMLSurfaceHCSRBackend::_ensure_gpu_texture_imported_on_render_thread() {
 		terminal_failure_reason = "Godot could not import HCSR's host-device GPU texture.";
 		return;
 	}
+	integration_counters.texture_resource_creates++;
+	_publish_integration_counters();
 	if (gpu_texture.is_null()) {
 		gpu_texture.instantiate();
 	}
@@ -1283,12 +1329,15 @@ void HTMLSurfaceHCSRBackend::_detach_gpu_texture_import_on_render_thread() {
 		for (const KeyValue<uint64_t, RID> &entry : gpu_texture_import_cache) {
 			if (entry.value.is_valid()) {
 				rendering_server->free_rid(entry.value);
+				integration_counters.texture_resource_frees++;
 			}
 		}
 		if (gpu_texture_rid.is_valid() && !gpu_texture_import_cache.has((uint64_t)native_gpu_texture)) {
 			rendering_server->free_rid(gpu_texture_rid);
+			integration_counters.texture_resource_frees++;
 		}
 	}
+	_publish_integration_counters();
 	gpu_texture_import_cache.clear();
 	gpu_texture_rid = RID();
 }
@@ -1364,6 +1413,8 @@ bool HTMLSurfaceHCSRBackend::_activate_engine_ordered_gpu_frame_on_render_thread
 			RenderingServer *rendering_server = RenderingServer::get_singleton();
 			if (rendering_server != nullptr) {
 				rendering_server->free_rid(previous_texture_rid);
+				integration_counters.texture_resource_frees++;
+				_publish_integration_counters();
 			}
 		}
 	} else {
@@ -1562,6 +1613,7 @@ bool HTMLSurfaceHCSRBackend::_activate_completed_gpu_frame_on_render_thread(cons
 				for (const KeyValue<uint64_t, RID> &entry : gpu_texture_import_cache) {
 					if (entry.key != (uint64_t)native_gpu_texture) {
 						rendering_server->free_rid(entry.value);
+						integration_counters.texture_resource_frees++;
 						obsolete_handles.push_back(entry.key);
 					}
 				}
@@ -1572,7 +1624,9 @@ bool HTMLSurfaceHCSRBackend::_activate_completed_gpu_frame_on_render_thread(cons
 			if (previous_texture_rid.is_valid() && previous_texture_rid != gpu_texture_rid
 					&& (!_uses_presentation_texture_import_cache() || previous_native_texture == native_gpu_texture)) {
 				rendering_server->free_rid(previous_texture_rid);
+				integration_counters.texture_resource_frees++;
 			}
+			_publish_integration_counters();
 		}
 	} else {
 		_ensure_gpu_texture_imported_on_render_thread();
@@ -1629,6 +1683,8 @@ void HTMLSurfaceHCSRBackend::_poll_gpu_presentation_on_render_thread() {
 		return;
 	}
 	if (lock_busy != 0) {
+		integration_counters.presentation_lock_busy++;
+		_publish_integration_counters();
 		gpu_presentation_work_pending.set();
 		return;
 	}
@@ -1785,6 +1841,15 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 	}
 	uint8_t submission_ready = 0;
 	uint8_t readiness_lock_busy = 0;
+#ifdef DEBUG_ENABLED
+	if (_diagnostic_is_capacity_blocked()) {
+		deferred_gpu_packet = p_packet;
+		gpu_submission_deferred.set();
+		gpu_submission_lock_deferred.clear();
+		gpu_render_succeeded = gpu_texture_rid.is_valid();
+		return;
+	}
+#endif
 	// Submission readiness is part of the immutable packet handoff: retain the
 	// packet unchanged until the borrowed host queue releases a frame slot.
 	if (hcsr_renderer_try_can_submit_gpu_frame(renderer, p_packet, &submission_ready, &readiness_lock_busy) != HCSR_STATUS_OK) {
@@ -1794,6 +1859,10 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 		return;
 	}
 	if (readiness_lock_busy != 0 || submission_ready == 0) {
+		if (readiness_lock_busy != 0) {
+			integration_counters.presentation_lock_busy++;
+			_publish_integration_counters();
+		}
 		deferred_gpu_packet = p_packet;
 		gpu_submission_deferred.set();
 		if (readiness_lock_busy != 0) {
@@ -1814,12 +1883,19 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 		return;
 	}
 	if (submission_lock_busy != 0 || submitted == 0) {
+		if (submission_lock_busy != 0) {
+			integration_counters.presentation_lock_busy++;
+			_publish_integration_counters();
+		}
 		deferred_gpu_packet = p_packet;
 		gpu_submission_deferred.set();
 		gpu_submission_lock_deferred.set();
 		gpu_render_succeeded = gpu_texture_rid.is_valid();
 		return;
 	}
+#ifdef DEBUG_ENABLED
+	_diagnostic_note_successful_submission();
+#endif
 	deferred_gpu_packet = nullptr;
 	gpu_submission_deferred.clear();
 	gpu_submission_lock_deferred.clear();
@@ -1857,6 +1933,11 @@ void HTMLSurfaceHCSRBackend::_retry_deferred_gpu_frame_on_render_thread() {
 
 	uint8_t submission_ready = 0;
 	uint8_t readiness_lock_busy = 0;
+#ifdef DEBUG_ENABLED
+	if (_diagnostic_is_capacity_blocked()) {
+		return;
+	}
+#endif
 	if (hcsr_renderer_try_can_submit_gpu_frame(renderer, deferred_gpu_packet, &submission_ready, &readiness_lock_busy) != HCSR_STATUS_OK) {
 		hcsr_gpu_frame_packet_t *packet = deferred_gpu_packet;
 		deferred_gpu_packet = nullptr;
@@ -1868,6 +1949,10 @@ void HTMLSurfaceHCSRBackend::_retry_deferred_gpu_frame_on_render_thread() {
 		return;
 	}
 	if (readiness_lock_busy != 0 || submission_ready == 0) {
+		if (readiness_lock_busy != 0) {
+			integration_counters.presentation_lock_busy++;
+			_publish_integration_counters();
+		}
 		return;
 	}
 
@@ -1890,9 +1975,16 @@ void HTMLSurfaceHCSRBackend::_retry_deferred_gpu_frame_on_render_thread() {
 			return;
 		}
 		if (submission_lock_busy != 0 || submitted == 0) {
+			if (submission_lock_busy != 0) {
+				integration_counters.presentation_lock_busy++;
+				_publish_integration_counters();
+			}
 			return;
 		}
 
+#ifdef DEBUG_ENABLED
+		_diagnostic_note_successful_submission();
+#endif
 		deferred_gpu_packet = nullptr;
 		gpu_submission_deferred.clear();
 		gpu_submission_lock_deferred.clear();
@@ -1915,6 +2007,8 @@ void HTMLSurfaceHCSRBackend::_retry_deferred_gpu_frame_on_render_thread() {
 	gpu_submission_lock_deferred.clear();
 	gpu_frame_pending.clear();
 	_abandon_gpu_frame_packet(superseded_packet);
+	integration_counters.capacity_probe_cancellations++;
+	_publish_integration_counters();
 	if (packet_generation != 0) {
 		_discard_gpu_packet_metadata(packet_generation);
 	}
@@ -2165,6 +2259,12 @@ void HTMLSurfaceHCSRBackend::_update_performance_profile() {
 			HCSRPerformanceMonitor::publish_frame_data();
 		}
 	}
+#endif
+}
+
+void HTMLSurfaceHCSRBackend::_publish_integration_counters() {
+#ifdef DEBUG_ENABLED
+	HCSRPerformanceMonitor::update_integration((uint64_t)this, integration_counters);
 #endif
 }
 
@@ -2723,6 +2823,17 @@ uint64_t HTMLSurfaceHCSRBackend::get_presentation_output_generation(uint64_t p_o
 
 HTMLSurfaceHCSRBackend::HTMLSurfaceHCSRBackend(hcsr_render_backend_t p_render_backend) :
 		render_backend(p_render_backend) {
+#ifdef DEBUG_ENABLED
+	ProjectSettings *project_settings = ProjectSettings::get_singleton();
+	if (project_settings != nullptr) {
+		diagnostic_capacity_block_after_submissions = MAX(0, int(project_settings->get_setting(
+				"rendering/html_css/hcsr/testing/capacity_block_after_submissions",
+				0)));
+		diagnostic_capacity_block_frames = MAX(0, int(project_settings->get_setting(
+				"rendering/html_css/hcsr/testing/capacity_block_frames",
+				0)));
+	}
+#endif
 }
 
 HTMLSurfaceHCSRBackend::~HTMLSurfaceHCSRBackend() {

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "html_surface_cpu_backend.h"
+#include "hcsr_performance_monitor.h"
 
 #include "core/templates/hash_map.h"
 #include "core/os/mutex.h"
@@ -97,6 +98,16 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool begin_frame_requested = false;
 	String terminal_failure_reason;
 	String last_reported_error;
+	HCSRPerformanceMonitor::IntegrationCounters integration_counters;
+#ifdef DEBUG_ENABLED
+	int diagnostic_capacity_block_after_submissions = 0;
+	int diagnostic_capacity_block_frames = 0;
+	int diagnostic_capacity_block_arm = 0;
+	int diagnostic_capacity_block_submission_baseline = 0;
+	int diagnostic_successful_submissions = 0;
+	uint64_t diagnostic_capacity_block_until_frame = 0;
+	bool diagnostic_capacity_block_triggered = false;
+#endif
 
 	bool _ensure_renderer();
 	bool _sync_viewport();
@@ -164,6 +175,11 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	void _update_performance_profile();
 	bool _update_frame_schedule();
 	bool _set_host_frame_context();
+	void _publish_integration_counters();
+#ifdef DEBUG_ENABLED
+	bool _diagnostic_is_capacity_blocked();
+	void _diagnostic_note_successful_submission();
+#endif
 	Error _set_input();
 	bool _clamp_scroll_offset_to_content(bool &r_changed, int p_content_width = -1, int p_content_height = -1);
 	Error _apply_dom_mutation(hcsr_dom_mutation_operation_kind_t p_operation, hcsr_dom_mutation_target_kind_t p_target_kind, const String &p_target, const String &p_name, const String &p_value, hcsr_dom_mutation_content_kind_t p_content_kind = HCSR_DOM_MUTATION_CONTENT_TEXT);

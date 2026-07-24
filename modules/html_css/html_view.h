@@ -99,11 +99,19 @@ private:
 	uint64_t frame_budget_request_after_generation = 0;
 	uint64_t frame_budget_queued_generation = 0;
 	bool frame_budget_queue_missed = false;
+	bool frame_budget_physical_pool_blocked = false;
 	uint64_t last_frame_budget_generation = 0;
 	double last_frame_budget_elapsed_milliseconds = 0.0;
 	double last_frame_budget_milliseconds = 0.0;
 	bool last_frame_budget_missed = false;
 	StringName last_frame_budget_stage;
+	uint64_t scheduler_submitted_count = 0;
+	uint64_t scheduler_no_visual_output_count = 0;
+	uint64_t scheduler_superseded_count = 0;
+	uint64_t scheduler_physical_pool_blocked_count = 0;
+	uint64_t scheduler_preparation_failed_count = 0;
+	uint64_t scheduler_submission_failed_count = 0;
+	uint64_t scheduler_last_blocked_request_generation = 0;
 	ColorRect *backdrop_filter_rect = nullptr;
 	Viewport *viewport_size_changed_viewport = nullptr;
 	Ref<Shader> backdrop_filter_shader;
@@ -219,6 +227,7 @@ public:
 	void set_frame_budget_milliseconds(double p_budget_milliseconds);
 	double get_frame_budget_milliseconds() const;
 	Dictionary get_last_frame_budget_result() const;
+	Dictionary get_frame_scheduler_diagnostics() const;
 	void set_logical_size(const Size2i &p_logical_size);
 	Size2i get_logical_size() const;
 	Ref<HTMLViewOutput> create_output(const Size2i &p_size, bool p_mipmaps = false);

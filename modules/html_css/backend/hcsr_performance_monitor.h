@@ -41,11 +41,22 @@ public:
 		MONITOR_EXECUTED_DISPLAY_COMMANDS,
 		MONITOR_EXECUTED_GLYPHS,
 		MONITOR_GPU_DISPATCHES,
+		MONITOR_TEXTURE_RESOURCE_CREATES,
+		MONITOR_TEXTURE_RESOURCE_FREES,
+		MONITOR_PRESENTATION_LOCK_BUSY,
+		MONITOR_CAPACITY_PROBE_CANCELLATIONS,
+	};
+	struct IntegrationCounters {
+		uint64_t texture_resource_creates = 0;
+		uint64_t texture_resource_frees = 0;
+		uint64_t presentation_lock_busy = 0;
+		uint64_t capacity_probe_cancellations = 0;
 	};
 
 private:
 	static Mutex mutex;
 	static HashMap<uint64_t, hcsr_performance_profile_t> profiles;
+	static HashMap<uint64_t, IntegrationCounters> integration_counters;
 	static Vector<hcsr_performance_profile_t> pending_profiler_profiles;
 	static Vector<double> pending_input_to_visible_milliseconds;
 	static double latest_input_to_visible_milliseconds;
@@ -55,6 +66,7 @@ public:
 	static void initialize();
 	static void finalize();
 	static void update(uint64_t p_instance_id, const hcsr_performance_profile_t &p_profile);
+	static void update_integration(uint64_t p_instance_id, const IntegrationCounters &p_counters);
 	static void record_input_to_visible(double p_milliseconds);
 	static void publish_frame_data();
 	static void remove(uint64_t p_instance_id);

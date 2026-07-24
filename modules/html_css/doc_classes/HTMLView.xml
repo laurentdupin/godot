@@ -92,7 +92,7 @@
 			<param index="2" name="budget_milliseconds" type="float" />
 			<param index="3" name="stage" type="StringName" />
 			<description>
-				Emitted when a requested frame exceeds [member frame_budget_milliseconds]. [param stage] is [code]prepare_submit[/code] when the frame was already late when queued, [code]activation[/code] when later activation consumed the budget, or [code]no_visual_output[/code] when a request completed without producing new pixels. [param generation] is the synchronized generation that became active, or the unchanged active generation for [code]no_visual_output[/code].
+				Emitted when a requested frame exceeds [member frame_budget_milliseconds]. [param stage] is [code]physical_pool_blocked[/code] when producer capacity delayed the request, [code]prepare_submit[/code] when the frame was already late when queued, [code]activation[/code] when later activation consumed the budget, or [code]no_visual_output[/code] when a request completed without producing new pixels. [param generation] is the synchronized generation that became active, or the unchanged active generation for [code]no_visual_output[/code].
 			</description>
 		</signal>
 		<signal name="action_requested">
@@ -172,6 +172,12 @@
 			<return type="Dictionary" />
 			<description>
 				Returns the latest completed budget observation with [code]generation[/code], [code]elapsed_milliseconds[/code], [code]budget_milliseconds[/code], [code]missed[/code], and [code]stage[/code]. A request that produces no visual generation is still completed and reported with the [code]no_visual_output[/code] stage.
+			</description>
+		</method>
+		<method name="get_frame_scheduler_diagnostics" qualifiers="const">
+			<return type="Dictionary" />
+			<description>
+				Returns cumulative terminal outcomes for semantic frame requests. Keys are [code]submitted[/code], [code]no_visual_output[/code], [code]superseded_by_newer_revision[/code], [code]physical_pool_blocked[/code], [code]preparation_failed[/code], and [code]submission_failed[/code]. Producer-capacity retries are counted once per requested revision; retirement maintenance is not an outcome and never contributes backpressure.
 			</description>
 		</method>
 		<method name="get_backdrop_filter_regions">

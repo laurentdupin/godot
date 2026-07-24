@@ -112,6 +112,8 @@ public:
 	void schedule_retirement_service();
 	bool has_pending_output() const;
 	bool has_pending_frame_request() const;
+	bool has_terminal_render_failure() const;
+	String get_terminal_render_failure_reason() const;
 	bool is_begin_frame_requested() const;
 	Error submit_cpu_frame(const HTMLCPUFrame &p_frame, const HTMLFrameMetadata &p_metadata = HTMLFrameMetadata());
 	const HTMLFrameMetadata &get_frame_metadata() const;
