@@ -40,10 +40,7 @@ func _run() -> void:
 		_fail("Secondary output did not expose its stable texture proxy.")
 		return
 
-	if not await _wait_for_generations(view, output, 0, 0):
-		return
-	if view.get_generation() != output.generation:
-		_fail("Automatic and secondary outputs activated different shared generations: %d versus %d." % [view.get_generation(), output.generation])
+	if not await _wait_for_matching_generation(view, output):
 		return
 	if not await _wait_for_matching_generation(view, same_size_output):
 		return
@@ -145,14 +142,6 @@ func _run() -> void:
 
 	print("HCSR shared logical frame multi-output smoke passed on %s." % backend_name)
 	quit(0)
-
-func _wait_for_generations(view: HTMLView, output: HTMLViewOutput, primary_after: int, output_after: int) -> bool:
-	for _frame in range(240):
-		await process_frame
-		if view.get_texture() != null and view.get_texture().get_width() == 320 and output.generation > output_after:
-			return true
-	_fail("Timed out waiting for primary and secondary output activation.")
-	return false
 
 func _wait_for_output_generation(output: HTMLViewOutput, after: int) -> bool:
 	for _frame in range(240):

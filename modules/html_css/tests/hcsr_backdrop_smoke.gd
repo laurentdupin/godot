@@ -43,6 +43,11 @@ func _initialize() -> void:
 
 	print("Static HCSR Godot %s backdrop metadata and resize smoke passed." % ("D3D12" if use_d3d12 else ("Vulkan" if use_vulkan else ("Metal" if use_metal else "CPU"))))
 	target.free()
+	target = null
+	document = null
+	await process_frame
+	RenderingServer.force_draw(false)
+	await RenderingServer.frame_post_draw
 	quit()
 
 func _wait_for_initial_frame(target: HTMLRenderTarget) -> bool:

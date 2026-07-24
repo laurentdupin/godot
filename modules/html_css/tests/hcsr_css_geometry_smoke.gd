@@ -9,6 +9,7 @@ func _initialize() -> void:
 	var use_gpu := use_d3d12 or use_vulkan or use_metal
 	var backend := HTMLView.BACKEND_D3D12 if use_d3d12 else (HTMLView.BACKEND_VULKAN if use_vulkan else (HTMLView.BACKEND_METAL if use_metal else HTMLView.BACKEND_CPU))
 	var document := HTMLDocument.new()
+	document.background_color = Color.WHITE
 	document.html = """<!DOCTYPE html><html><head><style>
 		body { margin: 0; background: white; }
 		#topbar { position: absolute; z-index: 100; left: 40px; top: 20px; width: 80px; height: 40px; }
@@ -56,7 +57,13 @@ func _initialize() -> void:
 	var arrow_center := image.get_pixel(205, 100)
 	var arrow_outside := image.get_pixel(199, 100)
 	if arrow_center.r < 0.55 or arrow_center.r > 0.90 or arrow_outside.r < 0.98:
-		_fail("Zero-content asymmetric borders did not paint a CSS triangle: center=%s outside=%s" % [arrow_center, arrow_outside])
+		var direct_image := target.get_texture().get_image() if use_gpu and target.get_texture() != null else null
+		_fail("Zero-content asymmetric borders did not paint a CSS triangle: center=%s outside=%s direct_center=%s direct_outside=%s" % [
+			arrow_center,
+			arrow_outside,
+			direct_image.get_pixel(205, 100) if direct_image != null else Color(),
+			direct_image.get_pixel(199, 100) if direct_image != null else Color(),
+		])
 		return
 	for y in range(70, 96):
 		for x in range(125, 190):

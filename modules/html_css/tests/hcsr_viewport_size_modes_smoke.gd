@@ -11,6 +11,9 @@ func _initialize() -> void:
 	elif OS.get_cmdline_user_args().has("--vulkan"):
 		backend_preference = HTMLView.BACKEND_VULKAN
 		backend_name = "Vulkan"
+	elif OS.get_cmdline_user_args().has("--metal"):
+		backend_preference = HTMLView.BACKEND_METAL
+		backend_name = "Metal"
 
 	var viewport := SubViewport.new()
 	viewport.size = Vector2i(1000, 600)

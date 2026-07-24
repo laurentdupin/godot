@@ -66,6 +66,8 @@ html,body{margin:0;width:100%;height:100%;background:#101820}
 		view.backend_preference = HTMLView.BACKEND_CPU
 	elif OS.get_cmdline_user_args().has("--vulkan"):
 		view.backend_preference = HTMLView.BACKEND_VULKAN
+	elif OS.get_cmdline_user_args().has("--metal"):
+		view.backend_preference = HTMLView.BACKEND_METAL
 	else:
 		view.backend_preference = HTMLView.BACKEND_D3D12
 	view.size = DESKTOP_SIZE

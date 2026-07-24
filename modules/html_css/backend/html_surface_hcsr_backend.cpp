@@ -901,6 +901,10 @@ void HTMLSurfaceHCSRBackend::_defer_presentation_output_destroy_on_render_thread
 void HTMLSurfaceHCSRBackend::_destroy_presentation_output_state_on_render_thread(PresentationOutputState *p_state) {
 	ERR_FAIL_NULL(p_state);
 	_detach_presentation_output_on_render_thread(p_state);
+	if (p_state->texture.is_valid()) {
+		p_state->texture->release_resources();
+		p_state->texture.unref();
+	}
 	_defer_presentation_output_destroy_on_render_thread(p_state->output);
 	memdelete(p_state);
 }
@@ -1283,11 +1287,26 @@ bool HTMLSurfaceHCSRBackend::_activate_engine_ordered_gpu_frame_on_render_thread
 	if (native_gpu_texture != p_output.native_texture
 			|| native_gpu_generation != p_output.resource_generation
 			|| native_gpu_size != Size2i(p_output.width, p_output.height)) {
+		void *previous_native_texture = native_gpu_texture;
+		const uint64_t previous_native_generation = native_gpu_generation;
+		const Size2i previous_native_size = native_gpu_size;
+		const RID previous_texture_rid = gpu_texture_rid;
 		native_gpu_texture = p_output.native_texture;
 		native_gpu_generation = p_output.resource_generation;
 		native_gpu_size = Size2i(p_output.width, p_output.height);
 		gpu_texture_rid = RID();
 		_ensure_gpu_texture_imported_on_render_thread();
+		if (!gpu_texture_rid.is_valid()) {
+			native_gpu_texture = previous_native_texture;
+			native_gpu_generation = previous_native_generation;
+			native_gpu_size = previous_native_size;
+			gpu_texture_rid = previous_texture_rid;
+		} else if (previous_texture_rid.is_valid() && previous_texture_rid != gpu_texture_rid) {
+			RenderingServer *rendering_server = RenderingServer::get_singleton();
+			if (rendering_server != nullptr) {
+				rendering_server->free_rid(previous_texture_rid);
+			}
+		}
 	} else {
 		_ensure_gpu_texture_imported_on_render_thread();
 	}
@@ -1411,16 +1430,18 @@ bool HTMLSurfaceHCSRBackend::_activate_completed_gpu_frame_on_render_thread(cons
 			return false;
 		}
 		RenderingServer *rendering_server = RenderingServer::get_singleton();
-		if (rendering_server != nullptr && size_changed) {
-			Vector<uint64_t> obsolete_handles;
-			for (const KeyValue<uint64_t, RID> &entry : gpu_texture_import_cache) {
-				if (entry.key != (uint64_t)native_gpu_texture) {
-					rendering_server->free_rid(entry.value);
-					obsolete_handles.push_back(entry.key);
+		if (rendering_server != nullptr) {
+			if (size_changed) {
+				Vector<uint64_t> obsolete_handles;
+				for (const KeyValue<uint64_t, RID> &entry : gpu_texture_import_cache) {
+					if (entry.key != (uint64_t)native_gpu_texture) {
+						rendering_server->free_rid(entry.value);
+						obsolete_handles.push_back(entry.key);
+					}
 				}
-			}
-			for (uint64_t handle : obsolete_handles) {
-				gpu_texture_import_cache.erase(handle);
+				for (uint64_t handle : obsolete_handles) {
+					gpu_texture_import_cache.erase(handle);
+				}
 			}
 			if (previous_texture_rid.is_valid() && previous_texture_rid != gpu_texture_rid
 					&& (!_uses_presentation_texture_import_cache() || previous_native_texture == native_gpu_texture)) {
@@ -2490,6 +2511,10 @@ HTMLSurfaceHCSRBackend::~HTMLSurfaceHCSRBackend() {
 	HCSRPerformanceMonitor::remove((uint64_t)this);
 #endif
 	_detach_gpu_texture_import();
+	if (gpu_texture.is_valid()) {
+		gpu_texture->release_resources();
+		gpu_texture.unref();
+	}
 	RenderingServer *rendering_server = RenderingServer::get_singleton();
 	if (render_backend == HCSR_RENDER_BACKEND_CPU || rendering_server == nullptr || rendering_server->is_on_render_thread()) {
 		_destroy_renderer_on_render_thread();
