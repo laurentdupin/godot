@@ -1672,6 +1672,7 @@ void HTMLSurfaceHCSRBackend::_destroy_renderer_on_render_thread() {
 		deferred_gpu_packet = nullptr;
 	}
 	gpu_submission_deferred.clear();
+	gpu_submission_lock_deferred.clear();
 	gpu_submission_retry_pending.clear();
 	gpu_frame_pending.clear();
 	gpu_presentation_changed.clear();
@@ -1782,29 +1783,45 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 		return;
 	}
 	uint8_t submission_ready = 0;
+	uint8_t readiness_lock_busy = 0;
 	// Submission readiness is part of the immutable packet handoff: retain the
 	// packet unchanged until the borrowed host queue releases a frame slot.
-	if (hcsr_renderer_can_submit_gpu_frame(renderer, p_packet, &submission_ready) != HCSR_STATUS_OK) {
+	if (hcsr_renderer_try_can_submit_gpu_frame(renderer, p_packet, &submission_ready, &readiness_lock_busy) != HCSR_STATUS_OK) {
 		_abandon_gpu_frame_packet(p_packet);
 		_discard_gpu_packet_metadata(packet_generation);
 		_record_error("HCSR could not query Godot GPU submission readiness");
 		return;
 	}
-	if (submission_ready == 0) {
+	if (readiness_lock_busy != 0 || submission_ready == 0) {
 		deferred_gpu_packet = p_packet;
 		gpu_submission_deferred.set();
+		if (readiness_lock_busy != 0) {
+			gpu_submission_lock_deferred.set();
+		} else {
+			gpu_submission_lock_deferred.clear();
+		}
+		gpu_render_succeeded = gpu_texture_rid.is_valid();
+		return;
+	}
+	hcsr_gpu_frame_t output = {};
+	output.struct_size = sizeof(output);
+	uint8_t submitted = 0;
+	uint8_t submission_lock_busy = 0;
+	if (hcsr_renderer_try_submit_gpu_frame(renderer, p_packet, &output, &submitted, &submission_lock_busy) != HCSR_STATUS_OK) {
+		_discard_gpu_packet_metadata(packet_generation);
+		_record_error("HCSR could not submit the prepared Godot GPU frame");
+		return;
+	}
+	if (submission_lock_busy != 0 || submitted == 0) {
+		deferred_gpu_packet = p_packet;
+		gpu_submission_deferred.set();
+		gpu_submission_lock_deferred.set();
 		gpu_render_succeeded = gpu_texture_rid.is_valid();
 		return;
 	}
 	deferred_gpu_packet = nullptr;
 	gpu_submission_deferred.clear();
-	hcsr_gpu_frame_t output = {};
-	output.struct_size = sizeof(output);
-	if (hcsr_renderer_submit_gpu_frame(renderer, p_packet, &output) != HCSR_STATUS_OK) {
-		_discard_gpu_packet_metadata(packet_generation);
-		_record_error("HCSR could not submit the prepared Godot GPU frame");
-		return;
-	}
+	gpu_submission_lock_deferred.clear();
 	_update_performance_profile();
 	gpu_render_succeeded = _record_submitted_gpu_frame_on_render_thread(output);
 	if (gpu_render_succeeded
@@ -1838,24 +1855,63 @@ void HTMLSurfaceHCSRBackend::_retry_deferred_gpu_frame_on_render_thread() {
 	}
 
 	uint8_t submission_ready = 0;
-	if (hcsr_renderer_can_submit_gpu_frame(renderer, deferred_gpu_packet, &submission_ready) != HCSR_STATUS_OK) {
+	uint8_t readiness_lock_busy = 0;
+	if (hcsr_renderer_try_can_submit_gpu_frame(renderer, deferred_gpu_packet, &submission_ready, &readiness_lock_busy) != HCSR_STATUS_OK) {
 		hcsr_gpu_frame_packet_t *packet = deferred_gpu_packet;
 		deferred_gpu_packet = nullptr;
 		gpu_submission_deferred.clear();
+		gpu_submission_lock_deferred.clear();
 		gpu_frame_pending.clear();
 		_abandon_gpu_frame_packet(packet);
 		_record_error("HCSR could not query deferred Godot GPU submission readiness");
 		return;
 	}
-	if (submission_ready == 0) {
+	if (readiness_lock_busy != 0 || submission_ready == 0) {
 		return;
 	}
 
 	uint64_t packet_generation = 0;
 	(void)hcsr_renderer_gpu_frame_packet_generation(deferred_gpu_packet, &packet_generation);
+	if (gpu_submission_lock_deferred.is_set()) {
+		hcsr_gpu_frame_t output = {};
+		output.struct_size = sizeof(output);
+		uint8_t submitted = 0;
+		uint8_t submission_lock_busy = 0;
+		if (hcsr_renderer_try_submit_gpu_frame(renderer, deferred_gpu_packet, &output, &submitted, &submission_lock_busy) != HCSR_STATUS_OK) {
+			hcsr_gpu_frame_packet_t *packet = deferred_gpu_packet;
+			deferred_gpu_packet = nullptr;
+			gpu_submission_deferred.clear();
+			gpu_submission_lock_deferred.clear();
+			gpu_frame_pending.clear();
+			_abandon_gpu_frame_packet(packet);
+			_discard_gpu_packet_metadata(packet_generation);
+			_record_error("HCSR could not retry the prepared Godot GPU frame");
+			return;
+		}
+		if (submission_lock_busy != 0 || submitted == 0) {
+			return;
+		}
+
+		deferred_gpu_packet = nullptr;
+		gpu_submission_deferred.clear();
+		gpu_submission_lock_deferred.clear();
+		gpu_frame_pending.clear();
+		_update_performance_profile();
+		gpu_render_succeeded = _record_submitted_gpu_frame_on_render_thread(output);
+		if (gpu_render_succeeded
+				&& gpu_capabilities.synchronization_mode == HCSR_GPU_SYNCHRONIZATION_ENGINE_QUEUE_ORDERED) {
+			gpu_render_succeeded = _activate_engine_ordered_output_group_on_render_thread(output);
+		}
+		if (_uses_async_gpu_presentation()) {
+			gpu_presentation_work_pending.set();
+		}
+		return;
+	}
+
 	hcsr_gpu_frame_packet_t *superseded_packet = deferred_gpu_packet;
 	deferred_gpu_packet = nullptr;
 	gpu_submission_deferred.clear();
+	gpu_submission_lock_deferred.clear();
 	gpu_frame_pending.clear();
 	_abandon_gpu_frame_packet(superseded_packet);
 	if (packet_generation != 0) {

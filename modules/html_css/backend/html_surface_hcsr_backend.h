@@ -80,6 +80,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	hcsr_gpu_frame_packet_t *deferred_gpu_packet = nullptr;
 	SafeFlag gpu_frame_pending;
 	SafeFlag gpu_submission_deferred;
+	SafeFlag gpu_submission_lock_deferred;
 	SafeFlag gpu_submission_retry_pending;
 	SafeFlag gpu_follow_up_frame_requested;
 	SafeFlag gpu_presentation_poll_pending;
