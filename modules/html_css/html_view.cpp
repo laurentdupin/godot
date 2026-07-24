@@ -489,18 +489,13 @@ void HTMLView::_notification(int p_what) {
 				break;
 			}
 
-			if (frame_render_delay > 0) {
-				frame_render_delay--;
-				break;
-			}
-
-			bool waiting_for_async_completion = false;
-			const bool poll_changed = surface->poll_pending_output(&waiting_for_async_completion);
-			if (poll_changed) {
+			const HTMLPendingOutputState pending_state = surface->consume_pending_output_state();
+			if (pending_state.presentation_changed) {
 				_update_backdrop_filter_canvas();
 				queue_redraw();
 			}
-			if (waiting_for_async_completion) {
+			if (pending_state.producer_blocked) {
+				surface->schedule_retirement_service();
 				frame_render_pending = true;
 				set_process_internal(true);
 				break;
@@ -508,6 +503,7 @@ void HTMLView::_notification(int p_what) {
 			const bool has_explicit_render_request = frame_render_request_generation != frame_render_serviced_generation;
 			const bool has_backend_render_request = surface->has_pending_frame_request();
 			if (!has_explicit_render_request && !has_backend_render_request && !surface->is_begin_frame_requested()) {
+				surface->schedule_retirement_service();
 				frame_render_pending = surface->has_pending_output();
 				set_process_internal(frame_render_pending);
 				break;
@@ -551,6 +547,7 @@ void HTMLView::_notification(int p_what) {
 			} else if (trace_sequence != 0) {
 				html_view_input_trace(vformat("seq=%d render_now skipped reason=no_output", (int64_t)trace_sequence));
 			}
+			surface->schedule_retirement_service();
 			if (frame_budget_request_usec != 0 && !surface->has_pending_output() && surface->get_active_frame_generation() <= frame_budget_request_after_generation) {
 				_finish_frame_budget_request(surface->get_active_frame_generation(), SNAME("no_visual_output"));
 			}
@@ -1456,12 +1453,8 @@ void HTMLView::_call_bound_action(const StringName &p_action, const Dictionary &
 
 void HTMLView::_queue_frame_render() {
 	_note_frame_budget_request();
-	const bool was_pending = frame_render_pending;
 	frame_render_request_generation++;
 	frame_render_pending = true;
-	if (!was_pending && frame_render_delay == 0) {
-		frame_render_delay = 1;
-	}
 	if (is_inside_tree()) {
 		set_process_internal(true);
 	}

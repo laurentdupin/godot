@@ -108,6 +108,8 @@ public:
 	Error update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame = nullptr);
 	void render_now(const String &p_marker);
 	bool poll_pending_output(bool *r_waiting_for_completion = nullptr);
+	HTMLPendingOutputState consume_pending_output_state();
+	void schedule_retirement_service();
 	bool has_pending_output() const;
 	bool has_pending_frame_request() const;
 	bool is_begin_frame_requested() const;

@@ -66,6 +66,10 @@ func _run() -> void:
 	while Time.get_ticks_msec() - started < 350 and observed_frames < 240:
 		await process_frame
 		observed_frames += 1
+		if secondary_output.generation != view.get_generation():
+			push_error("%s hover enter exposed mixed primary/secondary generations %d/%d." % [backend_name, view.get_generation(), secondary_output.generation])
+			quit(1)
+			return
 		if Time.get_ticks_msec() >= next_sample and view.get_texture() != null:
 			var primary_image := view.get_texture().get_image()
 			if primary_image != null:
@@ -79,6 +83,10 @@ func _run() -> void:
 			continue
 		last_generation = view.get_generation()
 		generations.append(last_generation)
+	if generations.size() < 20:
+		push_error("%s hover transition published only %d primary generations." % [backend_name, generations.size()])
+		quit(1)
+		return
 	var distinct_colors := 0
 	var previous := Color(-1, -1, -1, -1)
 	for color in colors:
@@ -116,6 +124,10 @@ func _run() -> void:
 	while Time.get_ticks_msec() - started < 350 and observed_frames < 240:
 		await process_frame
 		observed_frames += 1
+		if secondary_output.generation != view.get_generation():
+			push_error("%s hover leave exposed mixed primary/secondary generations %d/%d." % [backend_name, view.get_generation(), secondary_output.generation])
+			quit(1)
+			return
 		if Time.get_ticks_msec() < next_sample:
 			continue
 		if view.get_texture() != null:

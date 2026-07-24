@@ -450,6 +450,23 @@ bool HTMLRenderSurface::poll_pending_output(bool *r_waiting_for_completion) {
 	return changed;
 }
 
+HTMLPendingOutputState HTMLRenderSurface::consume_pending_output_state() {
+	_ensure_backend();
+	HTMLPendingOutputState state = backend->consume_pending_output_state();
+	if (state.presentation_changed) {
+		backend->get_frame_metadata(frame_metadata);
+		backend->get_gpu_backdrop_frame(gpu_backdrop_frame);
+		_notify_changed();
+	}
+	_notify_frame_state_changes();
+	return state;
+}
+
+void HTMLRenderSurface::schedule_retirement_service() {
+	_ensure_backend();
+	backend->schedule_retirement_service();
+}
+
 bool HTMLRenderSurface::has_pending_output() const {
 	return backend != nullptr && backend->has_pending_output();
 }

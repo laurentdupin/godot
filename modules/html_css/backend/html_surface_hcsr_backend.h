@@ -23,6 +23,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 		RID texture_rid;
 		RID mipmapped_texture_rid;
 		HashMap<uint64_t, RID> import_cache;
+		HashMap<uint64_t, uint64_t> submitted_generations;
 		hcsr_gpu_frame_t active_frame = {};
 		uint64_t active_generation = 0;
 		void *native_texture = nullptr;
@@ -177,6 +178,8 @@ public:
 	virtual Error update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame) override;
 	virtual void render_placeholder(const String &p_marker) override;
 	virtual bool poll_pending_output(bool *r_waiting_for_completion = nullptr) override;
+	virtual HTMLPendingOutputState consume_pending_output_state() override;
+	virtual void schedule_retirement_service() override;
 	virtual bool has_pending_output() const override;
 	virtual bool has_pending_frame_request() const override;
 	virtual uint64_t get_last_queued_frame_generation() const override;

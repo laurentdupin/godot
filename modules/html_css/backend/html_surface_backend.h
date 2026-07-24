@@ -59,6 +59,12 @@ enum HTMLSurfaceInputModifier {
 	HTML_SURFACE_INPUT_MODIFIER_RIGHT_BUTTON_DOWN = 1 << 8,
 };
 
+struct HTMLPendingOutputState {
+	bool presentation_changed = false;
+	bool producer_blocked = false;
+	bool retirement_pending = false;
+};
+
 class HTMLSurfaceBackend {
 public:
 	virtual ~HTMLSurfaceBackend() {}
@@ -88,6 +94,12 @@ public:
 		}
 		return false;
 	}
+	virtual HTMLPendingOutputState consume_pending_output_state() {
+		HTMLPendingOutputState state;
+		state.presentation_changed = poll_pending_output(&state.producer_blocked);
+		return state;
+	}
+	virtual void schedule_retirement_service() {}
 	virtual bool has_pending_output() const { return false; }
 	virtual bool has_pending_frame_request() const { return false; }
 	virtual uint64_t get_last_queued_frame_generation() const { return 0; }
