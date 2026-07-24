@@ -11,6 +11,9 @@ func _initialize() -> void:
 	elif "--vulkan" in OS.get_cmdline_user_args():
 		backend = HTMLView.BACKEND_VULKAN
 		backend_name = "Vulkan"
+	elif "--metal" in OS.get_cmdline_user_args():
+		backend = HTMLView.BACKEND_METAL
+		backend_name = "Metal"
 	call_deferred("_run")
 
 func _run() -> void:
