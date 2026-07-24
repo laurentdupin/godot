@@ -1344,7 +1344,9 @@ bool HTMLSurfaceHCSRBackend::_activate_engine_ordered_gpu_frame_on_render_thread
 			native_gpu_generation = previous_native_generation;
 			native_gpu_size = previous_native_size;
 			gpu_texture_rid = previous_texture_rid;
-		} else if (previous_texture_rid.is_valid() && previous_texture_rid != gpu_texture_rid) {
+		} else if (previous_texture_rid.is_valid()
+				&& previous_texture_rid != gpu_texture_rid
+				&& !_uses_presentation_texture_import_cache()) {
 			RenderingServer *rendering_server = RenderingServer::get_singleton();
 			if (rendering_server != nullptr) {
 				rendering_server->free_rid(previous_texture_rid);

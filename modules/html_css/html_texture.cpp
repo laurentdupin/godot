@@ -109,11 +109,14 @@ void HTMLTexture2D::set_external_texture(const RID &p_texture_rid, const Size2i 
 }
 
 void HTMLTexture2D::clear_external_texture() {
-	if (!external_texture_rid.is_valid()) {
+	if (!external_texture_rid.is_valid() && size == Size2i()) {
 		return;
 	}
 	html_css_texture_trace("clear_external_texture");
 	external_texture_rid = RID();
+	Ref<Image> fallback = Image::create_empty(1, 1, false, Image::FORMAT_RGBA8);
+	fallback->fill(Color(0, 0, 0, 0));
+	texture->set_image(fallback);
 	RenderingServer::get_singleton()->texture_proxy_update(proxy_texture_rid, texture->get_rid());
 	size = Size2i();
 	_notify_changed();
