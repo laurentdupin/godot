@@ -42,6 +42,9 @@ class HTMLTexture2D : public Texture2D {
 	Size2i size;
 	bool alpha = true;
 
+	void _emit_changed_on_main_thread();
+	void _notify_changed();
+
 protected:
 	static void _bind_methods();
 
@@ -50,6 +53,7 @@ public:
 	void update_from_image(const Ref<Image> &p_image);
 	void set_external_texture(const RID &p_texture_rid, const Size2i &p_size, bool p_alpha);
 	void clear_external_texture();
+	void release_resources();
 
 	int get_width() const override;
 	int get_height() const override;

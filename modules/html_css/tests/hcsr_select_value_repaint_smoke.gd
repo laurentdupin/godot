@@ -11,6 +11,9 @@ func _initialize() -> void:
 	elif OS.get_cmdline_user_args().has("--vulkan"):
 		backend_preference = HTMLView.BACKEND_VULKAN
 		backend_name = "Vulkan"
+	elif OS.get_cmdline_user_args().has("--metal"):
+		backend_preference = HTMLView.BACKEND_METAL
+		backend_name = "Metal"
 
 	var retained := _create_view(false)
 	var clean := _create_view(true)

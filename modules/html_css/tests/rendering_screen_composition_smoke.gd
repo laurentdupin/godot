@@ -10,6 +10,7 @@ const TRANSPARENT_SAMPLE := Vector2i(144, 68)
 func _initialize() -> void:
 	DisplayServer.window_set_size(WINDOW_SIZE)
 	DisplayServer.window_set_position(Vector2i(80, 80))
+	DisplayServer.window_move_to_foreground()
 
 	var background := ColorRect.new()
 	background.color = Color(0.0, 0.0, 1.0, 1.0)
@@ -40,22 +41,30 @@ func _initialize() -> void:
 	RenderingServer.viewport_set_render_direct_to_screen(viewport_rid, true)
 	RenderingServer.viewport_set_screen_composition(viewport_rid, RenderingServer.VIEWPORT_SCREEN_COMPOSITION_PREMULTIPLIED_ALPHA, 100)
 
-	for frame in 8:
-		await process_frame
-
 	var client_origin := DisplayServer.window_get_position(window_id)
-	var outside := _capture_pixel(client_origin + Vector2i(16, 16))
+	var outside := Color(0, 0, 0, 0)
+	for frame in 120:
+		await process_frame
+		client_origin = DisplayServer.window_get_position(window_id)
+		outside = _capture_pixel(client_origin + Vector2i(16, 16))
+		if outside.b >= 0.7 and outside.r <= 0.2 and outside.g <= 0.2:
+			break
+
 	var transparent := _capture_pixel(client_origin + TRANSPARENT_SAMPLE)
 	var translucent := _capture_pixel(client_origin + TRANSLUCENT_RECT.position + TRANSLUCENT_RECT.size / 2)
 	var opaque := _capture_pixel(client_origin + OPAQUE_RECT.position + OPAQUE_RECT.size / 2)
 	overlay.size = RESIZED_OVERLAY_RECT.size
 	RenderingServer.viewport_attach_to_screen(viewport_rid, Rect2(RESIZED_OVERLAY_RECT), window_id)
-	for frame in 4:
-		await process_frame
-	var resized_translucent_position := RESIZED_OVERLAY_RECT.position + TRANSLUCENT_RECT.position - OVERLAY_RECT.position + TRANSLUCENT_RECT.size / 2
 	var resized_opaque_position := RESIZED_OVERLAY_RECT.position + OPAQUE_RECT.position - OVERLAY_RECT.position + OPAQUE_RECT.size / 2
+	var resized_opaque := Color(0, 0, 0, 0)
+	for frame in 120:
+		await process_frame
+		client_origin = DisplayServer.window_get_position(window_id)
+		resized_opaque = _capture_pixel(client_origin + resized_opaque_position)
+		if resized_opaque.g >= 0.8 and resized_opaque.r <= 0.2 and resized_opaque.b <= 0.2:
+			break
+	var resized_translucent_position := RESIZED_OVERLAY_RECT.position + TRANSLUCENT_RECT.position - OVERLAY_RECT.position + TRANSLUCENT_RECT.size / 2
 	var resized_translucent := _capture_pixel(client_origin + resized_translucent_position)
-	var resized_opaque := _capture_pixel(client_origin + resized_opaque_position)
 	RenderingServer.viewport_attach_to_screen(viewport_rid, Rect2(), DisplayServer.INVALID_WINDOW_ID)
 
 	if outside.b < 0.7 or outside.r > 0.2 or outside.g > 0.2:

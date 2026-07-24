@@ -55,4 +55,5 @@ public:
 	virtual Ref<HTMLTexture2D> get_html_texture() const override;
 
 	HTMLSurfaceCPUBackend();
+	~HTMLSurfaceCPUBackend();
 };

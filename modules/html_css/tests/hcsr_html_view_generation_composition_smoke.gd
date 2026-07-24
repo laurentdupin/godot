@@ -15,8 +15,11 @@ func _initialize() -> void:
 	elif OS.get_cmdline_user_args().has("--vulkan"):
 		backend_preference = HTMLView.BACKEND_VULKAN
 		backend_name = "Vulkan"
+	elif OS.get_cmdline_user_args().has("--metal"):
+		backend_preference = HTMLView.BACKEND_METAL
+		backend_name = "Metal"
 	else:
-		_fail("HTMLView generation composition smoke requires --d3d12 or --vulkan.")
+		_fail("HTMLView generation composition smoke requires --d3d12, --vulkan, or --metal.")
 		return
 
 	var viewport := SubViewport.new()

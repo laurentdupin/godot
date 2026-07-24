@@ -1243,6 +1243,9 @@ void HTMLView::_emit_pointer_phase(const StringName &p_phase, const HTMLElementH
 	const Point2i document_position(Math::floor(p_html_position.x), Math::floor(p_html_position.y));
 	HTMLActionActivation activation = HTMLActivationEngine::activate(p_hit, document_position, p_button);
 	activation.payload[SNAME("phase")] = p_phase;
+	activation.payload[SNAME("action_element_id")] = activation.element_id;
+	activation.payload[SNAME("target_element_id")] = p_hit.element_id;
+	activation.payload[SNAME("element_id")] = activation.element_id;
 	emit_signal(SNAME("element_pointer_event"), p_phase, activation.element_id, activation.action, (int)p_button, activation.payload);
 }
 
@@ -1297,13 +1300,42 @@ bool HTMLView::_emit_surface_pointer_event(const HTMLPointerEvent &p_event) {
 	return false;
 }
 
-bool HTMLView::_drain_surface_pointer_events(bool *r_activation_emitted) {
+bool HTMLView::_drain_surface_pointer_events(bool *r_activation_emitted, bool p_emit_events, const HTMLElementHit *p_pressed_hit, const HTMLElementHit *p_released_hit) {
 	bool consumed = false;
 	bool activation_emitted = false;
 	HTMLPointerEvent pointer_event;
 	while (surface->poll_pointer_event(pointer_event)) {
 		consumed = true;
-		activation_emitted = _emit_surface_pointer_event(pointer_event) || activation_emitted;
+		const bool is_generation_sensitive_phase = pointer_event.type == HTML_POINTER_EVENT_DOWN
+				|| pointer_event.type == HTML_POINTER_EVENT_UP
+				|| pointer_event.type == HTML_POINTER_EVENT_CLICK;
+		if (p_emit_events || !is_generation_sensitive_phase) {
+			activation_emitted = _emit_surface_pointer_event(pointer_event) || activation_emitted;
+		} else {
+			const HTMLElementHit *replacement_hit = pointer_event.type == HTML_POINTER_EVENT_CLICK ? p_released_hit : p_pressed_hit;
+			if (replacement_hit != nullptr) {
+				StringName phase;
+				switch (pointer_event.type) {
+					case HTML_POINTER_EVENT_DOWN: phase = SNAME("down"); break;
+					case HTML_POINTER_EVENT_UP: phase = SNAME("up"); break;
+					case HTML_POINTER_EVENT_CLICK: phase = SNAME("click"); break;
+					default: break;
+				}
+				MouseButton button = MouseButton::NONE;
+				switch (pointer_event.button) {
+					case HTML_SURFACE_MOUSE_BUTTON_LEFT: button = MouseButton::LEFT; break;
+					case HTML_SURFACE_MOUSE_BUTTON_MIDDLE: button = MouseButton::MIDDLE; break;
+					case HTML_SURFACE_MOUSE_BUTTON_RIGHT: button = MouseButton::RIGHT; break;
+					default: break;
+				}
+				const Vector2 position(pointer_event.document_position.x, pointer_event.document_position.y);
+				_emit_pointer_phase(phase, *replacement_hit, position, button);
+				if (pointer_event.type == HTML_POINTER_EVENT_CLICK && !replacement_hit->disabled) {
+					_emit_activation(*replacement_hit, position, button);
+					activation_emitted = true;
+				}
+			}
+		}
 	}
 	if (r_activation_emitted != nullptr) {
 		*r_activation_emitted = activation_emitted;
@@ -1894,10 +1926,10 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 			const uint64_t input_start_usec = html_view_input_trace_enabled() && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 			pointer_press_active = false;
 			pointer_press_button = button_index;
-			const Error down_err = surface->mouse_down(html_position, html_button, _modifiers_from_event(mb, button_index, true), mb->is_double_click() ? 2 : 1);
-			const bool used_surface_dispatch = _drain_surface_pointer_events();
-			const bool has_press_hit = _hit_test(html_position, pointer_press_hit);
 			const bool generation_bound_input = surface->uses_generation_bound_input();
+			const bool has_press_hit = _hit_test(html_position, pointer_press_hit);
+			const Error down_err = surface->mouse_down(html_position, html_button, _modifiers_from_event(mb, button_index, true), mb->is_double_click() ? 2 : 1);
+			const bool used_surface_dispatch = _drain_surface_pointer_events(nullptr, !generation_bound_input, has_press_hit ? &pointer_press_hit : nullptr);
 			if ((!used_surface_dispatch || generation_bound_input) && has_press_hit && !pointer_press_hit.disabled) {
 				// Retain the target from the presentation generation visible at press
 				// time. Native pointer phases can target a newer DOM generation while
@@ -1935,16 +1967,20 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 
 		const uint64_t trace_sequence = ++input_trace_sequence;
 		const uint64_t input_start_usec = html_view_input_trace_enabled() && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
-		const Error up_err = surface->mouse_up(html_position, html_button, _modifiers_from_event(mb, button_index, false), mb->is_double_click() ? 2 : 1);
-		bool native_activation_emitted = false;
-		const bool used_surface_dispatch = _drain_surface_pointer_events(&native_activation_emitted);
+		const bool generation_bound_input = surface->uses_generation_bound_input();
 		HTMLElementHit release_hit;
 		const bool has_release_hit = _hit_test(html_position, release_hit);
+		const Error up_err = surface->mouse_up(html_position, html_button, _modifiers_from_event(mb, button_index, false), mb->is_double_click() ? 2 : 1);
+		bool native_activation_emitted = false;
+		const bool used_surface_dispatch = _drain_surface_pointer_events(&native_activation_emitted, !generation_bound_input, pointer_press_active ? &pointer_press_hit : nullptr, has_release_hit ? &release_hit : nullptr);
 		if (!used_surface_dispatch && pointer_press_active && pointer_press_button == button_index) {
 			_emit_pointer_phase(SNAME("up"), pointer_press_hit, html_position, button_index);
 		}
 		bool activation_emitted = false;
-		if ((!used_surface_dispatch || (surface->uses_generation_bound_input() && !native_activation_emitted)) && button_index == MouseButton::LEFT && pointer_press_active && pointer_press_button == button_index && has_release_hit && _same_activation_target(pointer_press_hit, release_hit)) {
+		if ((!used_surface_dispatch || (generation_bound_input && !native_activation_emitted)) && button_index == MouseButton::LEFT && pointer_press_active && pointer_press_button == button_index && has_release_hit && _same_activation_target(pointer_press_hit, release_hit)) {
+			if (generation_bound_input && used_surface_dispatch) {
+				_emit_pointer_phase(SNAME("click"), release_hit, html_position, button_index);
+			}
 			_emit_activation(release_hit, html_position, button_index);
 			activation_emitted = true;
 		}

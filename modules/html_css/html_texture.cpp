@@ -30,8 +30,10 @@
 
 #include "html_texture.h"
 
+#include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 #include "core/os/os.h"
+#include "core/os/thread.h"
 #include "core/string/print_string.h"
 #include "servers/rendering/rendering_server.h"
 
@@ -42,6 +44,18 @@ static bool html_css_texture_trace_enabled() {
 static void html_css_texture_trace(const String &p_message) {
 	if (html_css_texture_trace_enabled()) {
 		print_line(vformat("HTML/CSS texture trace: %s", p_message));
+	}
+}
+
+void HTMLTexture2D::_emit_changed_on_main_thread() {
+	emit_changed();
+}
+
+void HTMLTexture2D::_notify_changed() {
+	if (Thread::is_main_thread()) {
+		emit_changed();
+	} else {
+		callable_mp(this, &HTMLTexture2D::_emit_changed_on_main_thread).call_deferred();
 	}
 }
 
@@ -81,7 +95,7 @@ void HTMLTexture2D::update_from_image(const Ref<Image> &p_image) {
 
 	size = Size2i(p_image->get_width(), p_image->get_height());
 	alpha = p_image->detect_alpha() != Image::ALPHA_NONE;
-	emit_changed();
+	_notify_changed();
 }
 
 void HTMLTexture2D::set_external_texture(const RID &p_texture_rid, const Size2i &p_size, bool p_alpha) {
@@ -91,7 +105,7 @@ void HTMLTexture2D::set_external_texture(const RID &p_texture_rid, const Size2i 
 	latest_image.unref();
 	size = Size2i(MAX(1, p_size.x), MAX(1, p_size.y));
 	alpha = p_alpha;
-	emit_changed();
+	_notify_changed();
 }
 
 void HTMLTexture2D::clear_external_texture() {
@@ -102,7 +116,20 @@ void HTMLTexture2D::clear_external_texture() {
 	external_texture_rid = RID();
 	RenderingServer::get_singleton()->texture_proxy_update(proxy_texture_rid, texture->get_rid());
 	size = Size2i();
-	emit_changed();
+	_notify_changed();
+}
+
+void HTMLTexture2D::release_resources() {
+	html_css_texture_trace(vformat("release_resources: proxy_valid=%s fallback_valid=%s", proxy_texture_rid.is_valid() ? "true" : "false", texture.is_valid() && texture->get_rid().is_valid() ? "true" : "false"));
+	external_texture_rid = RID();
+	latest_image.unref();
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	if (rendering_server != nullptr && proxy_texture_rid.is_valid()) {
+		rendering_server->free_rid(proxy_texture_rid);
+	}
+	proxy_texture_rid = RID();
+	texture.unref();
+	size = Size2i();
 }
 
 int HTMLTexture2D::get_width() const {
@@ -186,8 +213,5 @@ HTMLTexture2D::HTMLTexture2D() {
 }
 
 HTMLTexture2D::~HTMLTexture2D() {
-	RenderingServer *rendering_server = RenderingServer::get_singleton();
-	if (rendering_server != nullptr && proxy_texture_rid.is_valid()) {
-		rendering_server->free_rid(proxy_texture_rid);
-	}
+	release_resources();
 }

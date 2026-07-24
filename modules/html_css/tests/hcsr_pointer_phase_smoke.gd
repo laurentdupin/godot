@@ -5,6 +5,7 @@ var slider_phases: Array[StringName] = []
 var actions: Array[StringName] = []
 
 func _initialize() -> void:
+	DisplayServer.window_move_to_foreground()
 	var use_d3d12 := OS.get_cmdline_user_args().has("--d3d12")
 	var use_vulkan := OS.get_cmdline_user_args().has("--vulkan")
 	var use_metal := OS.get_cmdline_user_args().has("--metal")

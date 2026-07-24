@@ -8,6 +8,9 @@ func _initialize() -> void:
 	if "--vulkan" in OS.get_cmdline_user_args():
 		backend = HTMLView.BACKEND_VULKAN
 		backend_name = "Vulkan"
+	elif "--metal" in OS.get_cmdline_user_args():
+		backend = HTMLView.BACKEND_METAL
+		backend_name = "Metal"
 	elif "--cpu" in OS.get_cmdline_user_args():
 		backend = HTMLView.BACKEND_CPU
 		backend_name = "CPU"
@@ -59,6 +62,7 @@ func _run() -> void:
 		draw_batches,
 		gpu_dispatches,
 	])
+	print("HCSR frame-alignment smoke passed on %s." % backend_name)
 	quit(0)
 
 func _wait_for_aligned_visible_frame(view: HTMLView, output: HTMLViewOutput, expected: Color, after_generation: int) -> bool:

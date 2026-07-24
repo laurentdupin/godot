@@ -13,7 +13,9 @@ func _run() -> void:
 	root.add_child(host)
 	view = HTMLView.new()
 	view.backend_preference = HTMLView.BACKEND_D3D12 if "--d3d12" in OS.get_cmdline_user_args() else (
-		HTMLView.BACKEND_VULKAN if "--vulkan" in OS.get_cmdline_user_args() else HTMLView.BACKEND_CPU
+		HTMLView.BACKEND_VULKAN if "--vulkan" in OS.get_cmdline_user_args() else (
+			HTMLView.BACKEND_METAL if "--metal" in OS.get_cmdline_user_args() else HTMLView.BACKEND_CPU
+		)
 	)
 	view.logical_size = Vector2i(320, 180)
 	view.size = Vector2(320, 180)
@@ -52,6 +54,7 @@ func _run() -> void:
 		activated_process_frame,
 		view.get_timeline_time_seconds(),
 	])
+	print("HCSR host-frame evidence smoke passed.")
 	quit(0)
 
 func _on_frame_activated(generation: int) -> void:

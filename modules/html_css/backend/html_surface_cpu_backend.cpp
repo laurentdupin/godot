@@ -30,6 +30,8 @@
 
 #include "html_surface_cpu_backend.h"
 
+#include "servers/rendering/rendering_server.h"
+
 void HTMLSurfaceCPUBackend::clear_to_background() {
 	Ref<Image> image = Image::create_empty(size.x, size.y, false, Image::FORMAT_RGBA8);
 	image->fill(background_color);
@@ -114,4 +116,15 @@ Ref<HTMLTexture2D> HTMLSurfaceCPUBackend::get_html_texture() const {
 
 HTMLSurfaceCPUBackend::HTMLSurfaceCPUBackend() {
 	texture.instantiate();
+}
+
+HTMLSurfaceCPUBackend::~HTMLSurfaceCPUBackend() {
+	if (texture.is_valid()) {
+		texture->release_resources();
+		texture.unref();
+	}
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	if (rendering_server != nullptr && !rendering_server->is_on_render_thread()) {
+		rendering_server->sync();
+	}
 }

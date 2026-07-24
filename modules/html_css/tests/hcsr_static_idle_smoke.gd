@@ -9,6 +9,9 @@ func _initialize() -> void:
 	if "--vulkan" in OS.get_cmdline_user_args():
 		backend = HTMLView.BACKEND_VULKAN
 		backend_name = "Vulkan"
+	elif "--metal" in OS.get_cmdline_user_args():
+		backend = HTMLView.BACKEND_METAL
+		backend_name = "Metal"
 	elif "--cpu" in OS.get_cmdline_user_args():
 		backend = HTMLView.BACKEND_CPU
 		backend_name = "CPU"
@@ -62,6 +65,7 @@ func _run() -> void:
 		settled_generation,
 		Engine.get_process_frames() - idle_start_frame,
 	])
+	print("HCSR static-idle smoke passed on %s." % backend_name)
 	quit(0)
 
 func _fail(message: String) -> void:
