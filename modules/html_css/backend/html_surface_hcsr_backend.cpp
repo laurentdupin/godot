@@ -979,9 +979,9 @@ void HTMLSurfaceHCSRBackend::_schedule_presentation_output_topology_sync() {
 	}
 }
 
-bool HTMLSurfaceHCSRBackend::_activate_presentation_output_on_render_thread(PresentationOutputState *p_state, const hcsr_gpu_frame_t &p_frame) {
+bool HTMLSurfaceHCSRBackend::_activate_presentation_output_on_render_thread(PresentationOutputState *p_state, const hcsr_gpu_frame_t &p_frame, bool p_engine_ordered) {
 	ERR_FAIL_NULL_V(p_state, false);
-	if (p_frame.native_texture == nullptr || p_frame.width <= 0 || p_frame.height <= 0 || p_frame.render_backend != render_backend || p_frame.texture_format != HCSR_GPU_TEXTURE_FORMAT_RGBA8_UNORM || p_frame.premultiplied_alpha != 0 || p_frame.producer_completed == 0 || p_frame.frame_generation < p_state->active_generation) {
+	if (p_frame.native_texture == nullptr || p_frame.width <= 0 || p_frame.height <= 0 || p_frame.render_backend != render_backend || p_frame.texture_format != HCSR_GPU_TEXTURE_FORMAT_RGBA8_UNORM || p_frame.premultiplied_alpha != 0 || (p_frame.producer_completed == 0) != p_engine_ordered || p_frame.frame_generation <= p_state->active_generation) {
 		_record_error("HCSR returned an invalid secondary presentation frame");
 		return false;
 	}
@@ -1077,7 +1077,13 @@ void HTMLSurfaceHCSRBackend::_poll_presentation_outputs_on_render_thread() {
 			continue;
 		}
 		if (updated != 0) {
-			_activate_presentation_output_on_render_thread(state, frame);
+			if (gpu_capabilities.synchronization_mode == HCSR_GPU_SYNCHRONIZATION_ENGINE_QUEUE_ORDERED) {
+				if (state->active_frame.submission_token != frame.submission_token || state->active_generation != frame.frame_generation) {
+					_record_error("HCSR completed a secondary presentation frame that was not the active engine-ordered resource");
+				}
+			} else {
+				_activate_presentation_output_on_render_thread(state, frame);
+			}
 		}
 		if (pending != 0) {
 			gpu_presentation_work_pending.set();
@@ -1321,6 +1327,64 @@ bool HTMLSurfaceHCSRBackend::_activate_engine_ordered_gpu_frame_on_render_thread
 	}
 	gpu_presentation_changed.set();
 	return true;
+}
+
+bool HTMLSurfaceHCSRBackend::_activate_engine_ordered_output_group_on_render_thread(const hcsr_gpu_frame_t &p_primary_output) {
+	ERR_FAIL_COND_V(gpu_capabilities.synchronization_mode != HCSR_GPU_SYNCHRONIZATION_ENGINE_QUEUE_ORDERED, false);
+
+	struct QueuedPresentationFrame {
+		PresentationOutputState *state = nullptr;
+		hcsr_gpu_frame_t frame = {};
+	};
+	Vector<QueuedPresentationFrame> queued_outputs;
+	{
+		MutexLock lock(presentation_outputs_mutex);
+		queued_outputs.reserve(presentation_outputs.size());
+		auto release_acquired_outputs = [&]() {
+			for (const QueuedPresentationFrame &queued : queued_outputs) {
+				_defer_presentation_output_resource_release_on_render_thread(queued.state->output, queued.frame);
+			}
+		};
+		for (const KeyValue<uint64_t, PresentationOutputState *> &entry : presentation_outputs) {
+			PresentationOutputState *state = entry.value;
+			if (state == nullptr || state->output == nullptr) {
+				continue;
+			}
+			QueuedPresentationFrame queued;
+			queued.state = state;
+			queued.frame.struct_size = sizeof(queued.frame);
+			uint8_t available = 0;
+			if (hcsr_renderer_acquire_queued_presentation_output(renderer, state->output, p_primary_output.frame_generation, &queued.frame, &available) != HCSR_STATUS_OK || available == 0) {
+				release_acquired_outputs();
+				_record_error("HCSR did not queue every synchronized presentation output for the primary frame generation");
+				return false;
+			}
+			if (queued.frame.frame_generation != p_primary_output.frame_generation
+					|| queued.frame.render_backend != p_primary_output.render_backend
+					|| queued.frame.texture_format != p_primary_output.texture_format
+					|| queued.frame.premultiplied_alpha != p_primary_output.premultiplied_alpha
+					|| queued.frame.producer_completed != 0
+					|| Size2i(queued.frame.width, queued.frame.height) != state->requested_size) {
+				_defer_presentation_output_resource_release_on_render_thread(state->output, queued.frame);
+				release_acquired_outputs();
+				_record_error("HCSR queued an inconsistent synchronized presentation output");
+				return false;
+			}
+			queued_outputs.push_back(queued);
+		}
+
+		// This render-thread callback is the publication transaction. Godot cannot
+		// record a draw between these proxy updates, so every consumer observes
+		// either the previous group or this complete generation.
+		for (QueuedPresentationFrame &queued : queued_outputs) {
+			if (!_activate_presentation_output_on_render_thread(queued.state, queued.frame, true)) {
+				release_acquired_outputs();
+				_record_error("Godot could not activate a synchronized secondary presentation output");
+				return false;
+			}
+		}
+	}
+	return _activate_engine_ordered_gpu_frame_on_render_thread(p_primary_output);
 }
 
 bool HTMLSurfaceHCSRBackend::_activate_completed_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output) {
@@ -1657,7 +1721,7 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 	gpu_render_succeeded = _record_submitted_gpu_frame_on_render_thread(output);
 	if (gpu_render_succeeded
 			&& gpu_capabilities.synchronization_mode == HCSR_GPU_SYNCHRONIZATION_ENGINE_QUEUE_ORDERED) {
-		gpu_render_succeeded = _activate_engine_ordered_gpu_frame_on_render_thread(output);
+		gpu_render_succeeded = _activate_engine_ordered_output_group_on_render_thread(output);
 	}
 	if (_uses_async_gpu_presentation()) {
 		gpu_presentation_work_pending.set();

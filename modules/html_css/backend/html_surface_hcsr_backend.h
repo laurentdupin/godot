@@ -125,6 +125,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	void _poll_gpu_presentation_on_render_thread();
 	bool _record_submitted_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output);
 	bool _activate_engine_ordered_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output);
+	bool _activate_engine_ordered_output_group_on_render_thread(const hcsr_gpu_frame_t &p_primary_output);
 	bool _activate_completed_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output);
 	void _ensure_gpu_texture_imported_on_render_thread();
 	void _defer_gpu_resource_release_on_render_thread(const hcsr_gpu_frame_t &p_frame);
@@ -136,7 +137,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool _ensure_presentation_outputs_on_render_thread();
 	void _schedule_presentation_output_topology_sync();
 	void _sync_presentation_output_topology_on_render_thread();
-	bool _activate_presentation_output_on_render_thread(PresentationOutputState *p_state, const hcsr_gpu_frame_t &p_frame);
+	bool _activate_presentation_output_on_render_thread(PresentationOutputState *p_state, const hcsr_gpu_frame_t &p_frame, bool p_engine_ordered = false);
 	void _detach_presentation_output_on_render_thread(PresentationOutputState *p_state);
 	void _destroy_presentation_output_state_on_render_thread(PresentationOutputState *p_state);
 	void _defer_presentation_output_destroy_on_render_thread(hcsr_presentation_output_t *p_output);
