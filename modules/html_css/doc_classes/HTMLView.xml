@@ -27,6 +27,9 @@
 		<member name="focus_on_click" type="bool" setter="set_focus_on_click" getter="is_focus_on_click_enabled" default="true">
 			If [code]true[/code], the view grabs keyboard focus when clicked.
 		</member>
+		<member name="frame_budget_milliseconds" type="float" setter="set_frame_budget_milliseconds" getter="get_frame_budget_milliseconds" default="0.0">
+			Optional end-to-end budget from an HTML frame request until its synchronized output group is activated. A positive value enables [signal frame_budget_missed]; [code]0.0[/code] disables reporting. Exceeding this budget never permits dropping animation samples, substituting stale pixels, or activating different generations across outputs.
+		</member>
 		<member name="accept_action" type="StringName" setter="set_accept_action" getter="get_accept_action" default="&amp;&quot;ui_accept&quot;">
 			Godot input action translated to Blink's Enter key for focused HTML activation.
 		</member>
@@ -81,6 +84,15 @@
 			<param index="0" name="generation" type="int" />
 			<description>
 				Emitted after a logical frame is submitted to the selected renderer backend.
+			</description>
+		</signal>
+		<signal name="frame_budget_missed">
+			<param index="0" name="generation" type="int" />
+			<param index="1" name="elapsed_milliseconds" type="float" />
+			<param index="2" name="budget_milliseconds" type="float" />
+			<param index="3" name="stage" type="StringName" />
+			<description>
+				Emitted when a requested frame exceeds [member frame_budget_milliseconds]. [param stage] is [code]prepare_submit[/code] when the frame was already late when queued, [code]activation[/code] when later activation consumed the budget, or [code]no_visual_output[/code] when a request completed without producing new pixels. [param generation] is the synchronized generation that became active, or the unchanged active generation for [code]no_visual_output[/code].
 			</description>
 		</signal>
 		<signal name="action_requested">
@@ -154,6 +166,12 @@
 			<return type="int" />
 			<description>
 				Returns the latest shared frame generation activated by the automatic Control presentation.
+			</description>
+		</method>
+		<method name="get_last_frame_budget_result" qualifiers="const">
+			<return type="Dictionary" />
+			<description>
+				Returns the latest completed budget observation with [code]generation[/code], [code]elapsed_milliseconds[/code], [code]budget_milliseconds[/code], [code]missed[/code], and [code]stage[/code]. A request that produces no visual generation is still completed and reported with the [code]no_visual_output[/code] stage.
 			</description>
 		</method>
 		<method name="get_backdrop_filter_regions">

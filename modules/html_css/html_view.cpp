@@ -350,6 +350,9 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_generation"), &HTMLView::get_generation);
 	ClassDB::bind_method(D_METHOD("get_host_frame_number"), &HTMLView::get_host_frame_number);
 	ClassDB::bind_method(D_METHOD("get_timeline_time_seconds"), &HTMLView::get_timeline_time_seconds);
+	ClassDB::bind_method(D_METHOD("set_frame_budget_milliseconds", "frame_budget_milliseconds"), &HTMLView::set_frame_budget_milliseconds);
+	ClassDB::bind_method(D_METHOD("get_frame_budget_milliseconds"), &HTMLView::get_frame_budget_milliseconds);
+	ClassDB::bind_method(D_METHOD("get_last_frame_budget_result"), &HTMLView::get_last_frame_budget_result);
 	ClassDB::bind_method(D_METHOD("set_logical_size", "logical_size"), &HTMLView::set_logical_size);
 	ClassDB::bind_method(D_METHOD("get_logical_size"), &HTMLView::get_logical_size);
 	ClassDB::bind_method(D_METHOD("create_output", "size", "mipmaps"), &HTMLView::create_output, DEFVAL(false));
@@ -392,6 +395,7 @@ void HTMLView::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "fixed_viewport_device_scale_factor", PROPERTY_HINT_RANGE, "0,8,0.05,or_greater,suffix:x"), "set_fixed_viewport_device_scale_factor", "get_fixed_viewport_device_scale_factor");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "use_document_minimum_size"), "set_use_document_minimum_size", "is_using_document_minimum_size");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "backdrop_filter_enabled"), "set_backdrop_filter_enabled", "is_backdrop_filter_enabled");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "frame_budget_milliseconds", PROPERTY_HINT_RANGE, "0,1000,0.1,or_greater,suffix:ms"), "set_frame_budget_milliseconds", "get_frame_budget_milliseconds");
 
 	ADD_SIGNAL(MethodInfo("action_requested", PropertyInfo(Variant::STRING_NAME, "action"), PropertyInfo(Variant::DICTIONARY, "payload")));
 	ADD_SIGNAL(MethodInfo("element_clicked", PropertyInfo(Variant::STRING_NAME, "element_id"), PropertyInfo(Variant::INT, "button")));
@@ -404,6 +408,11 @@ void HTMLView::_bind_methods() {
 	ADD_SIGNAL(MethodInfo("render_error", PropertyInfo(Variant::STRING, "message")));
 	ADD_SIGNAL(MethodInfo("frame_queued", PropertyInfo(Variant::INT, "generation")));
 	ADD_SIGNAL(MethodInfo("frame_activated", PropertyInfo(Variant::INT, "generation")));
+	ADD_SIGNAL(MethodInfo("frame_budget_missed",
+			PropertyInfo(Variant::INT, "generation"),
+			PropertyInfo(Variant::FLOAT, "elapsed_milliseconds"),
+			PropertyInfo(Variant::FLOAT, "budget_milliseconds"),
+			PropertyInfo(Variant::STRING_NAME, "stage")));
 
 	BIND_ENUM_CONSTANT(BACKEND_AUTO);
 	BIND_ENUM_CONSTANT(BACKEND_CPU);
@@ -503,6 +512,7 @@ void HTMLView::_notification(int p_what) {
 				set_process_internal(frame_render_pending);
 				break;
 			}
+			_note_frame_budget_request();
 			const uint64_t servicing_request_generation = frame_render_request_generation;
 
 			bool needs_output = true;
@@ -540,6 +550,9 @@ void HTMLView::_notification(int p_what) {
 				}
 			} else if (trace_sequence != 0) {
 				html_view_input_trace(vformat("seq=%d render_now skipped reason=no_output", (int64_t)trace_sequence));
+			}
+			if (frame_budget_request_usec != 0 && !surface->has_pending_output() && surface->get_active_frame_generation() <= frame_budget_request_after_generation) {
+				_finish_frame_budget_request(surface->get_active_frame_generation(), SNAME("no_visual_output"));
 			}
 
 			if (trace_sequence != 0 && needs_begin_frame) {
@@ -600,6 +613,12 @@ void HTMLView::_surface_changed() {
 }
 
 void HTMLView::_surface_frame_queued(uint64_t p_generation) {
+	if (frame_budget_request_usec != 0 && p_generation > frame_budget_request_after_generation) {
+		frame_budget_queued_generation = p_generation;
+		const uint64_t now_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
+		frame_budget_queue_missed = now_usec >= frame_budget_request_usec
+				&& (now_usec - frame_budget_request_usec) / 1000.0 > frame_budget_milliseconds;
+	}
 	emit_signal(SNAME("frame_queued"), p_generation);
 }
 
@@ -612,6 +631,9 @@ void HTMLView::_surface_frame_activated(uint64_t p_generation) {
 		pending_visual_input_usec = 0;
 		pending_visual_input_after_generation = 0;
 	}
+	if (frame_budget_request_usec != 0 && p_generation > frame_budget_request_after_generation) {
+		_finish_frame_budget_request(p_generation, SNAME("activation"));
+	}
 	emit_signal(SNAME("frame_activated"), p_generation);
 }
 
@@ -621,6 +643,35 @@ void HTMLView::_note_visual_input() {
 	}
 	pending_visual_input_usec = OS::get_singleton()->get_ticks_usec();
 	pending_visual_input_after_generation = surface.is_valid() ? get_generation() : 0;
+}
+
+void HTMLView::_note_frame_budget_request() {
+	if (frame_budget_milliseconds <= 0.0 || frame_budget_request_usec != 0 || OS::get_singleton() == nullptr) {
+		return;
+	}
+	frame_budget_request_usec = OS::get_singleton()->get_ticks_usec();
+	frame_budget_request_after_generation = surface.is_valid() ? get_generation() : 0;
+	frame_budget_queued_generation = 0;
+	frame_budget_queue_missed = false;
+}
+
+void HTMLView::_finish_frame_budget_request(uint64_t p_generation, const StringName &p_default_stage) {
+	if (frame_budget_request_usec == 0) {
+		return;
+	}
+	const uint64_t now_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
+	last_frame_budget_generation = p_generation;
+	last_frame_budget_elapsed_milliseconds = now_usec >= frame_budget_request_usec ? (now_usec - frame_budget_request_usec) / 1000.0 : 0.0;
+	last_frame_budget_milliseconds = frame_budget_milliseconds;
+	last_frame_budget_missed = last_frame_budget_elapsed_milliseconds > frame_budget_milliseconds;
+	last_frame_budget_stage = frame_budget_queue_missed && frame_budget_queued_generation == p_generation ? SNAME("prepare_submit") : p_default_stage;
+	if (last_frame_budget_missed) {
+		emit_signal(SNAME("frame_budget_missed"), p_generation, last_frame_budget_elapsed_milliseconds, frame_budget_milliseconds, last_frame_budget_stage);
+	}
+	frame_budget_request_usec = 0;
+	frame_budget_request_after_generation = 0;
+	frame_budget_queued_generation = 0;
+	frame_budget_queue_missed = false;
 }
 
 void HTMLView::_connect_viewport_size_changed() {
@@ -925,6 +976,31 @@ uint64_t HTMLView::get_host_frame_number() const {
 
 double HTMLView::get_timeline_time_seconds() const {
 	return surface->get_frame_metadata().timeline_time_seconds;
+}
+
+void HTMLView::set_frame_budget_milliseconds(double p_budget_milliseconds) {
+	ERR_FAIL_COND_MSG(!Math::is_finite(p_budget_milliseconds) || p_budget_milliseconds < 0.0, "HTMLView frame budget must be a finite non-negative duration.");
+	frame_budget_milliseconds = p_budget_milliseconds;
+	if (frame_budget_milliseconds == 0.0) {
+		frame_budget_request_usec = 0;
+		frame_budget_request_after_generation = 0;
+		frame_budget_queued_generation = 0;
+		frame_budget_queue_missed = false;
+	}
+}
+
+double HTMLView::get_frame_budget_milliseconds() const {
+	return frame_budget_milliseconds;
+}
+
+Dictionary HTMLView::get_last_frame_budget_result() const {
+	Dictionary result;
+	result[SNAME("generation")] = last_frame_budget_generation;
+	result[SNAME("elapsed_milliseconds")] = last_frame_budget_elapsed_milliseconds;
+	result[SNAME("budget_milliseconds")] = last_frame_budget_milliseconds;
+	result[SNAME("missed")] = last_frame_budget_missed;
+	result[SNAME("stage")] = last_frame_budget_stage;
+	return result;
 }
 
 Ref<HTMLViewOutput> HTMLView::create_output(const Size2i &p_size, bool p_mipmaps) {
@@ -1339,6 +1415,7 @@ void HTMLView::_call_bound_action(const StringName &p_action, const Dictionary &
 }
 
 void HTMLView::_queue_frame_render() {
+	_note_frame_budget_request();
 	const bool was_pending = frame_render_pending;
 	frame_render_request_generation++;
 	frame_render_pending = true;

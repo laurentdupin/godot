@@ -95,6 +95,16 @@ private:
 	uint64_t pending_input_trace_sequence = 0;
 	uint64_t pending_visual_input_usec = 0;
 	uint64_t pending_visual_input_after_generation = 0;
+	double frame_budget_milliseconds = 0.0;
+	uint64_t frame_budget_request_usec = 0;
+	uint64_t frame_budget_request_after_generation = 0;
+	uint64_t frame_budget_queued_generation = 0;
+	bool frame_budget_queue_missed = false;
+	uint64_t last_frame_budget_generation = 0;
+	double last_frame_budget_elapsed_milliseconds = 0.0;
+	double last_frame_budget_milliseconds = 0.0;
+	bool last_frame_budget_missed = false;
+	StringName last_frame_budget_stage;
 	ColorRect *backdrop_filter_rect = nullptr;
 	Viewport *viewport_size_changed_viewport = nullptr;
 	Ref<Shader> backdrop_filter_shader;
@@ -107,6 +117,8 @@ private:
 	void _surface_frame_queued(uint64_t p_generation);
 	void _surface_frame_activated(uint64_t p_generation);
 	void _note_visual_input();
+	void _note_frame_budget_request();
+	void _finish_frame_budget_request(uint64_t p_generation, const StringName &p_default_stage);
 	void _connect_viewport_size_changed();
 	void _disconnect_viewport_size_changed();
 	void _viewport_size_changed();
@@ -205,6 +217,9 @@ public:
 	uint64_t get_generation() const;
 	uint64_t get_host_frame_number() const;
 	double get_timeline_time_seconds() const;
+	void set_frame_budget_milliseconds(double p_budget_milliseconds);
+	double get_frame_budget_milliseconds() const;
+	Dictionary get_last_frame_budget_result() const;
 	void set_logical_size(const Size2i &p_logical_size);
 	Size2i get_logical_size() const;
 	Ref<HTMLViewOutput> create_output(const Size2i &p_size, bool p_mipmaps = false);
