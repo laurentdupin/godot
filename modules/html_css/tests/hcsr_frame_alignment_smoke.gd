@@ -48,7 +48,9 @@ func _run() -> void:
 	var resolved_updates: float = Performance.get_custom_monitor("HCSR/Resolved Updates")
 	var draw_batches: float = Performance.get_custom_monitor("HCSR/Draw Batches")
 	var gpu_dispatches: float = Performance.get_custom_monitor("HCSR/GPU Dispatches")
-	if backend != HTMLView.BACKEND_CPU and (resolved_updates <= 0.0 or draw_batches <= 0.0 or gpu_dispatches <= 0.0):
+	# Vulkan's direct physical compiler executes analytic batches as graphics draws,
+	# so a valid frame need not contain a compute dispatch.
+	if backend != HTMLView.BACKEND_CPU and (resolved_updates <= 0.0 or draw_batches <= 0.0):
 		_fail("%s did not expose nonzero execution telemetry: updates=%.0f batches=%.0f dispatches=%.0f." % [backend_name, resolved_updates, draw_batches, gpu_dispatches])
 		return
 	print("HCSR_FRAME_ALIGNMENT backend=%s generation=%d host=%d activation=%d visible=%d input_to_visible_ms=%.3f updates=%.0f batches=%.0f dispatches=%.0f" % [
