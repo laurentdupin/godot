@@ -935,7 +935,6 @@ void HTMLSurfaceHCSRBackend::_destroy_presentation_output_state_on_render_thread
 	ERR_FAIL_NULL(p_state);
 	_detach_presentation_output_on_render_thread(p_state);
 	if (p_state->texture.is_valid()) {
-		p_state->texture->release_resources();
 		p_state->texture.unref();
 	}
 	_defer_presentation_output_destroy_on_render_thread(p_state->output);
@@ -2624,7 +2623,6 @@ HTMLSurfaceHCSRBackend::~HTMLSurfaceHCSRBackend() {
 #endif
 	_detach_gpu_texture_import();
 	if (gpu_texture.is_valid()) {
-		gpu_texture->release_resources();
 		gpu_texture.unref();
 	}
 	RenderingServer *rendering_server = RenderingServer::get_singleton();

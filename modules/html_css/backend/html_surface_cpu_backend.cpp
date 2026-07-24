@@ -120,7 +120,6 @@ HTMLSurfaceCPUBackend::HTMLSurfaceCPUBackend() {
 
 HTMLSurfaceCPUBackend::~HTMLSurfaceCPUBackend() {
 	if (texture.is_valid()) {
-		texture->release_resources();
 		texture.unref();
 	}
 	RenderingServer *rendering_server = RenderingServer::get_singleton();

@@ -129,6 +129,10 @@ func _run() -> void:
 	if output.is_valid() or output.texture != null:
 		_fail("Released output remained attached to its HTMLView.")
 		return
+	if not await _wait_for_3d_color(material_viewport,
+			func(color: Color) -> bool: return color.a <= 0.01):
+		_fail("A released output invalidated or retained stale pixels in an externally held Texture2D proxy.")
+		return
 	var owner_destroyed_output := view.create_output(Vector2i(640, 360))
 	if owner_destroyed_output == null or not await _wait_for_output_generation(owner_destroyed_output, 0):
 		return
