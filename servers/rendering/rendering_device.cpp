@@ -2142,6 +2142,22 @@ void RenderingDevice::external_resource_defer_release(const Callable &p_callback
 	frames[frame].external_resource_release_callbacks.push_back(p_callback);
 }
 
+void RenderingDevice::external_texture_set_state(RID p_texture, ExternalTextureState p_state) {
+	ERR_RENDER_THREAD_GUARD();
+	ERR_FAIL_INDEX(p_state, RDD::TEXTURE_LAYOUT_MAX);
+	Texture *texture = texture_owner.get_or_null(p_texture);
+	ERR_FAIL_NULL(texture);
+	_external_texture_set_layout(texture, (RDD::TextureLayout)p_state);
+}
+
+void RenderingDevice::external_texture_defer_release(RID p_texture, const Callable &p_callback) {
+	ERR_RENDER_THREAD_GUARD();
+	ERR_FAIL_COND_MSG(!p_callback.is_valid(), "An external texture release callback must be valid.");
+	ERR_FAIL_NULL(texture_owner.get_or_null(p_texture));
+	pending_external_texture_releases.push_back(p_texture);
+	frames[frame].external_resource_release_callbacks.push_back(p_callback);
+}
+
 RID RenderingDevice::texture_create_shared_from_slice(const TextureView &p_view, RID p_with_texture, uint32_t p_layer, uint32_t p_mipmap, uint32_t p_mipmaps, TextureSliceType p_slice_type, uint32_t p_layers) {
 	Texture *src_texture = texture_owner.get_or_null(p_with_texture);
 	ERR_FAIL_NULL_V(src_texture, RID());
@@ -8440,6 +8456,18 @@ void RenderingDevice::_end_frame() {
 		usages.push_back(RDG::RESOURCE_USAGE_GENERAL);
 		draw_graph.add_driver_callback([](RDD *, RDD::CommandBufferID, void *) {}, nullptr, trackers, usages);
 	}
+	for (const RID &texture_rid : pending_external_texture_releases) {
+		Texture *texture = texture_owner.get_or_null(texture_rid);
+		if (texture == nullptr) {
+			continue;
+		}
+		_texture_make_mutable(texture, texture_rid);
+		LocalVector<RDG::ResourceTracker *> trackers;
+		LocalVector<RDG::ResourceUsage> usages;
+		trackers.push_back(texture->draw_tracker);
+		usages.push_back(RDG::RESOURCE_USAGE_GENERAL);
+		draw_graph.add_driver_callback([](RDD *, RDD::CommandBufferID, void *) {}, nullptr, trackers, usages);
+	}
 
 	// The command buffer must be copied into a stack variable as the driver workarounds can change the command buffer in use.
 	RDD::CommandBufferID command_buffer = frames[frame].command_buffer;
@@ -8522,6 +8550,7 @@ void RenderingDevice::execute_chained_cmds(bool p_present_swap_chain, RenderingD
 		ERR_CONTINUE_MSG(error != OK, "Could not enqueue an external producer release signal.");
 	}
 	pending_external_releases.clear();
+	pending_external_texture_releases.clear();
 }
 
 void RenderingDevice::_execute_frame(bool p_present) {

@@ -816,6 +816,21 @@ void HTMLSurfaceHCSRBackend::_destroy_renderer_after_retirement_callback(uint64_
 	}
 }
 
+void HTMLSurfaceHCSRBackend::_publish_external_texture_state_on_render_thread(RID p_texture) {
+	if (render_backend != HCSR_RENDER_BACKEND_VULKAN || !p_texture.is_valid()) {
+		return;
+	}
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	RenderingDevice *rendering_device = rendering_server != nullptr ? rendering_server->get_rendering_device() : nullptr;
+	if (rendering_device == nullptr) {
+		return;
+	}
+	const RID rd_texture = rendering_server->texture_get_rd_texture(p_texture, false);
+	if (rd_texture.is_valid()) {
+		rendering_device->external_texture_set_state(rd_texture, RenderingDevice::EXTERNAL_TEXTURE_STATE_GENERAL);
+	}
+}
+
 void HTMLSurfaceHCSRBackend::_defer_gpu_resource_release_on_render_thread(const hcsr_gpu_frame_t &p_frame) {
 	if (renderer == nullptr || p_frame.native_texture == nullptr || p_frame.resource_generation == 0 || p_frame.frame_generation == 0 || p_frame.submission_token == 0) {
 		return;
@@ -825,15 +840,23 @@ void HTMLSurfaceHCSRBackend::_defer_gpu_resource_release_on_render_thread(const 
 	if (rendering_device == nullptr) {
 		return;
 	}
-	rendering_device->external_resource_defer_release(callable_mp_static(&HTMLSurfaceHCSRBackend::_release_gpu_resource_after_retirement_callback).bind(
+	const Callable release_callback = callable_mp_static(&HTMLSurfaceHCSRBackend::_release_gpu_resource_after_retirement_callback).bind(
 			(uint64_t)renderer,
 			(uint64_t)p_frame.native_texture,
 			p_frame.resource_generation,
 			p_frame.frame_generation,
-			p_frame.submission_token));
+			p_frame.submission_token);
+	const RID *cached = gpu_texture_import_cache.getptr((uint64_t)p_frame.native_texture);
+	const RID imported = cached != nullptr ? *cached : ((uint64_t)native_gpu_texture == (uint64_t)p_frame.native_texture ? gpu_texture_rid : RID());
+	const RID rd_texture = imported.is_valid() ? rendering_server->texture_get_rd_texture(imported, false) : RID();
+	if (render_backend == HCSR_RENDER_BACKEND_VULKAN && rd_texture.is_valid()) {
+		rendering_device->external_texture_defer_release(rd_texture, release_callback);
+	} else {
+		rendering_device->external_resource_defer_release(release_callback);
+	}
 }
 
-void HTMLSurfaceHCSRBackend::_defer_presentation_output_resource_release_on_render_thread(hcsr_presentation_output_t *p_output, const hcsr_gpu_frame_t &p_frame) {
+void HTMLSurfaceHCSRBackend::_defer_presentation_output_resource_release_on_render_thread(hcsr_presentation_output_t *p_output, const hcsr_gpu_frame_t &p_frame, RID p_imported_texture) {
 	if (renderer == nullptr || p_output == nullptr || p_frame.native_texture == nullptr || p_frame.submission_token == 0) {
 		return;
 	}
@@ -842,7 +865,7 @@ void HTMLSurfaceHCSRBackend::_defer_presentation_output_resource_release_on_rend
 	if (rendering_device == nullptr) {
 		return;
 	}
-	rendering_device->external_resource_defer_release(callable_mp_static(&HTMLSurfaceHCSRBackend::_release_presentation_output_resource_after_retirement_callback).bind(
+	const Callable release_callback = callable_mp_static(&HTMLSurfaceHCSRBackend::_release_presentation_output_resource_after_retirement_callback).bind(
 			(uint64_t)renderer,
 			(uint64_t)p_output,
 			(uint64_t)p_frame.native_texture,
@@ -851,13 +874,27 @@ void HTMLSurfaceHCSRBackend::_defer_presentation_output_resource_release_on_rend
 			p_frame.submission_token,
 			(uint64_t)p_frame.render_backend,
 			(uint64_t)p_frame.width,
-			(uint64_t)p_frame.height));
+			(uint64_t)p_frame.height);
+	const RID rd_texture = p_imported_texture.is_valid() ? rendering_server->texture_get_rd_texture(p_imported_texture, false) : RID();
+	if (render_backend == HCSR_RENDER_BACKEND_VULKAN && rd_texture.is_valid()) {
+		rendering_device->external_texture_defer_release(rd_texture, release_callback);
+	} else {
+		rendering_device->external_resource_defer_release(release_callback);
+	}
 }
 
 void HTMLSurfaceHCSRBackend::_detach_presentation_output_on_render_thread(PresentationOutputState *p_state) {
 	ERR_FAIL_NULL(p_state);
 	if (p_state->texture.is_valid()) {
 		p_state->texture->clear_external_texture();
+	}
+	if (p_state->active_frame.native_texture != nullptr) {
+		const RID *active_imported = p_state->import_cache.getptr((uint64_t)p_state->active_frame.native_texture);
+		_defer_presentation_output_resource_release_on_render_thread(
+				p_state->output,
+				p_state->active_frame,
+				active_imported != nullptr ? *active_imported : p_state->texture_rid);
+		p_state->active_frame = {};
 	}
 	RenderingServer *rendering_server = RenderingServer::get_singleton();
 	if (rendering_server != nullptr) {
@@ -876,10 +913,6 @@ void HTMLSurfaceHCSRBackend::_detach_presentation_output_on_render_thread(Presen
 	p_state->import_cache.clear();
 	p_state->texture_rid = RID();
 	p_state->mipmapped_texture_rid = RID();
-	if (p_state->active_frame.native_texture != nullptr) {
-		_defer_presentation_output_resource_release_on_render_thread(p_state->output, p_state->active_frame);
-		p_state->active_frame = {};
-	}
 	p_state->native_texture = nullptr;
 	p_state->native_generation = 0;
 	p_state->native_size = Size2i();
@@ -1038,6 +1071,7 @@ bool HTMLSurfaceHCSRBackend::_activate_presentation_output_on_render_thread(Pres
 		p_state->native_generation = p_frame.resource_generation;
 		p_state->native_size = frame_size;
 	}
+	_publish_external_texture_state_on_render_thread(p_state->texture_rid);
 	RID published_texture = p_state->texture_rid;
 	if (p_state->mipmaps) {
 		RenderingServer *rendering_server = RenderingServer::get_singleton();
@@ -1057,7 +1091,11 @@ bool HTMLSurfaceHCSRBackend::_activate_presentation_output_on_render_thread(Pres
 	}
 	p_state->texture->set_external_texture(published_texture, frame_size, true);
 	if (p_state->active_frame.native_texture != nullptr) {
-		_defer_presentation_output_resource_release_on_render_thread(p_state->output, p_state->active_frame);
+		const RID *active_imported = p_state->import_cache.getptr((uint64_t)p_state->active_frame.native_texture);
+		_defer_presentation_output_resource_release_on_render_thread(
+				p_state->output,
+				p_state->active_frame,
+				active_imported != nullptr ? *active_imported : RID());
 	}
 	p_state->active_frame = p_frame;
 	p_state->active_generation = p_frame.frame_generation;
@@ -1320,6 +1358,7 @@ bool HTMLSurfaceHCSRBackend::_activate_engine_ordered_gpu_frame_on_render_thread
 		_release_gpu_packet_metadata(prepared_metadata);
 		return false;
 	}
+	_publish_external_texture_state_on_render_thread(gpu_texture_rid);
 
 	hcsr_hit_test_snapshot_t *retired_snapshot = nullptr;
 	hcsr_gpu_frame_t retired_frame = {};
@@ -1361,7 +1400,11 @@ bool HTMLSurfaceHCSRBackend::_activate_engine_ordered_output_group_on_render_thr
 		queued_outputs.reserve(presentation_outputs.size());
 		auto release_acquired_outputs = [&]() {
 			for (const QueuedPresentationFrame &queued : queued_outputs) {
-				_defer_presentation_output_resource_release_on_render_thread(queued.state->output, queued.frame);
+				const RID *imported = queued.state->import_cache.getptr((uint64_t)queued.frame.native_texture);
+				_defer_presentation_output_resource_release_on_render_thread(
+						queued.state->output,
+						queued.frame,
+						imported != nullptr ? *imported : RID());
 			}
 		};
 		for (const KeyValue<uint64_t, PresentationOutputState *> &entry : presentation_outputs) {
@@ -1384,7 +1427,11 @@ bool HTMLSurfaceHCSRBackend::_activate_engine_ordered_output_group_on_render_thr
 					|| queued.frame.premultiplied_alpha != p_primary_output.premultiplied_alpha
 					|| queued.frame.producer_completed != 0
 					|| Size2i(queued.frame.width, queued.frame.height) != state->requested_size) {
-				_defer_presentation_output_resource_release_on_render_thread(state->output, queued.frame);
+				const RID *imported = state->import_cache.getptr((uint64_t)queued.frame.native_texture);
+				_defer_presentation_output_resource_release_on_render_thread(
+						state->output,
+						queued.frame,
+						imported != nullptr ? *imported : RID());
 				release_acquired_outputs();
 				_record_error("HCSR queued an inconsistent synchronized presentation output");
 				return false;
@@ -1520,6 +1567,7 @@ bool HTMLSurfaceHCSRBackend::_activate_completed_gpu_frame_on_render_thread(cons
 		_defer_gpu_resource_release_on_render_thread(completed_frame);
 		return false;
 	}
+	_publish_external_texture_state_on_render_thread(gpu_texture_rid);
 	if (active_gpu_frame.native_texture != nullptr) {
 		_defer_gpu_resource_release_on_render_thread(active_gpu_frame);
 	}

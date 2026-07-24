@@ -128,6 +128,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool _activate_engine_ordered_output_group_on_render_thread(const hcsr_gpu_frame_t &p_primary_output);
 	bool _activate_completed_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output);
 	void _ensure_gpu_texture_imported_on_render_thread();
+	void _publish_external_texture_state_on_render_thread(RID p_texture);
 	void _defer_gpu_resource_release_on_render_thread(const hcsr_gpu_frame_t &p_frame);
 	void _detach_gpu_texture_import();
 	void _detach_gpu_texture_import_on_render_thread();
@@ -141,7 +142,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	void _detach_presentation_output_on_render_thread(PresentationOutputState *p_state);
 	void _destroy_presentation_output_state_on_render_thread(PresentationOutputState *p_state);
 	void _defer_presentation_output_destroy_on_render_thread(hcsr_presentation_output_t *p_output);
-	void _defer_presentation_output_resource_release_on_render_thread(hcsr_presentation_output_t *p_output, const hcsr_gpu_frame_t &p_frame);
+	void _defer_presentation_output_resource_release_on_render_thread(hcsr_presentation_output_t *p_output, const hcsr_gpu_frame_t &p_frame, RID p_imported_texture = RID());
 	static void _configure_d3d12_device_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _configure_vulkan_device_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _configure_metal_device_on_render_thread_callback(uint64_t p_backend_ptr);

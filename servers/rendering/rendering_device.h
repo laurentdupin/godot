@@ -455,6 +455,7 @@ public:
 	RID_Owner<ExternalTexturePool, true> external_texture_pool_owner;
 	LocalVector<ExternalTimelineOperation> pending_external_acquires;
 	LocalVector<ExternalTimelineOperation> pending_external_releases;
+	LocalVector<RID> pending_external_texture_releases;
 
 	static RDG::ResourceUsage _external_layout_to_resource_usage(RDD::TextureLayout p_layout);
 	void _external_texture_set_layout(Texture *p_texture, RDD::TextureLayout p_layout);
@@ -528,6 +529,10 @@ public:
 	// Runs after the current engine frame's GPU fence retires. Same-queue native
 	// producers use this to reclaim resources without a CPU fence wait.
 	void external_resource_defer_release(const Callable &p_callback);
+	// Same-queue producers publish a backend-neutral final state before Godot
+	// consumes an imported texture and request GENERAL before reclaiming it.
+	void external_texture_set_state(RID p_texture, ExternalTextureState p_state);
+	void external_texture_defer_release(RID p_texture, const Callable &p_callback);
 	RID texture_create_shared_from_slice(const TextureView &p_view, RID p_with_texture, uint32_t p_layer, uint32_t p_mipmap, uint32_t p_mipmaps = 1, TextureSliceType p_slice_type = TEXTURE_SLICE_2D, uint32_t p_layers = 0);
 	Error texture_update(RID p_texture, uint32_t p_layer, const Vector<uint8_t> &p_data);
 	Vector<uint8_t> texture_get_data(RID p_texture, uint32_t p_layer); // CPU textures will return immediately, while GPU textures will most likely force a flush
