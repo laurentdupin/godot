@@ -911,6 +911,7 @@ void HTMLSurfaceHCSRBackend::_detach_presentation_output_on_render_thread(Presen
 		}
 	}
 	p_state->import_cache.clear();
+	p_state->submitted_generations.clear();
 	p_state->texture_rid = RID();
 	p_state->mipmapped_texture_rid = RID();
 	p_state->native_texture = nullptr;
@@ -2276,7 +2277,7 @@ bool HTMLSurfaceHCSRBackend::poll_pending_output(bool *r_waiting_for_completion)
 	const HTMLPendingOutputState state = consume_pending_output_state();
 	schedule_retirement_service();
 	if (r_waiting_for_completion != nullptr) {
-		*r_waiting_for_completion = state.producer_blocked || state.retirement_pending;
+		*r_waiting_for_completion = state.producer_blocked;
 	}
 	return state.presentation_changed;
 }
