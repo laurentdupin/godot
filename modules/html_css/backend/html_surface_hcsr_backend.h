@@ -84,6 +84,8 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	SafeFlag gpu_presentation_poll_pending;
 	SafeFlag gpu_presentation_work_pending;
 	SafeFlag gpu_presentation_changed;
+	SafeFlag presentation_output_topology_sync_pending;
+	SafeFlag presentation_output_topology_sync_required;
 	SafeNumeric<uint64_t> viewport_revision;
 	Vector<uint64_t> pending_document_commits;
 	HashMap<uint64_t, PresentationOutputState *> presentation_outputs;
@@ -132,9 +134,12 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	void _poll_presentation_outputs_on_render_thread();
 	void _poll_cpu_presentation_outputs();
 	bool _ensure_presentation_outputs_on_render_thread();
+	void _schedule_presentation_output_topology_sync();
+	void _sync_presentation_output_topology_on_render_thread();
 	bool _activate_presentation_output_on_render_thread(PresentationOutputState *p_state, const hcsr_gpu_frame_t &p_frame);
 	void _detach_presentation_output_on_render_thread(PresentationOutputState *p_state);
 	void _destroy_presentation_output_state_on_render_thread(PresentationOutputState *p_state);
+	void _defer_presentation_output_destroy_on_render_thread(hcsr_presentation_output_t *p_output);
 	void _defer_presentation_output_resource_release_on_render_thread(hcsr_presentation_output_t *p_output, const hcsr_gpu_frame_t &p_frame);
 	static void _configure_d3d12_device_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _configure_vulkan_device_on_render_thread_callback(uint64_t p_backend_ptr);
@@ -142,6 +147,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	static void _render_gpu_frame_on_render_thread_callback(uint64_t p_backend_ptr, uint64_t p_packet_ptr);
 	static void _retry_deferred_gpu_frame_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _poll_gpu_presentation_on_render_thread_callback(uint64_t p_backend_ptr);
+	static void _sync_presentation_output_topology_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _detach_gpu_texture_import_on_render_thread_callback(uint64_t p_backend_ptr);
 	static void _release_gpu_resource_after_retirement_callback(uint64_t p_renderer_ptr, uint64_t p_native_texture, uint64_t p_resource_generation, uint64_t p_frame_generation, uint64_t p_submission_token);
 	static void _destroy_renderer_after_retirement_callback(uint64_t p_renderer_ptr);

@@ -880,20 +880,28 @@ void HTMLSurfaceHCSRBackend::_detach_presentation_output_on_render_thread(Presen
 		_defer_presentation_output_resource_release_on_render_thread(p_state->output, p_state->active_frame);
 		p_state->active_frame = {};
 	}
+	p_state->native_texture = nullptr;
+	p_state->native_generation = 0;
+	p_state->native_size = Size2i();
+}
+
+void HTMLSurfaceHCSRBackend::_defer_presentation_output_destroy_on_render_thread(hcsr_presentation_output_t *p_output) {
+	if (renderer == nullptr || p_output == nullptr) {
+		return;
+	}
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	RenderingDevice *rendering_device = rendering_server != nullptr ? rendering_server->get_rendering_device() : nullptr;
+	if (rendering_device != nullptr) {
+		rendering_device->external_resource_defer_release(callable_mp_static(&HTMLSurfaceHCSRBackend::_destroy_presentation_output_after_retirement_callback).bind((uint64_t)renderer, (uint64_t)p_output));
+	} else {
+		hcsr_renderer_destroy_presentation_output(renderer, p_output);
+	}
 }
 
 void HTMLSurfaceHCSRBackend::_destroy_presentation_output_state_on_render_thread(PresentationOutputState *p_state) {
 	ERR_FAIL_NULL(p_state);
 	_detach_presentation_output_on_render_thread(p_state);
-	if (renderer != nullptr && p_state->output != nullptr) {
-		RenderingServer *rendering_server = RenderingServer::get_singleton();
-		RenderingDevice *rendering_device = rendering_server != nullptr ? rendering_server->get_rendering_device() : nullptr;
-		if (rendering_device != nullptr) {
-			rendering_device->external_resource_defer_release(callable_mp_static(&HTMLSurfaceHCSRBackend::_destroy_presentation_output_after_retirement_callback).bind((uint64_t)renderer, (uint64_t)p_state->output));
-		} else {
-			hcsr_renderer_destroy_presentation_output(renderer, p_state->output);
-		}
-	}
+	_defer_presentation_output_destroy_on_render_thread(p_state->output);
 	memdelete(p_state);
 }
 
@@ -906,16 +914,12 @@ bool HTMLSurfaceHCSRBackend::_ensure_presentation_outputs_on_render_thread() {
 			continue;
 		}
 		if (state->output != nullptr && state->resize_pending) {
-			if (state->active_frame.native_texture != nullptr) {
-				_detach_presentation_output_on_render_thread(state);
-			}
-			uint8_t resized = 0;
-			if (hcsr_renderer_resize_presentation_output(renderer, state->output, state->requested_size.x, state->requested_size.y, &resized) != HCSR_STATUS_OK || resized == 0) {
-				return false;
-			}
+			_detach_presentation_output_on_render_thread(state);
+			hcsr_presentation_output_t *retired_output = state->output;
+			state->output = nullptr;
 			state->resize_pending = false;
+			_defer_presentation_output_destroy_on_render_thread(retired_output);
 			topology_changed = true;
-			continue;
 		}
 		if (state->output != nullptr) {
 			continue;
@@ -927,6 +931,52 @@ bool HTMLSurfaceHCSRBackend::_ensure_presentation_outputs_on_render_thread() {
 		topology_changed = true;
 	}
 	return !topology_changed;
+}
+
+void HTMLSurfaceHCSRBackend::_sync_presentation_output_topology_on_render_thread() {
+	presentation_output_topology_sync_pending.clear();
+	if (renderer == nullptr || render_backend == HCSR_RENDER_BACKEND_CPU) {
+		return;
+	}
+	_ensure_presentation_outputs_on_render_thread();
+	bool topology_synchronized = true;
+	{
+		MutexLock lock(presentation_outputs_mutex);
+		for (const KeyValue<uint64_t, PresentationOutputState *> &entry : presentation_outputs) {
+			const PresentationOutputState *state = entry.value;
+			if (state != nullptr && (state->output == nullptr || state->resize_pending)) {
+				topology_synchronized = false;
+				break;
+			}
+		}
+	}
+	if (topology_synchronized) {
+		presentation_output_topology_sync_required.clear();
+	}
+	gpu_follow_up_frame_requested.set();
+}
+
+void HTMLSurfaceHCSRBackend::_sync_presentation_output_topology_on_render_thread_callback(uint64_t p_backend_ptr) {
+	HTMLSurfaceHCSRBackend *backend = (HTMLSurfaceHCSRBackend *)p_backend_ptr;
+	if (backend != nullptr) {
+		backend->_sync_presentation_output_topology_on_render_thread();
+	}
+}
+
+void HTMLSurfaceHCSRBackend::_schedule_presentation_output_topology_sync() {
+	if (render_backend == HCSR_RENDER_BACKEND_CPU || !presentation_output_topology_sync_required.is_set() || presentation_output_topology_sync_pending.is_set()) {
+		return;
+	}
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	if (rendering_server == nullptr) {
+		return;
+	}
+	presentation_output_topology_sync_pending.set();
+	if (rendering_server->is_on_render_thread()) {
+		_sync_presentation_output_topology_on_render_thread();
+	} else {
+		rendering_server->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRBackend::_sync_presentation_output_topology_on_render_thread_callback).bind((uint64_t)this));
+	}
 }
 
 bool HTMLSurfaceHCSRBackend::_activate_presentation_output_on_render_thread(PresentationOutputState *p_state, const hcsr_gpu_frame_t &p_frame) {
@@ -1085,6 +1135,22 @@ void HTMLSurfaceHCSRBackend::_poll_cpu_presentation_outputs() {
 			continue;
 		}
 		state->texture->update_from_image(image);
+		if (state->mipmaps) {
+			RenderingServer *rendering_server = RenderingServer::get_singleton();
+			ERR_CONTINUE_MSG(rendering_server == nullptr, "RenderingServer is unavailable for an HCSR CPU mipmapped output.");
+			if (!state->mipmapped_texture_rid.is_valid()) {
+				state->mipmapped_texture_rid = rendering_server->texture_drawable_create(
+						frame.size.x,
+						frame.size.y,
+						RenderingServerEnums::TEXTURE_DRAWABLE_FORMAT_RGBA8_SRGB,
+						Color(0, 0, 0, 0),
+						true);
+			}
+			ERR_CONTINUE_MSG(!state->mipmapped_texture_rid.is_valid(), "Godot could not create an HCSR CPU mipmapped output texture.");
+			rendering_server->texture_drawable_copy_level_zero(state->texture->get_rid(), state->mipmapped_texture_rid);
+			rendering_server->texture_drawable_generate_mipmaps(state->mipmapped_texture_rid, true);
+			state->texture->set_external_texture(state->mipmapped_texture_rid, frame.size, true);
+		}
 		state->active_generation = output.generation;
 		state->native_size = frame.size;
 	}
@@ -1663,6 +1729,7 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 		terminal_failure_reason = "RenderingServer is unavailable for HCSR GPU rendering.";
 		return false;
 	}
+	_schedule_presentation_output_topology_sync();
 	if (gpu_frame_pending.is_set()) {
 		_schedule_deferred_gpu_submission();
 		// Keep presenting the previous completed texture. Preparing another retained
@@ -2343,14 +2410,19 @@ uint64_t HTMLSurfaceHCSRBackend::create_presentation_output(const Size2i &p_size
 	state->requested_size = p_size;
 	state->mipmaps = p_mipmaps;
 	state->texture.instantiate();
-	MutexLock lock(presentation_outputs_mutex);
-	const uint64_t output_id = next_presentation_output_id++;
-	presentation_outputs.insert(output_id, state);
+	uint64_t output_id = 0;
+	{
+		MutexLock lock(presentation_outputs_mutex);
+		output_id = next_presentation_output_id++;
+		presentation_outputs.insert(output_id, state);
+	}
 	if (render_backend == HCSR_RENDER_BACKEND_CPU) {
 		begin_frame_requested = true;
 	} else {
+		presentation_output_topology_sync_required.set();
 		gpu_follow_up_frame_requested.set();
 	}
+	_schedule_presentation_output_topology_sync();
 	return output_id;
 }
 
@@ -2371,7 +2443,9 @@ Error HTMLSurfaceHCSRBackend::resize_presentation_output(uint64_t p_output_id, c
 	if (render_backend == HCSR_RENDER_BACKEND_CPU) {
 		begin_frame_requested = true;
 	} else {
+		presentation_output_topology_sync_required.set();
 		gpu_follow_up_frame_requested.set();
+		_schedule_presentation_output_topology_sync();
 	}
 	return OK;
 }

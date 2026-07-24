@@ -63,9 +63,18 @@ class HTMLRenderSurface : public RefCounted {
 	Callable frame_activated_callback;
 	uint64_t notified_queued_frame_generation = 0;
 	uint64_t notified_active_frame_generation = 0;
+	struct PresentationOutputBinding {
+		Size2i size;
+		bool mipmaps = false;
+		uint64_t backend_output_id = 0;
+	};
+	HashMap<uint64_t, PresentationOutputBinding> presentation_outputs;
+	uint64_t next_presentation_output_id = 1;
 
 	void _ensure_backend();
 	void _sync_backend_state();
+	void _sync_backend_presentation_outputs();
+	void _detach_backend_presentation_outputs();
 	bool _fallback_auto_gpu_to_cpu(const String &p_reason);
 	void _document_changed();
 	void _notify_changed() const;

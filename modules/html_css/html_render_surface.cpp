@@ -170,6 +170,25 @@ void HTMLRenderSurface::_sync_backend_state() {
 	backend->set_background_color(background_color);
 	backend->set_placeholder_background(placeholder_background);
 	backend->set_backdrop_filter_enabled(backdrop_filter_enabled);
+	_sync_backend_presentation_outputs();
+}
+
+void HTMLRenderSurface::_sync_backend_presentation_outputs() {
+	ERR_FAIL_NULL(backend);
+	for (KeyValue<uint64_t, PresentationOutputBinding> &entry : presentation_outputs) {
+		if (entry.value.backend_output_id != 0) {
+			continue;
+		}
+		entry.value.backend_output_id = backend->create_presentation_output(
+				entry.value.size,
+				entry.value.mipmaps);
+	}
+}
+
+void HTMLRenderSurface::_detach_backend_presentation_outputs() {
+	for (KeyValue<uint64_t, PresentationOutputBinding> &entry : presentation_outputs) {
+		entry.value.backend_output_id = 0;
+	}
 }
 
 bool HTMLRenderSurface::_fallback_auto_gpu_to_cpu(const String &p_reason) {
@@ -184,6 +203,7 @@ bool HTMLRenderSurface::_fallback_auto_gpu_to_cpu(const String &p_reason) {
 #else
 	HTMLSurfaceBackend *fallback_backend = memnew(HTMLSurfaceCPUBackend);
 #endif
+	_detach_backend_presentation_outputs();
 	memdelete(backend);
 	backend = fallback_backend;
 	_reset_frame_state_notifications();
@@ -348,6 +368,7 @@ void HTMLRenderSurface::set_backend_preference(HTMLSurfaceBackendPreference p_ba
 	}
 	backend_preference = p_backend_preference;
 	if (backend != nullptr) {
+		_detach_backend_presentation_outputs();
 		memdelete(backend);
 		backend = nullptr;
 		_reset_frame_state_notifications();
@@ -629,27 +650,64 @@ Ref<HTMLTexture2D> HTMLRenderSurface::get_html_texture() const {
 }
 
 uint64_t HTMLRenderSurface::create_presentation_output(const Size2i &p_size, bool p_mipmaps) {
-	_ensure_backend();
-	return backend != nullptr ? backend->create_presentation_output(p_size, p_mipmaps) : 0;
+	ERR_FAIL_COND_V(p_size.x <= 0 || p_size.y <= 0, 0);
+	const uint64_t output_id = next_presentation_output_id++;
+	PresentationOutputBinding binding;
+	binding.size = p_size;
+	binding.mipmaps = p_mipmaps;
+	if (backend != nullptr) {
+		binding.backend_output_id = backend->create_presentation_output(
+				p_size,
+				p_mipmaps);
+	}
+	presentation_outputs.insert(output_id, binding);
+	render_now(marker);
+	return output_id;
 }
 
 Error HTMLRenderSurface::resize_presentation_output(uint64_t p_output_id, const Size2i &p_size) {
-	_ensure_backend();
-	return backend != nullptr ? backend->resize_presentation_output(p_output_id, p_size) : ERR_UNAVAILABLE;
+	ERR_FAIL_COND_V(p_size.x <= 0 || p_size.y <= 0, ERR_INVALID_PARAMETER);
+	PresentationOutputBinding *binding = presentation_outputs.getptr(p_output_id);
+	ERR_FAIL_NULL_V(binding, ERR_DOES_NOT_EXIST);
+	if (binding->size == p_size) {
+		return OK;
+	}
+	binding->size = p_size;
+	if (backend != nullptr && binding->backend_output_id != 0) {
+		const Error error = backend->resize_presentation_output(
+				binding->backend_output_id,
+				p_size);
+		if (error != OK) {
+			return error;
+		}
+	}
+	render_now(marker);
+	return OK;
 }
 
 void HTMLRenderSurface::destroy_presentation_output(uint64_t p_output_id) {
-	if (backend != nullptr) {
-		backend->destroy_presentation_output(p_output_id);
+	PresentationOutputBinding *binding = presentation_outputs.getptr(p_output_id);
+	if (binding == nullptr) {
+		return;
 	}
+	if (backend != nullptr && binding->backend_output_id != 0) {
+		backend->destroy_presentation_output(binding->backend_output_id);
+	}
+	presentation_outputs.erase(p_output_id);
 }
 
 Ref<Texture2D> HTMLRenderSurface::get_presentation_output_texture(uint64_t p_output_id) const {
-	return backend != nullptr ? backend->get_presentation_output_texture(p_output_id) : Ref<Texture2D>();
+	const PresentationOutputBinding *binding = presentation_outputs.getptr(p_output_id);
+	return backend != nullptr && binding != nullptr && binding->backend_output_id != 0
+			? backend->get_presentation_output_texture(binding->backend_output_id)
+			: Ref<Texture2D>();
 }
 
 uint64_t HTMLRenderSurface::get_presentation_output_generation(uint64_t p_output_id) const {
-	return backend != nullptr ? backend->get_presentation_output_generation(p_output_id) : 0;
+	const PresentationOutputBinding *binding = presentation_outputs.getptr(p_output_id);
+	return backend != nullptr && binding != nullptr && binding->backend_output_id != 0
+			? backend->get_presentation_output_generation(binding->backend_output_id)
+			: 0;
 }
 
 HTMLRenderSurface::HTMLRenderSurface() {
@@ -662,6 +720,7 @@ HTMLRenderSurface::~HTMLRenderSurface() {
 		document->disconnect_changed(callable_mp(this, &HTMLRenderSurface::_document_changed));
 	}
 	if (backend != nullptr) {
+		_detach_backend_presentation_outputs();
 		memdelete(backend);
 	}
 }
