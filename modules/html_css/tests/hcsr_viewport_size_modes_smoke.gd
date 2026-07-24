@@ -53,6 +53,24 @@ func _initialize() -> void:
 		_fail("Control Size did not follow a later transformed control resize.")
 		return
 
+	var staged_errors: Array[String] = []
+	var staged_view := HTMLView.new()
+	staged_view.backend_preference = backend_preference
+	staged_view.viewport_size_mode = HTMLView.VIEWPORT_SIZE_CONTROL_PHYSICAL_ADJUSTED
+	staged_view.render_error.connect(func(message: String) -> void: staged_errors.append(message))
+	staged_view.document = document
+	parent.add_child(staged_view)
+	staged_view.logical_size = Vector2i(400, 200)
+	staged_view.size = Vector2(400, 200)
+	for _frame in range(12):
+		await process_frame
+	if not staged_errors.is_empty():
+		_fail("Deferred Control Physical Adjusted initialization emitted transient render errors: %s." % staged_errors)
+		return
+	if staged_view.get_texture() == null or staged_view.get_texture().get_size() != Vector2(200, 100):
+		_fail("Deferred Control Physical Adjusted initialization did not publish its first valid physical target.")
+		return
+
 	print("HCSR HTMLView viewport-size modes passed on %s." % backend_name)
 	quit()
 

@@ -1084,6 +1084,14 @@ Size2i HTMLView::_get_target_physical_size() const {
 }
 
 void HTMLView::_update_surface_size(bool p_force_render) {
+	if (!_has_current_viewport_size()) {
+		// Control-derived physical metrics do not exist until the view is in a
+		// viewport with positive local dimensions. Publishing the document's
+		// fallback logical size together with a synthetic 1x1 physical target
+		// creates a tuple that can never describe one presentation output.
+		queue_redraw();
+		return;
+	}
 	const bool changed = surface->set_viewport(_get_target_viewport_size(), _get_target_device_scale_factor(), _get_target_physical_size(), false);
 	if (changed || (p_force_render && surface->get_texture().is_null())) {
 		_queue_frame_render();
