@@ -64,6 +64,11 @@ func _run() -> void:
 	var last_generation := -1
 	var observed_frames := 0
 	while Time.get_ticks_msec() - started < 350 and observed_frames < 240:
+		var moving_hover := InputEventMouseMotion.new()
+		moving_hover.position = Vector2(100 + observed_frames % 8, 80)
+		moving_hover.global_position = moving_hover.position
+		get_root().push_input(moving_hover, true)
+		Input.warp_mouse(moving_hover.position)
 		await process_frame
 		observed_frames += 1
 		if secondary_output.generation != view.get_generation():
@@ -122,6 +127,11 @@ func _run() -> void:
 	next_sample = started
 	observed_frames = 0
 	while Time.get_ticks_msec() - started < 350 and observed_frames < 240:
+		var moving_outside := InputEventMouseMotion.new()
+		moving_outside.position = Vector2(300 + observed_frames % 8, 160)
+		moving_outside.global_position = moving_outside.position
+		get_root().push_input(moving_outside, true)
+		Input.warp_mouse(moving_outside.position)
 		await process_frame
 		observed_frames += 1
 		if secondary_output.generation != view.get_generation():
