@@ -55,6 +55,21 @@ void HCSRPerformanceMonitor::initialize() {
 		{ "HCSR/Executed Display Commands", MONITOR_EXECUTED_DISPLAY_COMMANDS, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Executed Glyphs", MONITOR_EXECUTED_GLYPHS, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/GPU Dispatches", MONITOR_GPU_DISPATCHES, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Semantic Preparation Time", MONITOR_SEMANTIC_PREPARATION_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/Semantic Snapshot Validation Time", MONITOR_SEMANTIC_SNAPSHOT_VALIDATION_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/Semantic Snapshots Reused", MONITOR_SEMANTIC_SNAPSHOTS_REUSED, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Semantic Snapshots Recreated", MONITOR_SEMANTIC_SNAPSHOTS_RECREATED, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Translated Packets", MONITOR_TRANSLATED_PACKETS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Translated Commands", MONITOR_TRANSLATED_COMMANDS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Translation Allocated Bytes", MONITOR_TRANSLATION_ALLOCATED_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Physical Compilation Time", MONITOR_PHYSICAL_COMPILATION_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/Physical Compilation Allocated Bytes", MONITOR_PHYSICAL_COMPILATION_ALLOCATED_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Physical Projection Time", MONITOR_PHYSICAL_PROJECTION_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/Painter Order Planning Time", MONITOR_PAINTER_ORDER_PLANNING_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/Physical Instance Expansion Time", MONITOR_PHYSICAL_INSTANCE_EXPANSION_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/Record And Submit Time", MONITOR_RECORD_AND_SUBMIT_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/Painter Order Intersection Tests", MONITOR_PAINTER_ORDER_INTERSECTION_TESTS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Painter Order Flushes", MONITOR_PAINTER_ORDER_FLUSHES, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Texture Resource Creates", MONITOR_TEXTURE_RESOURCE_CREATES, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Texture Resource Frees", MONITOR_TEXTURE_RESOURCE_FREES, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Presentation Lock Busy", MONITOR_PRESENTATION_LOCK_BUSY, Performance::MONITOR_TYPE_QUANTITY },
@@ -100,6 +115,21 @@ void HCSRPerformanceMonitor::finalize() {
 			"HCSR/Executed Display Commands",
 			"HCSR/Executed Glyphs",
 			"HCSR/GPU Dispatches",
+			"HCSR/Semantic Preparation Time",
+			"HCSR/Semantic Snapshot Validation Time",
+			"HCSR/Semantic Snapshots Reused",
+			"HCSR/Semantic Snapshots Recreated",
+			"HCSR/Translated Packets",
+			"HCSR/Translated Commands",
+			"HCSR/Translation Allocated Bytes",
+			"HCSR/Physical Compilation Time",
+			"HCSR/Physical Compilation Allocated Bytes",
+			"HCSR/Physical Projection Time",
+			"HCSR/Painter Order Planning Time",
+			"HCSR/Physical Instance Expansion Time",
+			"HCSR/Record And Submit Time",
+			"HCSR/Painter Order Intersection Tests",
+			"HCSR/Painter Order Flushes",
 			"HCSR/Texture Resource Creates",
 			"HCSR/Texture Resource Frees",
 			"HCSR/Presentation Lock Busy",
@@ -175,6 +205,13 @@ void HCSRPerformanceMonitor::publish_frame_data() {
 		frame_profile.gpu_submit_milliseconds += profile.gpu_submit_milliseconds;
 		frame_profile.retained_checkpoint_capture_milliseconds += profile.retained_checkpoint_capture_milliseconds;
 		frame_profile.retained_checkpoint_restore_milliseconds += profile.retained_checkpoint_restore_milliseconds;
+		frame_profile.semantic_preparation_milliseconds += profile.semantic_preparation_milliseconds;
+		frame_profile.semantic_snapshot_validation_milliseconds += profile.semantic_snapshot_validation_milliseconds;
+		frame_profile.physical_compilation_milliseconds += profile.physical_compilation_milliseconds;
+		frame_profile.physical_projection_milliseconds += profile.physical_projection_milliseconds;
+		frame_profile.painter_order_planning_milliseconds += profile.painter_order_planning_milliseconds;
+		frame_profile.physical_instance_expansion_milliseconds += profile.physical_instance_expansion_milliseconds;
+		frame_profile.record_and_submit_milliseconds += profile.record_and_submit_milliseconds;
 	}
 
 	const double measured_core_stage_milliseconds = frame_profile.parse_milliseconds
@@ -217,6 +254,20 @@ void HCSRPerformanceMonitor::publish_frame_data() {
 	values.push_back(frame_profile.retained_checkpoint_restore_milliseconds / 1000.0);
 	values.push_back("native_unclassified");
 	values.push_back(unclassified_native_milliseconds / 1000.0);
+	values.push_back("semantic_preparation");
+	values.push_back(frame_profile.semantic_preparation_milliseconds / 1000.0);
+	values.push_back("semantic_snapshot_validation");
+	values.push_back(frame_profile.semantic_snapshot_validation_milliseconds / 1000.0);
+	values.push_back("physical_compilation");
+	values.push_back(frame_profile.physical_compilation_milliseconds / 1000.0);
+	values.push_back("physical_projection");
+	values.push_back(frame_profile.physical_projection_milliseconds / 1000.0);
+	values.push_back("painter_order_planning");
+	values.push_back(frame_profile.painter_order_planning_milliseconds / 1000.0);
+	values.push_back("physical_instance_expansion");
+	values.push_back(frame_profile.physical_instance_expansion_milliseconds / 1000.0);
+	values.push_back("record_and_submit");
+	values.push_back(frame_profile.record_and_submit_milliseconds / 1000.0);
 	double input_to_visible_milliseconds = 0.0;
 	for (double sample : frame_input_to_visible_milliseconds) {
 		input_to_visible_milliseconds = MAX(input_to_visible_milliseconds, sample);
@@ -339,6 +390,51 @@ double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
 				break;
 			case MONITOR_GPU_DISPATCHES:
 				value += profile.gpu_dispatch_count;
+				break;
+			case MONITOR_SEMANTIC_PREPARATION_TIME:
+				value += profile.semantic_preparation_milliseconds / 1000.0;
+				break;
+			case MONITOR_SEMANTIC_SNAPSHOT_VALIDATION_TIME:
+				value += profile.semantic_snapshot_validation_milliseconds / 1000.0;
+				break;
+			case MONITOR_SEMANTIC_SNAPSHOTS_REUSED:
+				value += profile.semantic_snapshot_reused_count;
+				break;
+			case MONITOR_SEMANTIC_SNAPSHOTS_RECREATED:
+				value += profile.semantic_snapshot_recreated_count;
+				break;
+			case MONITOR_TRANSLATED_PACKETS:
+				value += profile.translated_packet_count;
+				break;
+			case MONITOR_TRANSLATED_COMMANDS:
+				value += profile.translated_command_count;
+				break;
+			case MONITOR_TRANSLATION_ALLOCATED_BYTES:
+				value += profile.translation_allocated_bytes;
+				break;
+			case MONITOR_PHYSICAL_COMPILATION_TIME:
+				value += profile.physical_compilation_milliseconds / 1000.0;
+				break;
+			case MONITOR_PHYSICAL_COMPILATION_ALLOCATED_BYTES:
+				value += profile.physical_compilation_allocated_bytes;
+				break;
+			case MONITOR_PHYSICAL_PROJECTION_TIME:
+				value += profile.physical_projection_milliseconds / 1000.0;
+				break;
+			case MONITOR_PAINTER_ORDER_PLANNING_TIME:
+				value += profile.painter_order_planning_milliseconds / 1000.0;
+				break;
+			case MONITOR_PHYSICAL_INSTANCE_EXPANSION_TIME:
+				value += profile.physical_instance_expansion_milliseconds / 1000.0;
+				break;
+			case MONITOR_RECORD_AND_SUBMIT_TIME:
+				value += profile.record_and_submit_milliseconds / 1000.0;
+				break;
+			case MONITOR_PAINTER_ORDER_INTERSECTION_TESTS:
+				value += profile.painter_order_intersection_test_count;
+				break;
+			case MONITOR_PAINTER_ORDER_FLUSHES:
+				value += profile.painter_order_flush_count;
 				break;
 		}
 	}

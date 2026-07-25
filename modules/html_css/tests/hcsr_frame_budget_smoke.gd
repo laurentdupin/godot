@@ -61,6 +61,22 @@ func _run() -> void:
 	if StringName(missed.stage) != &"prepare_submit" and StringName(missed.stage) != &"activation":
 		_fail("The overload result did not classify its missed stage: %s." % missed)
 		return
+	var semantic_preparation: float = Performance.get_custom_monitor("HCSR/Semantic Preparation Time")
+	var semantic_validation: float = Performance.get_custom_monitor("HCSR/Semantic Snapshot Validation Time")
+	var translated_commands: float = Performance.get_custom_monitor("HCSR/Translated Commands")
+	var translation_bytes: float = Performance.get_custom_monitor("HCSR/Translation Allocated Bytes")
+	if semantic_preparation <= 0.0 or semantic_validation <= 0.0:
+		_fail("Separated semantic stage telemetry was not published: preparation=%f validation=%f." % [semantic_preparation, semantic_validation])
+		return
+	if translated_commands != 0.0 or translation_bytes != 0.0:
+		_fail("A non-scroll mutation unexpectedly materialized translated commands: commands=%f bytes=%f." % [translated_commands, translation_bytes])
+		return
+	if backend != HTMLView.BACKEND_CPU:
+		var physical_compilation: float = Performance.get_custom_monitor("HCSR/Physical Compilation Time")
+		var record_and_submit: float = Performance.get_custom_monitor("HCSR/Record And Submit Time")
+		if physical_compilation <= 0.0 or record_and_submit <= 0.0:
+			_fail("Separated GPU stage telemetry was not published: physical=%f record_submit=%f." % [physical_compilation, record_and_submit])
+			return
 
 	var stable_generation := view.get_generation()
 	view.frame_budget_milliseconds = 10000.0
