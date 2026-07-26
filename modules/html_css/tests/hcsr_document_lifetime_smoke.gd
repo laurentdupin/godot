@@ -55,12 +55,13 @@ func _initialize() -> void:
 		await process_frame
 	await RenderingServer.frame_post_draw
 
-	var composed_frame := root.get_texture().get_image()
-	if composed_frame == null or composed_frame.get_width() < WIDTH * 2 or composed_frame.get_height() < HEIGHT:
-		_fail("%s lifetime stress could not capture its composed recovery frame." % backend_name)
+	var replaced_frame := replaced_view.get_texture().get_image()
+	var clean_frame := clean_view.get_texture().get_image()
+	if replaced_frame == null or clean_frame == null \
+			or replaced_frame.get_size() != Vector2i(WIDTH, HEIGHT) \
+			or clean_frame.get_size() != Vector2i(WIDTH, HEIGHT):
+		_fail("%s lifetime stress could not capture its recovery textures." % backend_name)
 		return
-	var replaced_frame := composed_frame.get_region(Rect2i(0, 0, WIDTH, HEIGHT))
-	var clean_frame := composed_frame.get_region(Rect2i(WIDTH, 0, WIDTH, HEIGHT))
 	if _frame_hash(replaced_frame) != _frame_hash(clean_frame):
 		_fail("%s document replacement did not match a clean final render after repeated teardown." % backend_name)
 		return
