@@ -33,6 +33,7 @@ public:
 		MONITOR_PAINT_CHUNKS_REBUILT,
 		MONITOR_UPDATED_PIXELS,
 		MONITOR_INPUT_TO_VISIBLE_TIME,
+		MONITOR_INPUT_TO_COMPOSED_TIME,
 		MONITOR_RESOLVED_UPDATES,
 		MONITOR_DRAW_BATCHES,
 		MONITOR_CLEAR_OPERATIONS,
@@ -105,7 +106,9 @@ private:
 	static HashMap<uint64_t, IntegrationCounters> integration_counters;
 	static Vector<hcsr_performance_profile_t> pending_profiler_profiles;
 	static Vector<double> pending_input_to_visible_milliseconds;
+	static Vector<double> pending_input_to_composed_milliseconds;
 	static double latest_input_to_visible_milliseconds;
+	static double latest_input_to_composed_milliseconds;
 	static double _read_monitor(int p_monitor);
 
 public:
@@ -114,6 +117,7 @@ public:
 	static void update(uint64_t p_instance_id, const hcsr_performance_profile_t &p_profile);
 	static void update_integration(uint64_t p_instance_id, const IntegrationCounters &p_counters);
 	static void record_input_to_visible(double p_milliseconds);
+	static void record_input_to_composed(double p_milliseconds);
 	static void publish_frame_data();
 	static void remove(uint64_t p_instance_id);
 };

@@ -646,13 +646,36 @@ void HTMLView::_surface_frame_activated(uint64_t p_generation) {
 		if (now_usec >= pending_visual_input_usec) {
 			HCSRPerformanceMonitor::record_input_to_visible((now_usec - pending_visual_input_usec) / 1000.0);
 		}
+		if (pending_composed_input_usec == 0) {
+			pending_composed_input_usec = pending_visual_input_usec;
+			pending_composed_input_after_generation = pending_visual_input_after_generation;
+		}
 		pending_visual_input_usec = 0;
 		pending_visual_input_after_generation = 0;
+		RenderingServer *rendering_server = RenderingServer::get_singleton();
+		const Callable composed_callback = callable_mp(this, &HTMLView::_surface_frame_composed);
+		if (rendering_server != nullptr && !rendering_server->is_connected(SNAME("frame_post_draw"), composed_callback)) {
+			rendering_server->connect(SNAME("frame_post_draw"), composed_callback, Object::CONNECT_ONE_SHOT);
+		}
 	}
 	if (frame_budget_request_usec != 0 && p_generation > frame_budget_request_after_generation) {
 		_finish_frame_budget_request(p_generation, SNAME("activation"));
 	}
 	emit_signal(SNAME("frame_activated"), p_generation);
+}
+
+void HTMLView::_surface_frame_composed() {
+	if (pending_composed_input_usec == 0
+			|| !is_visible_in_tree()
+			|| get_generation() <= pending_composed_input_after_generation) {
+		return;
+	}
+	const uint64_t now_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
+	if (now_usec >= pending_composed_input_usec) {
+		HCSRPerformanceMonitor::record_input_to_composed((now_usec - pending_composed_input_usec) / 1000.0);
+	}
+	pending_composed_input_usec = 0;
+	pending_composed_input_after_generation = 0;
 }
 
 void HTMLView::_note_visual_input() {

@@ -45,6 +45,10 @@ func _run() -> void:
 	if input_to_visible_seconds <= 0.0 or input_to_visible_seconds >= 1.0:
 		_fail("%s input-to-visible latency was not recorded in a plausible range: %.6f seconds." % [backend_name, input_to_visible_seconds])
 		return
+	var input_to_composed_seconds: float = Performance.get_custom_monitor("HCSR/Input To Composed Time")
+	if input_to_composed_seconds < input_to_visible_seconds or input_to_composed_seconds >= 1.0:
+		_fail("%s input-to-composed latency did not follow activation in a plausible range: activation=%.6f composed=%.6f seconds." % [backend_name, input_to_visible_seconds, input_to_composed_seconds])
+		return
 	var resolved_updates: float = Performance.get_custom_monitor("HCSR/Resolved Updates")
 	var draw_batches: float = Performance.get_custom_monitor("HCSR/Draw Batches")
 	var gpu_dispatches: float = Performance.get_custom_monitor("HCSR/GPU Dispatches")
@@ -53,13 +57,14 @@ func _run() -> void:
 	if backend != HTMLView.BACKEND_CPU and (resolved_updates <= 0.0 or draw_batches <= 0.0):
 		_fail("%s did not expose nonzero execution telemetry: updates=%.0f batches=%.0f dispatches=%.0f." % [backend_name, resolved_updates, draw_batches, gpu_dispatches])
 		return
-	print("HCSR_FRAME_ALIGNMENT backend=%s generation=%d host=%d activation=%d visible=%d input_to_visible_ms=%.3f updates=%.0f batches=%.0f dispatches=%.0f" % [
+	print("HCSR_FRAME_ALIGNMENT backend=%s generation=%d host=%d activation=%d visible=%d input_to_visible_ms=%.3f input_to_composed_ms=%.3f updates=%.0f batches=%.0f dispatches=%.0f" % [
 		backend_name,
 		view.get_generation(),
 		view.get_host_frame_number(),
 		activation_frames[view.get_generation()],
 		Engine.get_process_frames(),
 		input_to_visible_seconds * 1000.0,
+		input_to_composed_seconds * 1000.0,
 		resolved_updates,
 		draw_batches,
 		gpu_dispatches,

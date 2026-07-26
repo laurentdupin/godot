@@ -94,6 +94,8 @@ private:
 	uint64_t pending_input_trace_sequence = 0;
 	uint64_t pending_visual_input_usec = 0;
 	uint64_t pending_visual_input_after_generation = 0;
+	uint64_t pending_composed_input_usec = 0;
+	uint64_t pending_composed_input_after_generation = 0;
 	double frame_budget_milliseconds = 0.0;
 	uint64_t frame_budget_request_usec = 0;
 	uint64_t frame_budget_request_after_generation = 0;
@@ -123,6 +125,7 @@ private:
 	void _surface_changed();
 	void _surface_frame_queued(uint64_t p_generation);
 	void _surface_frame_activated(uint64_t p_generation);
+	void _surface_frame_composed();
 	void _note_visual_input();
 	void _note_frame_budget_request();
 	void _finish_frame_budget_request(uint64_t p_generation, const StringName &p_default_stage);
