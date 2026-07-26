@@ -82,6 +82,11 @@ void HCSRPerformanceMonitor::initialize() {
 		{ "HCSR/Runtime Managed Committed Bytes", MONITOR_RUNTIME_MANAGED_COMMITTED_BYTES, Performance::MONITOR_TYPE_MEMORY },
 		{ "HCSR/Runtime LOH Bytes", MONITOR_RUNTIME_LOH_BYTES, Performance::MONITOR_TYPE_MEMORY },
 		{ "HCSR/Runtime LOH Fragmentation Bytes", MONITOR_RUNTIME_LOH_FRAGMENTATION_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Input State Application Time", MONITOR_INPUT_STATE_APPLICATION_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/Snapshot Publication Time", MONITOR_SNAPSHOT_PUBLICATION_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/Completion Retirement Time", MONITOR_COMPLETION_RETIREMENT_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/Owner Lock Wait Time", MONITOR_OWNER_LOCK_WAIT_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/Owner Lock Contentions", MONITOR_OWNER_LOCK_CONTENTIONS, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Texture Resource Creates", MONITOR_TEXTURE_RESOURCE_CREATES, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Texture Resource Frees", MONITOR_TEXTURE_RESOURCE_FREES, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Presentation Lock Busy", MONITOR_PRESENTATION_LOCK_BUSY, Performance::MONITOR_TYPE_QUANTITY },
@@ -161,6 +166,11 @@ void HCSRPerformanceMonitor::finalize() {
 			"HCSR/Runtime Managed Committed Bytes",
 			"HCSR/Runtime LOH Bytes",
 			"HCSR/Runtime LOH Fragmentation Bytes",
+			"HCSR/Input State Application Time",
+			"HCSR/Snapshot Publication Time",
+			"HCSR/Completion Retirement Time",
+			"HCSR/Owner Lock Wait Time",
+			"HCSR/Owner Lock Contentions",
 			"HCSR/Texture Resource Creates",
 			"HCSR/Texture Resource Frees",
 			"HCSR/Presentation Lock Busy",
@@ -250,6 +260,10 @@ void HCSRPerformanceMonitor::publish_frame_data() {
 		frame_profile.painter_order_planning_milliseconds += profile.painter_order_planning_milliseconds;
 		frame_profile.physical_instance_expansion_milliseconds += profile.physical_instance_expansion_milliseconds;
 		frame_profile.record_and_submit_milliseconds += profile.record_and_submit_milliseconds;
+		frame_profile.input_state_application_milliseconds += profile.input_state_application_milliseconds;
+		frame_profile.snapshot_publication_milliseconds += profile.snapshot_publication_milliseconds;
+		frame_profile.completion_retirement_milliseconds += profile.completion_retirement_milliseconds;
+		frame_profile.owner_lock_wait_milliseconds += profile.owner_lock_wait_milliseconds;
 	}
 
 	const double measured_core_stage_milliseconds = frame_profile.parse_milliseconds
@@ -306,6 +320,14 @@ void HCSRPerformanceMonitor::publish_frame_data() {
 	values.push_back(frame_profile.physical_instance_expansion_milliseconds / 1000.0);
 	values.push_back("record_and_submit");
 	values.push_back(frame_profile.record_and_submit_milliseconds / 1000.0);
+	values.push_back("input_state_application");
+	values.push_back(frame_profile.input_state_application_milliseconds / 1000.0);
+	values.push_back("snapshot_publication");
+	values.push_back(frame_profile.snapshot_publication_milliseconds / 1000.0);
+	values.push_back("completion_retirement");
+	values.push_back(frame_profile.completion_retirement_milliseconds / 1000.0);
+	values.push_back("owner_lock_wait");
+	values.push_back(frame_profile.owner_lock_wait_milliseconds / 1000.0);
 	double input_to_visible_milliseconds = 0.0;
 	for (double sample : frame_input_to_visible_milliseconds) {
 		input_to_visible_milliseconds = MAX(input_to_visible_milliseconds, sample);
@@ -530,6 +552,21 @@ double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
 				break;
 			case MONITOR_RUNTIME_LOH_FRAGMENTATION_BYTES:
 				value += profile.runtime_large_object_heap_fragmentation_bytes;
+				break;
+			case MONITOR_INPUT_STATE_APPLICATION_TIME:
+				value += profile.input_state_application_milliseconds / 1000.0;
+				break;
+			case MONITOR_SNAPSHOT_PUBLICATION_TIME:
+				value += profile.snapshot_publication_milliseconds / 1000.0;
+				break;
+			case MONITOR_COMPLETION_RETIREMENT_TIME:
+				value += profile.completion_retirement_milliseconds / 1000.0;
+				break;
+			case MONITOR_OWNER_LOCK_WAIT_TIME:
+				value += profile.owner_lock_wait_milliseconds / 1000.0;
+				break;
+			case MONITOR_OWNER_LOCK_CONTENTIONS:
+				value += profile.owner_lock_contention_count;
 				break;
 		}
 	}

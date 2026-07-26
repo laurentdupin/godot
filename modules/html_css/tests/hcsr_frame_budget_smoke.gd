@@ -65,17 +65,28 @@ func _run() -> void:
 	var semantic_validation: float = Performance.get_custom_monitor("HCSR/Semantic Snapshot Validation Time")
 	var translated_commands: float = Performance.get_custom_monitor("HCSR/Translated Commands")
 	var translation_bytes: float = Performance.get_custom_monitor("HCSR/Translation Allocated Bytes")
+	var input_state_application: float = Performance.get_custom_monitor("HCSR/Input State Application Time")
+	var snapshot_publication: float = Performance.get_custom_monitor("HCSR/Snapshot Publication Time")
+	var owner_lock_wait: float = Performance.get_custom_monitor("HCSR/Owner Lock Wait Time")
+	var owner_lock_contentions: float = Performance.get_custom_monitor("HCSR/Owner Lock Contentions")
 	if semantic_preparation <= 0.0 or semantic_validation <= 0.0:
 		_fail("Separated semantic stage telemetry was not published: preparation=%f validation=%f." % [semantic_preparation, semantic_validation])
 		return
 	if translated_commands != 0.0 or translation_bytes != 0.0:
 		_fail("A non-scroll mutation unexpectedly materialized translated commands: commands=%f bytes=%f." % [translated_commands, translation_bytes])
 		return
+	if input_state_application <= 0.0 or snapshot_publication <= 0.0:
+		_fail("Native ownership stage telemetry was not published: input_state=%f snapshot_publication=%f." % [input_state_application, snapshot_publication])
+		return
+	if owner_lock_wait != 0.0 or owner_lock_contentions != 0.0:
+		_fail("The normal frame-budget path waited or contended for native presentation ownership: wait=%f contentions=%f." % [owner_lock_wait, owner_lock_contentions])
+		return
 	if backend != HTMLView.BACKEND_CPU:
 		var physical_compilation: float = Performance.get_custom_monitor("HCSR/Physical Compilation Time")
 		var record_and_submit: float = Performance.get_custom_monitor("HCSR/Record And Submit Time")
-		if physical_compilation <= 0.0 or record_and_submit <= 0.0:
-			_fail("Separated GPU stage telemetry was not published: physical=%f record_submit=%f." % [physical_compilation, record_and_submit])
+		var completion_retirement: float = Performance.get_custom_monitor("HCSR/Completion Retirement Time")
+		if physical_compilation <= 0.0 or record_and_submit <= 0.0 or completion_retirement <= 0.0:
+			_fail("Separated GPU stage telemetry was not published: physical=%f record_submit=%f completion_retirement=%f." % [physical_compilation, record_and_submit, completion_retirement])
 			return
 
 	var stable_generation := view.get_generation()

@@ -1689,6 +1689,7 @@ void HTMLSurfaceHCSRBackend::_poll_gpu_presentation_on_render_thread() {
 		_activate_completed_gpu_frame_on_render_thread(output);
 	}
 	_poll_presentation_outputs_on_render_thread();
+	_update_performance_profile();
 }
 
 void HTMLSurfaceHCSRBackend::_detach_gpu_texture_import_on_render_thread_callback(uint64_t p_backend_ptr) {
