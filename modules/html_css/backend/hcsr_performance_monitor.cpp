@@ -70,6 +70,18 @@ void HCSRPerformanceMonitor::initialize() {
 		{ "HCSR/Record And Submit Time", MONITOR_RECORD_AND_SUBMIT_TIME, Performance::MONITOR_TYPE_TIME },
 		{ "HCSR/Painter Order Intersection Tests", MONITOR_PAINTER_ORDER_INTERSECTION_TESTS, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Painter Order Flushes", MONITOR_PAINTER_ORDER_FLUSHES, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Runtime Allocated Bytes", MONITOR_RUNTIME_ALLOCATED_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Runtime Allocation Rate MBps", MONITOR_RUNTIME_ALLOCATION_RATE, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Runtime GC Pause Time", MONITOR_RUNTIME_GC_PAUSE_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/Runtime GC Pause Observed Collections", MONITOR_RUNTIME_GC_PAUSE_OBSERVED_COLLECTIONS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Runtime GC Pause Unobserved Collections", MONITOR_RUNTIME_GC_PAUSE_UNOBSERVED_COLLECTIONS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Runtime Gen0 Collections", MONITOR_RUNTIME_GEN0_COLLECTIONS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Runtime Gen1 Collections", MONITOR_RUNTIME_GEN1_COLLECTIONS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Runtime Gen2 Collections", MONITOR_RUNTIME_GEN2_COLLECTIONS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Runtime Managed Heap Bytes", MONITOR_RUNTIME_MANAGED_HEAP_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Runtime Managed Committed Bytes", MONITOR_RUNTIME_MANAGED_COMMITTED_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Runtime LOH Bytes", MONITOR_RUNTIME_LOH_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Runtime LOH Fragmentation Bytes", MONITOR_RUNTIME_LOH_FRAGMENTATION_BYTES, Performance::MONITOR_TYPE_MEMORY },
 		{ "HCSR/Texture Resource Creates", MONITOR_TEXTURE_RESOURCE_CREATES, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Texture Resource Frees", MONITOR_TEXTURE_RESOURCE_FREES, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Presentation Lock Busy", MONITOR_PRESENTATION_LOCK_BUSY, Performance::MONITOR_TYPE_QUANTITY },
@@ -137,6 +149,18 @@ void HCSRPerformanceMonitor::finalize() {
 			"HCSR/Record And Submit Time",
 			"HCSR/Painter Order Intersection Tests",
 			"HCSR/Painter Order Flushes",
+			"HCSR/Runtime Allocated Bytes",
+			"HCSR/Runtime Allocation Rate MBps",
+			"HCSR/Runtime GC Pause Time",
+			"HCSR/Runtime GC Pause Observed Collections",
+			"HCSR/Runtime GC Pause Unobserved Collections",
+			"HCSR/Runtime Gen0 Collections",
+			"HCSR/Runtime Gen1 Collections",
+			"HCSR/Runtime Gen2 Collections",
+			"HCSR/Runtime Managed Heap Bytes",
+			"HCSR/Runtime Managed Committed Bytes",
+			"HCSR/Runtime LOH Bytes",
+			"HCSR/Runtime LOH Fragmentation Bytes",
 			"HCSR/Texture Resource Creates",
 			"HCSR/Texture Resource Frees",
 			"HCSR/Presentation Lock Busy",
@@ -470,6 +494,42 @@ double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
 				break;
 			case MONITOR_PAINTER_ORDER_FLUSHES:
 				value += profile.painter_order_flush_count;
+				break;
+			case MONITOR_RUNTIME_ALLOCATED_BYTES:
+				value += profile.runtime_allocated_bytes;
+				break;
+			case MONITOR_RUNTIME_ALLOCATION_RATE:
+				value += profile.runtime_allocation_rate_megabytes_per_second;
+				break;
+			case MONITOR_RUNTIME_GC_PAUSE_TIME:
+				value += profile.runtime_gc_pause_milliseconds / 1000.0;
+				break;
+			case MONITOR_RUNTIME_GC_PAUSE_OBSERVED_COLLECTIONS:
+				value += profile.runtime_gc_pause_observed_collection_count;
+				break;
+			case MONITOR_RUNTIME_GC_PAUSE_UNOBSERVED_COLLECTIONS:
+				value += profile.runtime_gc_pause_unobserved_collection_count;
+				break;
+			case MONITOR_RUNTIME_GEN0_COLLECTIONS:
+				value += profile.runtime_gen0_collection_count;
+				break;
+			case MONITOR_RUNTIME_GEN1_COLLECTIONS:
+				value += profile.runtime_gen1_collection_count;
+				break;
+			case MONITOR_RUNTIME_GEN2_COLLECTIONS:
+				value += profile.runtime_gen2_collection_count;
+				break;
+			case MONITOR_RUNTIME_MANAGED_HEAP_BYTES:
+				value += profile.runtime_managed_heap_bytes;
+				break;
+			case MONITOR_RUNTIME_MANAGED_COMMITTED_BYTES:
+				value += profile.runtime_managed_committed_bytes;
+				break;
+			case MONITOR_RUNTIME_LOH_BYTES:
+				value += profile.runtime_large_object_heap_bytes;
+				break;
+			case MONITOR_RUNTIME_LOH_FRAGMENTATION_BYTES:
+				value += profile.runtime_large_object_heap_fragmentation_bytes;
 				break;
 		}
 	}
