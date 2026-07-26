@@ -2,7 +2,7 @@ extends SceneTree
 
 const WIDTH := 420
 const HEIGHT := 180
-const STYLE := "body{margin:0;background:#111827;color:#f9fafb;font-size:18px}.row{display:flex;gap:12px;padding:12px}.label{width:112px}.ui-select-options{display:none;position:absolute;left:126px;top:42px;width:180px;background:#1f2937}.ui-select-options.open{display:block}"
+const STYLE := "html,body{margin:0;width:100%;height:100%;background:#111827;color:#f9fafb;font-size:18px}.row{display:flex;gap:12px;padding:12px}.label{width:112px}.ui-select-options{display:none;position:absolute;left:126px;top:42px;width:180px;background:#1f2937}.ui-select-options.open{display:block}"
 const BODY_PREFIX := "<div class='row'><span class='label'>Alpha glyphs</span><span class='label'>Bravo glyphs</span><span class='label'>Charlie glyphs</span></div>"
 const OPTIONS := "<div id='options' class='%s'><div>First option</div><div>Second option</div><div>Third option</div></div>"
 const BODY_SUFFIX := "<div class='row'><span class='label'>Delta glyphs</span><span class='label'>Echo glyphs</span><span class='label'>Foxtrot glyphs</span></div>"

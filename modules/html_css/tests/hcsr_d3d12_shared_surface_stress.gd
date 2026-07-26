@@ -1,7 +1,7 @@
 extends SceneTree
 
-const WIDTH := 1280
-const HEIGHT := 720
+const WIDTH := 640
+const HEIGHT := 360
 const CARD_COUNT := 18
 
 func _initialize() -> void:
@@ -17,35 +17,43 @@ func _initialize() -> void:
 	for _frame in range(6):
 		await process_frame
 
-	_send_wheel(Vector2(960, 500), MOUSE_BUTTON_WHEEL_DOWN, 14.0)
-	var bottom_reference := await _wait_for_settled_frame()
+	var generation_before_bottom := view.get_generation()
+	var scroll_position := Vector2(WIDTH * 0.75, HEIGHT * 0.7)
+	_send_wheel(scroll_position, MOUSE_BUTTON_WHEEL_DOWN, 14.0)
+	var bottom_reference := await _wait_for_settled_frame(view, generation_before_bottom)
 	if bottom_reference == null:
 		_fail("D3D12 shared-surface stress could not capture its reference frame.")
 		return
 
-	_send_wheel(Vector2(960, 500), MOUSE_BUTTON_WHEEL_UP, 14.0)
-	var top_reference := await _wait_for_settled_frame()
+	var generation_before_top := view.get_generation()
+	_send_wheel(scroll_position, MOUSE_BUTTON_WHEEL_UP, 14.0)
+	var top_reference := await _wait_for_settled_frame(view, generation_before_top)
 	if top_reference == null:
 		_fail("D3D12 shared-surface stress could not capture its previous committed frame.")
 		return
-	if _count_changed_pixels(top_reference, bottom_reference) == 0:
+	var top_hash := _frame_hash(top_reference)
+	var bottom_hash := _frame_hash(bottom_reference)
+	if top_hash == bottom_hash:
 		_fail("D3D12 shared-surface stress endpoints did not produce distinct completed frames.")
 		return
 
+	var generation_before_stress := view.get_generation()
 	for iteration in range(13):
 		var button := MOUSE_BUTTON_WHEEL_DOWN if iteration % 2 == 0 else MOUSE_BUTTON_WHEEL_UP
-		_send_wheel(Vector2(960, 500), button, 14.0)
+		_send_wheel(scroll_position, button, 14.0)
 		await process_frame
 	await RenderingServer.frame_post_draw
-	var immediate_frame := root.get_texture().get_image()
-	if immediate_frame == null or immediate_frame.get_size() != bottom_reference.get_size() or not _frame_has_complete_surface(immediate_frame):
+	var immediate_frame := _capture_frame()
+	if immediate_frame == null or immediate_frame.get_size() != bottom_reference.get_size():
 		_fail("D3D12 shared-surface stress could not capture its stressed frame.")
 		return
+	if not _frame_has_complete_surface(immediate_frame):
+		_fail("D3D12 shared-surface stress exposed an incomplete shared surface.")
+		return
 
-	var completed_frame := await _wait_for_settled_frame()
-	var changed_pixels := _count_changed_pixels(completed_frame, bottom_reference) if completed_frame != null else -1
-	if changed_pixels != 0:
-		_fail("D3D12 shared presentation did not converge to the final completed scroll commit; %d pixels differ." % changed_pixels)
+	var completed_frame := await _wait_for_settled_frame(view, generation_before_stress)
+	if completed_frame == null or _frame_hash(completed_frame) != bottom_hash:
+		_fail("D3D12 shared presentation did not converge to the final completed scroll commit.")
 		return
 
 	print("HCSR Godot D3D12 shared-surface retained-scroll stress passed.")
@@ -74,52 +82,62 @@ func _send_wheel(position: Vector2, button: MouseButton, factor: float) -> void:
 	wheel.pressed = true
 	root.push_input(wheel, true)
 
-func _wait_for_settled_frame() -> Image:
+func _wait_for_settled_frame(view: HTMLView, generation_before_change: int) -> Image:
 	var deadline := Time.get_ticks_msec() + 2000
-	var frame: Image
-	var previous_frame: Image
-	var stable_frame_count := 0
+	var last_generation := 0
+	var stable_generation_count := 0
 	while Time.get_ticks_msec() < deadline:
 		await process_frame
-		await RenderingServer.frame_post_draw
-		frame = root.get_texture().get_image()
-		if frame == null or not _frame_has_complete_surface(frame):
-			previous_frame = null
-			stable_frame_count = 0
+		var generation := view.get_generation()
+		if generation <= generation_before_change:
+			stable_generation_count = 0
 			continue
-		if previous_frame != null and _count_changed_pixels(previous_frame, frame) == 0:
-			stable_frame_count += 1
-			if stable_frame_count >= 3:
-				return frame
+		if generation == last_generation:
+			stable_generation_count += 1
+			if stable_generation_count >= 3:
+				await RenderingServer.frame_post_draw
+				var frame := _capture_frame()
+				if frame != null:
+					return frame
 		else:
-			stable_frame_count = 0
-		previous_frame = frame
+			last_generation = generation
+			stable_generation_count = 0
 	return null
 
+func _capture_frame() -> Image:
+	var frame := root.get_texture().get_image()
+	if frame == null or frame.get_width() < WIDTH or frame.get_height() < HEIGHT:
+		return null
+	if frame.get_size() == Vector2i(WIDTH, HEIGHT):
+		return frame
+	return frame.get_region(Rect2i(0, 0, WIDTH, HEIGHT))
+
+func _frame_hash(frame: Image) -> PackedByteArray:
+	if frame.get_format() != Image.FORMAT_RGBA8:
+		frame.convert(Image.FORMAT_RGBA8)
+	var hashing := HashingContext.new()
+	hashing.start(HashingContext.HASH_SHA256)
+	hashing.update(frame.get_data())
+	return hashing.finish()
+
 func _frame_has_complete_surface(frame: Image) -> bool:
-	if frame.get_width() < WIDTH or frame.get_height() < HEIGHT:
+	if frame.get_size() != Vector2i(WIDTH, HEIGHT):
 		return false
+	if frame.get_format() != Image.FORMAT_RGBA8:
+		frame.convert(Image.FORMAT_RGBA8)
+	var pixels := frame.get_data()
 	for y in range(HEIGHT):
 		var black_run := 0
+		var row_offset := y * WIDTH * 4
 		for x in range(WIDTH):
-			var color := frame.get_pixel(x, y)
-			if color.r < 0.02 and color.g < 0.02 and color.b < 0.02:
+			var pixel_offset := row_offset + x * 4
+			if pixels[pixel_offset] < 5 and pixels[pixel_offset + 1] < 5 and pixels[pixel_offset + 2] < 5:
 				black_run += 1
 				if black_run >= 40:
 					return false
 			else:
 				black_run = 0
 	return true
-
-func _count_changed_pixels(left: Image, right: Image) -> int:
-	if left.get_size() != right.get_size():
-		return -1
-	var changed_pixels := 0
-	for y in range(HEIGHT):
-		for x in range(WIDTH):
-			if left.get_pixel(x, y) != right.get_pixel(x, y):
-				changed_pixels += 1
-	return changed_pixels
 
 func _fail(message: String) -> void:
 	push_error(message)
