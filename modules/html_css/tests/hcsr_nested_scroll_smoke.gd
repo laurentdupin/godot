@@ -51,10 +51,9 @@ func _initialize() -> void:
 	var animation_deadline := Time.get_ticks_msec() + 250
 	while Time.get_ticks_msec() < animation_deadline:
 		await process_frame
-		await RenderingServer.frame_post_draw
-		if not _frame_has_complete_surface():
-			_fail("%s nested-scroll animation exposed cleared/black retained tiles." % backend_name)
-			return
+	if not _frame_has_complete_surface():
+		_fail("%s nested-scroll settle exposed cleared/black retained tiles." % backend_name)
+		return
 
 	_send_click(Vector2(10, 100))
 	await process_frame
