@@ -39,9 +39,12 @@ protected:
 	Color placeholder_background = Color(0.08, 0.09, 0.1, 1.0);
 	Color background_color = Color(0, 0, 0, 0);
 	bool transparent_background = false;
+	double cpu_frame_conversion_milliseconds = 0.0;
+	double cpu_frame_upload_milliseconds = 0.0;
 
 	void clear_to_background();
-	Error submit_cpu_frame_data(const Size2i &p_size, int p_stride, HTMLFramePixelFormat p_pixel_format, const uint8_t *p_pixels, int64_t p_pixel_count);
+	static void convert_bgra_to_rgba(const uint8_t *p_source, int p_source_stride, uint8_t *p_destination, int p_width, int p_height);
+	Error submit_cpu_frame_data(const Size2i &p_size, int p_stride, HTMLFramePixelFormat p_pixel_format, const uint8_t *p_pixels, int64_t p_pixel_count, bool p_alpha_known = false, bool p_has_alpha = false);
 
 public:
 	virtual void set_size(const Size2i &p_size) override;

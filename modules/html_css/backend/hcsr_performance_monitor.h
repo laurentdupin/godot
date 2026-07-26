@@ -60,12 +60,24 @@ public:
 		MONITOR_TEXTURE_RESOURCE_FREES,
 		MONITOR_PRESENTATION_LOCK_BUSY,
 		MONITOR_CAPACITY_PROBE_CANCELLATIONS,
+		MONITOR_CPU_PRIMARY_PUBLICATION_TIME,
+		MONITOR_CPU_SECONDARY_PUBLICATION_TIME,
+		MONITOR_CPU_PRIMARY_CONVERSION_TIME,
+		MONITOR_CPU_PRIMARY_UPLOAD_TIME,
+		MONITOR_CPU_SECONDARY_CONVERSION_TIME,
+		MONITOR_CPU_SECONDARY_UPLOAD_TIME,
 	};
 	struct IntegrationCounters {
 		uint64_t texture_resource_creates = 0;
 		uint64_t texture_resource_frees = 0;
 		uint64_t presentation_lock_busy = 0;
 		uint64_t capacity_probe_cancellations = 0;
+		double cpu_primary_publication_milliseconds = 0.0;
+		double cpu_secondary_publication_milliseconds = 0.0;
+		double cpu_primary_conversion_milliseconds = 0.0;
+		double cpu_primary_upload_milliseconds = 0.0;
+		double cpu_secondary_conversion_milliseconds = 0.0;
+		double cpu_secondary_upload_milliseconds = 0.0;
 	};
 
 private:

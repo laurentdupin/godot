@@ -30,6 +30,7 @@
 
 #include "html_surface_cpu_backend.h"
 
+#include "core/os/os.h"
 #include "servers/rendering/rendering_server.h"
 
 void HTMLSurfaceCPUBackend::clear_to_background() {
@@ -62,6 +63,22 @@ void HTMLSurfaceCPUBackend::render_placeholder(const String &p_marker) {
 	clear_to_background();
 }
 
+void HTMLSurfaceCPUBackend::convert_bgra_to_rgba(const uint8_t *p_source, int p_source_stride, uint8_t *p_destination, int p_width, int p_height) {
+	const int destination_stride = p_width * 4;
+	for (int y = 0; y < p_height; y++) {
+		const uint8_t *source_row = p_source + int64_t(p_source_stride) * y;
+		uint8_t *destination_row = p_destination + int64_t(destination_stride) * y;
+		for (int x = 0; x < p_width; x++) {
+			uint32_t bgra;
+			memcpy(&bgra, source_row + x * 4, sizeof(bgra));
+			const uint32_t rgba_pixel = (bgra & 0xff00ff00U)
+					| ((bgra & 0x00ff0000U) >> 16)
+					| ((bgra & 0x000000ffU) << 16);
+			memcpy(destination_row + x * 4, &rgba_pixel, sizeof(rgba_pixel));
+		}
+	}
+}
+
 Error HTMLSurfaceCPUBackend::submit_cpu_frame(const HTMLCPUFrame &p_frame) {
 	return submit_cpu_frame_data(
 			p_frame.size,
@@ -71,7 +88,7 @@ Error HTMLSurfaceCPUBackend::submit_cpu_frame(const HTMLCPUFrame &p_frame) {
 			p_frame.pixels.size());
 }
 
-Error HTMLSurfaceCPUBackend::submit_cpu_frame_data(const Size2i &p_size, int p_stride, HTMLFramePixelFormat p_pixel_format, const uint8_t *p_pixels, int64_t p_pixel_count) {
+Error HTMLSurfaceCPUBackend::submit_cpu_frame_data(const Size2i &p_size, int p_stride, HTMLFramePixelFormat p_pixel_format, const uint8_t *p_pixels, int64_t p_pixel_count, bool p_alpha_known, bool p_has_alpha) {
 	ERR_FAIL_COND_V_MSG(p_size.x <= 0 || p_size.y <= 0, ERR_INVALID_PARAMETER, "HTML CPU frame size must be positive.");
 	ERR_FAIL_COND_V_MSG(p_pixel_format != HTML_FRAME_PIXEL_FORMAT_RGBA8 && p_pixel_format != HTML_FRAME_PIXEL_FORMAT_BGRA8, ERR_INVALID_PARAMETER, "HTML CPU frame pixel format is not supported.");
 
@@ -82,32 +99,37 @@ Error HTMLSurfaceCPUBackend::submit_cpu_frame_data(const Size2i &p_size, int p_s
 	ERR_FAIL_NULL_V_MSG(p_pixels, ERR_INVALID_DATA, "HTML CPU frame pixel buffer is null.");
 	ERR_FAIL_COND_V_MSG(p_pixel_count < required_size, ERR_INVALID_DATA, "HTML CPU frame pixel buffer is shorter than the declared size.");
 
+	const uint64_t conversion_start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 	Vector<uint8_t> rgba;
 	rgba.resize(row_bytes * p_size.y);
 	uint8_t *write = rgba.ptrw();
 
-	for (int y = 0; y < p_size.y; y++) {
-		const uint8_t *src_row = p_pixels + int64_t(p_stride) * y;
-		uint8_t *dst_row = write + int64_t(row_bytes) * y;
-		if (p_pixel_format == HTML_FRAME_PIXEL_FORMAT_RGBA8) {
+	if (p_pixel_format == HTML_FRAME_PIXEL_FORMAT_RGBA8) {
+		for (int y = 0; y < p_size.y; y++) {
+			const uint8_t *src_row = p_pixels + int64_t(p_stride) * y;
+			uint8_t *dst_row = write + int64_t(row_bytes) * y;
 			memcpy(dst_row, src_row, row_bytes);
-		} else {
-			for (int x = 0; x < p_size.x; x++) {
-				uint32_t bgra;
-				memcpy(&bgra, src_row + x * 4, sizeof(bgra));
-				const uint32_t rgba_pixel = (bgra & 0xff00ff00U)
-						| ((bgra & 0x00ff0000U) >> 16)
-						| ((bgra & 0x000000ffU) << 16);
-				memcpy(dst_row + x * 4, &rgba_pixel, sizeof(rgba_pixel));
-			}
 		}
+	} else {
+		convert_bgra_to_rgba(p_pixels, p_stride, write, p_size.x, p_size.y);
 	}
 
 	Ref<Image> image = Image::create_from_data(p_size.x, p_size.y, false, Image::FORMAT_RGBA8, rgba);
 	ERR_FAIL_COND_V_MSG(image.is_null() || image->is_empty(), ERR_CANT_CREATE, "Could not create an Image from the HTML CPU frame.");
+	cpu_frame_conversion_milliseconds = conversion_start_usec != 0
+			? (OS::get_singleton()->get_ticks_usec() - conversion_start_usec) / 1000.0
+			: 0.0;
 
 	size = p_size;
-	texture->update_from_image(image);
+	const uint64_t upload_start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
+	if (p_alpha_known) {
+		texture->update_from_image(image, p_has_alpha);
+	} else {
+		texture->update_from_image(image);
+	}
+	cpu_frame_upload_milliseconds = upload_start_usec != 0
+			? (OS::get_singleton()->get_ticks_usec() - upload_start_usec) / 1000.0
+			: 0.0;
 	return OK;
 }
 

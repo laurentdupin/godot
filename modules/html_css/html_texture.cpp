@@ -79,6 +79,13 @@ void HTMLTexture2D::update_from_image(const Ref<Image> &p_image) {
 	ERR_FAIL_COND(p_image.is_null());
 	ERR_FAIL_COND(p_image->is_empty());
 
+	update_from_image(p_image, p_image->detect_alpha() != Image::ALPHA_NONE);
+}
+
+void HTMLTexture2D::update_from_image(const Ref<Image> &p_image, bool p_has_alpha) {
+	ERR_FAIL_COND(p_image.is_null());
+	ERR_FAIL_COND(p_image->is_empty());
+
 	latest_image = p_image;
 	external_texture_rid = RID();
 
@@ -94,7 +101,7 @@ void HTMLTexture2D::update_from_image(const Ref<Image> &p_image) {
 	RenderingServer::get_singleton()->texture_proxy_update(proxy_texture_rid, texture->get_rid());
 
 	size = Size2i(p_image->get_width(), p_image->get_height());
-	alpha = p_image->detect_alpha() != Image::ALPHA_NONE;
+	alpha = p_has_alpha;
 	_notify_changed();
 }
 

@@ -74,6 +74,12 @@ void HCSRPerformanceMonitor::initialize() {
 		{ "HCSR/Texture Resource Frees", MONITOR_TEXTURE_RESOURCE_FREES, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Presentation Lock Busy", MONITOR_PRESENTATION_LOCK_BUSY, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Capacity Probe Cancellations", MONITOR_CAPACITY_PROBE_CANCELLATIONS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/CPU Primary Publication Time", MONITOR_CPU_PRIMARY_PUBLICATION_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/CPU Secondary Publication Time", MONITOR_CPU_SECONDARY_PUBLICATION_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/CPU Primary Conversion Time", MONITOR_CPU_PRIMARY_CONVERSION_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/CPU Primary Upload Time", MONITOR_CPU_PRIMARY_UPLOAD_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/CPU Secondary Conversion Time", MONITOR_CPU_SECONDARY_CONVERSION_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/CPU Secondary Upload Time", MONITOR_CPU_SECONDARY_UPLOAD_TIME, Performance::MONITOR_TYPE_TIME },
 	};
 
 	for (const HCSRMonitorDefinition &definition : definitions) {
@@ -134,6 +140,12 @@ void HCSRPerformanceMonitor::finalize() {
 			"HCSR/Texture Resource Frees",
 			"HCSR/Presentation Lock Busy",
 			"HCSR/Capacity Probe Cancellations",
+			"HCSR/CPU Primary Publication Time",
+			"HCSR/CPU Secondary Publication Time",
+			"HCSR/CPU Primary Conversion Time",
+			"HCSR/CPU Primary Upload Time",
+			"HCSR/CPU Secondary Conversion Time",
+			"HCSR/CPU Secondary Upload Time",
 		};
 		for (const char *monitor_name : monitor_names) {
 			const StringName name(monitor_name);
@@ -300,6 +312,24 @@ double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
 					break;
 				case MONITOR_CAPACITY_PROBE_CANCELLATIONS:
 					value += entry.value.capacity_probe_cancellations;
+					break;
+				case MONITOR_CPU_PRIMARY_PUBLICATION_TIME:
+					value += entry.value.cpu_primary_publication_milliseconds / 1000.0;
+					break;
+				case MONITOR_CPU_SECONDARY_PUBLICATION_TIME:
+					value += entry.value.cpu_secondary_publication_milliseconds / 1000.0;
+					break;
+				case MONITOR_CPU_PRIMARY_CONVERSION_TIME:
+					value += entry.value.cpu_primary_conversion_milliseconds / 1000.0;
+					break;
+				case MONITOR_CPU_PRIMARY_UPLOAD_TIME:
+					value += entry.value.cpu_primary_upload_milliseconds / 1000.0;
+					break;
+				case MONITOR_CPU_SECONDARY_CONVERSION_TIME:
+					value += entry.value.cpu_secondary_conversion_milliseconds / 1000.0;
+					break;
+				case MONITOR_CPU_SECONDARY_UPLOAD_TIME:
+					value += entry.value.cpu_secondary_upload_milliseconds / 1000.0;
 					break;
 				default:
 					break;

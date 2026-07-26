@@ -11,6 +11,7 @@
 #include "core/config/engine.h"
 #include "core/math/math_funcs.h"
 #include "core/object/callable_mp.h"
+#include "core/os/os.h"
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/rendering_server.h"
 
@@ -1209,26 +1210,20 @@ void HTMLSurfaceHCSRBackend::_poll_cpu_presentation_outputs() {
 
 		const Size2i output_size(output.width, output.height);
 		const int row_bytes = output_size.x * 4;
+		const uint64_t conversion_start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 		Vector<uint8_t> rgba;
 		rgba.resize(row_bytes * output_size.y);
-		for (int y = 0; y < output_size.y; y++) {
-			const uint8_t *source = output.pixels + int64_t(output.stride) * y;
-			uint8_t *destination = rgba.ptrw() + int64_t(row_bytes) * y;
-			for (int x = 0; x < output_size.x; x++) {
-				uint32_t bgra;
-				memcpy(&bgra, source + x * 4, sizeof(bgra));
-				const uint32_t rgba_pixel = (bgra & 0xff00ff00U)
-						| ((bgra & 0x00ff0000U) >> 16)
-						| ((bgra & 0x000000ffU) << 16);
-				memcpy(destination + x * 4, &rgba_pixel, sizeof(rgba_pixel));
-			}
-		}
+		convert_bgra_to_rgba(output.pixels, output.stride, rgba.ptrw(), output_size.x, output_size.y);
 		Ref<Image> image = Image::create_from_data(output_size.x, output_size.y, false, Image::FORMAT_RGBA8, rgba);
 		if (image.is_null() || image->is_empty()) {
 			_record_error("Godot could not create an image for a CPU secondary presentation output");
 			continue;
 		}
-		state->texture->update_from_image(image);
+		integration_counters.cpu_secondary_conversion_milliseconds = conversion_start_usec != 0
+				? (OS::get_singleton()->get_ticks_usec() - conversion_start_usec) / 1000.0
+				: 0.0;
+		const uint64_t upload_start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
+		state->texture->update_from_image(image, transparent_background);
 		if (state->mipmaps) {
 			RenderingServer *rendering_server = RenderingServer::get_singleton();
 			ERR_CONTINUE_MSG(rendering_server == nullptr, "RenderingServer is unavailable for an HCSR CPU mipmapped output.");
@@ -1251,6 +1246,9 @@ void HTMLSurfaceHCSRBackend::_poll_cpu_presentation_outputs() {
 		}
 		state->active_generation = output.generation;
 		state->native_size = output_size;
+		integration_counters.cpu_secondary_upload_milliseconds = upload_start_usec != 0
+				? (OS::get_singleton()->get_ticks_usec() - upload_start_usec) / 1000.0
+				: 0.0;
 	}
 }
 
@@ -2161,15 +2159,28 @@ bool HTMLSurfaceHCSRBackend::_render_frame() {
 	}
 
 	const uint64_t frame_generation = output.generation;
+	const uint64_t primary_publication_start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 	const bool rendered = submit_cpu_frame_data(
 			Size2i(output.width, output.height),
 			output.stride,
 			HTML_FRAME_PIXEL_FORMAT_BGRA8,
 			output.pixels,
-			int64_t(output.stride) * output.height) == OK;
+			int64_t(output.stride) * output.height,
+			true,
+			transparent_background) == OK;
+	integration_counters.cpu_primary_publication_milliseconds = primary_publication_start_usec != 0
+			? (OS::get_singleton()->get_ticks_usec() - primary_publication_start_usec) / 1000.0
+			: 0.0;
+	integration_counters.cpu_primary_conversion_milliseconds = cpu_frame_conversion_milliseconds;
+	integration_counters.cpu_primary_upload_milliseconds = cpu_frame_upload_milliseconds;
 	hcsr_renderer_release_frame(renderer, &output);
 	if (rendered) {
+		const uint64_t secondary_publication_start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 		_poll_cpu_presentation_outputs();
+		integration_counters.cpu_secondary_publication_milliseconds = secondary_publication_start_usec != 0
+				? (OS::get_singleton()->get_ticks_usec() - secondary_publication_start_usec) / 1000.0
+				: 0.0;
+		_publish_integration_counters();
 		{
 			MutexLock lock(frame_metadata_mutex);
 			last_queued_frame_generation = frame_generation;
