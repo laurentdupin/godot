@@ -2061,10 +2061,12 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 	uint64_t packet_generation = 0;
 	for (int attempt = 0; attempt < 2; attempt++) {
 		packet = nullptr;
+		const uint64_t managed_export_call_start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 		if (hcsr_renderer_prepare_gpu_frame(renderer, timeline_time_seconds, &packet) != HCSR_STATUS_OK) {
 			_record_error("HCSR could not prepare the Godot GPU frame");
 			return false;
 		}
+		_record_managed_export_boundary_overhead(managed_export_call_start_usec);
 		if (!_update_frame_schedule()) {
 			if (packet != nullptr) {
 				_abandon_gpu_frame_packet(packet);
@@ -2132,10 +2134,12 @@ bool HTMLSurfaceHCSRBackend::_render_frame() {
 	for (int attempt = 0; attempt < 2; attempt++) {
 		output = {};
 		output.struct_size = sizeof(output);
+		const uint64_t managed_export_call_start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 		if (hcsr_renderer_render_frame(renderer, timeline_time_seconds, &output) != HCSR_STATUS_OK) {
 			_record_error("HCSR could not render the Godot frame");
 			return false;
 		}
+		_record_managed_export_boundary_overhead(managed_export_call_start_usec);
 		if (!_update_frame_schedule()) {
 			hcsr_renderer_release_frame(renderer, &output);
 			return false;
@@ -2261,6 +2265,23 @@ void HTMLSurfaceHCSRBackend::_update_performance_profile() {
 			HCSRPerformanceMonitor::publish_frame_data();
 		}
 	}
+#endif
+}
+
+void HTMLSurfaceHCSRBackend::_record_managed_export_boundary_overhead(uint64_t p_call_start_usec) {
+#ifdef DEBUG_ENABLED
+	if (renderer == nullptr || p_call_start_usec == 0 || OS::get_singleton() == nullptr) {
+		return;
+	}
+	hcsr_performance_profile_t profile = {};
+	profile.struct_size = sizeof(profile);
+	if (hcsr_renderer_get_performance_profile(renderer, &profile) != HCSR_STATUS_OK) {
+		return;
+	}
+	const double host_call_milliseconds = double(OS::get_singleton()->get_ticks_usec() - p_call_start_usec) / 1000.0;
+	integration_counters.managed_export_boundary_overhead_milliseconds =
+			MAX(0.0, host_call_milliseconds - profile.native_total_milliseconds);
+	_publish_integration_counters();
 #endif
 }
 

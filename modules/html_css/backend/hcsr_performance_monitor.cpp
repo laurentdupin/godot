@@ -80,6 +80,7 @@ void HCSRPerformanceMonitor::initialize() {
 		{ "HCSR/CPU Primary Upload Time", MONITOR_CPU_PRIMARY_UPLOAD_TIME, Performance::MONITOR_TYPE_TIME },
 		{ "HCSR/CPU Secondary Conversion Time", MONITOR_CPU_SECONDARY_CONVERSION_TIME, Performance::MONITOR_TYPE_TIME },
 		{ "HCSR/CPU Secondary Upload Time", MONITOR_CPU_SECONDARY_UPLOAD_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/Managed Export Boundary Overhead Time", MONITOR_MANAGED_EXPORT_BOUNDARY_OVERHEAD_TIME, Performance::MONITOR_TYPE_TIME },
 	};
 
 	for (const HCSRMonitorDefinition &definition : definitions) {
@@ -146,6 +147,7 @@ void HCSRPerformanceMonitor::finalize() {
 			"HCSR/CPU Primary Upload Time",
 			"HCSR/CPU Secondary Conversion Time",
 			"HCSR/CPU Secondary Upload Time",
+			"HCSR/Managed Export Boundary Overhead Time",
 		};
 		for (const char *monitor_name : monitor_names) {
 			const StringName name(monitor_name);
@@ -330,6 +332,9 @@ double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
 					break;
 				case MONITOR_CPU_SECONDARY_UPLOAD_TIME:
 					value += entry.value.cpu_secondary_upload_milliseconds / 1000.0;
+					break;
+				case MONITOR_MANAGED_EXPORT_BOUNDARY_OVERHEAD_TIME:
+					value += entry.value.managed_export_boundary_overhead_milliseconds / 1000.0;
 					break;
 				default:
 					break;

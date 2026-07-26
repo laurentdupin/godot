@@ -173,6 +173,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	void _record_error(const String &p_context);
 	void _retire_document_commits();
 	void _update_performance_profile();
+	void _record_managed_export_boundary_overhead(uint64_t p_call_start_usec);
 	bool _update_frame_schedule();
 	bool _set_host_frame_context();
 	void _publish_integration_counters();
