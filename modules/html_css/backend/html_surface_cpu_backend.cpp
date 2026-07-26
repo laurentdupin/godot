@@ -33,6 +33,10 @@
 #include "core/os/os.h"
 #include "servers/rendering/rendering_server.h"
 
+#if defined(__x86_64__) || defined(_M_X64)
+#include <emmintrin.h>
+#endif
+
 void HTMLSurfaceCPUBackend::clear_to_background() {
 	Ref<Image> image = Image::create_empty(size.x, size.y, false, Image::FORMAT_RGBA8);
 	image->fill(background_color);
@@ -68,7 +72,21 @@ void HTMLSurfaceCPUBackend::convert_bgra_to_rgba(const uint8_t *p_source, int p_
 	for (int y = 0; y < p_height; y++) {
 		const uint8_t *source_row = p_source + int64_t(p_source_stride) * y;
 		uint8_t *destination_row = p_destination + int64_t(destination_stride) * y;
-		for (int x = 0; x < p_width; x++) {
+		int x = 0;
+#if defined(__x86_64__) || defined(_M_X64)
+		const __m128i green_alpha_mask = _mm_set1_epi32(int32_t(0xff00ff00U));
+		const __m128i red_mask = _mm_set1_epi32(0x00ff0000);
+		const __m128i blue_mask = _mm_set1_epi32(0x000000ff);
+		for (; x <= p_width - 4; x += 4) {
+			const __m128i bgra = _mm_loadu_si128(reinterpret_cast<const __m128i *>(source_row + x * 4));
+			const __m128i green_alpha = _mm_and_si128(bgra, green_alpha_mask);
+			const __m128i red = _mm_srli_epi32(_mm_and_si128(bgra, red_mask), 16);
+			const __m128i blue = _mm_slli_epi32(_mm_and_si128(bgra, blue_mask), 16);
+			const __m128i rgba = _mm_or_si128(green_alpha, _mm_or_si128(red, blue));
+			_mm_storeu_si128(reinterpret_cast<__m128i *>(destination_row + x * 4), rgba);
+		}
+#endif
+		for (; x < p_width; x++) {
 			uint32_t bgra;
 			memcpy(&bgra, source_row + x * 4, sizeof(bgra));
 			const uint32_t rgba_pixel = (bgra & 0xff00ff00U)
