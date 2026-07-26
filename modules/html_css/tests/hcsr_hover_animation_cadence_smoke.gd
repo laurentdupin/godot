@@ -1,5 +1,9 @@
 extends SceneTree
 
+const AUTHORED_TRANSITION_MILLISECONDS := 200
+const MINIMUM_TRANSITION_GENERATIONS := 6
+const MINIMUM_PROCESS_FRAME_COVERAGE := 0.8
+
 var backend := HTMLView.BACKEND_D3D12
 var backend_name := "D3D12"
 
@@ -63,7 +67,10 @@ func _run() -> void:
 	var next_sample := started
 	var last_generation := -1
 	var observed_frames := 0
+	var transition_process_frames := 0
 	while Time.get_ticks_msec() - started < 350 and observed_frames < 240:
+		if Time.get_ticks_msec() - started < AUTHORED_TRANSITION_MILLISECONDS:
+			transition_process_frames += 1
 		var moving_hover := InputEventMouseMotion.new()
 		moving_hover.position = Vector2(100 + observed_frames % 8, 80)
 		moving_hover.global_position = moving_hover.position
@@ -88,8 +95,9 @@ func _run() -> void:
 			continue
 		last_generation = view.get_generation()
 		generations.append(last_generation)
-	if generations.size() < 20:
-		push_error("%s hover transition published only %d primary generations." % [backend_name, generations.size()])
+	var minimum_generation_count := maxi(MINIMUM_TRANSITION_GENERATIONS, ceili(float(transition_process_frames) * MINIMUM_PROCESS_FRAME_COVERAGE))
+	if generations.size() < minimum_generation_count:
+		push_error("%s hover transition published only %d primary generations for %d process frames during the authored transition; required %d." % [backend_name, generations.size(), transition_process_frames, minimum_generation_count])
 		quit(1)
 		return
 	var distinct_colors := 0
@@ -159,7 +167,7 @@ func _run() -> void:
 		push_error("%s hover leave transition did not return primary/secondary output to its authored endpoint." % backend_name)
 		quit(1)
 		return
-	print("HCSR hover enter/leave cadence passed on %s with %d primary generations." % [backend_name, generations.size()])
+	print("HCSR hover enter/leave cadence passed on %s with %d primary generations for %d process frames during the authored transition (required %d)." % [backend_name, generations.size(), transition_process_frames, minimum_generation_count])
 	quit(0)
 
 func _count_distinct_colors(colors: Array[Color]) -> int:
