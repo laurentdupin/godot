@@ -90,6 +90,29 @@ void HCSRPerformanceMonitor::initialize() {
 		{ "HCSR/Completion Retirement Time", MONITOR_COMPLETION_RETIREMENT_TIME, Performance::MONITOR_TYPE_TIME },
 		{ "HCSR/Owner Lock Wait Time", MONITOR_OWNER_LOCK_WAIT_TIME, Performance::MONITOR_TYPE_TIME },
 		{ "HCSR/Owner Lock Contentions", MONITOR_OWNER_LOCK_CONTENTIONS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Style Allocated Bytes", MONITOR_STYLE_ALLOCATED_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Layout Allocated Bytes", MONITOR_LAYOUT_ALLOCATED_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Layout Tree Allocated Bytes", MONITOR_LAYOUT_TREE_ALLOCATED_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Text Shaping Allocated Bytes", MONITOR_LAYOUT_TEXT_SHAPING_ALLOCATED_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Hit Test Allocated Bytes", MONITOR_HIT_TEST_ALLOCATED_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Display List Allocated Bytes", MONITOR_DISPLAY_LIST_ALLOCATED_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Paint Preparation Allocated Bytes", MONITOR_PAINT_PREPARATION_ALLOCATED_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Paint Traversal Allocated Bytes", MONITOR_PAINT_TRAVERSAL_ALLOCATED_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Paint Scene Allocated Bytes", MONITOR_PAINT_SCENE_CONSTRUCTION_ALLOCATED_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Paint Candidate Index Allocated Bytes", MONITOR_PAINT_CANDIDATE_INDEX_ALLOCATED_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Complete Frame Materialization Allocated Bytes", MONITOR_COMPLETE_FRAME_MATERIALIZATION_ALLOCATED_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Complete Sequence Allocated Bytes", MONITOR_COMPLETE_SEQUENCE_CONSTRUCTION_ALLOCATED_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Semantic Snapshot Allocated Bytes", MONITOR_SEMANTIC_SNAPSHOT_ALLOCATED_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Raster Allocated Bytes", MONITOR_RASTER_ALLOCATED_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/Authoritative Paint Chunks", MONITOR_AUTHORITATIVE_PAINT_CHUNKS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Visited Paint Chunks", MONITOR_VISITED_PAINT_CHUNKS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Changed Paint Chunks", MONITOR_CHANGED_PAINT_CHUNKS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Immutable Command References", MONITOR_IMMUTABLE_COMMAND_REFERENCES, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Flat Command References", MONITOR_FLAT_COMMAND_REFERENCES, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Semantic Segments", MONITOR_SEMANTIC_SEGMENTS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/New Scope Commands", MONITOR_NEW_SCOPE_COMMANDS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/New Scrollbar Commands", MONITOR_NEW_SCROLLBAR_COMMANDS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Snapshot Entries Written", MONITOR_SNAPSHOT_ENTRIES_WRITTEN, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Texture Resource Creates", MONITOR_TEXTURE_RESOURCE_CREATES, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Texture Resource Frees", MONITOR_TEXTURE_RESOURCE_FREES, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Presentation Lock Busy", MONITOR_PRESENTATION_LOCK_BUSY, Performance::MONITOR_TYPE_QUANTITY },
@@ -175,6 +198,29 @@ void HCSRPerformanceMonitor::finalize() {
 			"HCSR/Completion Retirement Time",
 			"HCSR/Owner Lock Wait Time",
 			"HCSR/Owner Lock Contentions",
+			"HCSR/Style Allocated Bytes",
+			"HCSR/Layout Allocated Bytes",
+			"HCSR/Layout Tree Allocated Bytes",
+			"HCSR/Text Shaping Allocated Bytes",
+			"HCSR/Hit Test Allocated Bytes",
+			"HCSR/Display List Allocated Bytes",
+			"HCSR/Paint Preparation Allocated Bytes",
+			"HCSR/Paint Traversal Allocated Bytes",
+			"HCSR/Paint Scene Allocated Bytes",
+			"HCSR/Paint Candidate Index Allocated Bytes",
+			"HCSR/Complete Frame Materialization Allocated Bytes",
+			"HCSR/Complete Sequence Allocated Bytes",
+			"HCSR/Semantic Snapshot Allocated Bytes",
+			"HCSR/Raster Allocated Bytes",
+			"HCSR/Authoritative Paint Chunks",
+			"HCSR/Visited Paint Chunks",
+			"HCSR/Changed Paint Chunks",
+			"HCSR/Immutable Command References",
+			"HCSR/Flat Command References",
+			"HCSR/Semantic Segments",
+			"HCSR/New Scope Commands",
+			"HCSR/New Scrollbar Commands",
+			"HCSR/Snapshot Entries Written",
 			"HCSR/Texture Resource Creates",
 			"HCSR/Texture Resource Frees",
 			"HCSR/Presentation Lock Busy",
@@ -280,6 +326,29 @@ void HCSRPerformanceMonitor::publish_frame_data() {
 		frame_profile.snapshot_publication_milliseconds += profile.snapshot_publication_milliseconds;
 		frame_profile.completion_retirement_milliseconds += profile.completion_retirement_milliseconds;
 		frame_profile.owner_lock_wait_milliseconds += profile.owner_lock_wait_milliseconds;
+		frame_profile.style_allocated_bytes += profile.style_allocated_bytes;
+		frame_profile.layout_allocated_bytes += profile.layout_allocated_bytes;
+		frame_profile.layout_tree_allocated_bytes += profile.layout_tree_allocated_bytes;
+		frame_profile.layout_text_shaping_allocated_bytes += profile.layout_text_shaping_allocated_bytes;
+		frame_profile.hit_test_allocated_bytes += profile.hit_test_allocated_bytes;
+		frame_profile.display_list_allocated_bytes += profile.display_list_allocated_bytes;
+		frame_profile.paint_preparation_allocated_bytes += profile.paint_preparation_allocated_bytes;
+		frame_profile.paint_traversal_allocated_bytes += profile.paint_traversal_allocated_bytes;
+		frame_profile.paint_scene_construction_allocated_bytes += profile.paint_scene_construction_allocated_bytes;
+		frame_profile.paint_candidate_index_allocated_bytes += profile.paint_candidate_index_allocated_bytes;
+		frame_profile.complete_frame_materialization_allocated_bytes += profile.complete_frame_materialization_allocated_bytes;
+		frame_profile.complete_sequence_construction_allocated_bytes += profile.complete_sequence_construction_allocated_bytes;
+		frame_profile.semantic_snapshot_allocated_bytes += profile.semantic_snapshot_allocated_bytes;
+		frame_profile.raster_allocated_bytes += profile.raster_allocated_bytes;
+		frame_profile.authoritative_paint_chunk_count += profile.authoritative_paint_chunk_count;
+		frame_profile.visited_paint_chunk_count += profile.visited_paint_chunk_count;
+		frame_profile.changed_paint_chunk_identity_count += profile.changed_paint_chunk_identity_count;
+		frame_profile.immutable_command_reference_count += profile.immutable_command_reference_count;
+		frame_profile.flat_command_reference_count += profile.flat_command_reference_count;
+		frame_profile.semantic_segment_count += profile.semantic_segment_count;
+		frame_profile.new_scope_command_count += profile.new_scope_command_count;
+		frame_profile.new_scrollbar_command_count += profile.new_scrollbar_command_count;
+		frame_profile.snapshot_array_entry_write_count += profile.snapshot_array_entry_write_count;
 	}
 
 	const double measured_core_stage_milliseconds = frame_profile.parse_milliseconds
@@ -344,6 +413,52 @@ void HCSRPerformanceMonitor::publish_frame_data() {
 	values.push_back(frame_profile.completion_retirement_milliseconds / 1000.0);
 	values.push_back("owner_lock_wait");
 	values.push_back(frame_profile.owner_lock_wait_milliseconds / 1000.0);
+	values.push_back("style_allocated_bytes");
+	values.push_back(frame_profile.style_allocated_bytes);
+	values.push_back("layout_allocated_bytes");
+	values.push_back(frame_profile.layout_allocated_bytes);
+	values.push_back("layout_tree_allocated_bytes");
+	values.push_back(frame_profile.layout_tree_allocated_bytes);
+	values.push_back("text_shaping_allocated_bytes");
+	values.push_back(frame_profile.layout_text_shaping_allocated_bytes);
+	values.push_back("hit_test_allocated_bytes");
+	values.push_back(frame_profile.hit_test_allocated_bytes);
+	values.push_back("display_list_allocated_bytes");
+	values.push_back(frame_profile.display_list_allocated_bytes);
+	values.push_back("paint_preparation_allocated_bytes");
+	values.push_back(frame_profile.paint_preparation_allocated_bytes);
+	values.push_back("paint_traversal_allocated_bytes");
+	values.push_back(frame_profile.paint_traversal_allocated_bytes);
+	values.push_back("paint_scene_allocated_bytes");
+	values.push_back(frame_profile.paint_scene_construction_allocated_bytes);
+	values.push_back("paint_candidate_index_allocated_bytes");
+	values.push_back(frame_profile.paint_candidate_index_allocated_bytes);
+	values.push_back("complete_frame_materialization_allocated_bytes");
+	values.push_back(frame_profile.complete_frame_materialization_allocated_bytes);
+	values.push_back("complete_sequence_allocated_bytes");
+	values.push_back(frame_profile.complete_sequence_construction_allocated_bytes);
+	values.push_back("semantic_snapshot_allocated_bytes");
+	values.push_back(frame_profile.semantic_snapshot_allocated_bytes);
+	values.push_back("raster_allocated_bytes");
+	values.push_back(frame_profile.raster_allocated_bytes);
+	values.push_back("authoritative_paint_chunks");
+	values.push_back(frame_profile.authoritative_paint_chunk_count);
+	values.push_back("visited_paint_chunks");
+	values.push_back(frame_profile.visited_paint_chunk_count);
+	values.push_back("changed_paint_chunks");
+	values.push_back(frame_profile.changed_paint_chunk_identity_count);
+	values.push_back("immutable_command_references");
+	values.push_back(frame_profile.immutable_command_reference_count);
+	values.push_back("flat_command_references");
+	values.push_back(frame_profile.flat_command_reference_count);
+	values.push_back("semantic_segments");
+	values.push_back(frame_profile.semantic_segment_count);
+	values.push_back("new_scope_commands");
+	values.push_back(frame_profile.new_scope_command_count);
+	values.push_back("new_scrollbar_commands");
+	values.push_back(frame_profile.new_scrollbar_command_count);
+	values.push_back("snapshot_entries_written");
+	values.push_back(frame_profile.snapshot_array_entry_write_count);
 	double input_to_visible_milliseconds = 0.0;
 	for (double sample : frame_input_to_visible_milliseconds) {
 		input_to_visible_milliseconds = MAX(input_to_visible_milliseconds, sample);
@@ -592,6 +707,75 @@ double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
 				break;
 			case MONITOR_OWNER_LOCK_CONTENTIONS:
 				value += profile.owner_lock_contention_count;
+				break;
+			case MONITOR_STYLE_ALLOCATED_BYTES:
+				value += profile.style_allocated_bytes;
+				break;
+			case MONITOR_LAYOUT_ALLOCATED_BYTES:
+				value += profile.layout_allocated_bytes;
+				break;
+			case MONITOR_LAYOUT_TREE_ALLOCATED_BYTES:
+				value += profile.layout_tree_allocated_bytes;
+				break;
+			case MONITOR_LAYOUT_TEXT_SHAPING_ALLOCATED_BYTES:
+				value += profile.layout_text_shaping_allocated_bytes;
+				break;
+			case MONITOR_HIT_TEST_ALLOCATED_BYTES:
+				value += profile.hit_test_allocated_bytes;
+				break;
+			case MONITOR_DISPLAY_LIST_ALLOCATED_BYTES:
+				value += profile.display_list_allocated_bytes;
+				break;
+			case MONITOR_PAINT_PREPARATION_ALLOCATED_BYTES:
+				value += profile.paint_preparation_allocated_bytes;
+				break;
+			case MONITOR_PAINT_TRAVERSAL_ALLOCATED_BYTES:
+				value += profile.paint_traversal_allocated_bytes;
+				break;
+			case MONITOR_PAINT_SCENE_CONSTRUCTION_ALLOCATED_BYTES:
+				value += profile.paint_scene_construction_allocated_bytes;
+				break;
+			case MONITOR_PAINT_CANDIDATE_INDEX_ALLOCATED_BYTES:
+				value += profile.paint_candidate_index_allocated_bytes;
+				break;
+			case MONITOR_COMPLETE_FRAME_MATERIALIZATION_ALLOCATED_BYTES:
+				value += profile.complete_frame_materialization_allocated_bytes;
+				break;
+			case MONITOR_COMPLETE_SEQUENCE_CONSTRUCTION_ALLOCATED_BYTES:
+				value += profile.complete_sequence_construction_allocated_bytes;
+				break;
+			case MONITOR_SEMANTIC_SNAPSHOT_ALLOCATED_BYTES:
+				value += profile.semantic_snapshot_allocated_bytes;
+				break;
+			case MONITOR_RASTER_ALLOCATED_BYTES:
+				value += profile.raster_allocated_bytes;
+				break;
+			case MONITOR_AUTHORITATIVE_PAINT_CHUNKS:
+				value += profile.authoritative_paint_chunk_count;
+				break;
+			case MONITOR_VISITED_PAINT_CHUNKS:
+				value += profile.visited_paint_chunk_count;
+				break;
+			case MONITOR_CHANGED_PAINT_CHUNKS:
+				value += profile.changed_paint_chunk_identity_count;
+				break;
+			case MONITOR_IMMUTABLE_COMMAND_REFERENCES:
+				value += profile.immutable_command_reference_count;
+				break;
+			case MONITOR_FLAT_COMMAND_REFERENCES:
+				value += profile.flat_command_reference_count;
+				break;
+			case MONITOR_SEMANTIC_SEGMENTS:
+				value += profile.semantic_segment_count;
+				break;
+			case MONITOR_NEW_SCOPE_COMMANDS:
+				value += profile.new_scope_command_count;
+				break;
+			case MONITOR_NEW_SCROLLBAR_COMMANDS:
+				value += profile.new_scrollbar_command_count;
+				break;
+			case MONITOR_SNAPSHOT_ENTRIES_WRITTEN:
+				value += profile.snapshot_array_entry_write_count;
 				break;
 		}
 	}

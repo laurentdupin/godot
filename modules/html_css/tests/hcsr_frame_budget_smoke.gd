@@ -81,6 +81,20 @@ func _run() -> void:
 	if owner_lock_wait != 0.0 or owner_lock_contentions != 0.0:
 		_fail("The normal frame-budget path waited or contended for native presentation ownership: wait=%f contentions=%f." % [owner_lock_wait, owner_lock_contentions])
 		return
+	var style_allocated: float = Performance.get_custom_monitor("HCSR/Style Allocated Bytes")
+	var display_list_allocated: float = Performance.get_custom_monitor("HCSR/Display List Allocated Bytes")
+	var authoritative_chunks: float = Performance.get_custom_monitor("HCSR/Authoritative Paint Chunks")
+	var visited_chunks: float = Performance.get_custom_monitor("HCSR/Visited Paint Chunks")
+	var changed_chunks: float = Performance.get_custom_monitor("HCSR/Changed Paint Chunks")
+	var immutable_references: float = Performance.get_custom_monitor("HCSR/Immutable Command References")
+	var flat_references: float = Performance.get_custom_monitor("HCSR/Flat Command References")
+	var semantic_segments: float = Performance.get_custom_monitor("HCSR/Semantic Segments")
+	if style_allocated <= 0.0 or display_list_allocated <= 0.0:
+		_fail("Causal semantic allocation telemetry was not published: style=%f display_list=%f." % [style_allocated, display_list_allocated])
+		return
+	if authoritative_chunks <= 0.0 or visited_chunks <= 0.0 or changed_chunks <= 0.0 or immutable_references <= 0.0 or semantic_segments <= 0.0:
+		_fail("Semantic work-amplification telemetry was not published: authoritative=%f visited=%f changed=%f immutable=%f flat=%f segments=%f." % [authoritative_chunks, visited_chunks, changed_chunks, immutable_references, flat_references, semantic_segments])
+		return
 	if backend != HTMLView.BACKEND_CPU:
 		var physical_compilation: float = Performance.get_custom_monitor("HCSR/Physical Compilation Time")
 		var record_and_submit: float = Performance.get_custom_monitor("HCSR/Record And Submit Time")
@@ -107,7 +121,7 @@ func _run() -> void:
 		_fail("An unchanged-state request emitted a false missed-budget event.")
 		return
 
-	print("HCSR explicit frame budget smoke passed on %s: %s." % [backend_name, missed])
+	print("HCSR explicit frame budget smoke passed on %s: %s semantic_alloc={style=%d display_list=%d} amplification={authoritative=%d visited=%d changed=%d immutable=%d flat=%d segments=%d}." % [backend_name, missed, int(style_allocated), int(display_list_allocated), int(authoritative_chunks), int(visited_chunks), int(changed_chunks), int(immutable_references), int(flat_references), int(semantic_segments)])
 	quit(0)
 
 func _wait_for_generation(view: HTMLView, output: HTMLViewOutput, after: int) -> bool:
