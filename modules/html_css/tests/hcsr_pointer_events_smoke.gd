@@ -49,7 +49,7 @@ func _initialize() -> void:
 		_fail("Could not mutate the cover to pointer-events:auto")
 		return
 	var previous_generation := activated_generation
-	if not await _wait_for_activation_after(previous_generation):
+	if not await _wait_for_state_only_update(previous_generation):
 		return
 	actions.clear()
 	_send_click(Vector2(60, 60))
@@ -64,7 +64,7 @@ func _initialize() -> void:
 		_fail("Could not restore the cover to pointer-events:none")
 		return
 	previous_generation = activated_generation
-	if not await _wait_for_activation_after(previous_generation):
+	if not await _wait_for_state_only_update(previous_generation):
 		return
 	actions.clear()
 	_send_click(Vector2(60, 60))
@@ -83,6 +83,14 @@ func _wait_for_activation_after(generation: int) -> bool:
 			return true
 	_fail("HCSR pointer-events smoke timed out waiting for activation after generation %d." % generation)
 	return false
+
+func _wait_for_state_only_update(generation: int) -> bool:
+	for _frame in range(4):
+		await process_frame
+	if activated_generation != generation:
+		_fail("A pointer-events-only mutation invented visual generation %d after %d." % [activated_generation, generation])
+		return false
+	return true
 
 func _send_click(position: Vector2) -> void:
 	var down := InputEventMouseButton.new()
