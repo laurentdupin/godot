@@ -41,6 +41,7 @@ protected:
 	bool transparent_background = false;
 
 	void clear_to_background();
+	Error submit_cpu_frame_data(const Size2i &p_size, int p_stride, HTMLFramePixelFormat p_pixel_format, const uint8_t *p_pixels, int64_t p_pixel_count);
 
 public:
 	virtual void set_size(const Size2i &p_size) override;

@@ -63,41 +63,50 @@ void HTMLSurfaceCPUBackend::render_placeholder(const String &p_marker) {
 }
 
 Error HTMLSurfaceCPUBackend::submit_cpu_frame(const HTMLCPUFrame &p_frame) {
-	ERR_FAIL_COND_V_MSG(p_frame.size.x <= 0 || p_frame.size.y <= 0, ERR_INVALID_PARAMETER, "HTML CPU frame size must be positive.");
-	ERR_FAIL_COND_V_MSG(p_frame.pixel_format != HTML_FRAME_PIXEL_FORMAT_RGBA8 && p_frame.pixel_format != HTML_FRAME_PIXEL_FORMAT_BGRA8, ERR_INVALID_PARAMETER, "HTML CPU frame pixel format is not supported.");
+	return submit_cpu_frame_data(
+			p_frame.size,
+			p_frame.stride,
+			p_frame.pixel_format,
+			p_frame.pixels.ptr(),
+			p_frame.pixels.size());
+}
 
-	const int row_bytes = p_frame.size.x * 4;
-	ERR_FAIL_COND_V_MSG(p_frame.stride < row_bytes, ERR_INVALID_PARAMETER, "HTML CPU frame stride is smaller than the row size.");
+Error HTMLSurfaceCPUBackend::submit_cpu_frame_data(const Size2i &p_size, int p_stride, HTMLFramePixelFormat p_pixel_format, const uint8_t *p_pixels, int64_t p_pixel_count) {
+	ERR_FAIL_COND_V_MSG(p_size.x <= 0 || p_size.y <= 0, ERR_INVALID_PARAMETER, "HTML CPU frame size must be positive.");
+	ERR_FAIL_COND_V_MSG(p_pixel_format != HTML_FRAME_PIXEL_FORMAT_RGBA8 && p_pixel_format != HTML_FRAME_PIXEL_FORMAT_BGRA8, ERR_INVALID_PARAMETER, "HTML CPU frame pixel format is not supported.");
 
-	const int64_t required_size = int64_t(p_frame.stride) * int64_t(p_frame.size.y - 1) + row_bytes;
-	ERR_FAIL_COND_V_MSG(p_frame.pixels.size() < required_size, ERR_INVALID_DATA, "HTML CPU frame pixel buffer is shorter than the declared size.");
+	const int row_bytes = p_size.x * 4;
+	ERR_FAIL_COND_V_MSG(p_stride < row_bytes, ERR_INVALID_PARAMETER, "HTML CPU frame stride is smaller than the row size.");
+
+	const int64_t required_size = int64_t(p_stride) * int64_t(p_size.y - 1) + row_bytes;
+	ERR_FAIL_NULL_V_MSG(p_pixels, ERR_INVALID_DATA, "HTML CPU frame pixel buffer is null.");
+	ERR_FAIL_COND_V_MSG(p_pixel_count < required_size, ERR_INVALID_DATA, "HTML CPU frame pixel buffer is shorter than the declared size.");
 
 	Vector<uint8_t> rgba;
-	rgba.resize(row_bytes * p_frame.size.y);
+	rgba.resize(row_bytes * p_size.y);
 	uint8_t *write = rgba.ptrw();
-	const uint8_t *read = p_frame.pixels.ptr();
 
-	for (int y = 0; y < p_frame.size.y; y++) {
-		const uint8_t *src_row = read + int64_t(p_frame.stride) * y;
+	for (int y = 0; y < p_size.y; y++) {
+		const uint8_t *src_row = p_pixels + int64_t(p_stride) * y;
 		uint8_t *dst_row = write + int64_t(row_bytes) * y;
-		if (p_frame.pixel_format == HTML_FRAME_PIXEL_FORMAT_RGBA8) {
+		if (p_pixel_format == HTML_FRAME_PIXEL_FORMAT_RGBA8) {
 			memcpy(dst_row, src_row, row_bytes);
 		} else {
-			for (int x = 0; x < p_frame.size.x; x++) {
-				const uint8_t *src = src_row + x * 4;
-				uint8_t *dst = dst_row + x * 4;
-				dst[0] = src[2];
-				dst[1] = src[1];
-				dst[2] = src[0];
-				dst[3] = src[3];
+			for (int x = 0; x < p_size.x; x++) {
+				uint32_t bgra;
+				memcpy(&bgra, src_row + x * 4, sizeof(bgra));
+				const uint32_t rgba_pixel = (bgra & 0xff00ff00U)
+						| ((bgra & 0x00ff0000U) >> 16)
+						| ((bgra & 0x000000ffU) << 16);
+				memcpy(dst_row + x * 4, &rgba_pixel, sizeof(rgba_pixel));
 			}
 		}
 	}
 
-	Ref<Image> image = Image::create_from_data(p_frame.size.x, p_frame.size.y, false, Image::FORMAT_RGBA8, rgba);
+	Ref<Image> image = Image::create_from_data(p_size.x, p_size.y, false, Image::FORMAT_RGBA8, rgba);
 	ERR_FAIL_COND_V_MSG(image.is_null() || image->is_empty(), ERR_CANT_CREATE, "Could not create an Image from the HTML CPU frame.");
 
-	size = p_frame.size;
+	size = p_size;
 	texture->update_from_image(image);
 	return OK;
 }

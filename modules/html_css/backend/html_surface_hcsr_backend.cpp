@@ -1207,29 +1207,23 @@ void HTMLSurfaceHCSRBackend::_poll_cpu_presentation_outputs() {
 			continue;
 		}
 
-		HTMLCPUFrame frame;
-		frame.size = Size2i(output.width, output.height);
-		frame.stride = output.stride;
-		frame.pixel_format = HTML_FRAME_PIXEL_FORMAT_BGRA8;
-		frame.premultiplied_alpha = output.premultiplied_alpha != 0;
-		frame.damage.full_frame = true;
-		frame.pixels.resize(output.stride * output.height);
-		memcpy(frame.pixels.ptrw(), output.pixels, frame.pixels.size());
-
-		const int row_bytes = frame.size.x * 4;
+		const Size2i output_size(output.width, output.height);
+		const int row_bytes = output_size.x * 4;
 		Vector<uint8_t> rgba;
-		rgba.resize(row_bytes * frame.size.y);
-		for (int y = 0; y < frame.size.y; y++) {
-			const uint8_t *source = frame.pixels.ptr() + int64_t(frame.stride) * y;
+		rgba.resize(row_bytes * output_size.y);
+		for (int y = 0; y < output_size.y; y++) {
+			const uint8_t *source = output.pixels + int64_t(output.stride) * y;
 			uint8_t *destination = rgba.ptrw() + int64_t(row_bytes) * y;
-			for (int x = 0; x < frame.size.x; x++) {
-				destination[x * 4 + 0] = source[x * 4 + 2];
-				destination[x * 4 + 1] = source[x * 4 + 1];
-				destination[x * 4 + 2] = source[x * 4 + 0];
-				destination[x * 4 + 3] = source[x * 4 + 3];
+			for (int x = 0; x < output_size.x; x++) {
+				uint32_t bgra;
+				memcpy(&bgra, source + x * 4, sizeof(bgra));
+				const uint32_t rgba_pixel = (bgra & 0xff00ff00U)
+						| ((bgra & 0x00ff0000U) >> 16)
+						| ((bgra & 0x000000ffU) << 16);
+				memcpy(destination + x * 4, &rgba_pixel, sizeof(rgba_pixel));
 			}
 		}
-		Ref<Image> image = Image::create_from_data(frame.size.x, frame.size.y, false, Image::FORMAT_RGBA8, rgba);
+		Ref<Image> image = Image::create_from_data(output_size.x, output_size.y, false, Image::FORMAT_RGBA8, rgba);
 		if (image.is_null() || image->is_empty()) {
 			_record_error("Godot could not create an image for a CPU secondary presentation output");
 			continue;
@@ -1240,8 +1234,8 @@ void HTMLSurfaceHCSRBackend::_poll_cpu_presentation_outputs() {
 			ERR_CONTINUE_MSG(rendering_server == nullptr, "RenderingServer is unavailable for an HCSR CPU mipmapped output.");
 			if (!state->mipmapped_texture_rid.is_valid()) {
 				state->mipmapped_texture_rid = rendering_server->texture_drawable_create(
-						frame.size.x,
-						frame.size.y,
+						output_size.x,
+						output_size.y,
 						RenderingServerEnums::TEXTURE_DRAWABLE_FORMAT_RGBA8_SRGB,
 						Color(0, 0, 0, 0),
 						true);
@@ -1253,10 +1247,10 @@ void HTMLSurfaceHCSRBackend::_poll_cpu_presentation_outputs() {
 			ERR_CONTINUE_MSG(!state->mipmapped_texture_rid.is_valid(), "Godot could not create an HCSR CPU mipmapped output texture.");
 			rendering_server->texture_drawable_copy_level_zero(state->texture->get_rid(), state->mipmapped_texture_rid);
 			rendering_server->texture_drawable_generate_mipmaps(state->mipmapped_texture_rid, true);
-			state->texture->set_external_texture(state->mipmapped_texture_rid, frame.size, true);
+			state->texture->set_external_texture(state->mipmapped_texture_rid, output_size, true);
 		}
 		state->active_generation = output.generation;
-		state->native_size = frame.size;
+		state->native_size = output_size;
 	}
 }
 
@@ -2166,17 +2160,14 @@ bool HTMLSurfaceHCSRBackend::_render_frame() {
 		return false;
 	}
 
-	HTMLCPUFrame frame;
-	frame.size = Size2i(output.width, output.height);
-	frame.stride = output.stride;
-	frame.pixel_format = HTML_FRAME_PIXEL_FORMAT_BGRA8;
-	frame.premultiplied_alpha = output.premultiplied_alpha != 0;
-	frame.damage.full_frame = true;
-	frame.pixels.resize(output.stride * output.height);
-	memcpy(frame.pixels.ptrw(), output.pixels, frame.pixels.size());
 	const uint64_t frame_generation = output.generation;
+	const bool rendered = submit_cpu_frame_data(
+			Size2i(output.width, output.height),
+			output.stride,
+			HTML_FRAME_PIXEL_FORMAT_BGRA8,
+			output.pixels,
+			int64_t(output.stride) * output.height) == OK;
 	hcsr_renderer_release_frame(renderer, &output);
-	const bool rendered = submit_cpu_frame(frame) == OK;
 	if (rendered) {
 		_poll_cpu_presentation_outputs();
 		{
