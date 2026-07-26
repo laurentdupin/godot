@@ -27,7 +27,7 @@ func _run() -> void:
 	view.backend_preference = backend
 	view.logical_size = Vector2i(320, 180)
 	view.size = Vector2(320, 180)
-	view.html = "<html><head><style>html,body{margin:0;background:#101010}.card{position:absolute;left:40px;top:30px;width:180px;height:100px;background:rgb(50,50,50);border:4px solid rgb(80,80,80);transition:background-color .2s,border-color .2s,transform .2s}.card:hover{background:rgb(110,110,110);border-color:rgb(160,160,160);transform:scale(1.02)}</style></head><body><button class='card'>Hover</button></body></html>"
+	view.html = "<html><head><style>@font-face{font-family:'HCSR Test Emoji';src:url('NotoColorEmoji-X.ttf') format('truetype')}html,body{margin:0;background:#101010}.card{position:absolute;left:40px;top:20px;width:180px;height:140px;display:flex;flex-direction:column;justify-content:center;align-items:center;background:rgb(50,50,50);border:4px solid rgb(80,80,80);transition:background-color .2s,border-color .2s,transform .2s}.card:hover{background:rgb(110,110,110);border-color:rgb(160,160,160);transform:scale(1.02)}.marker{display:flex;justify-content:center;align-items:center;flex:1 1 auto;width:100%;font-family:'HCSR Test Emoji';font-size:72px}.label{flex:0 0 auto}</style></head><body><button class='card'><span class='marker'>❌</span><span class='label'>Hover</span></button></body></html>"
 	root.add_child(view)
 	var secondary_output := view.create_output(Vector2i(640, 360))
 	print("HCSR cadence fixture waiting for initial frame on %s." % backend_name)
@@ -45,6 +45,11 @@ func _run() -> void:
 			break
 	if secondary_output.generation <= 0:
 		push_error("%s cadence fixture did not publish its initial secondary output." % backend_name)
+		quit(1)
+		return
+	var initial_marker_image := view.get_texture().get_image()
+	if initial_marker_image == null or _maximum_red_advantage(initial_marker_image, Rect2i(75, 20, 110, 105)) < 0.25:
+		push_error("%s cadence fixture did not produce the expected static red color glyph." % backend_name)
 		quit(1)
 		return
 	print("HCSR cadence fixture dispatching hover at generation %d." % view.get_generation())
@@ -85,11 +90,11 @@ func _run() -> void:
 		if Time.get_ticks_msec() >= next_sample and view.get_texture() != null:
 			var primary_image := view.get_texture().get_image()
 			if primary_image != null:
-				colors.append(primary_image.get_pixel(60, 60))
+				colors.append(primary_image.get_pixel(60, 130))
 			if secondary_output.texture != null and secondary_output.generation > 0:
 				var secondary_image := secondary_output.texture.get_image()
 				if secondary_image != null:
-					secondary_colors.append(secondary_image.get_pixel(120, 120))
+					secondary_colors.append(secondary_image.get_pixel(120, 260))
 			next_sample += 20
 		if view.get_generation() == last_generation or view.get_texture() == null:
 			continue
@@ -126,6 +131,16 @@ func _run() -> void:
 		push_error("%s hover transition did not reach its authored primary/secondary enter endpoint." % backend_name)
 		quit(1)
 		return
+	var transformed_primary := view.get_texture().get_image()
+	var transformed_secondary := secondary_output.texture.get_image() if secondary_output.texture != null else null
+	var transformed_composed := get_root().get_texture().get_image()
+	var primary_red_advantage := _maximum_red_advantage(transformed_primary, Rect2i(75, 20, 110, 105))
+	var secondary_red_advantage := _maximum_red_advantage(transformed_secondary, Rect2i(150, 40, 220, 210))
+	var composed_red_advantage := _maximum_red_advantage(transformed_composed, Rect2i(75, 20, 110, 105))
+	if primary_red_advantage < 0.25 or secondary_red_advantage < 0.25 or composed_red_advantage < 0.25:
+		push_error("%s transformed hover layer changed color-glyph channels; red advantage primary=%.3f secondary=%.3f composed=%.3f." % [backend_name, primary_red_advantage, secondary_red_advantage, composed_red_advantage])
+		quit(1)
+		return
 
 	get_root().push_input(outside_motion, true)
 	Input.warp_mouse(Vector2(300, 160))
@@ -151,11 +166,11 @@ func _run() -> void:
 		if view.get_texture() != null:
 			var leave_primary_image := view.get_texture().get_image()
 			if leave_primary_image != null:
-				leave_colors.append(leave_primary_image.get_pixel(60, 60))
+				leave_colors.append(leave_primary_image.get_pixel(60, 130))
 		if secondary_output.texture != null and secondary_output.generation > 0:
 			var leave_secondary_image := secondary_output.texture.get_image()
 			if leave_secondary_image != null:
-				leave_secondary_colors.append(leave_secondary_image.get_pixel(120, 120))
+				leave_secondary_colors.append(leave_secondary_image.get_pixel(120, 260))
 		next_sample += 20
 	if _count_distinct_colors(leave_colors) < 6 or _count_distinct_colors(leave_secondary_colors) < 6:
 		push_error("%s hover leave transition did not publish enough distinct primary/secondary frames." % backend_name)
@@ -181,3 +196,15 @@ func _count_distinct_colors(colors: Array[Color]) -> int:
 
 func _maximum_channel_difference(left: Color, right: Color) -> float:
 	return max(abs(left.r - right.r), abs(left.g - right.g), abs(left.b - right.b), abs(left.a - right.a))
+
+func _maximum_red_advantage(image: Image, bounds: Rect2i) -> float:
+	if image == null or image.is_empty():
+		return -1.0
+	var clipped := bounds.intersection(Rect2i(Vector2i.ZERO, image.get_size()))
+	var result := -1.0
+	for y in range(clipped.position.y, clipped.end.y):
+		for x in range(clipped.position.x, clipped.end.x):
+			var color := image.get_pixel(x, y)
+			if color.a > 0.1:
+				result = maxf(result, color.r - color.b)
+	return result
