@@ -66,6 +66,31 @@ static hcsr_render_backend_t html_surface_hcsr_backend_for_driver(const String &
 	}
 	return HCSR_RENDER_BACKEND_D3D12;
 }
+
+static int html_surface_hcsr_resolved_backend(HTMLSurfaceBackendPreference p_preference) {
+	const String rendering_driver = OS::get_singleton() != nullptr
+			? OS::get_singleton()->get_current_rendering_driver_name().to_lower()
+			: String();
+	if (p_preference == HTML_SURFACE_BACKEND_CPU) {
+		return HCSR_RENDER_BACKEND_CPU;
+	}
+	if (p_preference == HTML_SURFACE_BACKEND_AUTO || p_preference == HTML_SURFACE_BACKEND_GPU_AUTO) {
+		if (rendering_driver == "d3d12" || rendering_driver == "vulkan" || rendering_driver == "metal") {
+			return html_surface_hcsr_backend_for_driver(rendering_driver);
+		}
+		return p_preference == HTML_SURFACE_BACKEND_AUTO ? HCSR_RENDER_BACKEND_CPU : -1;
+	}
+	if (p_preference == HTML_SURFACE_BACKEND_D3D12 && rendering_driver == "d3d12") {
+		return HCSR_RENDER_BACKEND_D3D12;
+	}
+	if (p_preference == HTML_SURFACE_BACKEND_VULKAN && rendering_driver == "vulkan") {
+		return HCSR_RENDER_BACKEND_VULKAN;
+	}
+	if (p_preference == HTML_SURFACE_BACKEND_METAL && rendering_driver == "metal") {
+		return HCSR_RENDER_BACKEND_METAL;
+	}
+	return -1;
+}
 #endif
 
 static void html_surface_warn_auto_cpu_fallback(const String &p_reason) {
@@ -366,6 +391,16 @@ void HTMLRenderSurface::set_backend_preference(HTMLSurfaceBackendPreference p_ba
 	if (backend_preference == p_backend_preference) {
 		return;
 	}
+#ifdef HTML_CSS_USE_HCSR
+	const int current_resolved_backend = html_surface_hcsr_resolved_backend(backend_preference);
+	if (backend != nullptr
+			&& !backend->has_terminal_render_failure()
+			&& current_resolved_backend >= 0
+			&& current_resolved_backend == html_surface_hcsr_resolved_backend(p_backend_preference)) {
+		backend_preference = p_backend_preference;
+		return;
+	}
+#endif
 	backend_preference = p_backend_preference;
 	if (backend != nullptr) {
 		_detach_backend_presentation_outputs();

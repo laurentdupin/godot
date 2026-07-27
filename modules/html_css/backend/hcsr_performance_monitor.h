@@ -108,6 +108,9 @@ public:
 		MONITOR_CPU_SECONDARY_CONVERSION_TIME,
 		MONITOR_CPU_SECONDARY_UPLOAD_TIME,
 		MONITOR_MANAGED_EXPORT_BOUNDARY_OVERHEAD_TIME,
+		MONITOR_SEMANTIC_WORKER_MAILBOX_DELAY_TIME,
+		MONITOR_SEMANTIC_WORKER_SUPERSESSIONS,
+		MONITOR_SEMANTIC_WORKER_HOST_CALL_TIME,
 	};
 	struct IntegrationCounters {
 		uint64_t texture_resource_creates = 0;
@@ -121,6 +124,9 @@ public:
 		double cpu_secondary_conversion_milliseconds = 0.0;
 		double cpu_secondary_upload_milliseconds = 0.0;
 		double managed_export_boundary_overhead_milliseconds = 0.0;
+		double semantic_worker_mailbox_delay_milliseconds = 0.0;
+		uint64_t semantic_worker_supersessions = 0;
+		double semantic_worker_host_call_milliseconds = 0.0;
 	};
 
 private:

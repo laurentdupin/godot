@@ -124,6 +124,9 @@ void HCSRPerformanceMonitor::initialize() {
 		{ "HCSR/CPU Secondary Conversion Time", MONITOR_CPU_SECONDARY_CONVERSION_TIME, Performance::MONITOR_TYPE_TIME },
 		{ "HCSR/CPU Secondary Upload Time", MONITOR_CPU_SECONDARY_UPLOAD_TIME, Performance::MONITOR_TYPE_TIME },
 		{ "HCSR/Managed Export Boundary Overhead Time", MONITOR_MANAGED_EXPORT_BOUNDARY_OVERHEAD_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/Semantic Worker Mailbox Delay Time", MONITOR_SEMANTIC_WORKER_MAILBOX_DELAY_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/Semantic Worker Supersessions", MONITOR_SEMANTIC_WORKER_SUPERSESSIONS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Semantic Worker Host Call Time", MONITOR_SEMANTIC_WORKER_HOST_CALL_TIME, Performance::MONITOR_TYPE_TIME },
 	};
 
 	for (const HCSRMonitorDefinition &definition : definitions) {
@@ -232,6 +235,9 @@ void HCSRPerformanceMonitor::finalize() {
 			"HCSR/CPU Secondary Conversion Time",
 			"HCSR/CPU Secondary Upload Time",
 			"HCSR/Managed Export Boundary Overhead Time",
+			"HCSR/Semantic Worker Mailbox Delay Time",
+			"HCSR/Semantic Worker Supersessions",
+			"HCSR/Semantic Worker Host Call Time",
 		};
 		for (const char *monitor_name : monitor_names) {
 			const StringName name(monitor_name);
@@ -518,6 +524,15 @@ double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
 					break;
 				case MONITOR_MANAGED_EXPORT_BOUNDARY_OVERHEAD_TIME:
 					value += entry.value.managed_export_boundary_overhead_milliseconds / 1000.0;
+					break;
+				case MONITOR_SEMANTIC_WORKER_MAILBOX_DELAY_TIME:
+					value += entry.value.semantic_worker_mailbox_delay_milliseconds / 1000.0;
+					break;
+				case MONITOR_SEMANTIC_WORKER_SUPERSESSIONS:
+					value += entry.value.semantic_worker_supersessions;
+					break;
+				case MONITOR_SEMANTIC_WORKER_HOST_CALL_TIME:
+					value += entry.value.semantic_worker_host_call_milliseconds / 1000.0;
 					break;
 				default:
 					break;

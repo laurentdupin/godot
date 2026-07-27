@@ -38,6 +38,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 		uint64_t viewport_revision = 0;
 		int content_width = 0;
 		int content_height = 0;
+		Point2 scroll_offset;
 		HTMLFrameMetadata frame_metadata;
 		hcsr_hit_test_snapshot_t *hit_test_snapshot = nullptr;
 	};
@@ -78,6 +79,10 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool terminal_failure = false;
 	bool gpu_device_configured = false;
 	bool gpu_render_succeeded = false;
+	bool semantic_worker_enabled = false;
+	bool semantic_worker_pending = false;
+	uint64_t semantic_worker_next_revision = 0;
+	uint64_t semantic_worker_last_requested_revision = 0;
 	hcsr_gpu_frame_packet_t *deferred_gpu_packet = nullptr;
 	SafeFlag gpu_frame_pending;
 	SafeFlag gpu_submission_deferred;
@@ -131,6 +136,9 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	void _configure_metal_device_on_render_thread();
 	bool _validate_gpu_capabilities();
 	bool _render_gpu_frame();
+	bool _request_semantic_worker_frame();
+	void _poll_semantic_worker_frame();
+	bool _queue_prepared_gpu_packet(hcsr_gpu_frame_packet_t *p_packet, PreparedGPUFrameMetadata &p_metadata, uint64_t p_generation);
 	void _abandon_gpu_frame_packet(hcsr_gpu_frame_packet_t *p_packet);
 	void _render_gpu_frame_on_render_thread(hcsr_gpu_frame_packet_t *p_packet);
 	void _retry_deferred_gpu_frame_on_render_thread();

@@ -587,6 +587,7 @@ bool HTMLSurfaceHCSRBackend::_read_gpu_packet_metadata(hcsr_gpu_frame_packet_t *
 	}
 	r_metadata.content_width = source.content_width;
 	r_metadata.content_height = source.content_height;
+	r_metadata.scroll_offset = Point2(source.scroll_x, source.scroll_y);
 	for (uint32_t region_index = 0; region_index < source.backdrop_filter_region_count; region_index++) {
 		hcsr_backdrop_filter_region_t region_source = {};
 		region_source.struct_size = sizeof(region_source);
@@ -1726,6 +1727,8 @@ void HTMLSurfaceHCSRBackend::_destroy_renderer_on_render_thread() {
 	gpu_submission_retry_pending.clear();
 	gpu_frame_pending.clear();
 	gpu_presentation_changed.clear();
+	semantic_worker_pending = false;
+	semantic_worker_last_requested_revision = 0;
 	Vector<PresentationOutputState *> outputs_to_destroy;
 	{
 		MutexLock lock(presentation_outputs_mutex);
@@ -2056,6 +2059,9 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 		gpu_follow_up_frame_requested.set();
 		return true;
 	}
+	if (semantic_worker_enabled) {
+		return _request_semantic_worker_frame();
+	}
 	gpu_follow_up_frame_requested.clear();
 	hcsr_gpu_frame_packet_t *packet = nullptr;
 	PreparedGPUFrameMetadata packet_metadata;
@@ -2107,6 +2113,127 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 		}
 	}
 	ERR_FAIL_NULL_V(packet, false);
+	return _queue_prepared_gpu_packet(packet, packet_metadata, packet_generation);
+}
+
+bool HTMLSurfaceHCSRBackend::_request_semantic_worker_frame() {
+	gpu_follow_up_frame_requested.clear();
+	const uint64_t revision = ++semantic_worker_next_revision;
+	const uint64_t host_frame = Engine::get_singleton() != nullptr ? Engine::get_singleton()->get_process_frames() + 1 : 0;
+	const uint64_t call_start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
+	const hcsr_status_t request_status = hcsr_renderer_request_semantic_worker_frame(
+				renderer,
+				revision,
+				host_frame,
+				timeline_time_seconds);
+	integration_counters.semantic_worker_host_call_milliseconds = call_start_usec != 0
+			? double(OS::get_singleton()->get_ticks_usec() - call_start_usec) / 1000.0
+			: 0.0;
+	_publish_integration_counters();
+	if (request_status != HCSR_STATUS_OK) {
+		_record_error("HCSR could not request a semantic worker frame");
+		return false;
+	}
+	semantic_worker_last_requested_revision = revision;
+	semantic_worker_pending = true;
+	return true;
+}
+
+void HTMLSurfaceHCSRBackend::_poll_semantic_worker_frame() {
+	if (!semantic_worker_enabled || !semantic_worker_pending || renderer == nullptr) {
+		return;
+	}
+
+	hcsr_semantic_worker_poll_state_t state = HCSR_SEMANTIC_WORKER_NONE;
+	uint64_t revision = 0;
+	double mailbox_delay_milliseconds = 0.0;
+	uint64_t superseded_revision_count = 0;
+	hcsr_gpu_frame_packet_t *packet = nullptr;
+	const uint64_t call_start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
+	const hcsr_status_t poll_status = hcsr_renderer_poll_semantic_worker_frame(
+				renderer,
+				&state,
+				&revision,
+				&mailbox_delay_milliseconds,
+				&superseded_revision_count,
+				&packet);
+	integration_counters.semantic_worker_host_call_milliseconds = call_start_usec != 0
+			? double(OS::get_singleton()->get_ticks_usec() - call_start_usec) / 1000.0
+			: 0.0;
+	if (poll_status != HCSR_STATUS_OK) {
+		_publish_integration_counters();
+		_record_error("HCSR could not poll the semantic worker");
+		semantic_worker_pending = false;
+		return;
+	}
+	integration_counters.semantic_worker_supersessions = superseded_revision_count;
+	if (state == HCSR_SEMANTIC_WORKER_NONE || state == HCSR_SEMANTIC_WORKER_PENDING) {
+		_publish_integration_counters();
+		return;
+	}
+
+	semantic_worker_pending = false;
+	integration_counters.semantic_worker_mailbox_delay_milliseconds = mailbox_delay_milliseconds;
+	_publish_integration_counters();
+	if (state == HCSR_SEMANTIC_WORKER_FAILED) {
+		_record_error("HCSR semantic worker preparation failed");
+		return;
+	}
+	if (revision != semantic_worker_last_requested_revision) {
+		if (packet != nullptr) {
+			_abandon_gpu_frame_packet(packet);
+		}
+		_record_error("HCSR semantic worker published an obsolete host revision");
+		return;
+	}
+	if (!_update_frame_schedule()) {
+		if (packet != nullptr) {
+			_abandon_gpu_frame_packet(packet);
+		}
+		return;
+	}
+	_retire_document_commits();
+	_update_performance_profile();
+	if (state == HCSR_SEMANTIC_WORKER_NO_VISUAL_OUTPUT) {
+		return;
+	}
+	if (state != HCSR_SEMANTIC_WORKER_PREPARED || packet == nullptr) {
+		_record_error("HCSR semantic worker returned an invalid completion");
+		return;
+	}
+
+	PreparedGPUFrameMetadata packet_metadata;
+	uint64_t packet_generation = 0;
+	if (!_read_gpu_packet_metadata(packet, packet_metadata, packet_generation)) {
+		_abandon_gpu_frame_packet(packet);
+		return;
+	}
+	const Vector2i published_scroll_offset(
+			Math::round(packet_metadata.scroll_offset.x),
+			Math::round(packet_metadata.scroll_offset.y));
+	const Vector2i clamped_scroll_offset(
+			CLAMP(published_scroll_offset.x, 0, MAX(0, packet_metadata.content_width - size.x)),
+			CLAMP(published_scroll_offset.y, 0, MAX(0, packet_metadata.content_height - size.y)));
+	scroll_offset = clamped_scroll_offset;
+	if (published_scroll_offset != clamped_scroll_offset) {
+		_release_gpu_packet_metadata(packet_metadata);
+		_abandon_gpu_frame_packet(packet);
+		if (_set_input() == OK) {
+			_request_semantic_worker_frame();
+		}
+		return;
+	}
+	_queue_prepared_gpu_packet(packet, packet_metadata, packet_generation);
+}
+
+bool HTMLSurfaceHCSRBackend::_queue_prepared_gpu_packet(hcsr_gpu_frame_packet_t *packet, PreparedGPUFrameMetadata &packet_metadata, uint64_t packet_generation) {
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	if (rendering_server == nullptr) {
+		_release_gpu_packet_metadata(packet_metadata);
+		_abandon_gpu_frame_packet(packet);
+		terminal_failure_reason = "RenderingServer is unavailable for HCSR GPU rendering.";
+		return false;
+	}
 	_stage_gpu_packet_metadata(packet_generation, packet_metadata);
 	if (rendering_server->is_on_render_thread()) {
 		gpu_frame_pending.set();
@@ -2123,7 +2250,16 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 }
 
 bool HTMLSurfaceHCSRBackend::_render_frame() {
-	if (!_sync_viewport() || !_sync_document() || _set_input() != OK || !_set_host_frame_context()) {
+	if (semantic_worker_enabled
+			&& semantic_worker_pending
+			&& (viewport_dirty || document_dirty)) {
+		gpu_follow_up_frame_requested.set();
+		return true;
+	}
+	if (!_sync_viewport()
+			|| !_sync_document()
+			|| _set_input() != OK
+			|| (!semantic_worker_enabled && !_set_host_frame_context())) {
 		return false;
 	}
 	if (render_backend != HCSR_RENDER_BACKEND_CPU) {
@@ -2407,6 +2543,7 @@ bool HTMLSurfaceHCSRBackend::poll_pending_output(bool *r_waiting_for_completion)
 }
 
 HTMLPendingOutputState HTMLSurfaceHCSRBackend::consume_pending_output_state() {
+	_poll_semantic_worker_frame();
 	HCSRPerformanceMonitor::publish_frame_data();
 	HTMLPendingOutputState state;
 	const bool follow_up_requested = gpu_follow_up_frame_requested.is_set();
@@ -2437,7 +2574,8 @@ void HTMLSurfaceHCSRBackend::schedule_retirement_service() {
 }
 
 bool HTMLSurfaceHCSRBackend::has_pending_output() const {
-	return gpu_follow_up_frame_requested.is_set()
+	return semantic_worker_pending
+			|| gpu_follow_up_frame_requested.is_set()
 			|| gpu_frame_pending.is_set()
 			|| gpu_submission_deferred.is_set()
 			|| gpu_submission_retry_pending.is_set()
@@ -2847,6 +2985,9 @@ uint64_t HTMLSurfaceHCSRBackend::get_presentation_output_generation(uint64_t p_o
 
 HTMLSurfaceHCSRBackend::HTMLSurfaceHCSRBackend(hcsr_render_backend_t p_render_backend) :
 		render_backend(p_render_backend) {
+	semantic_worker_enabled = render_backend != HCSR_RENDER_BACKEND_CPU
+			&& OS::get_singleton() != nullptr
+			&& OS::get_singleton()->get_environment("HCSR_SEMANTIC_WORKER") == "1";
 #ifdef DEBUG_ENABLED
 	ProjectSettings *project_settings = ProjectSettings::get_singleton();
 	if (project_settings != nullptr) {
