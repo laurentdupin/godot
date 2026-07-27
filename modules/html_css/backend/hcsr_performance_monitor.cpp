@@ -40,8 +40,8 @@ void HCSRPerformanceMonitor::initialize() {
 		{ "HCSR/Display List Time", MONITOR_DISPLAY_LIST_TIME, Performance::MONITOR_TYPE_TIME },
 		{ "HCSR/Raster Time", MONITOR_RASTER_TIME, Performance::MONITOR_TYPE_TIME },
 		{ "HCSR/GPU Submit Time", MONITOR_GPU_SUBMIT_TIME, Performance::MONITOR_TYPE_TIME },
-		{ "HCSR/Retained Checkpoint Capture Time", MONITOR_RETAINED_CHECKPOINT_CAPTURE_TIME, Performance::MONITOR_TYPE_TIME },
-		{ "HCSR/Retained Checkpoint Restore Time", MONITOR_RETAINED_CHECKPOINT_RESTORE_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/Presentation Checkpoint Capture Time", MONITOR_PRESENTATION_CHECKPOINT_CAPTURE_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/Presentation Checkpoint Restore Time", MONITOR_PRESENTATION_CHECKPOINT_RESTORE_TIME, Performance::MONITOR_TYPE_TIME },
 		{ "HCSR/Managed Allocation", MONITOR_ALLOCATED_BYTES, Performance::MONITOR_TYPE_MEMORY },
 		{ "HCSR/Display Commands", MONITOR_DISPLAY_COMMANDS, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Paint Chunks", MONITOR_PAINT_CHUNKS, Performance::MONITOR_TYPE_QUANTITY },
@@ -313,8 +313,8 @@ void HCSRPerformanceMonitor::publish_frame_data() {
 		frame_profile.display_list_milliseconds += profile.display_list_milliseconds;
 		frame_profile.raster_milliseconds += profile.raster_milliseconds;
 		frame_profile.gpu_submit_milliseconds += profile.gpu_submit_milliseconds;
-		frame_profile.retained_checkpoint_capture_milliseconds += profile.retained_checkpoint_capture_milliseconds;
-		frame_profile.retained_checkpoint_restore_milliseconds += profile.retained_checkpoint_restore_milliseconds;
+		frame_profile.presentation_checkpoint_capture_milliseconds += profile.presentation_checkpoint_capture_milliseconds;
+		frame_profile.presentation_checkpoint_restore_milliseconds += profile.presentation_checkpoint_restore_milliseconds;
 		frame_profile.semantic_preparation_milliseconds += profile.semantic_preparation_milliseconds;
 		frame_profile.semantic_snapshot_validation_milliseconds += profile.semantic_snapshot_validation_milliseconds;
 		frame_profile.physical_compilation_milliseconds += profile.physical_compilation_milliseconds;
@@ -363,8 +363,8 @@ void HCSRPerformanceMonitor::publish_frame_data() {
 			frame_profile.native_total_milliseconds
 					- frame_profile.core_total_milliseconds
 					- frame_profile.gpu_submit_milliseconds
-					- frame_profile.retained_checkpoint_capture_milliseconds
-					- frame_profile.retained_checkpoint_restore_milliseconds);
+					- frame_profile.presentation_checkpoint_capture_milliseconds
+					- frame_profile.presentation_checkpoint_restore_milliseconds);
 	Array values;
 	values.push_back("hcsr");
 	values.push_back("parse");
@@ -385,10 +385,10 @@ void HCSRPerformanceMonitor::publish_frame_data() {
 	values.push_back(unclassified_core_milliseconds / 1000.0);
 	values.push_back("gpu_submit");
 	values.push_back(frame_profile.gpu_submit_milliseconds / 1000.0);
-	values.push_back("retained_checkpoint_capture");
-	values.push_back(frame_profile.retained_checkpoint_capture_milliseconds / 1000.0);
-	values.push_back("retained_checkpoint_restore");
-	values.push_back(frame_profile.retained_checkpoint_restore_milliseconds / 1000.0);
+	values.push_back("presentation_checkpoint_capture");
+	values.push_back(frame_profile.presentation_checkpoint_capture_milliseconds / 1000.0);
+	values.push_back("presentation_checkpoint_restore");
+	values.push_back(frame_profile.presentation_checkpoint_restore_milliseconds / 1000.0);
 	values.push_back("native_unclassified");
 	values.push_back(unclassified_native_milliseconds / 1000.0);
 	values.push_back("semantic_preparation");
@@ -558,11 +558,11 @@ double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
 			case MONITOR_GPU_SUBMIT_TIME:
 				value += profile.gpu_submit_milliseconds / 1000.0;
 				break;
-			case MONITOR_RETAINED_CHECKPOINT_CAPTURE_TIME:
-				value += profile.retained_checkpoint_capture_milliseconds / 1000.0;
+			case MONITOR_PRESENTATION_CHECKPOINT_CAPTURE_TIME:
+				value += profile.presentation_checkpoint_capture_milliseconds / 1000.0;
 				break;
-			case MONITOR_RETAINED_CHECKPOINT_RESTORE_TIME:
-				value += profile.retained_checkpoint_restore_milliseconds / 1000.0;
+			case MONITOR_PRESENTATION_CHECKPOINT_RESTORE_TIME:
+				value += profile.presentation_checkpoint_restore_milliseconds / 1000.0;
 				break;
 			case MONITOR_ALLOCATED_BYTES:
 				value += profile.allocated_bytes;
