@@ -2615,6 +2615,7 @@ String HTMLSurfaceHCSRBackend::get_terminal_render_failure_reason() const {
 
 Error HTMLSurfaceHCSRBackend::mouse_move(const Point2 &p_position, int p_modifiers, bool &r_visual_state_changed) {
 	(void)p_modifiers;
+	const double event_time_seconds = OS::get_singleton() != nullptr ? (double)OS::get_singleton()->get_ticks_usec() / 1000000.0 : 0.0;
 	r_visual_state_changed = false;
 	pointer_position = p_position;
 	const Error input_error = _set_input();
@@ -2623,7 +2624,7 @@ Error HTMLSurfaceHCSRBackend::mouse_move(const Point2 &p_position, int p_modifie
 	}
 	const uint32_t buttons = primary_button_pressed ? 1U : 0U;
 	uint32_t damage_flags = HCSR_POINTER_DAMAGE_NONE;
-	const hcsr_status_t status = hcsr_renderer_dispatch_pointer_move_ex2(renderer, p_position.x, p_position.y, buttons, 1, &damage_flags);
+	const hcsr_status_t status = hcsr_renderer_dispatch_pointer_move_ex3(renderer, p_position.x, p_position.y, buttons, 1, event_time_seconds, &damage_flags);
 	r_visual_state_changed = (damage_flags & HCSR_POINTER_DAMAGE_VISUAL) != 0;
 	return status == HCSR_STATUS_OK ? OK : ERR_CANT_ACQUIRE_RESOURCE;
 }
