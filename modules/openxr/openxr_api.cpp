@@ -1416,10 +1416,15 @@ bool OpenXRAPI::create_main_swapchains(const Size2i &p_size) {
 }
 
 void OpenXRAPI::destroy_session() {
-	// TODO need to figure out if we're still rendering our current frame
-	// in a separate rendering thread and if so,
-	// if we need to wait for completion.
-	// We could be pulling the rug from underneath rendering...
+	if (session != XR_NULL_HANDLE) {
+		RenderingServer *rendering_server = RenderingServer::get_singleton();
+		if (rendering_server != nullptr && !rendering_server->is_on_render_thread()) {
+			// A caller can disable use_xr and uninitialize from the same UI
+			// callback. Flush that viewport change and the last queued XR frame
+			// before invalidating session-owned handles.
+			rendering_server->sync();
+		}
+	}
 
 	if (running) {
 		if (session != XR_NULL_HANDLE) {
@@ -1429,10 +1434,26 @@ void OpenXRAPI::destroy_session() {
 		running = false;
 		render_state.running = false;
 	}
+	session_state = XR_SESSION_STATE_UNKNOWN;
+	frame_state = { XR_TYPE_FRAME_STATE, nullptr, 0, 0, false };
+	play_space_is_dirty = true;
+	head_pose_confidence = XRPose::XR_TRACKING_CONFIDENCE_NONE;
+	interaction_profile_changed = false;
 
 	render_state.views.clear();
 	render_state.projection_views.clear();
 	render_state.depth_views.clear();
+	render_state.should_render = false;
+	render_state.has_xr_viewport = false;
+	render_state.predicted_display_time = 0;
+	render_state.play_space = XR_NULL_HANDLE;
+	render_state.view_pose_valid = false;
+	render_state.frame_begun = false;
+	render_state.frame = 0;
+	render_state.main_swapchain_size = Size2i();
+	render_state.projection_layer.space = XR_NULL_HANDLE;
+	render_state.projection_layer.viewCount = 0;
+	render_state.projection_layer.views = nullptr;
 
 	free_main_swapchains();
 	OpenXRSwapChainInfo::free_queued();
@@ -1872,6 +1893,11 @@ bool OpenXRAPI::was_last_initialization_unavailable() const {
 }
 
 bool OpenXRAPI::initialize_session() {
+	session_state = XR_SESSION_STATE_UNKNOWN;
+	frame_state = { XR_TYPE_FRAME_STATE, nullptr, 0, 0, false };
+	play_space_is_dirty = true;
+	head_pose_confidence = XRPose::XR_TRACKING_CONFIDENCE_NONE;
+
 	if (!create_session()) {
 		destroy_session();
 		return false;
@@ -2505,6 +2531,11 @@ void OpenXRAPI::pre_render() {
 		return;
 	}
 
+	if (render_state.frame_begun) {
+		ERR_PRINT("OpenXR: The previous frame was not ended before pre_render.");
+		return;
+	}
+
 	// Process any swapchains that were queued to be freed
 	OpenXRSwapChainInfo::free_queued();
 
@@ -2575,6 +2606,7 @@ void OpenXRAPI::pre_render() {
 		print_line("OpenXR: failed to begin frame [", get_error_string(result), "]");
 		return;
 	}
+	render_state.frame_begun = true;
 
 	// Reset this, we haven't found a viewport for output yet
 	render_state.has_xr_viewport = false;
@@ -2733,6 +2765,9 @@ void OpenXRAPI::end_frame() {
 		return;
 	}
 
+	if (!render_state.frame_begun) {
+		return;
+	}
 	if (render_state.should_render && render_state.view_pose_valid) {
 		if (!render_state.has_xr_viewport) {
 			print_line("OpenXR: No viewport was marked with use_xr, there is no rendered output!");
@@ -2773,6 +2808,7 @@ void OpenXRAPI::end_frame() {
 			nullptr // layers
 		};
 		result = xrEndFrame(session, &frame_end_info);
+		render_state.frame_begun = false;
 		if (XR_FAILED(result)) {
 			print_line("OpenXR: rendering skipped and failed to end frame! [", get_error_string(result), "]");
 			return;
@@ -2881,6 +2917,7 @@ void OpenXRAPI::end_frame() {
 		layers_list.ptr() // layers
 	};
 	result = xrEndFrame(session, &frame_end_info);
+	render_state.frame_begun = false;
 	if (XR_FAILED(result)) {
 		print_line("OpenXR: failed to end frame! [", get_error_string(result), "]");
 		return;

@@ -19,10 +19,10 @@ if ($output.Contains("OPENXR_REPEATABLE_LIFECYCLE_UNAVAILABLE")) {
     Write-Host "OpenXR repeatable lifecycle smoke skipped: no HMD/runtime is available."
     exit 0
 }
-if (-not $output.Contains("OPENXR_REPEATABLE_LIFECYCLE_OK")) {
+if (-not $output.Contains("OPENXR_REPEATABLE_RENDERED_LIFECYCLE_OK")) {
     throw "Repeatable OpenXR lifecycle completion marker is missing.`n$output"
 }
-if ($output -match "RID allocations.*were leaked|nonexistent connection|ERROR:") {
+if ($output -match "RID allocations.*were leaked|nonexistent connection|ERROR:|XR_ERROR_|Couldn't locate views|failed to (begin|end) frame") {
     throw "Repeatable OpenXR lifecycle emitted teardown diagnostics.`n$output"
 }
 

@@ -28,11 +28,21 @@ func _run() -> void:
 			quit(1)
 			return
 
+		root.use_xr = true
+		for _frame in 120:
+			await process_frame
+
+		# This is the supported public lifecycle ordering used by ordinary UI
+		# callbacks: stop routing the root viewport to XR, then tear down the
+		# interface immediately.
+		root.use_xr = false
 		openxr.uninitialize()
 		if openxr.is_initialized():
 			push_error("OpenXR remained initialized after cycle %d." % cycle)
 			quit(1)
 			return
+		for _frame in 4:
+			await process_frame
 
-	print("OPENXR_REPEATABLE_LIFECYCLE_OK")
+	print("OPENXR_REPEATABLE_RENDERED_LIFECYCLE_OK")
 	quit()
