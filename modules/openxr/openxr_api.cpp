@@ -1739,6 +1739,7 @@ bool OpenXRAPI::resolve_instance_openxr_symbols() {
 	OPENXR_API_INIT_XR_FUNC_V(xrEnumerateViewConfigurationViews);
 	OPENXR_API_INIT_XR_FUNC_V(xrGetActionStateBoolean);
 	OPENXR_API_INIT_XR_FUNC_V(xrGetActionStateFloat);
+	OPENXR_API_INIT_XR_FUNC_V(xrGetActionStatePose);
 	OPENXR_API_INIT_XR_FUNC_V(xrGetActionStateVector2f);
 	OPENXR_API_INIT_XR_FUNC_V(xrGetCurrentInteractionProfile);
 	OPENXR_API_INIT_XR_FUNC_V(xrGetReferenceSpaceBoundsRect);
@@ -4062,6 +4063,26 @@ XRPose::TrackingConfidence OpenXRAPI::get_action_pose(RID p_action, RID p_tracke
 		return XRPose::XR_TRACKING_CONFIDENCE_NONE;
 	}
 
+	XrActionStateGetInfo get_info = {
+		XR_TYPE_ACTION_STATE_GET_INFO, // type
+		nullptr, // next
+		action->handle, // action
+		tracker->toplevel_path // subactionPath
+	};
+	XrActionStatePose action_state = {
+		XR_TYPE_ACTION_STATE_POSE, // type
+		nullptr, // next
+		false // isActive
+	};
+	XrResult result = xrGetActionStatePose(session, &get_info, &action_state);
+	if (XR_FAILED(result)) {
+		print_line("OpenXR: couldn't get action pose state! [", get_error_string(result), "]");
+		return XRPose::XR_TRACKING_CONFIDENCE_NONE;
+	}
+	if (!action_state.isActive) {
+		return XRPose::XR_TRACKING_CONFIDENCE_NONE;
+	}
+
 	XrTime display_time = get_predicted_display_time();
 	if (display_time == 0) {
 		return XRPose::XR_TRACKING_CONFIDENCE_NONE;
@@ -4082,7 +4103,7 @@ XRPose::TrackingConfidence OpenXRAPI::get_action_pose(RID p_action, RID p_tracke
 		};
 
 		XrSpace space;
-		XrResult result = xrCreateActionSpace(session, &action_space_info, &space);
+		result = xrCreateActionSpace(session, &action_space_info, &space);
 		if (XR_FAILED(result)) {
 			print_line("OpenXR: couldn't create action space! [", get_error_string(result), "]");
 			return XRPose::XR_TRACKING_CONFIDENCE_NONE;
@@ -4109,7 +4130,7 @@ XRPose::TrackingConfidence OpenXRAPI::get_action_pose(RID p_action, RID p_tracke
 		} // pose
 	};
 
-	XrResult result = xrLocateSpace(action->trackers[index].space, play_space, display_time, &location);
+	result = xrLocateSpace(action->trackers[index].space, play_space, display_time, &location);
 	if (XR_FAILED(result)) {
 		print_line("OpenXR: failed to locate space! [", get_error_string(result), "]");
 		return XRPose::XR_TRACKING_CONFIDENCE_NONE;
