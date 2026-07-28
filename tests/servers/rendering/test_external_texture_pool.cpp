@@ -286,6 +286,80 @@ void main() {
 	memdelete(rd);
 	memdelete(context);
 }
+
+TEST_CASE("[RenderingDevice][D3D12] External texture pool imports Win32 shared resource handles") {
+	RenderingContextDriverD3D12 *context = memnew(RenderingContextDriverD3D12);
+	REQUIRE(context->initialize() == OK);
+	RenderingDevice *rd = memnew(RenderingDevice);
+	REQUIRE(rd->initialize(context) == OK);
+	REQUIRE(rd->get_device_api_name().contains("D3D12"));
+
+	ID3D12Device *device = reinterpret_cast<ID3D12Device *>(rd->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_LOGICAL_DEVICE));
+	REQUIRE(device != nullptr);
+
+	D3D12_HEAP_PROPERTIES heap_properties = {};
+	heap_properties.Type = D3D12_HEAP_TYPE_DEFAULT;
+	D3D12_RESOURCE_DESC texture_description = {};
+	texture_description.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+	texture_description.Width = 32;
+	texture_description.Height = 24;
+	texture_description.DepthOrArraySize = 1;
+	texture_description.MipLevels = 1;
+	texture_description.Format = DXGI_FORMAT_R32_FLOAT;
+	texture_description.SampleDesc.Count = 1;
+	texture_description.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+
+	Microsoft::WRL::ComPtr<ID3D12Resource> producer_texture;
+	REQUIRE(SUCCEEDED(device->CreateCommittedResource(
+			&heap_properties,
+			D3D12_HEAP_FLAG_SHARED,
+			&texture_description,
+			D3D12_RESOURCE_STATE_COMMON,
+			nullptr,
+			IID_PPV_ARGS(producer_texture.GetAddressOf()))));
+	HANDLE texture_handle = nullptr;
+	REQUIRE(SUCCEEDED(device->CreateSharedHandle(
+			producer_texture.Get(), nullptr, GENERIC_ALL, nullptr, &texture_handle)));
+
+	Microsoft::WRL::ComPtr<ID3D12Fence> producer_fence;
+	REQUIRE(SUCCEEDED(device->CreateFence(
+			0, D3D12_FENCE_FLAG_SHARED,
+			IID_PPV_ARGS(producer_fence.GetAddressOf()))));
+	HANDLE fence_handle = nullptr;
+	REQUIRE(SUCCEEDED(device->CreateSharedHandle(
+			producer_fence.Get(), nullptr, GENERIC_ALL, nullptr, &fence_handle)));
+
+	RID pool = rd->external_texture_pool_create();
+	REQUIRE(pool.is_valid());
+	REQUIRE(rd->external_texture_pool_add_shared_slot(
+					pool,
+					RenderingDevice::TEXTURE_TYPE_2D,
+					RenderingDevice::DATA_FORMAT_R32_SFLOAT,
+					RenderingDevice::TEXTURE_SAMPLES_1,
+					RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT,
+					uint64_t(texture_handle),
+					uint64_t(fence_handle),
+					32, 24, 1, 1, 1,
+					RenderingDevice::EXTERNAL_TEXTURE_STATE_GENERAL) == 0);
+
+	CloseHandle(texture_handle);
+	CloseHandle(fence_handle);
+	producer_texture.Reset();
+	producer_fence.Reset();
+
+	Dictionary status = rd->external_texture_pool_get_slot_status(pool, 0);
+	RID imported_texture = status["texture"];
+	REQUIRE(imported_texture.is_valid());
+	CHECK(rd->texture_get_format(imported_texture).format == RenderingDevice::DATA_FORMAT_R32_SFLOAT);
+	CHECK(rd->texture_size(imported_texture) == Size2i(32, 24));
+
+	rd->external_texture_pool_stop(pool);
+	rd->free_rid(pool);
+	rd->submit();
+	rd->sync();
+	memdelete(rd);
+	memdelete(context);
+}
 #endif
 
 #if defined(VULKAN_ENABLED) && defined(WINDOWS_ENABLED)

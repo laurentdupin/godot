@@ -279,6 +279,9 @@ public:
 
 	virtual TextureID texture_create(const TextureFormat &p_format, const TextureView &p_view) = 0;
 	virtual TextureID texture_create_from_extension(uint64_t p_native_texture, const TextureFormat &p_format) = 0;
+	// Imports a cross-process/platform shared texture handle. Backends that do
+	// not implement a compatible shared-handle type return an invalid ID.
+	virtual TextureID texture_create_from_shared_handle(uint64_t p_native_handle, const TextureFormat &p_format) { return TextureID(); }
 	// External producer textures publish their actual layout between frames. Updating
 	// the driver's tracker before graph recording prevents the first consumer barrier
 	// from assuming an unrelated or undefined state.

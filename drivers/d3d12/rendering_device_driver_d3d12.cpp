@@ -1608,6 +1608,21 @@ RDD::TextureID RenderingDeviceDriverD3D12::texture_create_from_extension(uint64_
 	return TextureID(tex_info);
 }
 
+RDD::TextureID RenderingDeviceDriverD3D12::texture_create_from_shared_handle(uint64_t p_native_handle, const TextureFormat &p_format) {
+	ERR_FAIL_COND_V(p_native_handle == 0, TextureID());
+	Microsoft::WRL::ComPtr<ID3D12Resource> texture;
+	const HRESULT result = device->OpenSharedHandle(
+			reinterpret_cast<HANDLE>(static_cast<uintptr_t>(p_native_handle)),
+			IID_PPV_ARGS(texture.GetAddressOf()));
+	ERR_FAIL_COND_V_MSG(FAILED(result), TextureID(), "D3D12 could not import the shared texture handle.");
+
+	// texture_create_from_extension retains its own COM reference. The temporary
+	// OpenSharedHandle reference may therefore be released on return.
+	return texture_create_from_extension(
+			static_cast<uint64_t>(reinterpret_cast<uintptr_t>(texture.Get())),
+			p_format);
+}
+
 static D3D12_RESOURCE_STATES _external_texture_layout_to_d3d12_state(RDD::TextureLayout p_layout) {
 	switch (p_layout) {
 		case RDD::TEXTURE_LAYOUT_UNDEFINED:

@@ -1844,7 +1844,7 @@ RID RenderingDevice::texture_create_shared(const TextureView &p_view, RID p_with
 	return id;
 }
 
-RID RenderingDevice::texture_create_from_extension(TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_image, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps) {
+RID RenderingDevice::_texture_create_from_external_source(TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_image, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, bool p_shared_handle) {
 	// This method creates a texture object using a VkImage created by an extension, module or other external source (OpenXR uses this).
 
 	Texture texture;
@@ -1888,7 +1888,9 @@ RID RenderingDevice::texture_create_from_extension(TextureType p_type, DataForma
 		texture.barrier_aspect_flags.set_flag(RDD::TEXTURE_ASPECT_COLOR_BIT);
 	}
 
-	texture.driver_id = driver->texture_create_from_extension(p_image, texture.texture_format());
+	texture.driver_id = p_shared_handle
+			? driver->texture_create_from_shared_handle(p_image, texture.texture_format())
+			: driver->texture_create_from_extension(p_image, texture.texture_format());
 	ERR_FAIL_COND_V(!texture.driver_id, RID());
 
 	_texture_make_mutable(&texture, RID());
@@ -1899,6 +1901,10 @@ RID RenderingDevice::texture_create_from_extension(TextureType p_type, DataForma
 #endif
 
 	return id;
+}
+
+RID RenderingDevice::texture_create_from_extension(TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_image, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps) {
+	return _texture_create_from_external_source(p_type, p_format, p_samples, p_usage, p_image, p_width, p_height, p_depth, p_layers, p_mipmaps, false);
 }
 
 RDG::ResourceUsage RenderingDevice::_external_layout_to_resource_usage(RDD::TextureLayout p_layout) {
@@ -1949,7 +1955,7 @@ RID RenderingDevice::external_texture_pool_create() {
 	return external_texture_pool_owner.make_rid(pool);
 }
 
-int32_t RenderingDevice::external_texture_pool_add_slot(RID p_pool, TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_native_texture, uint64_t p_producer_timeline, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, ExternalTextureState p_initial_state) {
+int32_t RenderingDevice::_external_texture_pool_add_slot(RID p_pool, TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_native_texture, uint64_t p_producer_timeline, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, ExternalTextureState p_initial_state, bool p_shared_handle) {
 	ERR_RENDER_THREAD_GUARD_V(-1);
 	ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_pool);
 	ERR_FAIL_NULL_V(pool, -1);
@@ -1959,7 +1965,7 @@ int32_t RenderingDevice::external_texture_pool_add_slot(RID p_pool, TextureType 
 	ERR_FAIL_INDEX_V(p_initial_state, RDD::TEXTURE_LAYOUT_MAX, -1);
 	const RDD::TextureLayout initial_layout = (RDD::TextureLayout)p_initial_state;
 
-	RID texture = texture_create_from_extension(p_type, p_format, p_samples, p_usage, p_native_texture, p_width, p_height, p_depth, p_layers, p_mipmaps);
+	RID texture = _texture_create_from_external_source(p_type, p_format, p_samples, p_usage, p_native_texture, p_width, p_height, p_depth, p_layers, p_mipmaps, p_shared_handle);
 	ERR_FAIL_COND_V(!texture.is_valid(), -1);
 	uint64_t producer_timeline = driver->external_timeline_import(p_producer_timeline);
 	uint64_t release_timeline = driver->external_timeline_create(0);
@@ -1988,6 +1994,14 @@ int32_t RenderingDevice::external_texture_pool_add_slot(RID p_pool, TextureType 
 	_external_texture_set_layout(texture_owner.get_or_null(texture), initial_layout);
 	pool->slots.push_back(slot);
 	return pool->slots.size() - 1;
+}
+
+int32_t RenderingDevice::external_texture_pool_add_slot(RID p_pool, TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_native_texture, uint64_t p_producer_timeline, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, ExternalTextureState p_initial_state) {
+	return _external_texture_pool_add_slot(p_pool, p_type, p_format, p_samples, p_usage, p_native_texture, p_producer_timeline, p_width, p_height, p_depth, p_layers, p_mipmaps, p_initial_state, false);
+}
+
+int32_t RenderingDevice::external_texture_pool_add_shared_slot(RID p_pool, TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_shared_texture, uint64_t p_producer_timeline, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, ExternalTextureState p_initial_state) {
+	return _external_texture_pool_add_slot(p_pool, p_type, p_format, p_samples, p_usage, p_shared_texture, p_producer_timeline, p_width, p_height, p_depth, p_layers, p_mipmaps, p_initial_state, true);
 }
 
 Error RenderingDevice::external_texture_pool_publish(RID p_pool, int32_t p_slot, uint64_t p_producer_value, uint64_t p_generation, ExternalTextureState p_published_state) {
@@ -9462,6 +9476,7 @@ void RenderingDevice::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("texture_create_from_extension", "type", "format", "samples", "usage_flags", "image", "width", "height", "depth", "layers", "mipmaps"), &RenderingDevice::texture_create_from_extension, DEFVAL(1));
 	ClassDB::bind_method(D_METHOD("external_texture_pool_create"), &RenderingDevice::external_texture_pool_create);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_add_slot", "pool", "type", "format", "samples", "usage_flags", "native_texture", "producer_timeline", "width", "height", "depth", "layers", "mipmaps", "initial_state"), &RenderingDevice::external_texture_pool_add_slot);
+	ClassDB::bind_method(D_METHOD("external_texture_pool_add_shared_slot", "pool", "type", "format", "samples", "usage_flags", "shared_texture", "producer_timeline", "width", "height", "depth", "layers", "mipmaps", "initial_state"), &RenderingDevice::external_texture_pool_add_shared_slot);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_publish", "pool", "slot", "producer_value", "generation", "published_state"), &RenderingDevice::external_texture_pool_publish);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_abandon_pending", "pool", "slot"), &RenderingDevice::external_texture_pool_abandon_pending);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_acquire_latest", "pool"), &RenderingDevice::external_texture_pool_acquire_latest);
