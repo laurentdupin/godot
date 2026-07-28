@@ -375,6 +375,9 @@ cpp.hint
 *~
 .directory
 
+# Repository-local build toolchains
+/.build-tools/
+
 # macOS
 .DS_Store
 __MACOSX
