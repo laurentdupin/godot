@@ -31,9 +31,9 @@ func _run() -> void:
 html,body{margin:0;width:100vw;height:100vh;background:transparent;overflow:hidden}
 .slot{position:absolute;left:1055px;top:416px;width:450px;height:560px}
 .content{position:absolute;inset:4px;background:#304860;border-radius:16px;transform-origin:center;transition:transform 200ms linear}
-.border{position:absolute;left:0;top:0;width:450px;height:560px;object-fit:fill;transition:left 200ms linear,top 200ms linear,width 200ms linear,height 200ms linear}
+.border{position:absolute;left:0%%;top:0%%;width:100%%;height:100%%;object-fit:fill;transition:left 200ms linear,top 200ms linear,width 200ms linear,height 200ms linear}
 .slot.hot .content{transform:scale(1.1)}
-.slot.hot .border{left:-22px;top:-28px;width:495px;height:616px}
+.slot.hot .border{left:-1.75%%;top:-1.75%%;width:103.5%%;height:103.5%%}
 </style></head><body><div id="slot" class="slot"><div class="content"></div><img class="border" src="data:image/svg+xml;base64,%s" alt=""></div></body></html>""" % SVG_DATA)
 	viewport.add_child(view)
 	for _frame in range(16):
@@ -65,7 +65,7 @@ html,body{margin:0;width:100vw;height:100vh;background:transparent;overflow:hidd
 	var hovered_top := _find_top_stroke(hovered, 1280, 370, 440)
 	var hovered_thickness := _vertical_stroke_thickness(hovered, 1280, hovered_top)
 
-	if baseline_top < 0 or hovered_top < 0 or hovered_top > baseline_top - 20:
+	if baseline_top < 0 or hovered_top < 0 or hovered_top > baseline_top - 5:
 		_fail("%s SVG border did not grow upward with its resized viewport: %d -> %d." % [backend_name, baseline_top, hovered_top])
 		return
 	if baseline_thickness <= 0 or abs(baseline_thickness - hovered_thickness) > 1:
