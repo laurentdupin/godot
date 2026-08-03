@@ -582,7 +582,10 @@ bool HTMLSurfaceHCSRBackend::_read_gpu_packet_metadata(hcsr_gpu_frame_packet_t *
 	if (r_metadata.css_viewport_size != size
 			|| r_metadata.physical_size != physical_size
 			|| !Math::is_equal_approx(r_metadata.device_scale_factor, device_scale_factor)) {
-		_record_error("HCSR prepared a GPU packet for stale viewport metrics");
+		// Live resize can supersede a semantic packet while it is being prepared.
+		// The packet is safely abandoned by the caller; retain an explicit request
+		// for the current viewport instead of waiting for unrelated input.
+		gpu_follow_up_frame_requested.set();
 		return false;
 	}
 	r_metadata.content_width = source.content_width;
@@ -2517,11 +2520,12 @@ void HTMLSurfaceHCSRBackend::set_backdrop_filter_enabled(bool p_enabled) {
 Error HTMLSurfaceHCSRBackend::update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame) {
 	timeline_time_seconds = MAX(0.0, p_timeline_time_seconds);
 	const bool scheduled_frame_due = begin_frame_requested && timeline_time_seconds + 0.000001 >= next_begin_frame_time_seconds;
+	const bool state_sync_required = viewport_dirty || document_dirty || gpu_follow_up_frame_requested.is_set();
 	if (r_needs_output != nullptr) {
-		*r_needs_output = !begin_frame_requested || scheduled_frame_due;
+		*r_needs_output = state_sync_required || !begin_frame_requested || scheduled_frame_due;
 	}
 	if (r_needs_begin_frame != nullptr) {
-		*r_needs_begin_frame = begin_frame_requested && !scheduled_frame_due;
+		*r_needs_begin_frame = !state_sync_required && begin_frame_requested && !scheduled_frame_due;
 	}
 	return document.is_valid() && _ensure_renderer() ? OK : ERR_UNAVAILABLE;
 }
@@ -2584,7 +2588,7 @@ bool HTMLSurfaceHCSRBackend::has_pending_output() const {
 }
 
 bool HTMLSurfaceHCSRBackend::has_pending_frame_request() const {
-	return gpu_follow_up_frame_requested.is_set();
+	return viewport_dirty || document_dirty || gpu_follow_up_frame_requested.is_set();
 }
 
 uint64_t HTMLSurfaceHCSRBackend::get_last_queued_frame_generation() const {

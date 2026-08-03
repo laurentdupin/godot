@@ -478,9 +478,10 @@ void HTMLView::_notification(int p_what) {
 			_update_backdrop_filter_canvas();
 			Ref<Texture2D> texture = surface->get_texture();
 			if (texture.is_valid() && texture->get_width() > 0 && texture->get_height() > 0) {
-				const HTMLFrameMetadata &active_metadata = surface->get_frame_metadata();
-				const Size2 draw_size = active_metadata.logical_size.x > 0 && active_metadata.logical_size.y > 0 ? Size2(active_metadata.logical_size) : get_size();
-				draw_texture_rect(texture, Rect2(Vector2(), draw_size));
+				// A resize changes the presentation rectangle before its replacement
+				// frame can complete. Keep the last coherent texture visible by scaling
+				// it to the current Control instead of preserving stale frame geometry.
+				draw_texture_rect(texture, Rect2(Vector2(), get_size()));
 			}
 		} break;
 
