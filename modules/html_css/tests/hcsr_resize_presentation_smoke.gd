@@ -3,6 +3,7 @@ extends SceneTree
 const INITIAL_SIZE := Vector2i(320, 180)
 const INTERMEDIATE_SIZE := Vector2i(480, 210)
 const RESIZED_SIZE := Vector2i(640, 240)
+const TOPOLOGY_RESIZED_SIZE := Vector2i(600, 300)
 const REPLACEMENT_TIMEOUT_MILLISECONDS := 3000
 
 var backend_preference := HTMLView.BACKEND_D3D12
@@ -84,8 +85,27 @@ func _run() -> void:
 		_fail("%s resize replacement texture has the wrong dimensions." % backend_name)
 		return
 
+	var retiring_output := view.create_output(Vector2i(800, 300))
+	if retiring_output == null or not await _wait_for_output_generation(retiring_output, 0):
+		_fail("%s resize smoke could not activate its initial secondary output." % backend_name)
+		return
+	var topology_generation := view.get_generation()
+	retiring_output.release()
+	view.logical_size = TOPOLOGY_RESIZED_SIZE
+	view.size = TOPOLOGY_RESIZED_SIZE
+	var replacement_output := view.create_output(Vector2i(800, 400))
+	if replacement_output == null \
+			or not await _wait_for_generation(view, topology_generation) \
+			or not await _wait_for_output_generation(replacement_output, topology_generation):
+		_fail("%s old-aspect secondary output blocked resize replacement until unrelated input." % backend_name)
+		return
+	if replacement_output.generation != view.get_generation():
+		_fail("%s resize activated incoherent primary/secondary generations %d/%d." % [backend_name, view.get_generation(), replacement_output.generation])
+		return
+	replacement_output.release()
+
 	print("HCSR Godot %s resize presentation passed: generation %d -> %d, size %s." % [
-		backend_name, initial_generation, view.get_generation(), RESIZED_SIZE])
+		backend_name, initial_generation, view.get_generation(), TOPOLOGY_RESIZED_SIZE])
 	quit()
 
 
@@ -94,6 +114,15 @@ func _wait_for_generation(view: HTMLView, generation_before_change: int) -> bool
 	while Time.get_ticks_msec() < deadline:
 		await process_frame
 		if view.get_generation() > generation_before_change:
+			return true
+	return false
+
+
+func _wait_for_output_generation(output: HTMLViewOutput, generation_before_change: int) -> bool:
+	var deadline := Time.get_ticks_msec() + REPLACEMENT_TIMEOUT_MILLISECONDS
+	while Time.get_ticks_msec() < deadline:
+		await process_frame
+		if output.generation > generation_before_change:
 			return true
 	return false
 

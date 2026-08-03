@@ -2968,6 +2968,10 @@ void HTMLSurfaceHCSRBackend::destroy_presentation_output(uint64_t p_output_id) {
 		state = *found;
 		presentation_outputs.erase(p_output_id);
 	}
+	if (renderer != nullptr && state->output != nullptr
+			&& hcsr_renderer_detach_presentation_output(renderer, state->output) != HCSR_STATUS_OK) {
+		_record_error("HCSR could not detach a secondary presentation output from synchronized topology");
+	}
 	RenderingServer *rendering_server = RenderingServer::get_singleton();
 	if (rendering_server == nullptr || rendering_server->is_on_render_thread()) {
 		_destroy_presentation_output_state_on_render_thread(state);
