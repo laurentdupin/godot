@@ -113,6 +113,8 @@ void HCSRPerformanceMonitor::initialize() {
 		{ "HCSR/New Scope Commands", MONITOR_NEW_SCOPE_COMMANDS, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/New Scrollbar Commands", MONITOR_NEW_SCROLLBAR_COMMANDS, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Snapshot Entries Written", MONITOR_SNAPSHOT_ENTRIES_WRITTEN, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Retained Transform Layer Hits", MONITOR_RETAINED_TRANSFORM_LAYER_HITS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/Retained Transform Layer Rasters", MONITOR_RETAINED_TRANSFORM_LAYER_RASTERS, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Texture Resource Creates", MONITOR_TEXTURE_RESOURCE_CREATES, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Texture Resource Frees", MONITOR_TEXTURE_RESOURCE_FREES, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Presentation Lock Busy", MONITOR_PRESENTATION_LOCK_BUSY, Performance::MONITOR_TYPE_QUANTITY },
@@ -224,6 +226,8 @@ void HCSRPerformanceMonitor::finalize() {
 			"HCSR/New Scope Commands",
 			"HCSR/New Scrollbar Commands",
 			"HCSR/Snapshot Entries Written",
+			"HCSR/Retained Transform Layer Hits",
+			"HCSR/Retained Transform Layer Rasters",
 			"HCSR/Texture Resource Creates",
 			"HCSR/Texture Resource Frees",
 			"HCSR/Presentation Lock Busy",
@@ -355,6 +359,8 @@ void HCSRPerformanceMonitor::publish_frame_data() {
 		frame_profile.new_scope_command_count += profile.new_scope_command_count;
 		frame_profile.new_scrollbar_command_count += profile.new_scrollbar_command_count;
 		frame_profile.snapshot_array_entry_write_count += profile.snapshot_array_entry_write_count;
+		frame_profile.retained_transform_layer_hit_count += profile.retained_transform_layer_hit_count;
+		frame_profile.retained_transform_layer_raster_count += profile.retained_transform_layer_raster_count;
 	}
 
 	const double measured_core_stage_milliseconds = frame_profile.parse_milliseconds
@@ -465,6 +471,10 @@ void HCSRPerformanceMonitor::publish_frame_data() {
 	values.push_back(frame_profile.new_scrollbar_command_count);
 	values.push_back("snapshot_entries_written");
 	values.push_back(frame_profile.snapshot_array_entry_write_count);
+	values.push_back("retained_transform_layer_hits");
+	values.push_back(frame_profile.retained_transform_layer_hit_count);
+	values.push_back("retained_transform_layer_rasters");
+	values.push_back(frame_profile.retained_transform_layer_raster_count);
 	double input_to_visible_milliseconds = 0.0;
 	for (double sample : frame_input_to_visible_milliseconds) {
 		input_to_visible_milliseconds = MAX(input_to_visible_milliseconds, sample);
@@ -791,6 +801,12 @@ double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
 				break;
 			case MONITOR_SNAPSHOT_ENTRIES_WRITTEN:
 				value += profile.snapshot_array_entry_write_count;
+				break;
+			case MONITOR_RETAINED_TRANSFORM_LAYER_HITS:
+				value += profile.retained_transform_layer_hit_count;
+				break;
+			case MONITOR_RETAINED_TRANSFORM_LAYER_RASTERS:
+				value += profile.retained_transform_layer_raster_count;
 				break;
 		}
 	}
