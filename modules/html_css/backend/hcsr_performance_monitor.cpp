@@ -50,13 +50,7 @@ void HCSRPerformanceMonitor::initialize() {
 		{ "HCSR/Updated Pixels", MONITOR_UPDATED_PIXELS, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Input To Visible Time", MONITOR_INPUT_TO_VISIBLE_TIME, Performance::MONITOR_TYPE_TIME },
 		{ "HCSR/Input To Composed Time", MONITOR_INPUT_TO_COMPOSED_TIME, Performance::MONITOR_TYPE_TIME },
-		{ "HCSR/Resolved Updates", MONITOR_RESOLVED_UPDATES, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Draw Batches", MONITOR_DRAW_BATCHES, Performance::MONITOR_TYPE_QUANTITY },
-		{ "HCSR/Clear Operations", MONITOR_CLEAR_OPERATIONS, Performance::MONITOR_TYPE_QUANTITY },
-		{ "HCSR/Copy Operations", MONITOR_COPY_OPERATIONS, Performance::MONITOR_TYPE_QUANTITY },
-		{ "HCSR/Resolved Copied Bytes", MONITOR_RESOLVED_COPIED_BYTES, Performance::MONITOR_TYPE_MEMORY },
-		{ "HCSR/Executed Display Commands", MONITOR_EXECUTED_DISPLAY_COMMANDS, Performance::MONITOR_TYPE_QUANTITY },
-		{ "HCSR/Executed Glyphs", MONITOR_EXECUTED_GLYPHS, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/GPU Dispatches", MONITOR_GPU_DISPATCHES, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Semantic Preparation Time", MONITOR_SEMANTIC_PREPARATION_TIME, Performance::MONITOR_TYPE_TIME },
 		{ "HCSR/Semantic Snapshot Validation Time", MONITOR_SEMANTIC_SNAPSHOT_VALIDATION_TIME, Performance::MONITOR_TYPE_TIME },
@@ -613,26 +607,8 @@ double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
 			case MONITOR_INPUT_TO_COMPOSED_TIME:
 				value = latest_input_to_composed_milliseconds / 1000.0;
 				break;
-			case MONITOR_RESOLVED_UPDATES:
-				value += profile.resolved_update_count;
-				break;
 			case MONITOR_DRAW_BATCHES:
 				value += profile.draw_batch_count;
-				break;
-			case MONITOR_CLEAR_OPERATIONS:
-				value += profile.clear_operation_count;
-				break;
-			case MONITOR_COPY_OPERATIONS:
-				value += profile.copy_operation_count;
-				break;
-			case MONITOR_RESOLVED_COPIED_BYTES:
-				value += profile.resolved_copied_bytes;
-				break;
-			case MONITOR_EXECUTED_DISPLAY_COMMANDS:
-				value += profile.executed_display_command_count;
-				break;
-			case MONITOR_EXECUTED_GLYPHS:
-				value += profile.executed_glyph_count;
 				break;
 			case MONITOR_GPU_DISPATCHES:
 				value += profile.gpu_dispatch_count;

@@ -521,10 +521,10 @@ Error HTMLSurfaceHCSRBackend::_set_input() {
 	if (!_ensure_renderer()) {
 		return ERR_CANT_CREATE;
 	}
-	return hcsr_renderer_set_input(
+	return hcsr_renderer_set_input_css(
 			renderer,
-			Math::floor(pointer_position.x),
-			Math::floor(pointer_position.y),
+			pointer_position.x,
+			pointer_position.y,
 			primary_button_pressed ? 1 : 0,
 			scroll_offset.x,
 			scroll_offset.y) == HCSR_STATUS_OK
@@ -2765,7 +2765,10 @@ Error HTMLSurfaceHCSRBackend::wheel(const Point2 &p_position, const Vector2 &p_d
 	}
 
 	uint8_t consumed = 0;
-	if (hcsr_renderer_dispatch_wheel(renderer, p_position.x, p_position.y, p_delta.x, p_delta.y, &consumed) != HCSR_STATUS_OK) {
+	const double event_time_seconds = OS::get_singleton() != nullptr ? (double)OS::get_singleton()->get_ticks_usec() / 1000000.0 : 0.0;
+	if (hcsr_renderer_dispatch_scroll(renderer, p_position.x, p_position.y, p_delta.x, p_delta.y,
+			HCSR_SCROLL_GRANULARITY_PRECISE_PIXEL, HCSR_SCROLL_SOURCE_MOUSE_WHEEL,
+			event_time_seconds, &consumed) != HCSR_STATUS_OK) {
 		return ERR_CANT_ACQUIRE_RESOURCE;
 	}
 	if (consumed != 0) {
