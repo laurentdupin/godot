@@ -118,6 +118,11 @@ class GodotGLRenderView extends GLSurfaceView implements GodotRenderView {
 
 	@Override
 	public void onActivityResumed() {
+		// onPause() is not always paired with onStop() on Android. Activities
+		// such as the system document picker can return through onResume()
+		// without another onStart(), so resume the thread that onPause() paused
+		// before queueing renderer lifecycle work on it.
+		resumeGLThread();
 		queueEvent(() -> {
 			// Resume the renderer
 			godotRenderer.onActivityResumed();
