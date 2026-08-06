@@ -31,7 +31,9 @@
 #include "html_view.h"
 
 #include "bridge/html_activation_engine.h"
+#ifdef HTML_CSS_USE_HCSR
 #include "backend/hcsr_performance_monitor.h"
+#endif
 
 #include "core/input/input_event.h"
 #include "core/math/math_funcs.h"
@@ -645,7 +647,9 @@ void HTMLView::_surface_frame_activated(uint64_t p_generation) {
 	if (pending_visual_input_usec != 0 && p_generation > pending_visual_input_after_generation) {
 		const uint64_t now_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 		if (now_usec >= pending_visual_input_usec) {
+#ifdef HTML_CSS_USE_HCSR
 			HCSRPerformanceMonitor::record_input_to_visible((now_usec - pending_visual_input_usec) / 1000.0);
+#endif
 		}
 		if (pending_composed_input_usec == 0) {
 			pending_composed_input_usec = pending_visual_input_usec;
@@ -673,7 +677,9 @@ void HTMLView::_surface_frame_composed() {
 	}
 	const uint64_t now_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 	if (now_usec >= pending_composed_input_usec) {
+#ifdef HTML_CSS_USE_HCSR
 		HCSRPerformanceMonitor::record_input_to_composed((now_usec - pending_composed_input_usec) / 1000.0);
+#endif
 	}
 	pending_composed_input_usec = 0;
 	pending_composed_input_after_generation = 0;
