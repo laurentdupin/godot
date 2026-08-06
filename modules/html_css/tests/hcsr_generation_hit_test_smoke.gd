@@ -53,8 +53,10 @@ func _initialize() -> void:
 			return
 		var old_pixel := image.get_pixelv(Vector2i(OLD_POSITION))
 		var new_pixel := image.get_pixelv(Vector2i(NEW_POSITION))
-		var old_visible := old_pixel.b > old_pixel.r * 1.3
-		var new_visible := new_pixel.r > new_pixel.b * 1.3
+		# The dark page background is also blue-dominant, so dominance alone
+		# cannot distinguish it from the old bright-blue target.
+		var old_visible := old_pixel.b > 0.5 and old_pixel.b > old_pixel.r * 1.3
+		var new_visible := new_pixel.r > 0.5 and new_pixel.r > new_pixel.b * 1.3
 		if old_visible == new_visible:
 			_fail("%s presentation did not expose exactly one complete geometry generation (old=%s, new=%s)." % [backend_name, old_pixel, new_pixel])
 			return

@@ -49,15 +49,15 @@ func _run() -> void:
 	if input_to_composed_seconds < input_to_visible_seconds or input_to_composed_seconds >= 1.0:
 		_fail("%s input-to-composed latency did not follow activation in a plausible range: activation=%.6f composed=%.6f seconds." % [backend_name, input_to_visible_seconds, input_to_composed_seconds])
 		return
-	var resolved_updates: float = Performance.get_custom_monitor("HCSR/Resolved Updates")
+	var display_commands: float = Performance.get_custom_monitor("HCSR/Display Commands")
 	var draw_batches: float = Performance.get_custom_monitor("HCSR/Draw Batches")
 	var gpu_dispatches: float = Performance.get_custom_monitor("HCSR/GPU Dispatches")
 	# Vulkan's direct physical compiler executes analytic batches as graphics draws,
 	# so a valid frame need not contain a compute dispatch.
-	if backend != HTMLView.BACKEND_CPU and (resolved_updates <= 0.0 or draw_batches <= 0.0):
-		_fail("%s did not expose nonzero execution telemetry: updates=%.0f batches=%.0f dispatches=%.0f." % [backend_name, resolved_updates, draw_batches, gpu_dispatches])
+	if backend != HTMLView.BACKEND_CPU and (display_commands <= 0.0 or draw_batches <= 0.0):
+		_fail("%s did not expose nonzero execution telemetry: commands=%.0f batches=%.0f dispatches=%.0f." % [backend_name, display_commands, draw_batches, gpu_dispatches])
 		return
-	print("HCSR_FRAME_ALIGNMENT backend=%s generation=%d host=%d activation=%d visible=%d input_to_visible_ms=%.3f input_to_composed_ms=%.3f updates=%.0f batches=%.0f dispatches=%.0f" % [
+	print("HCSR_FRAME_ALIGNMENT backend=%s generation=%d host=%d activation=%d visible=%d input_to_visible_ms=%.3f input_to_composed_ms=%.3f commands=%.0f batches=%.0f dispatches=%.0f" % [
 		backend_name,
 		view.get_generation(),
 		view.get_host_frame_number(),
@@ -65,7 +65,7 @@ func _run() -> void:
 		Engine.get_process_frames(),
 		input_to_visible_seconds * 1000.0,
 		input_to_composed_seconds * 1000.0,
-		resolved_updates,
+		display_commands,
 		draw_batches,
 		gpu_dispatches,
 	])
