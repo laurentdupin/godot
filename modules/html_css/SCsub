@@ -21,6 +21,15 @@ if env["module_html_css_blink_enabled"]:
         Exit(1)
     _html_css_renderer = "blink"
 
+# Renderer-facing public headers and compile definitions must be present before
+# any html_css object is created. Common module sources such as html_view.cpp
+# include backend headers when HCSR is selected, so configuring only the
+# backend-specific source block leaves those objects with an incomplete build
+# environment on clean builds.
+if _html_css_renderer == "hcsr":
+    env_html_css.Append(CPPDEFINES=["HTML_CSS_USE_HCSR"])
+    env_html_css.Prepend(CPPPATH=["#thirdparty/hcsr/native/include"])
+
 _html_css_blink_package_path_override = bool(env["module_html_css_blink_lib_path"])
 
 
@@ -802,8 +811,6 @@ elif _html_css_renderer == "hcsr":
     _html_css_ensure_hcsr_static_library()
     hcsr_library_path = _html_css_hcsr_static_library_path()
     print("HTML/CSS HCSR static library: " + hcsr_library_path)
-    env_html_css.Append(CPPDEFINES=["HTML_CSS_USE_HCSR"])
-    env_html_css.Append(CPPPATH=["#thirdparty/hcsr/native/include"])
     hcsr_module_sources = []
     env_html_css.add_source_files(hcsr_module_sources, "backend/hcsr_performance_monitor.cpp")
     env_html_css.add_source_files(hcsr_module_sources, "backend/html_surface_hcsr_backend.cpp")
