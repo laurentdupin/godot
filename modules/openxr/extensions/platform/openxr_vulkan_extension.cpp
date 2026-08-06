@@ -37,6 +37,13 @@
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/rendering_server.h"
 
+static XrVersion make_xr_version_from_vulkan(uint32_t p_version) {
+	return XR_MAKE_VERSION(
+			VK_VERSION_MAJOR(p_version),
+			VK_VERSION_MINOR(p_version),
+			VK_VERSION_PATCH(p_version));
+}
+
 HashMap<String, bool *> OpenXRVulkanExtension::get_requested_extensions(XrVersion p_version) {
 	HashMap<String, bool *> request_extensions;
 
@@ -100,10 +107,7 @@ bool OpenXRVulkanExtension::check_graphics_api_support(XrVersion p_desired_versi
 bool OpenXRVulkanExtension::create_vulkan_instance(const VkInstanceCreateInfo *p_vulkan_create_info, VkInstance *r_instance) {
 	// get the vulkan version we are creating
 	uint32_t vulkan_version = p_vulkan_create_info->pApplicationInfo->apiVersion;
-	uint32_t major_version = VK_VERSION_MAJOR(vulkan_version);
-	uint32_t minor_version = VK_VERSION_MINOR(vulkan_version);
-	uint32_t patch_version = VK_VERSION_PATCH(vulkan_version);
-	XrVersion desired_version = XR_MAKE_VERSION(major_version, minor_version, patch_version);
+	XrVersion desired_version = make_xr_version_from_vulkan(vulkan_version);
 
 	// check if this is supported
 	if (!check_graphics_api_support(desired_version)) {
@@ -252,7 +256,7 @@ void *OpenXRVulkanExtension::set_session_create_and_get_next_pointer(void *p_nex
 	}
 	VkPhysicalDeviceProperties physical_device_properties;
 	vkGetPhysicalDeviceProperties(vulkan_physical_device, &physical_device_properties);
-	if (!check_graphics_api_support(physical_device_properties.apiVersion)) {
+	if (!check_graphics_api_support(make_xr_version_from_vulkan(physical_device_properties.apiVersion))) {
 		return p_next_pointer;
 	}
 
