@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource path="res://hcsr_android_svg_smoke.gd" type="Script" id="1"]
+
+[node name="HcsrAndroidSvgSmoke" type="Node"]
+script = ExtResource("1")

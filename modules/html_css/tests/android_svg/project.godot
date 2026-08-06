@@ -1,0 +1,11 @@
+[application]
+config/name="HCSR Android SVG Smoke"
+run/main_scene="res://hcsr_android_svg_smoke.tscn"
+
+[display]
+window/size/viewport_width=64
+window/size/viewport_height=64
+
+[rendering]
+renderer/rendering_method="mobile"
+textures/vram_compression/import_etc2_astc=true
