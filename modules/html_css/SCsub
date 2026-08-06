@@ -134,9 +134,12 @@ def _html_css_ensure_hcsr_static_library():
     hcsr_root = _html_css_resolve_repo_path(os.path.join("thirdparty", "hcsr"))
     initializer_name = "hcsr_renderer_android_initializer.o" if env["platform"] == "android" else "hcsr_renderer_initializer.o"
     initializer_path = os.path.join(os.path.dirname(library_path), initializer_name)
-    package_is_current = os.path.isfile(library_path) and (
-        env["platform"] == "windows" or os.path.isfile(initializer_path)
-    )
+    required_package_files = [library_path]
+    if env["platform"] != "windows":
+        required_package_files.append(initializer_path)
+    if env["platform"] == "android":
+        required_package_files.append(os.path.join(os.path.dirname(library_path), "hcsr_native_codecs_android.a"))
+    package_is_current = all(os.path.isfile(path) for path in required_package_files)
     if package_is_current and not env["module_html_css_hcsr_lib_path"]:
         marker_name = "hcsr_renderer_android.commit" if env["platform"] == "android" else "hcsr_renderer_combined.commit"
         marker_path = os.path.join(os.path.dirname(library_path), marker_name)
@@ -205,6 +208,11 @@ def _html_css_ensure_hcsr_static_library():
     if env["platform"] != "windows" and not os.path.isfile(initializer_path):
         print("HTML/CSS HCSR NativeAOT initializer object is missing: " + initializer_path)
         Exit(1)
+    if env["platform"] == "android":
+        codec_path = os.path.join(os.path.dirname(library_path), "hcsr_native_codecs_android.a")
+        if not os.path.isfile(codec_path):
+            print("HTML/CSS HCSR Android codec retention archive is missing: " + codec_path)
+            Exit(1)
 
 
 def _html_css_default_blink_package_path():
@@ -820,13 +828,21 @@ elif _html_css_renderer == "hcsr":
         env_html_css.add_source_files(env.modules_sources, "editor/html_package_export_plugin.cpp")
     if env["platform"] == "android":
         hcsr_initializer_path = os.path.join(os.path.dirname(hcsr_library_path), "hcsr_renderer_android_initializer.o")
-        hcsr_local_symbols_flag = "-Wl,--exclude-libs," + os.path.basename(hcsr_library_path)
+        hcsr_codec_library_path = os.path.join(os.path.dirname(hcsr_library_path), "hcsr_native_codecs_android.a")
+        hcsr_local_symbols_flags = [
+            "-Wl,--exclude-libs," + os.path.basename(hcsr_library_path),
+            "-Wl,--exclude-libs," + os.path.basename(hcsr_codec_library_path),
+        ]
         env.Append(
             LINKFLAGS=[
                 "-Wl,-z,nostart-stop-gc",
-                hcsr_local_symbols_flag,
+                *hcsr_local_symbols_flags,
+                "-Wl,--require-defined=hcsr_svg_decode_bgra32",
                 hcsr_initializer_path,
                 hcsr_library_path,
+                "-Wl,--whole-archive",
+                hcsr_codec_library_path,
+                "-Wl,--no-whole-archive",
                 "-lm",
                 "-lz",
             ]
