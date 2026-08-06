@@ -15,7 +15,6 @@
 #include "hcsr_renderer.h"
 
 void HTMLPackageExportPlugin::_export_begin(const HashSet<String> &p_features, bool p_debug, const String &p_path, int p_flags) {
-	debug_export = p_debug;
 	compiled_documents.clear();
 	inspected_resources.clear();
 }
@@ -202,9 +201,6 @@ void HTMLPackageExportPlugin::_inspect_resource_dependencies(const String &p_pat
 }
 
 void HTMLPackageExportPlugin::_export_file(const String &p_path, const String &p_type, const HashSet<String> &p_features) {
-	if (debug_export) {
-		return;
-	}
 	_inspect_resource_dependencies(p_path);
 	if (p_type != HTMLDocument::get_class_static()) {
 		return;

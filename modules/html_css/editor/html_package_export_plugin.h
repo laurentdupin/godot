@@ -11,7 +11,6 @@
 class HTMLPackageExportPlugin : public EditorExportPlugin {
 	GDCLASS(HTMLPackageExportPlugin, EditorExportPlugin);
 
-	bool debug_export = false;
 	HashSet<String> compiled_documents;
 	HashSet<String> inspected_resources;
 	bool _compile_package(const String &p_path);
