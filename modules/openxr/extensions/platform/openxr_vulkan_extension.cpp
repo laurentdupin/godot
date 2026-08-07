@@ -186,6 +186,29 @@ bool OpenXRVulkanExtension::create_vulkan_device(const VkDeviceCreateInfo *p_dev
 
 	VkResult vk_result = VK_SUCCESS;
 	XrResult result = xrCreateVulkanDeviceKHR(OpenXRAPI::get_singleton()->get_instance(), &create_info, &vulkan_device, &vk_result);
+	if (vk_result == VK_ERROR_NOT_PERMITTED_KHR) {
+		LocalVector<VkDeviceQueueCreateInfo> fallback_queue_create_infos;
+		fallback_queue_create_infos.resize(p_device_create_info->queueCreateInfoCount);
+		bool removed_global_priority = false;
+		for (uint32_t i = 0; i < p_device_create_info->queueCreateInfoCount; i++) {
+			fallback_queue_create_infos[i] = p_device_create_info->pQueueCreateInfos[i];
+			const VkBaseInStructure *queue_next = static_cast<const VkBaseInStructure *>(fallback_queue_create_infos[i].pNext);
+			if (queue_next != nullptr && queue_next->sType == VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR) {
+				fallback_queue_create_infos[i].pNext = queue_next->pNext;
+				removed_global_priority = true;
+			}
+		}
+
+		if (removed_global_priority) {
+			print_line("OpenXR: Vulkan HIGH global queue priority was denied; retrying safely with default MEDIUM priority.");
+			VkDeviceCreateInfo fallback_device_create_info = *p_device_create_info;
+			fallback_device_create_info.pQueueCreateInfos = fallback_queue_create_infos.ptr();
+			create_info.vulkanCreateInfo = &fallback_device_create_info;
+			vulkan_device = VK_NULL_HANDLE;
+			vk_result = VK_SUCCESS;
+			result = xrCreateVulkanDeviceKHR(OpenXRAPI::get_singleton()->get_instance(), &create_info, &vulkan_device, &vk_result);
+		}
+	}
 	if (XR_FAILED(result)) {
 		print_line("OpenXR: Failed to create Vulkan device [", OpenXRAPI::get_singleton()->get_error_string(result), "]");
 		return false;
@@ -193,6 +216,7 @@ bool OpenXRVulkanExtension::create_vulkan_device(const VkDeviceCreateInfo *p_dev
 
 	if (vk_result != VK_SUCCESS) {
 		print_line("OpenXR: Failed to create Vulkan device [Vulkan error", vk_result, "]");
+		return false;
 	}
 
 	*r_device = vulkan_device;

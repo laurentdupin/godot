@@ -631,6 +631,10 @@ Error RenderingDeviceDriverVulkan::_initialize_device_extensions() {
 	_register_requested_device_extension(VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME, false);
 	_register_requested_device_extension(VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME, false);
 	_register_requested_device_extension(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME, false);
+	if (VulkanHooks::get_singleton() != nullptr) {
+		_register_requested_device_extension(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME, false);
+		_register_requested_device_extension(VK_EXT_GLOBAL_PRIORITY_QUERY_EXTENSION_NAME, false);
+	}
 #endif
 #ifdef WINDOWS_ENABLED
 	_register_requested_device_extension(VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME, false);
@@ -968,6 +972,7 @@ Error RenderingDeviceDriverVulkan::_check_device_capabilities() {
 		VkPhysicalDeviceSynchronization2FeaturesKHR sync_2_features = {};
 		VkPhysicalDeviceTimelineSemaphoreFeatures timeline_semaphore_features = {};
 		VkPhysicalDeviceRayTracingValidationFeaturesNV raytracing_validation_features = {};
+		VkPhysicalDeviceGlobalPriorityQueryFeaturesKHR global_priority_query_features = {};
 
 		const bool use_1_2_features = physical_device_properties.apiVersion >= VK_API_VERSION_1_2;
 		if (use_1_2_features) {
@@ -1064,11 +1069,20 @@ Error RenderingDeviceDriverVulkan::_check_device_capabilities() {
 			next_features = &timeline_semaphore_features;
 		}
 
+#ifdef ANDROID_ENABLED
+		if (VulkanHooks::get_singleton() != nullptr && enabled_device_extension_names.has(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME)) {
+			global_priority_query_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GLOBAL_PRIORITY_QUERY_FEATURES_KHR;
+			global_priority_query_features.pNext = next_features;
+			next_features = &global_priority_query_features;
+		}
+#endif
+
 		VkPhysicalDeviceFeatures2 device_features_2 = {};
 		device_features_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
 		device_features_2.pNext = next_features;
 		functions.GetPhysicalDeviceFeatures2(physical_device, &device_features_2);
 		timeline_semaphore_support = use_1_2_features ? bool(device_features_vk_1_2.timelineSemaphore) : bool(timeline_semaphore_features.timelineSemaphore);
+		global_priority_query_support = bool(global_priority_query_features.globalPriorityQuery);
 
 		if (use_1_2_features) {
 #ifdef MACOS_ENABLED
@@ -1365,9 +1379,63 @@ Error RenderingDeviceDriverVulkan::_add_queue_create_info(LocalVector<VkDeviceQu
 	uint32_t queue_family_count = queue_family_properties.size();
 	queue_families.resize(queue_family_count);
 
+	uint32_t interactive_queue_family_index = UINT32_MAX;
+	bool request_interactive_high_priority = false;
+#ifdef ANDROID_ENABLED
+	if (VulkanHooks::get_singleton() != nullptr) {
+		VkQueueFlags picked_queue_flags = VK_QUEUE_FLAG_BITS_MAX_ENUM;
+		const VkQueueFlags interactive_queue_flags = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT;
+		for (uint32_t i = 0; i < queue_family_count; i++) {
+			const VkQueueFlags option_queue_flags = queue_family_properties[i].queueFlags;
+			if ((option_queue_flags & interactive_queue_flags) == interactive_queue_flags && option_queue_flags < picked_queue_flags) {
+				interactive_queue_family_index = i;
+				picked_queue_flags = option_queue_flags;
+			}
+		}
+
+		const RenderingContextDriverVulkan::Functions &functions = context_driver->functions_get();
+		if (interactive_queue_family_index != UINT32_MAX && enabled_device_extension_names.has(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME) && global_priority_query_support && functions.GetPhysicalDeviceQueueFamilyProperties2 != nullptr) {
+			TightLocalVector<VkQueueFamilyProperties2> queue_properties;
+			TightLocalVector<VkQueueFamilyGlobalPriorityPropertiesKHR> priority_properties;
+			queue_properties.resize(queue_family_count);
+			priority_properties.resize(queue_family_count);
+			for (uint32_t i = 0; i < queue_family_count; i++) {
+				priority_properties[i] = {};
+				priority_properties[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES_KHR;
+				queue_properties[i] = {};
+				queue_properties[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
+				queue_properties[i].pNext = &priority_properties[i];
+			}
+			uint32_t queried_queue_family_count = queue_family_count;
+			functions.GetPhysicalDeviceQueueFamilyProperties2(physical_device, &queried_queue_family_count, queue_properties.ptr());
+			if (queried_queue_family_count == queue_family_count) {
+				const VkQueueFamilyGlobalPriorityPropertiesKHR &interactive_priorities = priority_properties[interactive_queue_family_index];
+				for (uint32_t i = 0; i < interactive_priorities.priorityCount; i++) {
+					if (interactive_priorities.priorities[i] == VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR) {
+						request_interactive_high_priority = true;
+						break;
+					}
+				}
+			}
+		}
+	}
+#endif
+
+	interactive_queue_global_priority_create_info = {};
+#ifdef ANDROID_ENABLED
+	if (request_interactive_high_priority) {
+		interactive_queue_global_priority_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR;
+		interactive_queue_global_priority_create_info.globalPriority = VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR;
+		print_line(vformat("Vulkan: Android OpenXR render queue family %d requests HIGH global priority.", interactive_queue_family_index));
+	} else if (VulkanHooks::get_singleton() != nullptr) {
+		print_line("Vulkan: Android OpenXR HIGH global queue priority is unavailable; using default MEDIUM priority.");
+	}
+#endif
+
 	VkQueueFlags queue_flags_mask = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT;
 	const uint32_t max_queue_count_per_family = 1;
-	static const float queue_priorities[max_queue_count_per_family] = {};
+	static const float default_queue_priorities[max_queue_count_per_family] = {};
+	static const float interactive_queue_priorities[max_queue_count_per_family] = { 1.0f };
 	for (uint32_t i = 0; i < queue_family_count; i++) {
 		if ((queue_family_properties[i].queueFlags & queue_flags_mask) == 0) {
 			// We ignore creating queues in families that don't support any of the operations we require.
@@ -1378,7 +1446,10 @@ Error RenderingDeviceDriverVulkan::_add_queue_create_info(LocalVector<VkDeviceQu
 		create_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
 		create_info.queueFamilyIndex = i;
 		create_info.queueCount = MIN(queue_family_properties[i].queueCount, max_queue_count_per_family);
-		create_info.pQueuePriorities = queue_priorities;
+		create_info.pQueuePriorities = i == interactive_queue_family_index ? interactive_queue_priorities : default_queue_priorities;
+		if (request_interactive_high_priority && i == interactive_queue_family_index) {
+			create_info.pNext = &interactive_queue_global_priority_create_info;
+		}
 		r_queue_create_info.push_back(create_info);
 
 		// Prepare the vectors where the queues will be filled out.
@@ -1506,6 +1577,14 @@ Error RenderingDeviceDriverVulkan::_initialize_device(const LocalVector<VkDevice
 		timeline_semaphore_features.pNext = create_info_next;
 		timeline_semaphore_features.timelineSemaphore = VK_TRUE;
 		create_info_next = &timeline_semaphore_features;
+	}
+
+	VkPhysicalDeviceGlobalPriorityQueryFeaturesKHR global_priority_query_features = {};
+	if (global_priority_query_support) {
+		global_priority_query_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GLOBAL_PRIORITY_QUERY_FEATURES_KHR;
+		global_priority_query_features.pNext = create_info_next;
+		global_priority_query_features.globalPriorityQuery = VK_TRUE;
+		create_info_next = &global_priority_query_features;
 	}
 
 	VkPhysicalDeviceVulkan11Features vulkan_1_1_features = {};
