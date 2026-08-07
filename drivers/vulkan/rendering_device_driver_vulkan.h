@@ -149,6 +149,7 @@ class RenderingDeviceDriverVulkan : public RenderingDeviceDriver {
 	VkPhysicalDeviceFeatures requested_device_features = {};
 	HashMap<CharString, bool> requested_device_extensions;
 	HashSet<CharString> enabled_device_extension_names;
+	uint32_t main_queue_family_index = VK_QUEUE_FAMILY_IGNORED;
 	TightLocalVector<TightLocalVector<Queue>> queue_families;
 	TightLocalVector<VkQueueFamilyProperties> queue_family_properties;
 	RDD::Capabilities device_capabilities;
@@ -284,6 +285,11 @@ public:
 			VmaAllocation handle = nullptr;
 			VmaAllocationInfo info = {};
 		} allocation; // All 0/null if just a view.
+		VkDeviceMemory imported_memory = VK_NULL_HANDLE;
+		uint64_t android_hardware_buffer = 0;
+		bool android_foreign_owned = false;
+		bool android_ownership_transition_pending = false;
+		bool android_target_foreign_owned = false;
 		bool is_subsampled = false;
 #ifdef DEBUG_ENABLED
 		bool created_from_extension = false;
@@ -296,6 +302,8 @@ public:
 public:
 	virtual TextureID texture_create(const TextureFormat &p_format, const TextureView &p_view) override final;
 	virtual TextureID texture_create_from_extension(uint64_t p_native_texture, const TextureFormat &p_format) override final;
+	virtual TextureID texture_create_from_android_hardware_buffer(uint64_t p_hardware_buffer, const TextureFormat &p_format) override final;
+	virtual void texture_set_external_queue_family(TextureID p_texture, bool p_foreign_owned) override final;
 	virtual TextureID texture_create_shared(TextureID p_original_texture, const TextureView &p_view) override final;
 	virtual TextureID texture_create_shared_from_slice(TextureID p_original_texture, const TextureView &p_view, TextureSliceType p_slice_type, uint32_t p_layer, uint32_t p_layers, uint32_t p_mipmap, uint32_t p_mipmaps) override final;
 	virtual void texture_free(TextureID p_texture) override final;
@@ -304,6 +312,7 @@ public:
 	virtual Vector<uint8_t> texture_get_data(TextureID p_texture, uint32_t p_layer) override final;
 	virtual BitField<TextureUsageBits> texture_get_usages_supported_by_format(DataFormat p_format, bool p_cpu_readable) override final;
 	virtual bool texture_can_make_shared_with_format(TextureID p_texture, DataFormat p_format, bool &r_raw_reinterpretation) override final;
+	virtual bool android_hardware_buffer_is_supported() const override final;
 
 	/*****************/
 	/**** SAMPLER ****/
@@ -369,6 +378,13 @@ public:
 	virtual bool external_timeline_is_complete(uint64_t p_timeline, uint64_t p_value) const override final;
 	virtual Error command_queue_wait_external_timeline(CommandQueueID p_cmd_queue, uint64_t p_timeline, uint64_t p_value) override final;
 	virtual Error command_queue_signal_external_timeline(CommandQueueID p_cmd_queue, uint64_t p_timeline, uint64_t p_value) override final;
+	virtual uint64_t external_binary_semaphore_import_sync_fd(int p_sync_fd) override final;
+	virtual uint64_t external_binary_semaphore_create_exportable_sync_fd() override final;
+	virtual int external_binary_semaphore_export_sync_fd(uint64_t p_semaphore) override final;
+	virtual void external_binary_sync_fd_close(int p_sync_fd) override final;
+	virtual void external_binary_semaphore_free(uint64_t p_semaphore) override final;
+	virtual Error command_queue_wait_external_binary(CommandQueueID p_cmd_queue, uint64_t p_semaphore) override final;
+	virtual Error command_queue_signal_external_binary(CommandQueueID p_cmd_queue, uint64_t p_semaphore, FenceID p_fence) override final;
 
 	/******************/
 	/**** COMMANDS ****/

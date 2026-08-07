@@ -279,6 +279,9 @@ public:
 
 	virtual TextureID texture_create(const TextureFormat &p_format, const TextureView &p_view) = 0;
 	virtual TextureID texture_create_from_extension(uint64_t p_native_texture, const TextureFormat &p_format) = 0;
+	// Imports an Android AHardwareBuffer and retains its native reference until
+	// texture_free(). Other platforms return an invalid ID.
+	virtual TextureID texture_create_from_android_hardware_buffer(uint64_t p_hardware_buffer, const TextureFormat &p_format) { return TextureID(); }
 	// Imports a cross-process/platform shared texture handle. Backends that do
 	// not implement a compatible shared-handle type return an invalid ID.
 	virtual TextureID texture_create_from_shared_handle(uint64_t p_native_handle, const TextureFormat &p_format) { return TextureID(); }
@@ -286,6 +289,7 @@ public:
 	// the driver's tracker before graph recording prevents the first consumer barrier
 	// from assuming an unrelated or undefined state.
 	virtual void texture_set_external_layout(TextureID p_texture, TextureLayout p_layout) {}
+	virtual void texture_set_external_queue_family(TextureID p_texture, bool p_foreign_owned) {}
 	// texture_create_shared_*() can only use original, non-view textures as original. RenderingDevice is responsible for ensuring that.
 	virtual TextureID texture_create_shared(TextureID p_original_texture, const TextureView &p_view) = 0;
 	virtual TextureID texture_create_shared_from_slice(TextureID p_original_texture, const TextureView &p_view, TextureSliceType p_slice_type, uint32_t p_layer, uint32_t p_layers, uint32_t p_mipmap, uint32_t p_mipmaps) = 0;
@@ -298,6 +302,7 @@ public:
 	virtual Vector<uint8_t> texture_get_data(TextureID p_texture, uint32_t p_layer) = 0;
 	virtual BitField<TextureUsageBits> texture_get_usages_supported_by_format(DataFormat p_format, bool p_cpu_readable) = 0;
 	virtual bool texture_can_make_shared_with_format(TextureID p_texture, DataFormat p_format, bool &r_raw_reinterpretation) = 0;
+	virtual bool android_hardware_buffer_is_supported() const { return false; }
 
 	/*****************/
 	/**** SAMPLER ****/
@@ -436,6 +441,16 @@ public:
 	virtual bool external_timeline_is_complete(uint64_t p_timeline, uint64_t p_value) const { return false; }
 	virtual Error command_queue_wait_external_timeline(CommandQueueID p_cmd_queue, uint64_t p_timeline, uint64_t p_value) { return ERR_UNAVAILABLE; }
 	virtual Error command_queue_signal_external_timeline(CommandQueueID p_cmd_queue, uint64_t p_timeline, uint64_t p_value) { return ERR_UNAVAILABLE; }
+	// Android native-image producers exchange one-shot sync_file descriptors.
+	// A successful import consumes p_sync_fd. Export transfers ownership of the
+	// returned descriptor to the caller.
+	virtual uint64_t external_binary_semaphore_import_sync_fd(int p_sync_fd) { return 0; }
+	virtual uint64_t external_binary_semaphore_create_exportable_sync_fd() { return 0; }
+	virtual int external_binary_semaphore_export_sync_fd(uint64_t p_semaphore) { return -1; }
+	virtual void external_binary_sync_fd_close(int p_sync_fd) {}
+	virtual void external_binary_semaphore_free(uint64_t p_semaphore) {}
+	virtual Error command_queue_wait_external_binary(CommandQueueID p_cmd_queue, uint64_t p_semaphore) { return ERR_UNAVAILABLE; }
+	virtual Error command_queue_signal_external_binary(CommandQueueID p_cmd_queue, uint64_t p_semaphore, FenceID p_fence) { return ERR_UNAVAILABLE; }
 
 	/*************************/
 	/**** COMMAND BUFFERS ****/

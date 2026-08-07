@@ -1184,6 +1184,20 @@
 				Imports one producer-owned texture and a borrowed native producer timeline handle. The resource must be opened on the logical device returned by [method get_external_device_identity] and support ordinary sampled views, including the linear/sRGB view pair for RGBA8 formats. On D3D12, the producer and Godot synchronize exclusive ownership only with the producer and release timeline fences; a D3D11 resource imported by D3D12 must therefore use an NT shared handle without [code]D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX[/code]. Both sides hand the resource over in [constant EXTERNAL_TEXTURE_STATE_GENERAL] ([code]D3D12_RESOURCE_STATE_COMMON[/code]). Vulkan producers must create such images with [code]VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT[/code]. The returned slot index remains stable until the pool is freed.
 			</description>
 		</method>
+		<method name="external_texture_pool_add_android_hardware_buffer_slot">
+			<return type="int" />
+			<param index="0" name="pool" type="RID" />
+			<param index="1" name="hardware_buffer" type="int" />
+			<param index="2" name="format" type="int" enum="RenderingDevice.DataFormat" />
+			<param index="3" name="usage_flags" type="int" enum="RenderingDevice.TextureUsageBits" is_bitfield="true" />
+			<param index="4" name="width" type="int" />
+			<param index="5" name="height" type="int" />
+			<param index="6" name="initial_state" type="int" enum="RenderingDevice.ExternalTextureState" />
+			<description>
+				Imports a producer-owned Android [code]AHardwareBuffer*[/code] as a sampled Vulkan texture slot. The active device must report [method external_texture_pool_supports_android_hardware_buffer], the buffer must be RGBA8 with GPU sampling usage, and [param initial_state] must be [constant EXTERNAL_TEXTURE_STATE_GENERAL]. Godot acquires its own native reference and releases it when the pool is freed, so the caller may release its original reference after this method succeeds.
+				This API is intended for a native Android GDExtension or provider. Pass the pointer value directly without copying pixel data through Java or GDScript.
+			</description>
+		</method>
 		<method name="external_texture_pool_publish">
 			<return type="int" enum="Error" />
 			<param index="0" name="pool" type="RID" />
@@ -1193,6 +1207,32 @@
 			<param index="4" name="published_state" type="int" enum="RenderingDevice.ExternalTextureState" />
 			<description>
 				Publishes a producer frame without waiting. Both values must increase monotonically. Returns [constant ERR_BUSY] if the slot is still pending, current, or in flight. Godot keeps sampling the last completed slot until the producer timeline reaches [param producer_value].
+			</description>
+		</method>
+		<method name="external_texture_pool_publish_android">
+			<return type="int" enum="Error" />
+			<param index="0" name="pool" type="RID" />
+			<param index="1" name="slot" type="int" />
+			<param index="2" name="acquire_fence_fd" type="int" />
+			<param index="3" name="generation" type="int" />
+			<param index="4" name="published_state" type="int" enum="RenderingDevice.ExternalTextureState" />
+			<description>
+				Publishes an Android hardware-buffer slot without waiting on the CPU. [param acquire_fence_fd] is a one-shot Android [code]sync_file[/code] descriptor, or [code]-1[/code] when the producer has already completed. On success Godot consumes the descriptor and waits for it on the Vulkan queue. [param generation] must increase monotonically and [param published_state] must be [constant EXTERNAL_TEXTURE_STATE_GENERAL].
+				When a newer generation is acquired, skipped and previously current slots receive GPU-ordered release fences. Call [method external_texture_pool_take_android_release_fence] before reusing each retired slot.
+			</description>
+		</method>
+		<method name="external_texture_pool_take_android_release_fence">
+			<return type="int" />
+			<param index="0" name="pool" type="RID" />
+			<param index="1" name="slot" type="int" />
+			<description>
+				Transfers ownership of a retired Android slot's one-shot release [code]sync_file[/code] descriptor to the caller, or returns [code]-1[/code] when none is available. Pass it to [code]AImage_deleteAsync[/code] or the native producer's equivalent release operation. Taking the descriptor makes the slot available for a later publication; the caller must close it if it is not transferred to another Android API.
+			</description>
+		</method>
+		<method name="external_texture_pool_supports_android_hardware_buffer" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns [code]true[/code] when the active Vulkan device supports Android hardware-buffer memory import, sync-fd semaphores, and foreign queue-family ownership transfers.
 			</description>
 		</method>
 		<method name="external_texture_pool_acquire_latest">

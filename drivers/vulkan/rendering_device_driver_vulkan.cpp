@@ -38,6 +38,35 @@
 
 #include <thirdparty/misc/smolv.h>
 
+#ifdef ANDROID_ENABLED
+#include <android/hardware_buffer.h>
+#include <dlfcn.h>
+
+namespace {
+struct AndroidHardwareBufferFunctions {
+	void (*acquire)(AHardwareBuffer *) = nullptr;
+	void (*release)(AHardwareBuffer *) = nullptr;
+	void (*describe)(const AHardwareBuffer *, AHardwareBuffer_Desc *) = nullptr;
+
+	AndroidHardwareBufferFunctions() {
+		void *library = dlopen("libandroid.so", RTLD_NOW | RTLD_LOCAL);
+		if (library != nullptr) {
+			acquire = reinterpret_cast<void (*)(AHardwareBuffer *)>(dlsym(library, "AHardwareBuffer_acquire"));
+			release = reinterpret_cast<void (*)(AHardwareBuffer *)>(dlsym(library, "AHardwareBuffer_release"));
+			describe = reinterpret_cast<void (*)(const AHardwareBuffer *, AHardwareBuffer_Desc *)>(dlsym(library, "AHardwareBuffer_describe"));
+		}
+	}
+
+	bool available() const { return acquire != nullptr && release != nullptr && describe != nullptr; }
+};
+
+AndroidHardwareBufferFunctions &get_android_hardware_buffer_functions() {
+	static AndroidHardwareBufferFunctions functions;
+	return functions;
+}
+} // namespace
+#endif
+
 #if defined(UNIX_ENABLED) && !defined(MACOS_ENABLED) && !defined(APPLE_EMBEDDED_ENABLED)
 #define VULKAN_EXTERNAL_SEMAPHORE_FD_ENABLED
 #include <unistd.h>
@@ -597,6 +626,12 @@ Error RenderingDeviceDriverVulkan::_initialize_device_extensions() {
 	_register_requested_device_extension(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME, false);
 	_register_requested_device_extension(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME, false);
 	_register_requested_device_extension(VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME, false);
+#ifdef ANDROID_ENABLED
+	_register_requested_device_extension(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME, false);
+	_register_requested_device_extension(VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME, false);
+	_register_requested_device_extension(VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME, false);
+	_register_requested_device_extension(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME, false);
+#endif
 #ifdef WINDOWS_ENABLED
 	_register_requested_device_extension(VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME, false);
 #elif defined(VULKAN_EXTERNAL_SEMAPHORE_FD_ENABLED)
@@ -2564,6 +2599,158 @@ RDD::TextureID RenderingDeviceDriverVulkan::texture_create_from_extension(uint64
 	return TextureID(tex_info);
 }
 
+RDD::TextureID RenderingDeviceDriverVulkan::texture_create_from_android_hardware_buffer(uint64_t p_hardware_buffer, const TextureFormat &p_format) {
+#ifdef ANDROID_ENABLED
+	ERR_FAIL_COND_V_MSG(p_hardware_buffer == 0, TextureID(), "A valid AHardwareBuffer is required.");
+	ERR_FAIL_COND_V_MSG(!android_hardware_buffer_is_supported(), TextureID(), "VK_ANDROID_external_memory_android_hardware_buffer is unavailable.");
+	ERR_FAIL_COND_V_MSG(p_format.texture_type != TEXTURE_TYPE_2D || p_format.depth != 1 || p_format.array_layers != 1 || p_format.mipmaps != 1 || p_format.samples != TEXTURE_SAMPLES_1, TextureID(), "Android hardware-buffer imports currently require a single-sample 2D texture with one layer and mip level.");
+
+	AHardwareBuffer *hardware_buffer = reinterpret_cast<AHardwareBuffer *>(uintptr_t(p_hardware_buffer));
+	AndroidHardwareBufferFunctions &hardware_buffer_functions = get_android_hardware_buffer_functions();
+	ERR_FAIL_COND_V_MSG(!hardware_buffer_functions.available(), TextureID(), "Android hardware-buffer functions require API level 26 or newer.");
+	AHardwareBuffer_Desc description = {};
+	hardware_buffer_functions.describe(hardware_buffer, &description);
+	ERR_FAIL_COND_V_MSG(description.width != p_format.width || description.height != p_format.height || description.layers != 1, TextureID(), "The AHardwareBuffer dimensions do not match the requested texture format.");
+	ERR_FAIL_COND_V_MSG((description.usage & AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE) == 0, TextureID(), "The AHardwareBuffer was not allocated for GPU sampling.");
+	ERR_FAIL_COND_V_MSG(description.format != AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM, TextureID(), "Only RGBA_8888 AHardwareBuffer sampling is currently supported.");
+
+	VkAndroidHardwareBufferFormatPropertiesANDROID format_properties = {};
+	format_properties.sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_FORMAT_PROPERTIES_ANDROID;
+	VkAndroidHardwareBufferPropertiesANDROID buffer_properties = {};
+	buffer_properties.sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID;
+	buffer_properties.pNext = &format_properties;
+	VkResult err = vkGetAndroidHardwareBufferPropertiesANDROID(vk_device, hardware_buffer, &buffer_properties);
+	ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, TextureID(), vformat("Could not query AHardwareBuffer Vulkan properties (VkResult error %d).", err));
+	ERR_FAIL_COND_V_MSG(format_properties.format == VK_FORMAT_UNDEFINED, TextureID(), "External-format/YUV AHardwareBuffer imports are not supported by this RGBA path.");
+	ERR_FAIL_COND_V_MSG(format_properties.format != RD_TO_VK_FORMAT[p_format.format], TextureID(), "The AHardwareBuffer Vulkan format does not match the requested RenderingDevice format.");
+	ERR_FAIL_COND_V_MSG(buffer_properties.memoryTypeBits == 0, TextureID(), "The AHardwareBuffer exposes no compatible Vulkan memory type.");
+
+	VkExternalMemoryImageCreateInfo external_memory_info = {};
+	external_memory_info.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
+	external_memory_info.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
+
+	VkImageCreateInfo image_create_info = {};
+	image_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+	image_create_info.pNext = &external_memory_info;
+	image_create_info.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+	image_create_info.imageType = VK_IMAGE_TYPE_2D;
+	image_create_info.format = format_properties.format;
+	image_create_info.extent = { p_format.width, p_format.height, 1 };
+	image_create_info.mipLevels = 1;
+	image_create_info.arrayLayers = 1;
+	image_create_info.samples = VK_SAMPLE_COUNT_1_BIT;
+	image_create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+	image_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+	image_create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	if (p_format.usage_bits & TEXTURE_USAGE_SAMPLING_BIT) {
+		image_create_info.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+	}
+	if (p_format.usage_bits & TEXTURE_USAGE_STORAGE_BIT) {
+		image_create_info.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+	}
+	if (p_format.usage_bits & TEXTURE_USAGE_COLOR_ATTACHMENT_BIT) {
+		image_create_info.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+	}
+	if (p_format.usage_bits & TEXTURE_USAGE_CAN_COPY_FROM_BIT) {
+		image_create_info.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+	}
+	if (p_format.usage_bits & (TEXTURE_USAGE_CAN_COPY_TO_BIT | TEXTURE_USAGE_CAN_UPDATE_BIT)) {
+		image_create_info.usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+	}
+	ERR_FAIL_COND_V_MSG(image_create_info.usage == 0, TextureID(), "The imported AHardwareBuffer texture requires at least one supported GPU usage.");
+
+	hardware_buffer_functions.acquire(hardware_buffer);
+	VkImage image = VK_NULL_HANDLE;
+	err = vkCreateImage(vk_device, &image_create_info, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_IMAGE), &image);
+	if (err != VK_SUCCESS) {
+		hardware_buffer_functions.release(hardware_buffer);
+		ERR_FAIL_V_MSG(TextureID(), vformat("Could not create an AHardwareBuffer-backed Vulkan image (VkResult error %d).", err));
+	}
+
+	uint32_t memory_type_index = 0;
+	while ((buffer_properties.memoryTypeBits & (1u << memory_type_index)) == 0) {
+		memory_type_index++;
+	}
+	VkMemoryDedicatedAllocateInfo dedicated_info = {};
+	dedicated_info.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+	dedicated_info.image = image;
+	VkImportAndroidHardwareBufferInfoANDROID import_info = {};
+	import_info.sType = VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID;
+	import_info.pNext = &dedicated_info;
+	import_info.buffer = hardware_buffer;
+	VkMemoryAllocateInfo allocation_info = {};
+	allocation_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+	allocation_info.pNext = &import_info;
+	allocation_info.allocationSize = buffer_properties.allocationSize;
+	allocation_info.memoryTypeIndex = memory_type_index;
+	VkDeviceMemory memory = VK_NULL_HANDLE;
+	err = vkAllocateMemory(vk_device, &allocation_info, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_DEVICE_MEMORY), &memory);
+	if (err == VK_SUCCESS) {
+		err = vkBindImageMemory(vk_device, image, memory, 0);
+	}
+	if (err != VK_SUCCESS) {
+		if (memory != VK_NULL_HANDLE) {
+			vkFreeMemory(vk_device, memory, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_DEVICE_MEMORY));
+		}
+		vkDestroyImage(vk_device, image, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_IMAGE));
+		hardware_buffer_functions.release(hardware_buffer);
+		ERR_FAIL_V_MSG(TextureID(), vformat("Could not bind AHardwareBuffer Vulkan memory (VkResult error %d).", err));
+	}
+
+	VkImageViewCreateInfo view_create_info = {};
+	view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+	view_create_info.image = image;
+	view_create_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+	view_create_info.format = format_properties.format;
+	view_create_info.components = { VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A };
+	view_create_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	view_create_info.subresourceRange.levelCount = 1;
+	view_create_info.subresourceRange.layerCount = 1;
+	VkImageView image_view = VK_NULL_HANDLE;
+	err = vkCreateImageView(vk_device, &view_create_info, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_IMAGE_VIEW), &image_view);
+	if (err != VK_SUCCESS) {
+		vkFreeMemory(vk_device, memory, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_DEVICE_MEMORY));
+		vkDestroyImage(vk_device, image, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_IMAGE));
+		hardware_buffer_functions.release(hardware_buffer);
+		ERR_FAIL_V_MSG(TextureID(), vformat("Could not create an AHardwareBuffer Vulkan image view (VkResult error %d).", err));
+	}
+
+	TextureInfo *texture_info = VersatileResource::allocate<TextureInfo>(resources_allocator);
+	texture_info->vk_image = image;
+	texture_info->vk_view = image_view;
+	texture_info->rd_format = p_format.format;
+	texture_info->vk_create_info = image_create_info;
+	texture_info->vk_create_info.pNext = nullptr;
+	texture_info->vk_view_create_info = view_create_info;
+	texture_info->imported_memory = memory;
+	texture_info->android_hardware_buffer = p_hardware_buffer;
+	texture_info->android_foreign_owned = true;
+#ifdef DEBUG_ENABLED
+	texture_info->created_from_extension = true;
+#endif
+	return TextureID(texture_info);
+#else
+	return TextureID();
+#endif
+}
+
+void RenderingDeviceDriverVulkan::texture_set_external_queue_family(TextureID p_texture, bool p_foreign_owned) {
+	TextureInfo *texture_info = (TextureInfo *)p_texture.id;
+	if (texture_info == nullptr || texture_info->android_hardware_buffer == 0 || texture_info->android_foreign_owned == p_foreign_owned) {
+		return;
+	}
+	texture_info->android_target_foreign_owned = p_foreign_owned;
+	texture_info->android_ownership_transition_pending = true;
+}
+
+bool RenderingDeviceDriverVulkan::android_hardware_buffer_is_supported() const {
+#ifdef ANDROID_ENABLED
+	return get_android_hardware_buffer_functions().available() && enabled_device_extension_names.has(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME) && enabled_device_extension_names.has(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME) && enabled_device_extension_names.has(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME);
+#else
+	return false;
+#endif
+}
+
 RDD::TextureID RenderingDeviceDriverVulkan::texture_create_shared(TextureID p_original_texture, const TextureView &p_view) {
 	const TextureInfo *owner_tex_info = (const TextureInfo *)p_original_texture.id;
 #ifdef DEBUG_ENABLED
@@ -2677,7 +2864,13 @@ RDD::TextureID RenderingDeviceDriverVulkan::texture_create_shared_from_slice(Tex
 void RenderingDeviceDriverVulkan::texture_free(TextureID p_texture) {
 	TextureInfo *tex_info = (TextureInfo *)p_texture.id;
 	vkDestroyImageView(vk_device, tex_info->vk_view, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_IMAGE_VIEW));
-	if (tex_info->allocation.handle) {
+	if (tex_info->imported_memory != VK_NULL_HANDLE) {
+		vkDestroyImage(vk_device, tex_info->vk_image, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_IMAGE));
+		vkFreeMemory(vk_device, tex_info->imported_memory, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_DEVICE_MEMORY));
+#ifdef ANDROID_ENABLED
+		get_android_hardware_buffer_functions().release(reinterpret_cast<AHardwareBuffer *>(uintptr_t(tex_info->android_hardware_buffer)));
+#endif
+	} else if (tex_info->allocation.handle) {
 		if (!Engine::get_singleton()->is_extra_gpu_memory_tracking_enabled()) {
 			vmaDestroyImage(allocator, tex_info->vk_view_create_info.image, tex_info->allocation.handle);
 		} else {
@@ -3017,7 +3210,7 @@ void RenderingDeviceDriverVulkan::command_pipeline_barrier(
 
 	VkImageMemoryBarrier *vk_image_barriers = ALLOCA_ARRAY(VkImageMemoryBarrier, p_texture_barriers.size());
 	for (uint32_t i = 0; i < p_texture_barriers.size(); i++) {
-		const TextureInfo *tex_info = (const TextureInfo *)p_texture_barriers[i].texture.id;
+		TextureInfo *tex_info = (TextureInfo *)p_texture_barriers[i].texture.id;
 		vk_image_barriers[i] = {};
 		vk_image_barriers[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
 		vk_image_barriers[i].srcAccessMask = _rd_to_vk_access_flags(p_texture_barriers[i].src_access);
@@ -3026,6 +3219,13 @@ void RenderingDeviceDriverVulkan::command_pipeline_barrier(
 		vk_image_barriers[i].newLayout = RD_TO_VK_LAYOUT[p_texture_barriers[i].next_layout];
 		vk_image_barriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		vk_image_barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		if (tex_info->android_ownership_transition_pending) {
+			ERR_CONTINUE_MSG(main_queue_family_index == VK_QUEUE_FAMILY_IGNORED, "The Vulkan main queue family is unavailable for an Android hardware-buffer ownership transfer.");
+			vk_image_barriers[i].srcQueueFamilyIndex = tex_info->android_foreign_owned ? VK_QUEUE_FAMILY_FOREIGN_EXT : main_queue_family_index;
+			vk_image_barriers[i].dstQueueFamilyIndex = tex_info->android_target_foreign_owned ? VK_QUEUE_FAMILY_FOREIGN_EXT : main_queue_family_index;
+			tex_info->android_foreign_owned = tex_info->android_target_foreign_owned;
+			tex_info->android_ownership_transition_pending = false;
+		}
 		vk_image_barriers[i].image = tex_info->vk_view_create_info.image;
 		vk_image_barriers[i].subresourceRange.aspectMask = (VkImageAspectFlags)p_texture_barriers[i].subresources.aspect;
 		vk_image_barriers[i].subresourceRange.baseMipLevel = p_texture_barriers[i].subresources.base_mipmap;
@@ -3373,6 +3573,124 @@ Error RenderingDeviceDriverVulkan::command_queue_signal_external_timeline(Comman
 	return OK;
 }
 
+uint64_t RenderingDeviceDriverVulkan::external_binary_semaphore_import_sync_fd(int p_sync_fd) {
+#if defined(VULKAN_EXTERNAL_SEMAPHORE_FD_ENABLED)
+	ERR_FAIL_COND_V_MSG(p_sync_fd < 0, 0, "A valid Android sync fence file descriptor is required.");
+	ERR_FAIL_COND_V_MSG(!enabled_device_extension_names.has(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME), 0, "Vulkan sync-fd semaphores are unavailable.");
+	VkSemaphoreCreateInfo create_info = {};
+	create_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+	VkSemaphore semaphore = VK_NULL_HANDLE;
+	VkResult err = vkCreateSemaphore(vk_device, &create_info, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SEMAPHORE), &semaphore);
+	if (err != VK_SUCCESS) {
+		close(p_sync_fd);
+		ERR_FAIL_V_MSG(0, vformat("Could not create a Vulkan semaphore for an Android acquire fence (VkResult error %d).", err));
+	}
+	VkImportSemaphoreFdInfoKHR import_info = {};
+	import_info.sType = VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR;
+	import_info.semaphore = semaphore;
+	import_info.flags = VK_SEMAPHORE_IMPORT_TEMPORARY_BIT;
+	import_info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+	import_info.fd = p_sync_fd;
+	err = vkImportSemaphoreFdKHR(vk_device, &import_info);
+	if (err != VK_SUCCESS) {
+		close(p_sync_fd);
+		vkDestroySemaphore(vk_device, semaphore, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SEMAPHORE));
+		ERR_FAIL_V_MSG(0, vformat("Could not import an Android acquire sync fence (VkResult error %d).", err));
+	}
+	return uint64_t(semaphore);
+#else
+	return 0;
+#endif
+}
+
+uint64_t RenderingDeviceDriverVulkan::external_binary_semaphore_create_exportable_sync_fd() {
+#if defined(VULKAN_EXTERNAL_SEMAPHORE_FD_ENABLED)
+	ERR_FAIL_COND_V_MSG(!enabled_device_extension_names.has(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME), 0, "Vulkan sync-fd semaphores are unavailable.");
+	VkExportSemaphoreCreateInfo export_info = {};
+	export_info.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
+	export_info.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+	VkSemaphoreCreateInfo create_info = {};
+	create_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+	create_info.pNext = &export_info;
+	VkSemaphore semaphore = VK_NULL_HANDLE;
+	VkResult err = vkCreateSemaphore(vk_device, &create_info, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SEMAPHORE), &semaphore);
+	ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, 0, vformat("Could not create an exportable Android release semaphore (VkResult error %d).", err));
+	return uint64_t(semaphore);
+#else
+	return 0;
+#endif
+}
+
+int RenderingDeviceDriverVulkan::external_binary_semaphore_export_sync_fd(uint64_t p_semaphore) {
+#if defined(VULKAN_EXTERNAL_SEMAPHORE_FD_ENABLED)
+	ERR_FAIL_COND_V_MSG(p_semaphore == 0, -1, "A valid release semaphore is required.");
+	VkSemaphoreGetFdInfoKHR get_info = {};
+	get_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
+	get_info.semaphore = VkSemaphore(p_semaphore);
+	get_info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+	int release_fence_fd = -1;
+	VkResult err = vkGetSemaphoreFdKHR(vk_device, &get_info, &release_fence_fd);
+	ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, -1, vformat("Could not export an Android release sync fence (VkResult error %d).", err));
+	return release_fence_fd;
+#else
+	return -1;
+#endif
+}
+
+void RenderingDeviceDriverVulkan::external_binary_sync_fd_close(int p_sync_fd) {
+#if defined(VULKAN_EXTERNAL_SEMAPHORE_FD_ENABLED)
+	if (p_sync_fd >= 0) {
+		close(p_sync_fd);
+	}
+#endif
+}
+
+void RenderingDeviceDriverVulkan::external_binary_semaphore_free(uint64_t p_semaphore) {
+	if (p_semaphore != 0) {
+		vkDestroySemaphore(vk_device, VkSemaphore(p_semaphore), VKC::get_allocation_callbacks(VK_OBJECT_TYPE_SEMAPHORE));
+	}
+}
+
+Error RenderingDeviceDriverVulkan::command_queue_wait_external_binary(CommandQueueID p_cmd_queue, uint64_t p_semaphore) {
+	ERR_FAIL_COND_V(p_cmd_queue.id == 0 || p_semaphore == 0, ERR_INVALID_PARAMETER);
+	CommandQueue *command_queue = (CommandQueue *)p_cmd_queue.id;
+	Queue &device_queue = queue_families[command_queue->queue_family][command_queue->queue_index];
+	VkSemaphore semaphore = VkSemaphore(p_semaphore);
+	VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+	VkSubmitInfo submit_info = {};
+	submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submit_info.waitSemaphoreCount = 1;
+	submit_info.pWaitSemaphores = &semaphore;
+	submit_info.pWaitDstStageMask = &wait_stage;
+	MutexLock lock(device_queue.submit_mutex);
+	VkResult err = vkQueueSubmit(device_queue.queue, 1, &submit_info, VK_NULL_HANDLE);
+	ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, FAILED, vformat("Could not enqueue an Android acquire sync-fd wait (VkResult error %d).", err));
+	return OK;
+}
+
+Error RenderingDeviceDriverVulkan::command_queue_signal_external_binary(CommandQueueID p_cmd_queue, uint64_t p_semaphore, FenceID p_fence) {
+	ERR_FAIL_COND_V(p_cmd_queue.id == 0 || p_semaphore == 0, ERR_INVALID_PARAMETER);
+	CommandQueue *command_queue = (CommandQueue *)p_cmd_queue.id;
+	Queue &device_queue = queue_families[command_queue->queue_family][command_queue->queue_index];
+	VkSemaphore semaphore = VkSemaphore(p_semaphore);
+	VkSubmitInfo submit_info = {};
+	submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submit_info.signalSemaphoreCount = 1;
+	submit_info.pSignalSemaphores = &semaphore;
+	MutexLock lock(device_queue.submit_mutex);
+	Fence *fence = (Fence *)p_fence.id;
+	VkResult err = vkQueueSubmit(device_queue.queue, 1, &submit_info, fence != nullptr ? fence->vk_fence : VK_NULL_HANDLE);
+	ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, FAILED, vformat("Could not enqueue an Android release sync-fd signal (VkResult error %d).", err));
+	if (fence != nullptr && !command_queue->pending_semaphores_for_fence.is_empty()) {
+		fence->queue_signaled_from = command_queue;
+		for (uint32_t i = 0; i < command_queue->pending_semaphores_for_fence.size(); i++) {
+			command_queue->image_semaphores_for_fences.push_back({ fence, command_queue->pending_semaphores_for_fence[i] });
+		}
+		command_queue->pending_semaphores_for_fence.clear();
+	}
+	return OK;
+}
+
 /******************/
 /**** COMMANDS ****/
 /******************/
@@ -3444,6 +3762,9 @@ RDD::CommandQueueID RenderingDeviceDriverVulkan::command_queue_create(CommandQue
 	command_queue->queue_family = family_index;
 	command_queue->queue_index = picked_queue_index;
 	queue_family[picked_queue_index].virtual_count++;
+	if (p_identify_as_main_queue) {
+		main_queue_family_index = family_index;
+	}
 
 	// If is was identified as the main queue and a hook is active, indicate it as such to the hook.
 	if (p_identify_as_main_queue && (VulkanHooks::get_singleton() != nullptr)) {

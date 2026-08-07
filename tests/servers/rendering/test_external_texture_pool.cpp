@@ -19,9 +19,16 @@ TEST_FORCE_LINK(test_external_texture_pool)
 #include <wrl/client.h>
 #endif
 
-#if defined(VULKAN_ENABLED) && defined(WINDOWS_ENABLED)
+#if defined(VULKAN_ENABLED) && (defined(WINDOWS_ENABLED) || defined(ANDROID_ENABLED))
 #include "drivers/vulkan/rendering_context_driver_vulkan.h"
 #include <vulkan/vulkan.h>
+#endif
+
+#ifdef ANDROID_ENABLED
+#include <android/hardware_buffer.h>
+#include <android/log.h>
+#include <dlfcn.h>
+#include <unistd.h>
 #endif
 
 namespace TestExternalTexturePool {
@@ -359,6 +366,200 @@ TEST_CASE("[RenderingDevice][D3D12] External texture pool imports Win32 shared r
 	rd->sync();
 	memdelete(rd);
 	memdelete(context);
+}
+#endif
+
+#if defined(VULKAN_ENABLED) && defined(ANDROID_ENABLED)
+TEST_CASE("[RenderingDevice][Vulkan][Android] AHardwareBuffer slots preserve latest-wins ownership and RGBA sampling") {
+	__android_log_print(ANDROID_LOG_INFO, "GodotAHBTest", "AHARDWAREBUFFER_TEST_BEGIN");
+	struct AndroidHardwareBufferFunctions {
+		int (*allocate)(const AHardwareBuffer_Desc *, AHardwareBuffer **) = nullptr;
+		void (*describe)(const AHardwareBuffer *, AHardwareBuffer_Desc *) = nullptr;
+		int (*lock)(AHardwareBuffer *, uint64_t, int32_t, const ARect *, void **) = nullptr;
+		int (*unlock)(AHardwareBuffer *, int32_t *) = nullptr;
+		void (*release)(AHardwareBuffer *) = nullptr;
+	};
+
+	void *android_library = dlopen("libandroid.so", RTLD_NOW | RTLD_LOCAL);
+	REQUIRE(android_library != nullptr);
+	AndroidHardwareBufferFunctions functions;
+	functions.allocate = reinterpret_cast<decltype(functions.allocate)>(dlsym(android_library, "AHardwareBuffer_allocate"));
+	functions.describe = reinterpret_cast<decltype(functions.describe)>(dlsym(android_library, "AHardwareBuffer_describe"));
+	functions.lock = reinterpret_cast<decltype(functions.lock)>(dlsym(android_library, "AHardwareBuffer_lock"));
+	functions.unlock = reinterpret_cast<decltype(functions.unlock)>(dlsym(android_library, "AHardwareBuffer_unlock"));
+	functions.release = reinterpret_cast<decltype(functions.release)>(dlsym(android_library, "AHardwareBuffer_release"));
+	REQUIRE(functions.allocate != nullptr);
+	REQUIRE(functions.describe != nullptr);
+	REQUIRE(functions.lock != nullptr);
+	REQUIRE(functions.unlock != nullptr);
+	REQUIRE(functions.release != nullptr);
+
+	RenderingContextDriverVulkan *context = memnew(RenderingContextDriverVulkan);
+	REQUIRE(context->initialize() == OK);
+	RenderingDevice *rd = memnew(RenderingDevice);
+	REQUIRE(rd->initialize(context) == OK);
+	REQUIRE(rd->external_texture_pool_supports_android_hardware_buffer());
+
+	constexpr int32_t slot_count = 3;
+	AHardwareBuffer *buffers[slot_count] = {};
+	int32_t acquire_fences[slot_count] = { -1, -1, -1 };
+	RID pool = rd->external_texture_pool_create();
+	REQUIRE(pool.is_valid());
+	for (int32_t slot = 0; slot < slot_count; slot++) {
+		AHardwareBuffer_Desc description = {};
+		description.width = 64;
+		description.height = 48;
+		description.layers = 1;
+		description.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
+		description.usage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN;
+		REQUIRE(functions.allocate(&description, &buffers[slot]) == 0);
+		REQUIRE(buffers[slot] != nullptr);
+		functions.describe(buffers[slot], &description);
+		void *mapped = nullptr;
+		REQUIRE(functions.lock(buffers[slot], AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN, -1, nullptr, &mapped) == 0);
+		REQUIRE(mapped != nullptr);
+		uint8_t *bytes = static_cast<uint8_t *>(mapped);
+		for (uint32_t y = 0; y < description.height; y++) {
+			for (uint32_t x = 0; x < description.width; x++) {
+				const uint32_t offset = (y * description.stride + x) * 4;
+				bytes[offset + 0] = uint8_t(0x20 + slot);
+				bytes[offset + 1] = uint8_t(0x40 + slot);
+				bytes[offset + 2] = uint8_t(0x60 + slot);
+				bytes[offset + 3] = 0xff;
+			}
+		}
+		REQUIRE(functions.unlock(buffers[slot], &acquire_fences[slot]) == 0);
+		REQUIRE(rd->external_texture_pool_add_android_hardware_buffer_slot(
+					pool,
+					uint64_t(uintptr_t(buffers[slot])),
+					RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM,
+					RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT,
+					64,
+					48,
+					RenderingDevice::EXTERNAL_TEXTURE_STATE_GENERAL) == slot);
+	}
+
+	// Publish two frames before the consumer samples. Slot 0 must be released
+	// without being sampled and slot 1 must become the sole current authority.
+	REQUIRE(rd->external_texture_pool_publish_android(pool, 0, acquire_fences[0], 1, RenderingDevice::EXTERNAL_TEXTURE_STATE_GENERAL) == OK);
+	acquire_fences[0] = -1;
+	REQUIRE(rd->external_texture_pool_publish_android(pool, 1, acquire_fences[1], 2, RenderingDevice::EXTERNAL_TEXTURE_STATE_GENERAL) == OK);
+	acquire_fences[1] = -1;
+	RID current = rd->external_texture_pool_acquire_latest(pool);
+	REQUIRE(current.is_valid());
+	CHECK(bool(rd->external_texture_pool_get_slot_status(pool, 1)["current"]));
+	Vector<uint8_t> pixels = rd->texture_get_data(current, 0);
+	REQUIRE(pixels.size() == 64 * 48 * 4);
+	CHECK(pixels[0] == 0x21);
+	CHECK(pixels[1] == 0x41);
+	CHECK(pixels[2] == 0x61);
+	CHECK(pixels[3] == 0xff);
+
+	// A third frame retires slot 1. GPU completion makes both one-shot release
+	// sync fds available, after which the producer may safely reuse the slots.
+	REQUIRE(rd->external_texture_pool_publish_android(pool, 2, acquire_fences[2], 3, RenderingDevice::EXTERNAL_TEXTURE_STATE_GENERAL) == OK);
+	acquire_fences[2] = -1;
+	CHECK(rd->external_texture_pool_acquire_latest(pool).is_valid());
+	rd->submit();
+	rd->sync();
+	for (int32_t slot = 0; slot < 2; slot++) {
+		const int release_fence = rd->external_texture_pool_take_android_release_fence(pool, slot);
+		REQUIRE(release_fence >= 0);
+		close(release_fence);
+		CHECK(bool(rd->external_texture_pool_get_slot_status(pool, slot)["available"]));
+	}
+
+	// Reuse every slot repeatedly. The release fence is transferred before the
+	// producer maps and republishes a buffer, preserving the AImage lease model.
+	int32_t current_slot = 2;
+	uint64_t generation = 3;
+	for (uint32_t iteration = 0; iteration < 12; iteration++) {
+		const int32_t next_slot = (current_slot + 1) % slot_count;
+		CHECK(bool(rd->external_texture_pool_get_slot_status(pool, next_slot)["available"]));
+		AHardwareBuffer_Desc description = {};
+		functions.describe(buffers[next_slot], &description);
+		void *mapped = nullptr;
+		REQUIRE(functions.lock(buffers[next_slot], AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN, -1, nullptr, &mapped) == 0);
+		REQUIRE(mapped != nullptr);
+		uint8_t *bytes = static_cast<uint8_t *>(mapped);
+		const uint8_t red = uint8_t(0x80 + iteration);
+		for (uint32_t y = 0; y < description.height; y++) {
+			for (uint32_t x = 0; x < description.width; x++) {
+				const uint32_t offset = (y * description.stride + x) * 4;
+				bytes[offset + 0] = red;
+				bytes[offset + 1] = 0x31;
+				bytes[offset + 2] = 0x52;
+				bytes[offset + 3] = 0xff;
+			}
+		}
+		int acquire_fence = -1;
+		REQUIRE(functions.unlock(buffers[next_slot], &acquire_fence) == 0);
+		generation++;
+		REQUIRE(rd->external_texture_pool_publish_android(pool, next_slot, acquire_fence, generation, RenderingDevice::EXTERNAL_TEXTURE_STATE_GENERAL) == OK);
+		current = rd->external_texture_pool_acquire_latest(pool);
+		REQUIRE(current.is_valid());
+		pixels = rd->texture_get_data(current, 0);
+		REQUIRE(pixels.size() == 64 * 48 * 4);
+		CHECK(pixels[0] == red);
+		rd->submit();
+		rd->sync();
+		const int release_fence = rd->external_texture_pool_take_android_release_fence(pool, current_slot);
+		REQUIRE(release_fence >= 0);
+		close(release_fence);
+		current_slot = next_slot;
+	}
+
+	rd->external_texture_pool_stop(pool);
+	rd->submit();
+	rd->sync();
+	const int final_release_fence = rd->external_texture_pool_take_android_release_fence(pool, current_slot);
+	REQUIRE(final_release_fence >= 0);
+	close(final_release_fence);
+	rd->free_rid(pool);
+	rd->submit();
+	rd->sync();
+
+	// A new pool with a different extent proves resize is represented by a new
+	// retained hardware-buffer lease rather than mutating an in-flight slot.
+	AHardwareBuffer_Desc resized_description = {};
+	resized_description.width = 96;
+	resized_description.height = 32;
+	resized_description.layers = 1;
+	resized_description.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
+	resized_description.usage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN;
+	AHardwareBuffer *resized_buffer = nullptr;
+	REQUIRE(functions.allocate(&resized_description, &resized_buffer) == 0);
+	REQUIRE(resized_buffer != nullptr);
+	RID resized_pool = rd->external_texture_pool_create();
+	REQUIRE(rd->external_texture_pool_add_android_hardware_buffer_slot(
+				resized_pool,
+				uint64_t(uintptr_t(resized_buffer)),
+				RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM,
+				RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT,
+				96,
+				32,
+				RenderingDevice::EXTERNAL_TEXTURE_STATE_GENERAL) == 0);
+	REQUIRE(rd->external_texture_pool_publish_android(resized_pool, 0, -1, 1, RenderingDevice::EXTERNAL_TEXTURE_STATE_GENERAL) == OK);
+	RID resized_texture = rd->external_texture_pool_acquire_latest(resized_pool);
+	REQUIRE(resized_texture.is_valid());
+	CHECK(rd->texture_size(resized_texture) == Size2i(96, 32));
+	rd->external_texture_pool_stop(resized_pool);
+	rd->submit();
+	rd->sync();
+	const int resized_release_fence = rd->external_texture_pool_take_android_release_fence(resized_pool, 0);
+	REQUIRE(resized_release_fence >= 0);
+	close(resized_release_fence);
+	rd->free_rid(resized_pool);
+	rd->submit();
+	rd->sync();
+	functions.release(resized_buffer);
+	memdelete(rd);
+	memdelete(context);
+	for (AHardwareBuffer *buffer : buffers) {
+		functions.release(buffer);
+	}
+	dlclose(android_library);
+	__android_log_print(ANDROID_LOG_INFO, "GodotAHBTest", "AHARDWAREBUFFER_TEST_PASS");
 }
 #endif
 

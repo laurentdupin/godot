@@ -1844,7 +1844,7 @@ RID RenderingDevice::texture_create_shared(const TextureView &p_view, RID p_with
 	return id;
 }
 
-RID RenderingDevice::_texture_create_from_external_source(TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_image, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, bool p_shared_handle) {
+RID RenderingDevice::_texture_create_from_external_source(TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_image, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, bool p_shared_handle, bool p_android_hardware_buffer) {
 	// This method creates a texture object using a VkImage created by an extension, module or other external source (OpenXR uses this).
 
 	Texture texture;
@@ -1888,9 +1888,11 @@ RID RenderingDevice::_texture_create_from_external_source(TextureType p_type, Da
 		texture.barrier_aspect_flags.set_flag(RDD::TEXTURE_ASPECT_COLOR_BIT);
 	}
 
-	texture.driver_id = p_shared_handle
-			? driver->texture_create_from_shared_handle(p_image, texture.texture_format())
-			: driver->texture_create_from_extension(p_image, texture.texture_format());
+	texture.driver_id = p_android_hardware_buffer
+			? driver->texture_create_from_android_hardware_buffer(p_image, texture.texture_format())
+			: (p_shared_handle
+					? driver->texture_create_from_shared_handle(p_image, texture.texture_format())
+					: driver->texture_create_from_extension(p_image, texture.texture_format()));
 	ERR_FAIL_COND_V(!texture.driver_id, RID());
 
 	_texture_make_mutable(&texture, RID());
@@ -1962,7 +1964,7 @@ int32_t RenderingDevice::_external_texture_pool_add_slot(RID p_pool, TextureType
 	MutexLock lock(*pool->mutex);
 	ERR_FAIL_COND_V(pool->stopped, -1);
 	ERR_FAIL_COND_V(p_native_texture == 0 || p_producer_timeline == 0, -1);
-	ERR_FAIL_INDEX_V(p_initial_state, RDD::TEXTURE_LAYOUT_MAX, -1);
+	ERR_FAIL_INDEX_V(int(p_initial_state), int(RDD::TEXTURE_LAYOUT_MAX), -1);
 	const RDD::TextureLayout initial_layout = (RDD::TextureLayout)p_initial_state;
 
 	RID texture = _texture_create_from_external_source(p_type, p_format, p_samples, p_usage, p_native_texture, p_width, p_height, p_depth, p_layers, p_mipmaps, p_shared_handle);
@@ -2004,15 +2006,37 @@ int32_t RenderingDevice::external_texture_pool_add_shared_slot(RID p_pool, Textu
 	return _external_texture_pool_add_slot(p_pool, p_type, p_format, p_samples, p_usage, p_shared_texture, p_producer_timeline, p_width, p_height, p_depth, p_layers, p_mipmaps, p_initial_state, true);
 }
 
+int32_t RenderingDevice::external_texture_pool_add_android_hardware_buffer_slot(RID p_pool, uint64_t p_hardware_buffer, DataFormat p_format, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_width, uint64_t p_height, ExternalTextureState p_initial_state) {
+	ERR_RENDER_THREAD_GUARD_V(-1);
+	ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_pool);
+	ERR_FAIL_NULL_V(pool, -1);
+	MutexLock lock(*pool->mutex);
+	ERR_FAIL_COND_V(pool->stopped || p_hardware_buffer == 0, -1);
+	ERR_FAIL_INDEX_V(int(p_initial_state), int(RDD::TEXTURE_LAYOUT_MAX), -1);
+	ERR_FAIL_COND_V_MSG(p_initial_state != EXTERNAL_TEXTURE_STATE_GENERAL, -1, "Android hardware-buffer slots use GENERAL while owned by the external producer.");
+	ERR_FAIL_COND_V_MSG(!driver->android_hardware_buffer_is_supported(), -1, "The active RenderingDevice does not support Android hardware-buffer imports.");
+	RID texture = _texture_create_from_external_source(TEXTURE_TYPE_2D, p_format, TEXTURE_SAMPLES_1, p_usage, p_hardware_buffer, p_width, p_height, 1, 1, 1, false, true);
+	ERR_FAIL_COND_V(!texture.is_valid(), -1);
+	ExternalTexturePoolSlot slot;
+	slot.texture = texture;
+	slot.android_hardware_buffer = true;
+	slot.published_layout = (RDD::TextureLayout)p_initial_state;
+	texture_owner.get_or_null(texture)->external_pool_owner = p_pool;
+	_external_texture_set_layout(texture_owner.get_or_null(texture), slot.published_layout);
+	pool->slots.push_back(slot);
+	return pool->slots.size() - 1;
+}
+
 Error RenderingDevice::external_texture_pool_publish(RID p_pool, int32_t p_slot, uint64_t p_producer_value, uint64_t p_generation, ExternalTextureState p_published_state) {
 	ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_pool);
 	ERR_FAIL_NULL_V(pool, ERR_INVALID_PARAMETER);
 	MutexLock lock(*pool->mutex);
-	ERR_FAIL_INDEX_V(p_published_state, RDD::TEXTURE_LAYOUT_MAX, ERR_INVALID_PARAMETER);
+	ERR_FAIL_INDEX_V(int(p_published_state), int(RDD::TEXTURE_LAYOUT_MAX), ERR_INVALID_PARAMETER);
 	const RDD::TextureLayout published_layout = (RDD::TextureLayout)p_published_state;
 	ERR_FAIL_COND_V(pool->stopped, ERR_UNAVAILABLE);
 	ERR_FAIL_INDEX_V(p_slot, pool->slots.size(), ERR_INVALID_PARAMETER);
 	ExternalTexturePoolSlot &slot = pool->slots.write[p_slot];
+	ERR_FAIL_COND_V(slot.android_hardware_buffer, ERR_INVALID_PARAMETER);
 	if (slot.retired && driver->external_timeline_is_complete(slot.release_timeline, slot.release_value)) {
 		slot.retired = false;
 	}
@@ -2025,6 +2049,55 @@ Error RenderingDevice::external_texture_pool_publish(RID p_pool, int32_t p_slot,
 	slot.release_value++;
 	slot.pending = true;
 	return OK;
+}
+
+Error RenderingDevice::external_texture_pool_publish_android(RID p_pool, int32_t p_slot, int p_acquire_fence_fd, uint64_t p_generation, ExternalTextureState p_published_state) {
+	ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_pool);
+	ERR_FAIL_NULL_V(pool, ERR_INVALID_PARAMETER);
+	MutexLock lock(*pool->mutex);
+	ERR_FAIL_INDEX_V(int(p_published_state), int(RDD::TEXTURE_LAYOUT_MAX), ERR_INVALID_PARAMETER);
+	ERR_FAIL_COND_V_MSG(p_published_state != EXTERNAL_TEXTURE_STATE_GENERAL, ERR_INVALID_PARAMETER, "Android hardware-buffer publications must use GENERAL before queue-family acquisition.");
+	ERR_FAIL_COND_V(pool->stopped, ERR_UNAVAILABLE);
+	ERR_FAIL_INDEX_V(p_slot, pool->slots.size(), ERR_INVALID_PARAMETER);
+	ExternalTexturePoolSlot &slot = pool->slots.write[p_slot];
+	ERR_FAIL_COND_V(!slot.android_hardware_buffer || slot.current || slot.pending || slot.retired || slot.release_fence_fd >= 0, ERR_BUSY);
+	ERR_FAIL_COND_V(p_generation <= pool->last_published_generation, ERR_INVALID_PARAMETER);
+	uint64_t release_semaphore = driver->external_binary_semaphore_create_exportable_sync_fd();
+	ERR_FAIL_COND_V_MSG(release_semaphore == 0, ERR_CANT_CREATE, "Could not create the Android release sync fence semaphore.");
+	uint64_t acquire_semaphore = 0;
+	if (p_acquire_fence_fd >= 0) {
+		acquire_semaphore = driver->external_binary_semaphore_import_sync_fd(p_acquire_fence_fd);
+		if (acquire_semaphore == 0) {
+			driver->external_binary_semaphore_free(release_semaphore);
+			ERR_FAIL_V_MSG(ERR_CANT_CREATE, "Could not import the Android acquire sync fence.");
+		}
+	}
+	slot.acquire_semaphore = acquire_semaphore;
+	slot.release_semaphore = release_semaphore;
+	slot.generation = p_generation;
+	pool->last_published_generation = p_generation;
+	slot.published_layout = (RDD::TextureLayout)p_published_state;
+	slot.pending = true;
+	slot.release_submitted = false;
+	return OK;
+}
+
+int RenderingDevice::external_texture_pool_take_android_release_fence(RID p_pool, int32_t p_slot) {
+	ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_pool);
+	ERR_FAIL_NULL_V(pool, -1);
+	MutexLock lock(*pool->mutex);
+	ERR_FAIL_INDEX_V(p_slot, pool->slots.size(), -1);
+	ExternalTexturePoolSlot &slot = pool->slots.write[p_slot];
+	ERR_FAIL_COND_V(!slot.android_hardware_buffer || slot.release_fence_fd < 0, -1);
+	const int release_fence_fd = slot.release_fence_fd;
+	slot.release_fence_fd = -1;
+	slot.release_submitted = false;
+	slot.retired = false;
+	return release_fence_fd;
+}
+
+bool RenderingDevice::external_texture_pool_supports_android_hardware_buffer() const {
+	return driver != nullptr && driver->android_hardware_buffer_is_supported();
 }
 
 Error RenderingDevice::external_texture_pool_abandon_pending(RID p_pool, int32_t p_slot) {
@@ -2041,6 +2114,18 @@ Error RenderingDevice::external_texture_pool_abandon_pending(RID p_pool, int32_t
 	// loss). Since Godot never acquired the unfinished publication, no producer
 	// wait or resource transition is required before releasing the slot.
 	slot.pending = false;
+	if (slot.android_hardware_buffer) {
+		if (slot.acquire_semaphore != 0) {
+			driver->external_binary_semaphore_free(slot.acquire_semaphore);
+			slot.acquire_semaphore = 0;
+		}
+		if (slot.release_semaphore != 0) {
+			driver->external_binary_semaphore_free(slot.release_semaphore);
+			slot.release_semaphore = 0;
+		}
+		slot.retired = false;
+		return OK;
+	}
 	slot.retired = true;
 	pending_external_releases.push_back({ slot.release_timeline, slot.release_value, RID() });
 	return OK;
@@ -2051,12 +2136,32 @@ RID RenderingDevice::external_texture_pool_acquire_latest(RID p_pool) {
 	ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_pool);
 	ERR_FAIL_NULL_V(pool, RID());
 	MutexLock lock(*pool->mutex);
+	auto schedule_acquire = [&](int32_t p_slot_index, ExternalTexturePoolSlot &p_slot) {
+		if (p_slot.android_hardware_buffer) {
+			if (p_slot.acquire_semaphore != 0) {
+				pending_external_binary_acquires.push_back({ p_slot.acquire_semaphore, p_pool, p_slot_index, p_slot.texture });
+				p_slot.acquire_semaphore = 0;
+			}
+		} else {
+			pending_external_acquires.push_back({ p_slot.producer_timeline, p_slot.producer_value });
+		}
+	};
+	auto schedule_release = [&](int32_t p_slot_index, ExternalTexturePoolSlot &p_slot, bool p_release_ownership) {
+		if (p_slot.android_hardware_buffer) {
+			ERR_FAIL_COND(p_slot.release_semaphore == 0 || p_slot.release_submitted);
+			pending_external_binary_releases.push_back({ p_slot.release_semaphore, p_pool, p_slot_index, p_slot.texture, p_release_ownership });
+			p_slot.release_submitted = true;
+		} else {
+			pending_external_releases.push_back({ p_slot.release_timeline, p_slot.release_value, p_slot.texture });
+		}
+	};
 
 	int32_t newest_slot = -1;
 	uint64_t newest_generation = 0;
 	for (int32_t i = 0; i < pool->slots.size(); i++) {
 		const ExternalTexturePoolSlot &slot = pool->slots[i];
-		if (slot.pending && driver->external_timeline_is_complete(slot.producer_timeline, slot.producer_value) && (newest_slot < 0 || slot.generation > newest_generation)) {
+		const bool producer_ready = slot.android_hardware_buffer || driver->external_timeline_is_complete(slot.producer_timeline, slot.producer_value);
+		if (slot.pending && producer_ready && (newest_slot < 0 || slot.generation > newest_generation)) {
 			newest_slot = i;
 			newest_generation = slot.generation;
 		}
@@ -2065,14 +2170,15 @@ RID RenderingDevice::external_texture_pool_acquire_latest(RID p_pool) {
 	if (newest_slot >= 0) {
 		for (int32_t i = 0; i < pool->slots.size(); i++) {
 			ExternalTexturePoolSlot &slot = pool->slots.write[i];
-			if (!slot.pending || !driver->external_timeline_is_complete(slot.producer_timeline, slot.producer_value)) {
+			const bool producer_ready = slot.android_hardware_buffer || driver->external_timeline_is_complete(slot.producer_timeline, slot.producer_value);
+			if (!slot.pending || !producer_ready) {
 				continue;
 			}
 			if (i == newest_slot) {
 				continue;
 			}
-			pending_external_acquires.push_back({ slot.producer_timeline, slot.producer_value });
-			pending_external_releases.push_back({ slot.release_timeline, slot.release_value, slot.texture });
+			schedule_acquire(i, slot);
+			schedule_release(i, slot, false);
 			slot.pending = false;
 			slot.retired = true;
 		}
@@ -2081,7 +2187,7 @@ RID RenderingDevice::external_texture_pool_acquire_latest(RID p_pool) {
 			ExternalTexturePoolSlot &old_slot = pool->slots.write[pool->current_slot];
 			old_slot.current = false;
 			old_slot.retired = true;
-			pending_external_releases.push_back({ old_slot.release_timeline, old_slot.release_value, old_slot.texture });
+			schedule_release(pool->current_slot, old_slot, true);
 		}
 
 		ExternalTexturePoolSlot &new_slot = pool->slots.write[newest_slot];
@@ -2089,16 +2195,17 @@ RID RenderingDevice::external_texture_pool_acquire_latest(RID p_pool) {
 		new_slot.current = true;
 		pool->current_slot = newest_slot;
 		Texture *new_texture = texture_owner.get_or_null(new_slot.texture);
+		driver->texture_set_external_queue_family(new_texture->driver_id, false);
 		_external_texture_set_layout(new_texture, new_slot.published_layout);
 		// The producer changed the resource outside RenderingDevice. Advance the
 		// root revision so format-conversion fallback views refresh on first use.
 		_texture_check_shared_fallback(new_texture);
 		new_texture->shared_fallback->revision++;
-		pending_external_acquires.push_back({ new_slot.producer_timeline, new_slot.producer_value });
+		schedule_acquire(newest_slot, new_slot);
 	}
 
 	for (ExternalTexturePoolSlot &slot : pool->slots) {
-		if (slot.retired && driver->external_timeline_is_complete(slot.release_timeline, slot.release_value)) {
+		if (!slot.android_hardware_buffer && slot.retired && driver->external_timeline_is_complete(slot.release_timeline, slot.release_value)) {
 			slot.retired = false;
 		}
 	}
@@ -2113,17 +2220,19 @@ Dictionary RenderingDevice::external_texture_pool_get_slot_status(RID p_pool, in
 	MutexLock lock(*pool->mutex);
 	ERR_FAIL_INDEX_V(p_slot, pool->slots.size(), result);
 	const ExternalTexturePoolSlot &slot = pool->slots[p_slot];
-	const bool release_complete = driver->external_timeline_is_complete(slot.release_timeline, slot.release_value);
+	const bool release_complete = slot.android_hardware_buffer ? slot.release_fence_fd >= 0 : driver->external_timeline_is_complete(slot.release_timeline, slot.release_value);
 	result["texture"] = slot.texture;
-	result["release_timeline"] = slot.release_native_handle;
+	result["release_timeline"] = slot.android_hardware_buffer ? 0 : slot.release_native_handle;
 	result["release_value"] = slot.release_value;
 	result["release_state"] = EXTERNAL_TEXTURE_STATE_GENERAL;
 	result["release_complete"] = release_complete;
+	result["android_hardware_buffer"] = slot.android_hardware_buffer;
+	result["release_fence_available"] = slot.android_hardware_buffer && slot.release_fence_fd >= 0;
 	result["generation"] = slot.generation;
 	result["pending"] = slot.pending;
 	result["current"] = slot.current;
 	result["retired"] = slot.retired;
-	result["available"] = !slot.pending && !slot.current && (!slot.retired || release_complete);
+	result["available"] = !slot.pending && !slot.current && (slot.android_hardware_buffer ? !slot.retired : (!slot.retired || release_complete));
 	return result;
 }
 
@@ -2132,18 +2241,39 @@ void RenderingDevice::external_texture_pool_stop(RID p_pool) {
 	ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_pool);
 	ERR_FAIL_NULL(pool);
 	MutexLock lock(*pool->mutex);
+	auto schedule_acquire = [&](int32_t p_slot_index, ExternalTexturePoolSlot &p_slot) {
+		if (p_slot.android_hardware_buffer) {
+			if (p_slot.acquire_semaphore != 0) {
+				pending_external_binary_acquires.push_back({ p_slot.acquire_semaphore, p_pool, p_slot_index, p_slot.texture });
+				p_slot.acquire_semaphore = 0;
+			}
+		} else {
+			pending_external_acquires.push_back({ p_slot.producer_timeline, p_slot.producer_value });
+		}
+	};
+	auto schedule_release = [&](int32_t p_slot_index, ExternalTexturePoolSlot &p_slot, bool p_release_ownership) {
+		if (p_slot.android_hardware_buffer) {
+			if (p_slot.release_semaphore != 0 && !p_slot.release_submitted) {
+				pending_external_binary_releases.push_back({ p_slot.release_semaphore, p_pool, p_slot_index, p_slot.texture, p_release_ownership });
+				p_slot.release_submitted = true;
+			}
+		} else {
+			pending_external_releases.push_back({ p_slot.release_timeline, p_slot.release_value, p_slot.texture });
+		}
+	};
 	pool->stopped = true;
 	if (pool->current_slot >= 0) {
 		ExternalTexturePoolSlot &slot = pool->slots.write[pool->current_slot];
 		slot.current = false;
 		slot.retired = true;
-		pending_external_releases.push_back({ slot.release_timeline, slot.release_value, slot.texture });
+		schedule_release(pool->current_slot, slot, true);
 		pool->current_slot = -1;
 	}
-	for (ExternalTexturePoolSlot &slot : pool->slots) {
+	for (int32_t slot_index = 0; slot_index < pool->slots.size(); slot_index++) {
+		ExternalTexturePoolSlot &slot = pool->slots.write[slot_index];
 		if (slot.pending) {
-			pending_external_acquires.push_back({ slot.producer_timeline, slot.producer_value });
-			pending_external_releases.push_back({ slot.release_timeline, slot.release_value, slot.texture });
+			schedule_acquire(slot_index, slot);
+			schedule_release(slot_index, slot, false);
 			slot.pending = false;
 			slot.retired = true;
 		}
@@ -2158,7 +2288,7 @@ void RenderingDevice::external_resource_defer_release(const Callable &p_callback
 
 void RenderingDevice::external_texture_set_state(RID p_texture, ExternalTextureState p_state) {
 	ERR_RENDER_THREAD_GUARD();
-	ERR_FAIL_INDEX(p_state, RDD::TEXTURE_LAYOUT_MAX);
+	ERR_FAIL_INDEX(int(p_state), int(RDD::TEXTURE_LAYOUT_MAX));
 	Texture *texture = texture_owner.get_or_null(p_texture);
 	ERR_FAIL_NULL(texture);
 	_external_texture_set_layout(texture, (RDD::TextureLayout)p_state);
@@ -8318,6 +8448,15 @@ void RenderingDevice::_free_pending_resources(int p_frame) {
 				if (slot.release_native_handle != 0) {
 					driver->external_timeline_export_free(slot.release_native_handle);
 				}
+				if (slot.acquire_semaphore != 0) {
+					driver->external_binary_semaphore_free(slot.acquire_semaphore);
+				}
+				if (slot.release_semaphore != 0) {
+					driver->external_binary_semaphore_free(slot.release_semaphore);
+				}
+				if (slot.release_fence_fd >= 0) {
+					driver->external_binary_sync_fd_close(slot.release_fence_fd);
+				}
 			}
 			external_texture_pool_owner.free(pool_id);
 			lock.temp_unlock();
@@ -8344,6 +8483,11 @@ void RenderingDevice::_free_pending_resources(int p_frame) {
 	while (frames[p_frame].external_timelines_to_dispose_of.front()) {
 		driver->external_timeline_free(frames[p_frame].external_timelines_to_dispose_of.front()->get());
 		frames[p_frame].external_timelines_to_dispose_of.pop_front();
+	}
+
+	while (frames[p_frame].external_binary_semaphores_to_dispose_of.front()) {
+		driver->external_binary_semaphore_free(frames[p_frame].external_binary_semaphores_to_dispose_of.front()->get());
+		frames[p_frame].external_binary_semaphores_to_dispose_of.pop_front();
 	}
 
 	while (frames[p_frame].external_resource_release_callbacks.front()) {
@@ -8470,6 +8614,22 @@ void RenderingDevice::_end_frame() {
 		usages.push_back(RDG::RESOURCE_USAGE_GENERAL);
 		draw_graph.add_driver_callback([](RDD *, RDD::CommandBufferID, void *) {}, nullptr, trackers, usages);
 	}
+	for (const ExternalBinaryOperation &release : pending_external_binary_releases) {
+		if (!release.release_ownership) {
+			continue;
+		}
+		Texture *texture = texture_owner.get_or_null(release.texture);
+		if (texture == nullptr) {
+			continue;
+		}
+		_texture_make_mutable(texture, release.texture);
+		driver->texture_set_external_queue_family(texture->driver_id, true);
+		LocalVector<RDG::ResourceTracker *> trackers;
+		LocalVector<RDG::ResourceUsage> usages;
+		trackers.push_back(texture->draw_tracker);
+		usages.push_back(RDG::RESOURCE_USAGE_GENERAL);
+		draw_graph.add_driver_callback([](RDD *, RDD::CommandBufferID, void *) {}, nullptr, trackers, usages);
+	}
 	for (const RID &texture_rid : pending_external_texture_releases) {
 		Texture *texture = texture_owner.get_or_null(texture_rid);
 		if (texture == nullptr) {
@@ -8500,11 +8660,18 @@ void RenderingDevice::_end_frame() {
 
 void RenderingDevice::execute_chained_cmds(bool p_present_swap_chain, RenderingDeviceDriver::FenceID p_draw_fence,
 		RenderingDeviceDriver::SemaphoreID p_dst_draw_semaphore_to_signal) {
+	const uint32_t external_binary_release_count = pending_external_binary_releases.size();
 	for (const ExternalTimelineOperation &acquire : pending_external_acquires) {
 		const Error error = driver->command_queue_wait_external_timeline(main_queue, acquire.timeline, acquire.value);
 		ERR_CONTINUE_MSG(error != OK, "Could not enqueue an external producer timeline wait.");
 	}
 	pending_external_acquires.clear();
+	for (const ExternalBinaryOperation &acquire : pending_external_binary_acquires) {
+		const Error error = driver->command_queue_wait_external_binary(main_queue, acquire.semaphore);
+		ERR_CONTINUE_MSG(error != OK, "Could not enqueue an Android acquire sync-fd wait.");
+		frames[frame].external_binary_semaphores_to_dispose_of.push_back(acquire.semaphore);
+	}
+	pending_external_binary_acquires.clear();
 
 	// Execute command buffers and use semaphores to wait on the execution of the previous one.
 	// Normally there's only one command buffer, but driver workarounds can force situations where
@@ -8538,7 +8705,9 @@ void RenderingDevice::execute_chained_cmds(bool p_present_swap_chain, RenderingD
 		if (i == (command_buffer_count - 1)) {
 			// This is the last command buffer, it should signal the semaphore & fence.
 			signal_semaphore = p_dst_draw_semaphore_to_signal;
-			signal_fence = p_draw_fence;
+			// When external releases follow, the frame fence belongs to the final
+			// release submission so pool resources cannot be retired early.
+			signal_fence = external_binary_release_count == 0 ? p_draw_fence : RDD::FenceID();
 
 			if (p_present_swap_chain) {
 				// Just present the swap chains as part of the last command execution.
@@ -8564,6 +8733,33 @@ void RenderingDevice::execute_chained_cmds(bool p_present_swap_chain, RenderingD
 		ERR_CONTINUE_MSG(error != OK, "Could not enqueue an external producer release signal.");
 	}
 	pending_external_releases.clear();
+	uint32_t submitted_binary_release_count = 0;
+	for (const ExternalBinaryOperation &release : pending_external_binary_releases) {
+		submitted_binary_release_count++;
+		const RDD::FenceID completion_fence = submitted_binary_release_count == external_binary_release_count ? p_draw_fence : RDD::FenceID();
+		const Error error = driver->command_queue_signal_external_binary(main_queue, release.semaphore, completion_fence);
+		if (error != OK) {
+			ERR_PRINT("Could not enqueue an Android release sync-fd signal.");
+			continue;
+		}
+		const int release_fence_fd = driver->external_binary_semaphore_export_sync_fd(release.semaphore);
+		ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(release.pool);
+		if (pool != nullptr) {
+			MutexLock lock(*pool->mutex);
+			if (release.slot >= 0 && release.slot < pool->slots.size()) {
+				ExternalTexturePoolSlot &slot = pool->slots.write[release.slot];
+				if (slot.release_semaphore == release.semaphore) {
+					slot.release_semaphore = 0;
+					slot.release_fence_fd = release_fence_fd;
+				}
+			}
+		}
+		if (release_fence_fd < 0) {
+			ERR_PRINT("Could not export an Android release sync fence.");
+		}
+		frames[frame].external_binary_semaphores_to_dispose_of.push_back(release.semaphore);
+	}
+	pending_external_binary_releases.clear();
 	pending_external_texture_releases.clear();
 }
 
@@ -9477,7 +9673,11 @@ void RenderingDevice::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("external_texture_pool_create"), &RenderingDevice::external_texture_pool_create);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_add_slot", "pool", "type", "format", "samples", "usage_flags", "native_texture", "producer_timeline", "width", "height", "depth", "layers", "mipmaps", "initial_state"), &RenderingDevice::external_texture_pool_add_slot);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_add_shared_slot", "pool", "type", "format", "samples", "usage_flags", "shared_texture", "producer_timeline", "width", "height", "depth", "layers", "mipmaps", "initial_state"), &RenderingDevice::external_texture_pool_add_shared_slot);
+	ClassDB::bind_method(D_METHOD("external_texture_pool_add_android_hardware_buffer_slot", "pool", "hardware_buffer", "format", "usage_flags", "width", "height", "initial_state"), &RenderingDevice::external_texture_pool_add_android_hardware_buffer_slot);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_publish", "pool", "slot", "producer_value", "generation", "published_state"), &RenderingDevice::external_texture_pool_publish);
+	ClassDB::bind_method(D_METHOD("external_texture_pool_publish_android", "pool", "slot", "acquire_fence_fd", "generation", "published_state"), &RenderingDevice::external_texture_pool_publish_android);
+	ClassDB::bind_method(D_METHOD("external_texture_pool_take_android_release_fence", "pool", "slot"), &RenderingDevice::external_texture_pool_take_android_release_fence);
+	ClassDB::bind_method(D_METHOD("external_texture_pool_supports_android_hardware_buffer"), &RenderingDevice::external_texture_pool_supports_android_hardware_buffer);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_abandon_pending", "pool", "slot"), &RenderingDevice::external_texture_pool_abandon_pending);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_acquire_latest", "pool"), &RenderingDevice::external_texture_pool_acquire_latest);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_get_slot_status", "pool", "slot"), &RenderingDevice::external_texture_pool_get_slot_status);

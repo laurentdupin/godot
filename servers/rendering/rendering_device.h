@@ -435,6 +435,11 @@ public:
 		bool pending = false;
 		bool current = false;
 		bool retired = false;
+		bool android_hardware_buffer = false;
+		uint64_t acquire_semaphore = 0;
+		uint64_t release_semaphore = 0;
+		int release_fence_fd = -1;
+		bool release_submitted = false;
 	};
 
 	struct ExternalTexturePool {
@@ -452,14 +457,24 @@ public:
 		RID texture;
 	};
 
+	struct ExternalBinaryOperation {
+		uint64_t semaphore = 0;
+		RID pool;
+		int32_t slot = -1;
+		RID texture;
+		bool release_ownership = false;
+	};
+
 	RID_Owner<ExternalTexturePool, true> external_texture_pool_owner;
 	LocalVector<ExternalTimelineOperation> pending_external_acquires;
 	LocalVector<ExternalTimelineOperation> pending_external_releases;
+	LocalVector<ExternalBinaryOperation> pending_external_binary_acquires;
+	LocalVector<ExternalBinaryOperation> pending_external_binary_releases;
 	LocalVector<RID> pending_external_texture_releases;
 
 	static RDG::ResourceUsage _external_layout_to_resource_usage(RDD::TextureLayout p_layout);
 	void _external_texture_set_layout(Texture *p_texture, RDD::TextureLayout p_layout);
-	RID _texture_create_from_external_source(TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_image, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, bool p_shared_handle);
+	RID _texture_create_from_external_source(TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_image, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, bool p_shared_handle, bool p_android_hardware_buffer = false);
 	int32_t _external_texture_pool_add_slot(RID p_pool, TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_native_texture, uint64_t p_producer_timeline, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, ExternalTextureState p_initial_state, bool p_shared_handle);
 	uint32_t texture_upload_region_size_px = 0;
 	uint32_t texture_download_region_size_px = 0;
@@ -524,7 +539,11 @@ public:
 	RID external_texture_pool_create();
 	int32_t external_texture_pool_add_slot(RID p_pool, TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_native_texture, uint64_t p_producer_timeline, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, ExternalTextureState p_initial_state);
 	int32_t external_texture_pool_add_shared_slot(RID p_pool, TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_shared_texture, uint64_t p_producer_timeline, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, ExternalTextureState p_initial_state);
+	int32_t external_texture_pool_add_android_hardware_buffer_slot(RID p_pool, uint64_t p_hardware_buffer, DataFormat p_format, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_width, uint64_t p_height, ExternalTextureState p_initial_state);
 	Error external_texture_pool_publish(RID p_pool, int32_t p_slot, uint64_t p_producer_value, uint64_t p_generation, ExternalTextureState p_published_state);
+	Error external_texture_pool_publish_android(RID p_pool, int32_t p_slot, int p_acquire_fence_fd, uint64_t p_generation, ExternalTextureState p_published_state);
+	int external_texture_pool_take_android_release_fence(RID p_pool, int32_t p_slot);
+	bool external_texture_pool_supports_android_hardware_buffer() const;
 	Error external_texture_pool_abandon_pending(RID p_pool, int32_t p_slot);
 	RID external_texture_pool_acquire_latest(RID p_pool);
 	Dictionary external_texture_pool_get_slot_status(RID p_pool, int32_t p_slot);
@@ -1856,6 +1875,7 @@ private:
 		List<Texture> textures_to_dispose_of;
 		List<RID> external_texture_pools_to_dispose_of;
 		List<uint64_t> external_timelines_to_dispose_of;
+		List<uint64_t> external_binary_semaphores_to_dispose_of;
 		List<Callable> external_resource_release_callbacks;
 		List<Framebuffer> framebuffers_to_dispose_of;
 		List<RDD::SamplerID> samplers_to_dispose_of;
