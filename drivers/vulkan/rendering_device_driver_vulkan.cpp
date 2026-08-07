@@ -2632,7 +2632,11 @@ RDD::TextureID RenderingDeviceDriverVulkan::texture_create_from_android_hardware
 	VkImageCreateInfo image_create_info = {};
 	image_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 	image_create_info.pNext = &external_memory_info;
-	image_create_info.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+	// The imported image and its sole view use the exact AHardwareBuffer format.
+	// Requesting mutable-format support is unnecessary and sends some Android
+	// Vulkan drivers through a format-reinterpretation path that they do not
+	// handle correctly for imported hardware buffers.
+	image_create_info.flags = 0;
 	image_create_info.imageType = VK_IMAGE_TYPE_2D;
 	image_create_info.format = format_properties.format;
 	image_create_info.extent = { p_format.width, p_format.height, 1 };
