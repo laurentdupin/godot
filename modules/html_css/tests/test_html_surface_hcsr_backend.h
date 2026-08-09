@@ -1,0 +1,68 @@
+/**************************************************************************/
+/*  test_html_surface_hcsr_backend.h                                     */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE       */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
+
+#pragma once
+
+#include "../backend/hcsr_input_state_synchronization_cache.h"
+
+#include "tests/test_macros.h"
+
+namespace TestHTMLSurfaceHCSRBackend {
+
+TEST_CASE("[HTMLCSS][HCSR] input synchronization cache elides only identical accepted state") {
+	HCSRInputStateSynchronizationCache cache;
+	int native_call_count = 0;
+	auto synchronize = [&](const Point2 &p_pointer_position, bool p_primary_button_pressed, const Vector2i &p_scroll_offset, bool p_accept) {
+		if (!cache.needs_synchronization(p_pointer_position, p_primary_button_pressed, p_scroll_offset)) {
+			return false;
+		}
+		native_call_count++;
+		if (p_accept) {
+			cache.mark_synchronized(p_pointer_position, p_primary_button_pressed, p_scroll_offset);
+		}
+		return true;
+	};
+
+	CHECK(synchronize(Point2(10.5, 20.25), false, Vector2i(0, 0), true));
+	CHECK_FALSE(synchronize(Point2(10.5, 20.25), false, Vector2i(0, 0), true));
+	CHECK(synchronize(Point2(11.5, 20.25), false, Vector2i(0, 0), true));
+	CHECK_FALSE(synchronize(Point2(11.5, 20.25), false, Vector2i(0, 0), true));
+	CHECK(synchronize(Point2(11.5, 20.25), true, Vector2i(0, 0), true));
+	CHECK(synchronize(Point2(11.5, 20.25), true, Vector2i(0, 7), true));
+	CHECK_FALSE(synchronize(Point2(11.5, 20.25), true, Vector2i(0, 7), true));
+	CHECK(native_call_count == 4);
+
+	cache.reset();
+	CHECK(synchronize(Point2(11.5, 20.25), true, Vector2i(0, 7), false));
+	CHECK(synchronize(Point2(11.5, 20.25), true, Vector2i(0, 7), true));
+	CHECK_FALSE(synchronize(Point2(11.5, 20.25), true, Vector2i(0, 7), true));
+	CHECK(native_call_count == 6);
+}
+
+} // namespace TestHTMLSurfaceHCSRBackend

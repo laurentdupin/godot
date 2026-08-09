@@ -5,6 +5,7 @@
 #pragma once
 
 #include "html_surface_cpu_backend.h"
+#include "hcsr_input_state_synchronization_cache.h"
 #include "hcsr_performance_monitor.h"
 
 #include "core/templates/hash_map.h"
@@ -74,6 +75,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	Point2 pointer_position;
 	Vector2i scroll_offset;
 	bool primary_button_pressed = false;
+	HCSRInputStateSynchronizationCache input_state_cache;
 	bool document_dirty = true;
 	bool viewport_dirty = true;
 	bool terminal_failure = false;

@@ -151,6 +151,7 @@ bool HTMLSurfaceHCSRBackend::_ensure_renderer() {
 		ERR_PRINT(terminal_failure_reason);
 		return false;
 	}
+	input_state_cache.reset();
 
 #ifdef DEBUG_ENABLED
 	if (hcsr_renderer_set_performance_profiling_enabled(renderer, 1) != HCSR_STATUS_OK) {
@@ -521,15 +522,21 @@ Error HTMLSurfaceHCSRBackend::_set_input() {
 	if (!_ensure_renderer()) {
 		return ERR_CANT_CREATE;
 	}
-	return hcsr_renderer_set_input_css(
+	if (!input_state_cache.needs_synchronization(pointer_position, primary_button_pressed, scroll_offset)) {
+		return OK;
+	}
+	const hcsr_status_t status = hcsr_renderer_set_input_css(
 			renderer,
 			pointer_position.x,
 			pointer_position.y,
 			primary_button_pressed ? 1 : 0,
 			scroll_offset.x,
-			scroll_offset.y) == HCSR_STATUS_OK
-			? OK
-			: FAILED;
+			scroll_offset.y);
+	if (status != HCSR_STATUS_OK) {
+		return FAILED;
+	}
+	input_state_cache.mark_synchronized(pointer_position, primary_button_pressed, scroll_offset);
+	return OK;
 }
 
 bool HTMLSurfaceHCSRBackend::_clamp_scroll_offset_to_content(bool &r_changed, int p_content_width, int p_content_height) {
