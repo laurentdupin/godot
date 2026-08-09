@@ -182,7 +182,8 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	static void _destroy_presentation_output_state_on_render_thread_callback(uint64_t p_backend_ptr, uint64_t p_state_ptr);
 	void _record_error(const String &p_context);
 	void _retire_document_commits();
-	void _update_performance_profile();
+	void _update_latest_performance_profile();
+	void _complete_performance_profile(uint64_t p_generation);
 	void _record_managed_export_boundary_overhead(uint64_t p_call_start_usec);
 	bool _update_frame_schedule();
 	bool _set_host_frame_context();

@@ -11,6 +11,31 @@
 
 #include "hcsr_renderer.h"
 
+class HCSRPerformanceProfileStore {
+public:
+	struct GenerationSample {
+		uint64_t instance_id = 0;
+		uint64_t generation = 0;
+		hcsr_performance_profile_t profile = {};
+	};
+
+private:
+	// Custom monitors read the latest snapshot, while the Servers profiler
+	// consumes each successfully completed generation at most once.
+	HashMap<uint64_t, hcsr_performance_profile_t> latest_profiles;
+	HashMap<uint64_t, uint64_t> completed_generations;
+	Vector<GenerationSample> pending_generation_samples;
+
+public:
+	void update_latest(uint64_t p_instance_id, const hcsr_performance_profile_t &p_profile);
+	bool complete_generation(uint64_t p_instance_id, uint64_t p_generation, const hcsr_performance_profile_t &p_profile);
+	const HashMap<uint64_t, hcsr_performance_profile_t> &get_latest_profiles() const;
+	Vector<GenerationSample> take_pending_generation_samples();
+	void discard_pending_generation_samples();
+	void remove(uint64_t p_instance_id);
+	void clear();
+};
+
 class HCSRPerformanceMonitor {
 public:
 	enum Monitor {
@@ -127,11 +152,8 @@ public:
 
 private:
 	static Mutex mutex;
-	static HashMap<uint64_t, hcsr_performance_profile_t> profiles;
+	static HCSRPerformanceProfileStore profile_store;
 	static HashMap<uint64_t, IntegrationCounters> integration_counters;
-	static Vector<hcsr_performance_profile_t> pending_profiler_profiles;
-	static Vector<double> pending_input_to_visible_milliseconds;
-	static Vector<double> pending_input_to_composed_milliseconds;
 	static double latest_input_to_visible_milliseconds;
 	static double latest_input_to_composed_milliseconds;
 	static double _read_monitor(int p_monitor);
@@ -139,10 +161,12 @@ private:
 public:
 	static void initialize();
 	static void finalize();
-	static void update(uint64_t p_instance_id, const hcsr_performance_profile_t &p_profile);
+	static void update_latest(uint64_t p_instance_id, const hcsr_performance_profile_t &p_profile);
+	static void complete_generation(uint64_t p_instance_id, uint64_t p_generation, const hcsr_performance_profile_t &p_profile);
 	static void update_integration(uint64_t p_instance_id, const IntegrationCounters &p_counters);
 	static void record_input_to_visible(double p_milliseconds);
 	static void record_input_to_composed(double p_milliseconds);
+	static Array build_profiler_frame_data(const Vector<HCSRPerformanceProfileStore::GenerationSample> &p_samples);
 	static void publish_frame_data();
 	static void remove(uint64_t p_instance_id);
 };

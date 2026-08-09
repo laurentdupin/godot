@@ -1700,7 +1700,7 @@ void HTMLSurfaceHCSRBackend::_poll_gpu_presentation_on_render_thread() {
 		_activate_completed_gpu_frame_on_render_thread(output);
 	}
 	_poll_presentation_outputs_on_render_thread();
-	_update_performance_profile();
+	_update_latest_performance_profile();
 }
 
 void HTMLSurfaceHCSRBackend::_detach_gpu_texture_import_on_render_thread_callback(uint64_t p_backend_ptr) {
@@ -1905,8 +1905,14 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 	deferred_gpu_packet = nullptr;
 	gpu_submission_deferred.clear();
 	gpu_submission_lock_deferred.clear();
-	_update_performance_profile();
 	gpu_render_succeeded = _record_submitted_gpu_frame_on_render_thread(output);
+	if (gpu_render_succeeded) {
+		// HCSR's top-level timing profile is final at native submission. Completion
+		// polling only appends lifecycle diagnostics kept in custom monitors.
+		_complete_performance_profile(output.frame_generation);
+	} else {
+		_update_latest_performance_profile();
+	}
 	if (gpu_render_succeeded
 			&& gpu_capabilities.synchronization_mode == HCSR_GPU_SYNCHRONIZATION_ENGINE_QUEUE_ORDERED) {
 		gpu_render_succeeded = _activate_engine_ordered_output_group_on_render_thread(output);
@@ -1995,8 +2001,14 @@ void HTMLSurfaceHCSRBackend::_retry_deferred_gpu_frame_on_render_thread() {
 		gpu_submission_deferred.clear();
 		gpu_submission_lock_deferred.clear();
 		gpu_frame_pending.clear();
-		_update_performance_profile();
 		gpu_render_succeeded = _record_submitted_gpu_frame_on_render_thread(output);
+		if (gpu_render_succeeded) {
+			// HCSR's top-level timing profile is final at native submission. Completion
+			// polling only appends lifecycle diagnostics kept in custom monitors.
+			_complete_performance_profile(output.frame_generation);
+		} else {
+			_update_latest_performance_profile();
+		}
 		if (gpu_render_succeeded
 				&& gpu_capabilities.synchronization_mode == HCSR_GPU_SYNCHRONIZATION_ENGINE_QUEUE_ORDERED) {
 			gpu_render_succeeded = _activate_engine_ordered_output_group_on_render_thread(output);
@@ -2203,7 +2215,7 @@ void HTMLSurfaceHCSRBackend::_poll_semantic_worker_frame() {
 		return;
 	}
 	_retire_document_commits();
-	_update_performance_profile();
+	_update_latest_performance_profile();
 	if (state == HCSR_SEMANTIC_WORKER_NO_VISUAL_OUTPUT) {
 		return;
 	}
@@ -2292,7 +2304,7 @@ bool HTMLSurfaceHCSRBackend::_render_frame() {
 			return false;
 		}
 		_retire_document_commits();
-		_update_performance_profile();
+		_update_latest_performance_profile();
 		bool scroll_offset_changed = false;
 		if (!_clamp_scroll_offset_to_content(scroll_offset_changed)) {
 			hcsr_renderer_release_frame(renderer, &output);
@@ -2324,6 +2336,9 @@ bool HTMLSurfaceHCSRBackend::_render_frame() {
 			: 0.0;
 	integration_counters.cpu_primary_conversion_milliseconds = cpu_frame_conversion_milliseconds;
 	integration_counters.cpu_primary_upload_milliseconds = cpu_frame_upload_milliseconds;
+	if (rendered) {
+		_complete_performance_profile(frame_generation);
+	}
 	hcsr_renderer_release_frame(renderer, &output);
 	if (rendered) {
 		const uint64_t secondary_publication_start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
@@ -2398,7 +2413,7 @@ void HTMLSurfaceHCSRBackend::_read_backdrop_filter_regions() {
 	frame_metadata = next_metadata;
 }
 
-void HTMLSurfaceHCSRBackend::_update_performance_profile() {
+void HTMLSurfaceHCSRBackend::_update_latest_performance_profile() {
 #ifdef DEBUG_ENABLED
 	if (renderer == nullptr) {
 		return;
@@ -2406,7 +2421,24 @@ void HTMLSurfaceHCSRBackend::_update_performance_profile() {
 	hcsr_performance_profile_t profile = {};
 	profile.struct_size = sizeof(profile);
 	if (hcsr_renderer_get_performance_profile(renderer, &profile) == HCSR_STATUS_OK) {
-		HCSRPerformanceMonitor::update((uint64_t)this, profile);
+		HCSRPerformanceMonitor::update_latest((uint64_t)this, profile);
+		RenderingServer *rendering_server = RenderingServer::get_singleton();
+		if (rendering_server == nullptr || !rendering_server->is_on_render_thread()) {
+			HCSRPerformanceMonitor::publish_frame_data();
+		}
+	}
+#endif
+}
+
+void HTMLSurfaceHCSRBackend::_complete_performance_profile(uint64_t p_generation) {
+#ifdef DEBUG_ENABLED
+	if (renderer == nullptr || p_generation == 0) {
+		return;
+	}
+	hcsr_performance_profile_t profile = {};
+	profile.struct_size = sizeof(profile);
+	if (hcsr_renderer_get_performance_profile(renderer, &profile) == HCSR_STATUS_OK) {
+		HCSRPerformanceMonitor::complete_generation((uint64_t)this, p_generation, profile);
 		RenderingServer *rendering_server = RenderingServer::get_singleton();
 		if (rendering_server == nullptr || !rendering_server->is_on_render_thread()) {
 			HCSRPerformanceMonitor::publish_frame_data();
@@ -3034,9 +3066,6 @@ HTMLSurfaceHCSRBackend::HTMLSurfaceHCSRBackend(hcsr_render_backend_t p_render_ba
 }
 
 HTMLSurfaceHCSRBackend::~HTMLSurfaceHCSRBackend() {
-#ifdef DEBUG_ENABLED
-	HCSRPerformanceMonitor::remove((uint64_t)this);
-#endif
 	_detach_gpu_texture_import();
 	if (gpu_texture.is_valid()) {
 		gpu_texture.unref();
@@ -3048,4 +3077,7 @@ HTMLSurfaceHCSRBackend::~HTMLSurfaceHCSRBackend() {
 		rendering_server->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRBackend::_destroy_renderer_on_render_thread_callback).bind((uint64_t)this));
 		rendering_server->sync();
 	}
+#ifdef DEBUG_ENABLED
+	HCSRPerformanceMonitor::remove((uint64_t)this);
+#endif
 }

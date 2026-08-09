@@ -8,14 +8,67 @@
 #include "core/object/callable_mp.h"
 #include "main/performance.h"
 
+#ifdef HTML_CSS_HCSR_TESTS_ENABLED
+#include "../tests/test_hcsr_performance_monitor.h"
+#endif
+
 Mutex HCSRPerformanceMonitor::mutex;
-HashMap<uint64_t, hcsr_performance_profile_t> HCSRPerformanceMonitor::profiles;
+HCSRPerformanceProfileStore HCSRPerformanceMonitor::profile_store;
 HashMap<uint64_t, HCSRPerformanceMonitor::IntegrationCounters> HCSRPerformanceMonitor::integration_counters;
-Vector<hcsr_performance_profile_t> HCSRPerformanceMonitor::pending_profiler_profiles;
-Vector<double> HCSRPerformanceMonitor::pending_input_to_visible_milliseconds;
-Vector<double> HCSRPerformanceMonitor::pending_input_to_composed_milliseconds;
 double HCSRPerformanceMonitor::latest_input_to_visible_milliseconds = 0.0;
 double HCSRPerformanceMonitor::latest_input_to_composed_milliseconds = 0.0;
+
+void HCSRPerformanceProfileStore::update_latest(uint64_t p_instance_id, const hcsr_performance_profile_t &p_profile) {
+	latest_profiles.insert(p_instance_id, p_profile);
+}
+
+bool HCSRPerformanceProfileStore::complete_generation(uint64_t p_instance_id, uint64_t p_generation, const hcsr_performance_profile_t &p_profile) {
+	update_latest(p_instance_id, p_profile);
+	if (p_generation == 0) {
+		return false;
+	}
+	const uint64_t *completed_generation = completed_generations.getptr(p_instance_id);
+	if (completed_generation != nullptr && p_generation <= *completed_generation) {
+		return false;
+	}
+	completed_generations.insert(p_instance_id, p_generation);
+	GenerationSample sample;
+	sample.instance_id = p_instance_id;
+	sample.generation = p_generation;
+	sample.profile = p_profile;
+	pending_generation_samples.push_back(sample);
+	return true;
+}
+
+const HashMap<uint64_t, hcsr_performance_profile_t> &HCSRPerformanceProfileStore::get_latest_profiles() const {
+	return latest_profiles;
+}
+
+Vector<HCSRPerformanceProfileStore::GenerationSample> HCSRPerformanceProfileStore::take_pending_generation_samples() {
+	Vector<GenerationSample> samples = pending_generation_samples;
+	pending_generation_samples.clear();
+	return samples;
+}
+
+void HCSRPerformanceProfileStore::discard_pending_generation_samples() {
+	pending_generation_samples.clear();
+}
+
+void HCSRPerformanceProfileStore::remove(uint64_t p_instance_id) {
+	latest_profiles.erase(p_instance_id);
+	completed_generations.erase(p_instance_id);
+	for (int index = pending_generation_samples.size() - 1; index >= 0; index--) {
+		if (pending_generation_samples[index].instance_id == p_instance_id) {
+			pending_generation_samples.remove_at(index);
+		}
+	}
+}
+
+void HCSRPerformanceProfileStore::clear() {
+	latest_profiles.clear();
+	completed_generations.clear();
+	pending_generation_samples.clear();
+}
 
 struct HCSRMonitorDefinition {
 	const char *name;
@@ -246,11 +299,8 @@ void HCSRPerformanceMonitor::finalize() {
 	}
 
 	MutexLock lock(mutex);
-	profiles.clear();
+	profile_store.clear();
 	integration_counters.clear();
-	pending_profiler_profiles.clear();
-	pending_input_to_visible_milliseconds.clear();
-	pending_input_to_composed_milliseconds.clear();
 	latest_input_to_visible_milliseconds = 0.0;
 	latest_input_to_composed_milliseconds = 0.0;
 }
@@ -258,21 +308,21 @@ void HCSRPerformanceMonitor::finalize() {
 void HCSRPerformanceMonitor::record_input_to_visible(double p_milliseconds) {
 	MutexLock lock(mutex);
 	latest_input_to_visible_milliseconds = p_milliseconds;
-	pending_input_to_visible_milliseconds.push_back(p_milliseconds);
 }
 
 void HCSRPerformanceMonitor::record_input_to_composed(double p_milliseconds) {
 	MutexLock lock(mutex);
 	latest_input_to_composed_milliseconds = p_milliseconds;
-	pending_input_to_composed_milliseconds.push_back(p_milliseconds);
 }
 
-void HCSRPerformanceMonitor::update(uint64_t p_instance_id, const hcsr_performance_profile_t &p_profile) {
-	{
-		MutexLock lock(mutex);
-		profiles.insert(p_instance_id, p_profile);
-		pending_profiler_profiles.push_back(p_profile);
-	}
+void HCSRPerformanceMonitor::update_latest(uint64_t p_instance_id, const hcsr_performance_profile_t &p_profile) {
+	MutexLock lock(mutex);
+	profile_store.update_latest(p_instance_id, p_profile);
+}
+
+void HCSRPerformanceMonitor::complete_generation(uint64_t p_instance_id, uint64_t p_generation, const hcsr_performance_profile_t &p_profile) {
+	MutexLock lock(mutex);
+	profile_store.complete_generation(p_instance_id, p_generation, p_profile);
 }
 
 void HCSRPerformanceMonitor::update_integration(uint64_t p_instance_id, const IntegrationCounters &p_counters) {
@@ -283,32 +333,27 @@ void HCSRPerformanceMonitor::update_integration(uint64_t p_instance_id, const In
 void HCSRPerformanceMonitor::publish_frame_data() {
 	if (!EngineDebugger::is_profiling("servers")) {
 		MutexLock lock(mutex);
-		pending_profiler_profiles.clear();
-		pending_input_to_visible_milliseconds.clear();
-		pending_input_to_composed_milliseconds.clear();
+		profile_store.discard_pending_generation_samples();
 		return;
 	}
 
-	Vector<hcsr_performance_profile_t> frame_profiles;
-	Vector<double> frame_input_to_visible_milliseconds;
-	Vector<double> frame_input_to_composed_milliseconds;
+	Vector<HCSRPerformanceProfileStore::GenerationSample> frame_samples;
 	{
 		MutexLock lock(mutex);
-		frame_profiles = pending_profiler_profiles;
-		pending_profiler_profiles.clear();
-		frame_input_to_visible_milliseconds = pending_input_to_visible_milliseconds;
-		pending_input_to_visible_milliseconds.clear();
-		frame_input_to_composed_milliseconds = pending_input_to_composed_milliseconds;
-		pending_input_to_composed_milliseconds.clear();
+		frame_samples = profile_store.take_pending_generation_samples();
 	}
-	if (frame_profiles.is_empty() && frame_input_to_visible_milliseconds.is_empty() && frame_input_to_composed_milliseconds.is_empty()) {
+	if (frame_samples.is_empty()) {
 		return;
 	}
+	EngineDebugger::profiler_add_frame_data("servers", build_profiler_frame_data(frame_samples));
+}
 
+Array HCSRPerformanceMonitor::build_profiler_frame_data(const Vector<HCSRPerformanceProfileStore::GenerationSample> &p_samples) {
 	hcsr_performance_profile_t frame_profile = {};
-	for (const hcsr_performance_profile_t &profile : frame_profiles) {
-		frame_profile.native_total_milliseconds += profile.native_total_milliseconds;
-		frame_profile.core_total_milliseconds += profile.core_total_milliseconds;
+	double unclassified_core_milliseconds = 0.0;
+	double unclassified_native_milliseconds = 0.0;
+	for (const HCSRPerformanceProfileStore::GenerationSample &sample : p_samples) {
+		const hcsr_performance_profile_t &profile = sample.profile;
 		frame_profile.parse_milliseconds += profile.parse_milliseconds;
 		frame_profile.style_milliseconds += profile.style_milliseconds;
 		frame_profile.layout_milliseconds += profile.layout_milliseconds;
@@ -319,58 +364,21 @@ void HCSRPerformanceMonitor::publish_frame_data() {
 		frame_profile.gpu_submit_milliseconds += profile.gpu_submit_milliseconds;
 		frame_profile.presentation_checkpoint_capture_milliseconds += profile.presentation_checkpoint_capture_milliseconds;
 		frame_profile.presentation_checkpoint_restore_milliseconds += profile.presentation_checkpoint_restore_milliseconds;
-		frame_profile.semantic_preparation_milliseconds += profile.semantic_preparation_milliseconds;
-		frame_profile.semantic_snapshot_validation_milliseconds += profile.semantic_snapshot_validation_milliseconds;
-		frame_profile.physical_compilation_milliseconds += profile.physical_compilation_milliseconds;
-		frame_profile.physical_projection_milliseconds += profile.physical_projection_milliseconds;
-		frame_profile.painter_order_planning_milliseconds += profile.painter_order_planning_milliseconds;
-		frame_profile.physical_instance_expansion_milliseconds += profile.physical_instance_expansion_milliseconds;
-		frame_profile.record_and_submit_milliseconds += profile.record_and_submit_milliseconds;
-		frame_profile.input_state_application_milliseconds += profile.input_state_application_milliseconds;
-		frame_profile.snapshot_publication_milliseconds += profile.snapshot_publication_milliseconds;
-		frame_profile.completion_retirement_milliseconds += profile.completion_retirement_milliseconds;
-		frame_profile.owner_lock_wait_milliseconds += profile.owner_lock_wait_milliseconds;
-		frame_profile.style_allocated_bytes += profile.style_allocated_bytes;
-		frame_profile.layout_allocated_bytes += profile.layout_allocated_bytes;
-		frame_profile.layout_tree_allocated_bytes += profile.layout_tree_allocated_bytes;
-		frame_profile.layout_text_shaping_allocated_bytes += profile.layout_text_shaping_allocated_bytes;
-		frame_profile.hit_test_allocated_bytes += profile.hit_test_allocated_bytes;
-		frame_profile.display_list_allocated_bytes += profile.display_list_allocated_bytes;
-		frame_profile.paint_preparation_allocated_bytes += profile.paint_preparation_allocated_bytes;
-		frame_profile.paint_traversal_allocated_bytes += profile.paint_traversal_allocated_bytes;
-		frame_profile.paint_scene_construction_allocated_bytes += profile.paint_scene_construction_allocated_bytes;
-		frame_profile.paint_candidate_index_allocated_bytes += profile.paint_candidate_index_allocated_bytes;
-		frame_profile.complete_frame_materialization_allocated_bytes += profile.complete_frame_materialization_allocated_bytes;
-		frame_profile.complete_sequence_construction_allocated_bytes += profile.complete_sequence_construction_allocated_bytes;
-		frame_profile.semantic_snapshot_allocated_bytes += profile.semantic_snapshot_allocated_bytes;
-		frame_profile.raster_allocated_bytes += profile.raster_allocated_bytes;
-		frame_profile.authoritative_paint_chunk_count += profile.authoritative_paint_chunk_count;
-		frame_profile.visited_paint_chunk_count += profile.visited_paint_chunk_count;
-		frame_profile.changed_paint_chunk_identity_count += profile.changed_paint_chunk_identity_count;
-		frame_profile.immutable_command_reference_count += profile.immutable_command_reference_count;
-		frame_profile.flat_command_reference_count += profile.flat_command_reference_count;
-		frame_profile.semantic_segment_count += profile.semantic_segment_count;
-		frame_profile.new_scope_command_count += profile.new_scope_command_count;
-		frame_profile.new_scrollbar_command_count += profile.new_scrollbar_command_count;
-		frame_profile.snapshot_array_entry_write_count += profile.snapshot_array_entry_write_count;
-		frame_profile.retained_transform_layer_hit_count += profile.retained_transform_layer_hit_count;
-		frame_profile.retained_transform_layer_raster_count += profile.retained_transform_layer_raster_count;
+		const double measured_core_stage_milliseconds = profile.parse_milliseconds
+				+ profile.style_milliseconds
+				+ profile.layout_milliseconds
+				+ profile.hit_test_milliseconds
+				+ profile.interaction_milliseconds
+				+ profile.display_list_milliseconds
+				+ profile.raster_milliseconds;
+		unclassified_core_milliseconds += MAX(0.0, profile.core_total_milliseconds - measured_core_stage_milliseconds);
+		unclassified_native_milliseconds += MAX(0.0,
+				profile.native_total_milliseconds
+						- profile.core_total_milliseconds
+						- profile.gpu_submit_milliseconds
+						- profile.presentation_checkpoint_capture_milliseconds
+						- profile.presentation_checkpoint_restore_milliseconds);
 	}
-
-	const double measured_core_stage_milliseconds = frame_profile.parse_milliseconds
-			+ frame_profile.style_milliseconds
-			+ frame_profile.layout_milliseconds
-			+ frame_profile.hit_test_milliseconds
-			+ frame_profile.interaction_milliseconds
-			+ frame_profile.display_list_milliseconds
-			+ frame_profile.raster_milliseconds;
-	const double unclassified_core_milliseconds = MAX(0.0, frame_profile.core_total_milliseconds - measured_core_stage_milliseconds);
-	const double unclassified_native_milliseconds = MAX(0.0,
-			frame_profile.native_total_milliseconds
-					- frame_profile.core_total_milliseconds
-					- frame_profile.gpu_submit_milliseconds
-					- frame_profile.presentation_checkpoint_capture_milliseconds
-					- frame_profile.presentation_checkpoint_restore_milliseconds);
 	Array values;
 	values.push_back("hcsr");
 	values.push_back("parse");
@@ -397,96 +405,12 @@ void HCSRPerformanceMonitor::publish_frame_data() {
 	values.push_back(frame_profile.presentation_checkpoint_restore_milliseconds / 1000.0);
 	values.push_back("native_unclassified");
 	values.push_back(unclassified_native_milliseconds / 1000.0);
-	values.push_back("semantic_preparation");
-	values.push_back(frame_profile.semantic_preparation_milliseconds / 1000.0);
-	values.push_back("semantic_snapshot_validation");
-	values.push_back(frame_profile.semantic_snapshot_validation_milliseconds / 1000.0);
-	values.push_back("physical_compilation");
-	values.push_back(frame_profile.physical_compilation_milliseconds / 1000.0);
-	values.push_back("physical_projection");
-	values.push_back(frame_profile.physical_projection_milliseconds / 1000.0);
-	values.push_back("painter_order_planning");
-	values.push_back(frame_profile.painter_order_planning_milliseconds / 1000.0);
-	values.push_back("physical_instance_expansion");
-	values.push_back(frame_profile.physical_instance_expansion_milliseconds / 1000.0);
-	values.push_back("record_and_submit");
-	values.push_back(frame_profile.record_and_submit_milliseconds / 1000.0);
-	values.push_back("input_state_application");
-	values.push_back(frame_profile.input_state_application_milliseconds / 1000.0);
-	values.push_back("snapshot_publication");
-	values.push_back(frame_profile.snapshot_publication_milliseconds / 1000.0);
-	values.push_back("completion_retirement");
-	values.push_back(frame_profile.completion_retirement_milliseconds / 1000.0);
-	values.push_back("owner_lock_wait");
-	values.push_back(frame_profile.owner_lock_wait_milliseconds / 1000.0);
-	values.push_back("style_allocated_bytes");
-	values.push_back(frame_profile.style_allocated_bytes);
-	values.push_back("layout_allocated_bytes");
-	values.push_back(frame_profile.layout_allocated_bytes);
-	values.push_back("layout_tree_allocated_bytes");
-	values.push_back(frame_profile.layout_tree_allocated_bytes);
-	values.push_back("text_shaping_allocated_bytes");
-	values.push_back(frame_profile.layout_text_shaping_allocated_bytes);
-	values.push_back("hit_test_allocated_bytes");
-	values.push_back(frame_profile.hit_test_allocated_bytes);
-	values.push_back("display_list_allocated_bytes");
-	values.push_back(frame_profile.display_list_allocated_bytes);
-	values.push_back("paint_preparation_allocated_bytes");
-	values.push_back(frame_profile.paint_preparation_allocated_bytes);
-	values.push_back("paint_traversal_allocated_bytes");
-	values.push_back(frame_profile.paint_traversal_allocated_bytes);
-	values.push_back("paint_scene_allocated_bytes");
-	values.push_back(frame_profile.paint_scene_construction_allocated_bytes);
-	values.push_back("paint_candidate_index_allocated_bytes");
-	values.push_back(frame_profile.paint_candidate_index_allocated_bytes);
-	values.push_back("complete_frame_materialization_allocated_bytes");
-	values.push_back(frame_profile.complete_frame_materialization_allocated_bytes);
-	values.push_back("complete_sequence_allocated_bytes");
-	values.push_back(frame_profile.complete_sequence_construction_allocated_bytes);
-	values.push_back("semantic_snapshot_allocated_bytes");
-	values.push_back(frame_profile.semantic_snapshot_allocated_bytes);
-	values.push_back("raster_allocated_bytes");
-	values.push_back(frame_profile.raster_allocated_bytes);
-	values.push_back("authoritative_paint_chunks");
-	values.push_back(frame_profile.authoritative_paint_chunk_count);
-	values.push_back("visited_paint_chunks");
-	values.push_back(frame_profile.visited_paint_chunk_count);
-	values.push_back("changed_paint_chunks");
-	values.push_back(frame_profile.changed_paint_chunk_identity_count);
-	values.push_back("immutable_command_references");
-	values.push_back(frame_profile.immutable_command_reference_count);
-	values.push_back("flat_command_references");
-	values.push_back(frame_profile.flat_command_reference_count);
-	values.push_back("semantic_segments");
-	values.push_back(frame_profile.semantic_segment_count);
-	values.push_back("new_scope_commands");
-	values.push_back(frame_profile.new_scope_command_count);
-	values.push_back("new_scrollbar_commands");
-	values.push_back(frame_profile.new_scrollbar_command_count);
-	values.push_back("snapshot_entries_written");
-	values.push_back(frame_profile.snapshot_array_entry_write_count);
-	values.push_back("retained_transform_layer_hits");
-	values.push_back(frame_profile.retained_transform_layer_hit_count);
-	values.push_back("retained_transform_layer_rasters");
-	values.push_back(frame_profile.retained_transform_layer_raster_count);
-	double input_to_visible_milliseconds = 0.0;
-	for (double sample : frame_input_to_visible_milliseconds) {
-		input_to_visible_milliseconds = MAX(input_to_visible_milliseconds, sample);
-	}
-	values.push_back("input_to_visible");
-	values.push_back(input_to_visible_milliseconds / 1000.0);
-	double input_to_composed_milliseconds = 0.0;
-	for (double sample : frame_input_to_composed_milliseconds) {
-		input_to_composed_milliseconds = MAX(input_to_composed_milliseconds, sample);
-	}
-	values.push_back("input_to_composed");
-	values.push_back(input_to_composed_milliseconds / 1000.0);
-	EngineDebugger::profiler_add_frame_data("servers", values);
+	return values;
 }
 
 void HCSRPerformanceMonitor::remove(uint64_t p_instance_id) {
 	MutexLock lock(mutex);
-	profiles.erase(p_instance_id);
+	profile_store.remove(p_instance_id);
 	integration_counters.erase(p_instance_id);
 }
 
@@ -544,7 +468,7 @@ double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
 		}
 		return value;
 	}
-	for (const KeyValue<uint64_t, hcsr_performance_profile_t> &entry : profiles) {
+	for (const KeyValue<uint64_t, hcsr_performance_profile_t> &entry : profile_store.get_latest_profiles()) {
 		const hcsr_performance_profile_t &profile = entry.value;
 		switch ((Monitor)p_monitor) {
 			case MONITOR_FRAME_TIME:
