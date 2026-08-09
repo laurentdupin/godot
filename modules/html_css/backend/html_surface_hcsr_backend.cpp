@@ -2629,13 +2629,26 @@ Error HTMLSurfaceHCSRBackend::mouse_move(const Point2 &p_position, int p_modifie
 	const double event_time_seconds = OS::get_singleton() != nullptr ? (double)OS::get_singleton()->get_ticks_usec() / 1000000.0 : 0.0;
 	r_visual_state_changed = false;
 	pointer_position = p_position;
-	const Error input_error = _set_input();
-	if (input_error != OK) {
-		return input_error;
+	if (!_ensure_renderer()) {
+		return ERR_CANT_CREATE;
 	}
 	const uint32_t buttons = primary_button_pressed ? 1U : 0U;
 	uint32_t damage_flags = HCSR_POINTER_DAMAGE_NONE;
-	const hcsr_status_t status = hcsr_renderer_dispatch_pointer_move_ex3(renderer, p_position.x, p_position.y, buttons, 1, event_time_seconds, &damage_flags);
+	const hcsr_status_t status = hcsr_renderer_dispatch_pointer_move_ex4(
+			renderer,
+			p_position.x,
+			p_position.y,
+			primary_button_pressed ? 1 : 0,
+			scroll_offset.x,
+			scroll_offset.y,
+			HCSR_POINTER_KIND_MOUSE,
+			buttons,
+			1,
+			event_time_seconds,
+			&damage_flags);
+	if (status == HCSR_STATUS_OK) {
+		input_state_cache.mark_synchronized(pointer_position, primary_button_pressed, scroll_offset);
+	}
 	r_visual_state_changed = (damage_flags & HCSR_POINTER_DAMAGE_VISUAL) != 0;
 	return status == HCSR_STATUS_OK ? OK : ERR_CANT_ACQUIRE_RESOURCE;
 }
