@@ -6,6 +6,9 @@ const PHYSICAL_SIZE := Vector2i(2560, 1392)
 var backend_preference := HTMLView.BACKEND_CPU
 var backend_name := "CPU"
 var active_generation := 0
+var queued_generation := 0
+var view_under_test: HTMLView
+var queued_generation_was_inactive := false
 
 
 func _initialize() -> void:
@@ -35,9 +38,11 @@ func _initialize() -> void:
 		PHYSICAL_SIZE.y / float(LOGICAL_SIZE.y))
 	viewport.add_child(transform_parent)
 	var view := HTMLView.new()
+	view_under_test = view
 	view.backend_preference = backend_preference
 	view.viewport_size_mode = HTMLView.VIEWPORT_SIZE_CONTROL_PHYSICAL_ADJUSTED
 	view.size = Vector2(LOGICAL_SIZE)
+	view.frame_queued.connect(_on_frame_queued)
 	view.frame_activated.connect(_on_frame_activated)
 	view.document = document
 	transform_parent.add_child(view)
@@ -45,10 +50,14 @@ func _initialize() -> void:
 	if not await _wait_for_activation(0):
 		return
 	var baseline_generation := active_generation
+	queued_generation_was_inactive = false
 	if view.set_element_attribute(&"target", &"class", "target new") != OK:
 		_fail("%s HTMLView generation smoke could not queue its mutation." % backend_name)
 		return
 	if not await _wait_for_activation(baseline_generation):
+		return
+	if not queued_generation_was_inactive:
+		_fail("%s exposed the queued HTMLView texture before producer completion." % backend_name)
 		return
 
 	RenderingServer.force_draw(false)
@@ -80,16 +89,25 @@ func _initialize() -> void:
 
 
 func _wait_for_activation(after_generation: int) -> bool:
-	for _frame in range(30):
+	var deadline_usec := Time.get_ticks_usec() + 5_000_000
+	while Time.get_ticks_usec() < deadline_usec:
+		RenderingServer.force_draw(false)
+		await RenderingServer.frame_post_draw
 		await process_frame
 		if active_generation > after_generation:
 			return true
-	_fail("%s HTMLView generation smoke timed out after generation %d." % [backend_name, after_generation])
+	_fail("%s HTMLView generation smoke timed out after generation %d (queued=%d active=%d)." % [backend_name, after_generation, queued_generation, active_generation])
 	return false
 
 
 func _on_frame_activated(generation: int) -> void:
 	active_generation = generation
+
+
+func _on_frame_queued(generation: int) -> void:
+	queued_generation = generation
+	if view_under_test != null and view_under_test.get_generation() < generation:
+		queued_generation_was_inactive = true
 
 
 func _fail(message: String) -> void:

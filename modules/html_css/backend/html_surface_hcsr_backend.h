@@ -26,6 +26,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 		RID mipmapped_texture_rid;
 		HashMap<uint64_t, RID> import_cache;
 		HashMap<uint64_t, uint64_t> submitted_generations;
+		HashMap<uint64_t, hcsr_gpu_frame_t> queued_frames;
 		hcsr_gpu_frame_t active_frame = {};
 		uint64_t active_generation = 0;
 		void *native_texture = nullptr;
@@ -63,7 +64,9 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	uint64_t completed_gpu_submission_token = 0;
 	hcsr_gpu_frame_t active_gpu_frame = {};
 	// Swapped atomically with the texture and immutable metadata for the active generation.
-	// Engine-queue-ordered frames activate at submission; private-queue frames activate at completion.
+	// GPU frames activate only after producer completion. Queue ordering keeps the
+	// handoff asynchronous, but it does not make synchronous texture consumers
+	// safe before the producer fence has completed.
 	hcsr_hit_test_snapshot_t *active_hit_test_snapshot = nullptr;
 	void *native_gpu_texture = nullptr;
 	uint64_t native_gpu_generation = 0;
@@ -148,7 +151,8 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	void _poll_gpu_presentation_on_render_thread();
 	bool _record_submitted_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output);
 	bool _activate_engine_ordered_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output);
-	bool _activate_engine_ordered_output_group_on_render_thread(const hcsr_gpu_frame_t &p_primary_output);
+	bool _queue_engine_ordered_output_group_on_render_thread(const hcsr_gpu_frame_t &p_primary_output);
+	bool _activate_completed_engine_ordered_output_group_on_render_thread(const hcsr_gpu_frame_t &p_primary_output, const Vector<uint64_t> &p_superseded_generations);
 	bool _activate_completed_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output);
 	void _ensure_gpu_texture_imported_on_render_thread();
 	void _publish_external_texture_state_on_render_thread(RID p_texture);
