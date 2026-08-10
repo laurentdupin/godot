@@ -4,6 +4,7 @@ const WIDTH := 320
 const HEIGHT := 180
 const INNER_TOP := 30
 const INNER_HEIGHT := 120
+const WAIT_TIMEOUT_MSEC := 10000
 const FINAL_HTML := """<div id='section-0' class='section section-0'>Zero</div><div id='section-1' class='section section-1'>One</div><button id='section-mid' class='section section-mid' data-godot-action='mid'>Middle</button><div id='section-3' class='section section-3'>Three</div><div id='section-4' class='section section-4'>Four</div><button id='section-final' class='section section-final' data-godot-action='final'>Final</button>"""
 const INITIAL_HTML := """<div id='section-0' class='section section-0'>Zero</div><div id='section-1' class='section section-1'>One</div>"""
 const STYLE := """
@@ -13,6 +14,7 @@ const STYLE := """
 .outer-tail{height:160px;background:#1e293b}.section{display:block;width:260px;height:50px;margin:0;padding:0;border:0;color:white}
 .section-0{background:#991b1b}.section-1{background:#1d4ed8}.section-mid{height:40px;background:#16a34a}
 .section-3{background:#7e22ce}.section-4{background:#c2410c}.section-final{height:40px;background:#0891b2}
+.section-final[data-continuation='1']{background:#0e7490}
 """
 
 var backend_preference := HTMLView.BACKEND_CPU
@@ -85,8 +87,8 @@ func _initialize() -> void:
 
 	mutated_generation = mutated.get_generation()
 	fresh_generation = fresh.get_generation()
-	if mutated.set_element_attribute(&"section-0", &"data-continuation", "1") != OK \
-			or fresh.set_element_attribute(&"section-0", &"data-continuation", "1") != OK:
+	if mutated.set_element_attribute(&"section-final", &"data-continuation", "1") != OK \
+			or fresh.set_element_attribute(&"section-final", &"data-continuation", "1") != OK:
 		_fail("%s anonymous-container continuation mutation was rejected." % backend_name)
 		return
 	if not await _wait_for_view_generation(mutated, mutated_generation) \
@@ -95,8 +97,8 @@ func _initialize() -> void:
 	mutated_final = mutated.get_texture().get_image()
 	fresh_final = fresh.get_texture().get_image()
 	if not _images_equal(mutated_final, fresh_final) \
-			or not _is_color(mutated_final.get_pixel(50, INNER_TOP + 85), Color("0891b2")) \
-			or not _is_color(mutated_final.get_pixel(50, INNER_TOP + INNER_HEIGHT - 2), Color("0891b2")):
+			or not _is_color(mutated_final.get_pixel(50, INNER_TOP + 85), Color("0e7490")) \
+			or not _is_color(mutated_final.get_pixel(50, INNER_TOP + INNER_HEIGHT - 2), Color("0e7490")):
 		_fail("%s did not preserve the anonymous nearest container offset on the following frame." % backend_name)
 		return
 
@@ -114,8 +116,9 @@ func _initialize() -> void:
 	target.render_now()
 	if not await _wait_for_target_image(target):
 		return
-	if target.scroll_element_into_view(&"section-final") != OK:
-		_fail("%s HTMLRenderTarget rejected the final-section request." % backend_name)
+	if target.set_element_attribute(&"section-final", &"data-continuation", "1") != OK \
+			or target.scroll_element_into_view(&"section-final") != OK:
+		_fail("%s HTMLRenderTarget rejected the same-frame mutation or final-section request." % backend_name)
 		return
 	if not await _wait_for_target_match(target, fresh_final):
 		return
@@ -136,7 +139,8 @@ func _make_view(inner_html: String) -> HTMLView:
 	return view
 
 func _wait_for_initial_views(first: HTMLView, second: HTMLView) -> bool:
-	for _frame in range(40):
+	var deadline := Time.get_ticks_msec() + WAIT_TIMEOUT_MSEC
+	while Time.get_ticks_msec() < deadline:
 		await process_frame
 		if first.get_generation() > 0 and second.get_generation() > 0 \
 				and first.get_texture() != null and second.get_texture() != null:
@@ -145,7 +149,8 @@ func _wait_for_initial_views(first: HTMLView, second: HTMLView) -> bool:
 	return false
 
 func _wait_for_view_generation(view: HTMLView, after_generation: int) -> bool:
-	for _frame in range(40):
+	var deadline := Time.get_ticks_msec() + WAIT_TIMEOUT_MSEC
+	while Time.get_ticks_msec() < deadline:
 		await process_frame
 		if view.get_generation() > after_generation and view.get_texture() != null:
 			return true
@@ -153,17 +158,19 @@ func _wait_for_view_generation(view: HTMLView, after_generation: int) -> bool:
 	return false
 
 func _wait_for_target_image(target: HTMLRenderTarget) -> bool:
-	for _frame in range(40):
+	var deadline := Time.get_ticks_msec() + WAIT_TIMEOUT_MSEC
+	while Time.get_ticks_msec() < deadline:
 		await process_frame
-		if target.get_texture() != null and target.get_image() != null:
+		if _get_target_image(target) != null:
 			return true
 	_fail("%s scroll-into-view smoke timed out waiting for HTMLRenderTarget." % backend_name)
 	return false
 
 func _wait_for_target_match(target: HTMLRenderTarget, reference: Image) -> bool:
-	for _frame in range(40):
+	var deadline := Time.get_ticks_msec() + WAIT_TIMEOUT_MSEC
+	while Time.get_ticks_msec() < deadline:
 		await process_frame
-		var image := target.get_image()
+		var image := _get_target_image(target)
 		if image != null and _images_equal(image, reference):
 			return true
 	_fail("%s HTMLRenderTarget did not converge to the clamped HTMLView output." % backend_name)
@@ -173,6 +180,12 @@ func _images_equal(first: Image, second: Image) -> bool:
 	return first != null and second != null \
 			and first.get_size() == second.get_size() \
 			and first.get_data() == second.get_data()
+
+func _get_target_image(target: HTMLRenderTarget) -> Image:
+	if backend_preference == HTMLView.BACKEND_CPU:
+		return target.get_image()
+	var texture := target.get_texture()
+	return texture.get_image() if texture != null else null
 
 func _is_color(actual: Color, expected: Color) -> bool:
 	return abs(actual.r - expected.r) <= 0.01 \
