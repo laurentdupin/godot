@@ -30,10 +30,6 @@
 
 #include "html_render_surface.h"
 
-#ifdef HTML_CSS_USE_BLINK_C_API
-#include "backend/html_surface_blink_c_api_backend.h"
-#include "backend/html_surface_blink_gpu_backend.h"
-#endif
 #ifdef HTML_CSS_USE_HCSR
 #include "backend/html_surface_hcsr_backend.h"
 #endif
@@ -45,10 +41,7 @@
 #include "core/os/os.h"
 
 static bool html_surface_auto_can_use_gpu_backend() {
-#ifdef HTML_CSS_USE_BLINK_C_API
-	const String rendering_driver = OS::get_singleton() != nullptr ? OS::get_singleton()->get_current_rendering_driver_name().to_lower() : String();
-	return rendering_driver == "vulkan" || rendering_driver == "d3d12";
-#elif defined(HTML_CSS_USE_HCSR)
+#ifdef HTML_CSS_USE_HCSR
 	const String rendering_driver = OS::get_singleton() != nullptr ? OS::get_singleton()->get_current_rendering_driver_name().to_lower() : String();
 	return rendering_driver == "d3d12" || rendering_driver == "vulkan" || rendering_driver == "metal";
 #else
@@ -103,15 +96,7 @@ void HTMLRenderSurface::_ensure_backend() {
 	}
 
 	if (backend_preference == HTML_SURFACE_BACKEND_AUTO) {
-#ifdef HTML_CSS_USE_BLINK_C_API
-		if (html_surface_auto_can_use_gpu_backend()) {
-			backend = memnew(HTMLSurfaceBlinkGPUBackend(BLINK_STANDALONE_GPU_BACKEND_NONE));
-		} else {
-			html_surface_warn_auto_cpu_fallback(vformat("Godot rendering driver '%s' has no HTML/CSS GPU target backend.", OS::get_singleton() != nullptr ? OS::get_singleton()->get_current_rendering_driver_name() : String("unknown")));
-			backend = memnew(HTMLSurfaceExternalCApiBackend);
-		}
-#else
-	#ifdef HTML_CSS_USE_HCSR
+#ifdef HTML_CSS_USE_HCSR
 		if (html_surface_auto_can_use_gpu_backend()) {
 			const String rendering_driver = OS::get_singleton()->get_current_rendering_driver_name().to_lower();
 			backend = memnew(HTMLSurfaceHCSRBackend(html_surface_hcsr_backend_for_driver(rendering_driver)));
@@ -119,15 +104,12 @@ void HTMLRenderSurface::_ensure_backend() {
 			html_surface_warn_auto_cpu_fallback("HCSR host-device GPU mode requires Godot's Vulkan, D3D12, or Metal rendering driver");
 			backend = memnew(HTMLSurfaceHCSRBackend);
 		}
-	#else
+#else
 		html_surface_warn_auto_cpu_fallback("no external HTML/CSS renderer provider is compiled in");
 		backend = memnew(HTMLSurfaceCPUBackend);
-	#endif
 #endif
 	} else if (backend_preference == HTML_SURFACE_BACKEND_GPU_AUTO) {
-#ifdef HTML_CSS_USE_BLINK_C_API
-		backend = memnew(HTMLSurfaceBlinkGPUBackend(BLINK_STANDALONE_GPU_BACKEND_NONE));
-#elif defined(HTML_CSS_USE_HCSR)
+#ifdef HTML_CSS_USE_HCSR
 		if (html_surface_auto_can_use_gpu_backend()) {
 			const String rendering_driver = OS::get_singleton()->get_current_rendering_driver_name().to_lower();
 			backend = memnew(HTMLSurfaceHCSRBackend(html_surface_hcsr_backend_for_driver(rendering_driver)));
@@ -135,27 +117,23 @@ void HTMLRenderSurface::_ensure_backend() {
 			backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS GPU backend requested, but HCSR host-device mode requires Godot's Vulkan, D3D12, or Metal rendering driver. Explicit GPU requests do not fall back to CPU output."));
 		}
 #else
-		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS GPU backend requested, but the external renderer C API backend is not compiled in. Explicit GPU requests do not fall back to CPU output."));
+		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS GPU backend requested, but HCSR is not compiled in. Explicit GPU requests do not fall back to CPU output."));
 #endif
 	} else if (backend_preference == HTML_SURFACE_BACKEND_VULKAN) {
-#ifdef HTML_CSS_USE_BLINK_C_API
-		backend = memnew(HTMLSurfaceBlinkGPUBackend(BLINK_STANDALONE_GPU_BACKEND_VULKAN));
-#elif defined(HTML_CSS_USE_HCSR)
+#ifdef HTML_CSS_USE_HCSR
 		backend = OS::get_singleton() != nullptr && OS::get_singleton()->get_current_rendering_driver_name().to_lower() == "vulkan"
 				? (HTMLSurfaceBackend *)memnew(HTMLSurfaceHCSRBackend(HCSR_RENDER_BACKEND_VULKAN))
 				: (HTMLSurfaceBackend *)memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS Vulkan backend requested, but Godot is not running its Vulkan rendering driver."));
 #else
-		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS Vulkan GPU backend requested, but the external renderer C API backend is not compiled in. Explicit GPU requests do not fall back to CPU output."));
+		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS Vulkan GPU backend requested, but HCSR is not compiled in. Explicit GPU requests do not fall back to CPU output."));
 #endif
 	} else if (backend_preference == HTML_SURFACE_BACKEND_D3D12) {
-#ifdef HTML_CSS_USE_BLINK_C_API
-		backend = memnew(HTMLSurfaceBlinkGPUBackend(BLINK_STANDALONE_GPU_BACKEND_D3D12));
-#elif defined(HTML_CSS_USE_HCSR)
+#ifdef HTML_CSS_USE_HCSR
 		backend = OS::get_singleton() != nullptr && OS::get_singleton()->get_current_rendering_driver_name().to_lower() == "d3d12"
 				? (HTMLSurfaceBackend *)memnew(HTMLSurfaceHCSRBackend(HCSR_RENDER_BACKEND_D3D12))
 				: (HTMLSurfaceBackend *)memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS D3D12 backend requested, but Godot is not running its D3D12 rendering driver."));
 #else
-		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS D3D12 GPU backend requested, but the external renderer C API backend is not compiled in. Explicit GPU requests do not fall back to CPU output."));
+		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS D3D12 GPU backend requested, but HCSR is not compiled in. Explicit GPU requests do not fall back to CPU output."));
 #endif
 	} else if (backend_preference == HTML_SURFACE_BACKEND_METAL) {
 #ifdef HTML_CSS_USE_HCSR
@@ -166,9 +144,7 @@ void HTMLRenderSurface::_ensure_backend() {
 		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS Metal GPU backend requires the HCSR renderer provider. Explicit GPU requests do not fall back to CPU output."));
 #endif
 	} else if (backend_preference == HTML_SURFACE_BACKEND_CPU) {
-#ifdef HTML_CSS_USE_BLINK_C_API
-		backend = memnew(HTMLSurfaceExternalCApiBackend);
-#elif defined(HTML_CSS_USE_HCSR)
+#ifdef HTML_CSS_USE_HCSR
 		backend = memnew(HTMLSurfaceHCSRBackend);
 #else
 		backend = memnew(HTMLSurfaceCPUBackend);
@@ -221,9 +197,7 @@ bool HTMLRenderSurface::_fallback_auto_gpu_to_cpu(const String &p_reason) {
 		return false;
 	}
 
-#ifdef HTML_CSS_USE_BLINK_C_API
-	HTMLSurfaceBackend *fallback_backend = memnew(HTMLSurfaceExternalCApiBackend);
-#elif defined(HTML_CSS_USE_HCSR)
+#ifdef HTML_CSS_USE_HCSR
 	HTMLSurfaceBackend *fallback_backend = memnew(HTMLSurfaceHCSRBackend);
 #else
 	HTMLSurfaceBackend *fallback_backend = memnew(HTMLSurfaceCPUBackend);
@@ -661,6 +635,14 @@ Error HTMLRenderSurface::set_element_style(const StringName &p_id, const String 
 Error HTMLRenderSurface::replace_stylesheet_text(const StringName &p_style_id, const String &p_css_text) {
 	_ensure_backend();
 	return backend->replace_stylesheet_text(p_style_id, p_css_text);
+}
+
+Error HTMLRenderSurface::scroll_element_into_view(const StringName &p_id, const StringName &p_block_alignment) {
+	if (p_id.is_empty() || p_block_alignment != StringName("start")) {
+		return ERR_INVALID_PARAMETER;
+	}
+	_ensure_backend();
+	return backend->scroll_element_into_view(p_id, p_block_alignment);
 }
 
 Error HTMLRenderSurface::set_form_control_value(const StringName &p_id, const String &p_value) {

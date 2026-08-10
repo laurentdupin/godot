@@ -131,6 +131,7 @@ public:
 	virtual Error remove_element_attribute(const StringName &, const StringName &) { return ERR_UNAVAILABLE; }
 	virtual Error set_element_style(const StringName &, const String &) { return ERR_UNAVAILABLE; }
 	virtual Error replace_stylesheet_text(const StringName &, const String &) { return ERR_UNAVAILABLE; }
+	virtual Error scroll_element_into_view(const StringName &, const StringName &) { return ERR_UNAVAILABLE; }
 	virtual Error set_form_control_value(const StringName &, const String &) { return ERR_UNAVAILABLE; }
 	virtual Error set_form_control_checked(const StringName &, bool) { return ERR_UNAVAILABLE; }
 	virtual Error focus_element(const StringName &) { return ERR_UNAVAILABLE; }

@@ -31,13 +31,13 @@
 			Optional end-to-end budget from an HTML frame request until its synchronized output group is activated. A positive value enables [signal frame_budget_missed]; [code]0.0[/code] disables reporting. Exceeding this budget never permits dropping animation samples, substituting stale pixels, or activating different generations across outputs.
 		</member>
 		<member name="accept_action" type="StringName" setter="set_accept_action" getter="get_accept_action" default="&amp;&quot;ui_accept&quot;">
-			Godot input action translated to Blink's Enter key for focused HTML activation.
+			Godot input action translated to Enter for focused HTML activation.
 		</member>
 		<member name="focus_next_action" type="StringName" setter="set_focus_next_action" getter="get_focus_next_action" default="&amp;&quot;ui_focus_next&quot;">
-			Godot input action translated to Blink's Tab key.
+			Godot input action translated to Tab.
 		</member>
 		<member name="focus_previous_action" type="StringName" setter="set_focus_previous_action" getter="get_focus_previous_action" default="&amp;&quot;ui_focus_prev&quot;">
-			Godot input action translated to Blink's Shift+Tab key.
+			Godot input action translated to Shift+Tab.
 		</member>
 		<member name="html" type="String" setter="set_html" getter="get_html" default="&quot;&quot;">
 			Convenience access to the assigned document's inline HTML source.
@@ -58,13 +58,13 @@
 			Physical raster scale used with [constant VIEWPORT_SIZE_FIXED] without changing its logical CSS viewport. A value of [code]0.0[/code] uses a 1× raster so [member fixed_viewport_size] is the exact render resolution. Set a positive value to request a particular HiDPI or supersampling density.
 		</member>
 		<member name="text_backspace_action" type="StringName" setter="set_text_backspace_action" getter="get_text_backspace_action" default="&amp;&quot;ui_text_backspace&quot;">
-			Godot input action translated to Blink's Backspace key.
+			Godot input action translated to Backspace.
 		</member>
 		<member name="text_delete_action" type="StringName" setter="set_text_delete_action" getter="get_text_delete_action" default="&amp;&quot;ui_text_delete&quot;">
-			Godot input action translated to Blink's Delete key.
+			Godot input action translated to Delete.
 		</member>
 		<member name="text_submit_action" type="StringName" setter="set_text_submit_action" getter="get_text_submit_action" default="&amp;&quot;ui_text_submit&quot;">
-			Godot input action translated to Blink's Enter key for text submit.
+			Godot input action translated to Enter for text submit.
 		</member>
 		<member name="use_document_minimum_size" type="bool" setter="set_use_document_minimum_size" getter="is_using_document_minimum_size" default="false">
 			If [code]true[/code], the assigned document's default size is reported as this control's minimum size. Leave disabled when the HTML viewport should follow the actual Control or screen-pixel size.
@@ -248,6 +248,14 @@
 				Replaces the inner HTML of the live document body without reloading the document. The no-script profile rejects unsafe fragments such as scripts, inline event handlers, and [code]javascript:[/code] URL surfaces with a recoverable error.
 			</description>
 		</method>
+		<method name="scroll_element_into_view">
+			<return type="int" enum="Error" />
+			<param index="0" name="id" type="StringName" />
+			<param index="1" name="block_alignment" type="StringName" default="&amp;&quot;start&amp;&quot;" />
+			<description>
+				Scrolls the nearest element overflow container ([code]auto[/code] or [code]scroll[/code]) of the element with [param id] so the element's block-start edge is aligned with the scrollport start, clamped to the container's maximum scroll offset. Currently [code]start[/code] is the supported block alignment. The document viewport is not scrolled, and the live document is preserved.
+			</description>
+		</method>
 		<method name="set_form_control_value">
 			<return type="int" enum="Error" />
 			<param index="0" name="id" type="StringName" />
@@ -261,7 +269,7 @@
 			<param index="0" name="id" type="StringName" />
 			<param index="1" name="checked" type="bool" />
 			<description>
-				Sets the live checked state of a checkbox or radio control using Blink form-control semantics.
+				Sets the live checked state of a checkbox or radio control.
 			</description>
 		</method>
 		<method name="focus_element">

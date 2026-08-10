@@ -246,6 +246,7 @@ public:
 	Error remove_element_attribute(const StringName &p_id, const StringName &p_name);
 	Error set_element_style(const StringName &p_id, const String &p_css_text);
 	Error replace_stylesheet_text(const StringName &p_style_id, const String &p_css_text);
+	Error scroll_element_into_view(const StringName &p_id, const StringName &p_block_alignment);
 	Error set_form_control_value(const StringName &p_id, const String &p_value);
 	Error set_form_control_checked(const StringName &p_id, bool p_checked);
 	Error focus_element(const StringName &p_id);

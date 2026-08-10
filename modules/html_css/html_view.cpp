@@ -367,6 +367,7 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("remove_element_attribute", "id", "name"), &HTMLView::remove_element_attribute);
 	ClassDB::bind_method(D_METHOD("set_element_style", "id", "css_text"), &HTMLView::set_element_style);
 	ClassDB::bind_method(D_METHOD("replace_stylesheet_text", "style_id", "css_text"), &HTMLView::replace_stylesheet_text);
+	ClassDB::bind_method(D_METHOD("scroll_element_into_view", "id", "block_alignment"), &HTMLView::scroll_element_into_view, DEFVAL(StringName("start")));
 	ClassDB::bind_method(D_METHOD("set_form_control_value", "id", "value"), &HTMLView::set_form_control_value);
 	ClassDB::bind_method(D_METHOD("set_form_control_checked", "id", "checked"), &HTMLView::set_form_control_checked);
 	ClassDB::bind_method(D_METHOD("focus_element", "id"), &HTMLView::focus_element);
@@ -1815,6 +1816,14 @@ Error HTMLView::set_element_style(const StringName &p_id, const String &p_css_te
 
 Error HTMLView::replace_stylesheet_text(const StringName &p_style_id, const String &p_css_text) {
 	Error err = surface->replace_stylesheet_text(p_style_id, p_css_text);
+	if (err == OK) {
+		_queue_frame_render();
+	}
+	return err;
+}
+
+Error HTMLView::scroll_element_into_view(const StringName &p_id, const StringName &p_block_alignment) {
+	Error err = surface->scroll_element_into_view(p_id, p_block_alignment);
 	if (err == OK) {
 		_queue_frame_render();
 	}

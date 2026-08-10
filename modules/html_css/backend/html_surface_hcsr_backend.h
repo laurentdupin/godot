@@ -239,6 +239,7 @@ public:
 	virtual Error remove_element_attribute(const StringName &p_id, const StringName &p_name) override;
 	virtual Error set_element_style(const StringName &p_id, const String &p_css_text) override;
 	virtual Error replace_stylesheet_text(const StringName &p_style_id, const String &p_css_text) override;
+	virtual Error scroll_element_into_view(const StringName &p_id, const StringName &p_block_alignment) override;
 	virtual Error set_form_control_value(const StringName &p_id, const String &p_value) override;
 	virtual Error set_form_control_checked(const StringName &p_id, bool p_checked) override;
 	virtual bool get_form_control_state(const StringName &p_id, HTMLFormControlState &r_state) override;

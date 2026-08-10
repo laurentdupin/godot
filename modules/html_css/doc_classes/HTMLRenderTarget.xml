@@ -119,6 +119,14 @@
 				Replaces the inner HTML of the live document body without reloading the document. Unsafe fragments are rejected by the no-script profile.
 			</description>
 		</method>
+		<method name="scroll_element_into_view">
+			<return type="int" enum="Error" />
+			<param index="0" name="id" type="StringName" />
+			<param index="1" name="block_alignment" type="StringName" default="&amp;&quot;start&amp;&quot;" />
+			<description>
+				Scrolls the nearest element overflow container ([code]auto[/code] or [code]scroll[/code]) of the element with [param id] so the element's block-start edge is aligned with the scrollport start, clamped to the container's maximum scroll offset. Currently [code]start[/code] is the supported block alignment. The document viewport is not scrolled, and the live document is preserved.
+			</description>
+		</method>
 		<method name="set_form_control_value">
 			<return type="int" enum="Error" />
 			<param index="0" name="id" type="StringName" />
@@ -132,7 +140,7 @@
 			<param index="0" name="id" type="StringName" />
 			<param index="1" name="checked" type="bool" />
 			<description>
-				Sets the live checked state of a checkbox or radio control using Blink form-control semantics.
+				Sets the live checked state of a checkbox or radio control.
 			</description>
 		</method>
 		<method name="focus_element">

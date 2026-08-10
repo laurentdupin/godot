@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("hcsr", "blink", "none")]
+    [ValidateSet("hcsr", "none")]
     [string]$Renderer = "hcsr",
 
     [ValidateRange(1, 64)]

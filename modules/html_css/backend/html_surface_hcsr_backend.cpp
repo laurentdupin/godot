@@ -2943,6 +2943,19 @@ Error HTMLSurfaceHCSRBackend::replace_stylesheet_text(const StringName &p_style_
 	return _apply_dom_mutation(HCSR_DOM_MUTATION_SET_TEXT, HCSR_DOM_TARGET_ID, String(p_style_id), String(), p_css_text);
 }
 
+Error HTMLSurfaceHCSRBackend::scroll_element_into_view(const StringName &p_id, const StringName &p_block_alignment) {
+	if (!_sync_document()) {
+		return ERR_UNAVAILABLE;
+	}
+	const CharString id_utf8 = String(p_id).utf8();
+	const CharString alignment_utf8 = String(p_block_alignment).utf8();
+	if (hcsr_renderer_scroll_element_into_view(renderer, id_utf8.ptr(), alignment_utf8.ptr()) != HCSR_STATUS_OK) {
+		_record_error("HCSR rejected an element scroll-into-view request");
+		return ERR_INVALID_PARAMETER;
+	}
+	return OK;
+}
+
 Error HTMLSurfaceHCSRBackend::set_form_control_value(const StringName &p_id, const String &p_value) {
 	if (!_sync_document()) {
 		return ERR_UNAVAILABLE;
