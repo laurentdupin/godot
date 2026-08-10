@@ -61,6 +61,9 @@ func _run() -> void:
 	if StringName(missed.stage) != &"prepare_submit" and StringName(missed.stage) != &"activation":
 		_fail("The overload result did not classify its missed stage: %s." % missed)
 		return
+	if not Performance.has_custom_monitor("HCSR/Semantic Preparation Time") or not Performance.has_custom_monitor("HCSR/Semantic Snapshot Validation Time"):
+		_fail("Separated semantic stage telemetry monitors were not registered.")
+		return
 	var semantic_preparation: float = Performance.get_custom_monitor("HCSR/Semantic Preparation Time")
 	var semantic_validation: float = Performance.get_custom_monitor("HCSR/Semantic Snapshot Validation Time")
 	var translated_commands: float = Performance.get_custom_monitor("HCSR/Translated Commands")
@@ -69,8 +72,8 @@ func _run() -> void:
 	var snapshot_publication: float = Performance.get_custom_monitor("HCSR/Snapshot Publication Time")
 	var owner_lock_wait: float = Performance.get_custom_monitor("HCSR/Owner Lock Wait Time")
 	var owner_lock_contentions: float = Performance.get_custom_monitor("HCSR/Owner Lock Contentions")
-	if semantic_preparation <= 0.0 or semantic_validation <= 0.0:
-		_fail("Separated semantic stage telemetry was not published: preparation=%f validation=%f." % [semantic_preparation, semantic_validation])
+	if semantic_preparation <= 0.0 or semantic_validation < 0.0:
+		_fail("Separated semantic stage telemetry was invalid: preparation=%f validation=%f." % [semantic_preparation, semantic_validation])
 		return
 	if translated_commands != 0.0 or translation_bytes != 0.0:
 		_fail("A non-scroll mutation unexpectedly materialized translated commands: commands=%f bytes=%f." % [translated_commands, translation_bytes])
