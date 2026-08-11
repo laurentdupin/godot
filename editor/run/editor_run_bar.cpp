@@ -368,6 +368,18 @@ void EditorRunBar::_run_scene(const String &p_scene_path, const Vector<String> &
 		return;
 	}
 
+	const String recent_run_scene = ResourceUID::ensure_path(run_filename);
+	if (recent_run_scene.begins_with("res://")) {
+		Array recent_run_scenes = EditorSettings::get_singleton()->get_project_metadata("recent_files", "run_scenes", Array());
+		recent_run_scenes.erase(recent_run_scene);
+		recent_run_scenes.push_front(recent_run_scene);
+		if (recent_run_scenes.size() > 10) {
+			recent_run_scenes.resize(10);
+		}
+		EditorSettings::get_singleton()->set_project_metadata("recent_files", "run_scenes", recent_run_scenes);
+		EditorSettings::get_singleton()->save_project_metadata();
+	}
+
 	_update_play_buttons();
 	stop_button->set_disabled(false);
 

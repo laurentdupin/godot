@@ -58,6 +58,7 @@ class ProjectListItemControl : public HBoxContainer {
 	TextureRect *project_unsupported_features = nullptr;
 	TextureRect *project_different_version = nullptr;
 	HFlowContainer *tag_container = nullptr;
+	VBoxContainer *recent_scenes_container = nullptr;
 	Button *touch_menu_button = nullptr;
 
 	Color favorite_focus_color;
@@ -85,6 +86,7 @@ class ProjectListItemControl : public HBoxContainer {
 	void _favorite_button_pressed();
 	void _explore_button_pressed();
 	void _request_menu();
+	void _recent_scene_pressed(const String &p_scene_path);
 
 	ProjectList *get_list() const;
 
@@ -112,6 +114,7 @@ public:
 	void set_last_edited_info(const String &p_info);
 	void set_project_version(const String &p_version);
 	void set_unsupported_features(PackedStringArray p_features);
+	void set_recent_scenes(const PackedStringArray &p_recent_scenes);
 
 	bool should_load_project_icon() const;
 	bool is_older_version() const { return version_match_type == VersionMatchType::PROJECT_USES_OLDER_MAJOR || version_match_type == VersionMatchType::PROJECT_USES_OLDER_MINOR; }
@@ -165,12 +168,14 @@ public:
 		String path;
 		String icon;
 		String main_scene;
+		PackedStringArray recent_scenes;
 		PackedStringArray unsupported_features;
 		uint64_t last_edited = 0;
 		bool favorite = false;
 		bool grayed = false;
 		bool missing = false;
 		bool recovery_mode = false;
+		bool use_hidden_project_data_directory = true;
 		int version = 0;
 		int project_title_index = -1;
 
@@ -278,6 +283,9 @@ private:
 	void _list_item_input(const Ref<InputEvent> &p_ev, Control *p_hb);
 	void _on_favorite_pressed(Node *p_hb);
 	void _on_explore_pressed(const String &p_path);
+	void _on_recent_scene_pressed(const String &p_scene_path, const String &p_project_path);
+	static PackedStringArray _load_recent_run_scenes(const String &p_project_path, bool p_use_hidden_project_data_directory);
+	void _refresh_recent_run_scenes();
 
 	void _open_menu(const Vector2 &p_at, Control *p_hb);
 	void _menu_option(int p_option);
@@ -304,6 +312,7 @@ public:
 	static inline const char *SIGNAL_SELECTION_CHANGED = "selection_changed";
 	static inline const char *SIGNAL_PROJECT_ASK_OPEN = "project_ask_open";
 	static inline const char *SIGNAL_MENU_OPTION_SELECTED = "menu_option_selected";
+	static inline const char *SIGNAL_RECENT_SCENE_RUN_REQUESTED = "recent_scene_run_requested";
 
 	static bool project_feature_looks_like_version(const String &p_feature);
 
@@ -326,6 +335,7 @@ public:
 	void add_project(const String &dir_path, bool favorite);
 	void set_project_version(const String &p_project_path, int version);
 	int refresh_project(const String &dir_path);
+	void mark_scene_run(const String &p_project_path, const String &p_scene_path);
 	void ensure_project_visible(int p_index);
 	int get_index(const ProjectListItemControl *p_control) const;
 

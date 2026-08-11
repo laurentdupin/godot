@@ -110,6 +110,12 @@ void ProjectListItemControl::_notification(int p_what) {
 			if (touch_menu_button) {
 				touch_menu_button->set_button_icon(get_editor_theme_icon(SNAME("GuiTabMenuHl")));
 			}
+			for (Node *child : recent_scenes_container->iterate_children()) {
+				Button *scene_button = Object::cast_to<Button>(child);
+				if (scene_button) {
+					scene_button->set_button_icon(get_editor_theme_icon(SNAME("Play")));
+				}
+			}
 		} break;
 
 		case NOTIFICATION_MOUSE_ENTER: {
@@ -246,6 +252,10 @@ void ProjectListItemControl::_request_menu() {
 	emit_signal(SNAME("request_menu"), Vector2(touch_menu_button->get_position()));
 }
 
+void ProjectListItemControl::_recent_scene_pressed(const String &p_scene_path) {
+	emit_signal(SNAME("recent_scene_pressed"), p_scene_path);
+}
+
 void ProjectListItemControl::set_project_title(const String &p_title) {
 	project_title->set_text(p_title);
 	project_title->set_accessibility_name(TTRC("Project Name"));
@@ -284,6 +294,33 @@ void ProjectListItemControl::set_last_edited_info(const String &p_info) {
 
 void ProjectListItemControl::set_project_version(const String &p_info) {
 	project_version->set_text(p_info);
+}
+
+void ProjectListItemControl::set_recent_scenes(const PackedStringArray &p_recent_scenes) {
+	while (recent_scenes_container->get_child_count() > 0) {
+		Node *child = recent_scenes_container->get_child(0);
+		recent_scenes_container->remove_child(child);
+		memdelete(child);
+	}
+
+	const int displayed_scene_count = MIN(3, p_recent_scenes.size());
+	for (int i = 0; i < displayed_scene_count; i++) {
+		const String &scene_path = p_recent_scenes[i];
+		Button *scene_button = memnew(Button);
+		scene_button->set_name("RecentSceneButton");
+		scene_button->set_text(scene_path);
+		scene_button->set_tooltip_text(vformat(TTRC("Run recent scene: %s"), scene_path));
+		scene_button->set_accessibility_name(vformat(TTRC("Run recent scene: %s"), scene_path));
+		scene_button->set_flat(true);
+		scene_button->set_text_alignment(HORIZONTAL_ALIGNMENT_LEFT);
+		scene_button->set_autowrap_mode(TextServer::AUTOWRAP_ARBITRARY);
+		scene_button->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+		scene_button->set_button_icon(get_editor_theme_icon(SNAME("Play")));
+		scene_button->connect(SceneStringName(pressed), callable_mp(this, &ProjectListItemControl::_recent_scene_pressed).bind(scene_path));
+		recent_scenes_container->add_child(scene_button);
+	}
+
+	recent_scenes_container->set_visible(!p_recent_scenes.is_empty());
 }
 
 void ProjectListItemControl::set_unsupported_features(PackedStringArray p_features) {
@@ -498,6 +535,7 @@ void ProjectListItemControl::_bind_methods() {
 	ADD_SIGNAL(MethodInfo("favorite_pressed"));
 	ADD_SIGNAL(MethodInfo("explore_pressed"));
 	ADD_SIGNAL(MethodInfo("request_menu"));
+	ADD_SIGNAL(MethodInfo("recent_scene_pressed", PropertyInfo(Variant::STRING, "scene_path")));
 }
 
 ProjectListItemControl::ProjectListItemControl() {
@@ -552,6 +590,13 @@ ProjectListItemControl::ProjectListItemControl() {
 		tag_container->set_h_size_flags(Control::SIZE_EXPAND_FILL);
 		title_hb->add_child(tag_container);
 	}
+
+	recent_scenes_container = memnew(VBoxContainer);
+	recent_scenes_container->set_name("RecentScenes");
+	recent_scenes_container->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	recent_scenes_container->add_theme_constant_override("separation", 2 * EDSCALE);
+	recent_scenes_container->hide();
+	main_vbox->add_child(recent_scenes_container);
 
 	// Bottom half, containing the path and view folder button.
 	{
@@ -657,6 +702,43 @@ bool ProjectList::project_feature_looks_like_version(const String &p_feature) {
 	return p_feature.contains_char('.') && p_feature.substr(0, 3).is_numeric();
 }
 
+PackedStringArray ProjectList::_load_recent_run_scenes(const String &p_project_path, bool p_use_hidden_project_data_directory) {
+	const String project_data_directory = p_use_hidden_project_data_directory ? ".godot" : "godot";
+	const String metadata_path = p_project_path.path_join(project_data_directory).path_join("editor/project_metadata.cfg");
+
+	Ref<ConfigFile> metadata = memnew(ConfigFile);
+	if (metadata->load(metadata_path) != OK) {
+		return PackedStringArray();
+	}
+
+	const Array stored_scenes = metadata->get_value("recent_files", "run_scenes", Array());
+	PackedStringArray recent_scenes;
+	for (const Variant &stored_scene : stored_scenes) {
+		if (stored_scene.get_type() != Variant::STRING) {
+			continue;
+		}
+
+		const String scene_path = String(stored_scene).replace("\\", "/").simplify_path();
+		if (!scene_path.begins_with("res://")) {
+			continue;
+		}
+
+		const String project_relative_path = scene_path.trim_prefix("res://");
+		if (project_relative_path.is_empty() || !FileAccess::exists(p_project_path.path_join(project_relative_path))) {
+			continue;
+		}
+
+		if (!recent_scenes.has(scene_path)) {
+			recent_scenes.push_back(scene_path);
+		}
+		if (recent_scenes.size() == 10) {
+			break;
+		}
+	}
+
+	return recent_scenes;
+}
+
 // Notifications.
 
 void ProjectList::_notification(int p_what) {
@@ -673,6 +755,12 @@ void ProjectList::_notification(int p_what) {
 		case NOTIFICATION_THEME_CHANGED: {
 			if (project_context_menu) {
 				_update_menu_icons();
+			}
+		} break;
+
+		case NOTIFICATION_WM_WINDOW_FOCUS_IN: {
+			if (is_ready()) {
+				_refresh_recent_run_scenes();
 			}
 		} break;
 
@@ -818,6 +906,7 @@ ProjectList::Item ProjectList::load_project_data(const String &p_path, bool p_fa
 	const String description = cf->get_value("application", "config/description", "");
 	const PackedStringArray tags = cf->get_value("application", "config/tags", PackedStringArray());
 	const String main_scene = cf->get_value("application", "run/main_scene", "");
+	const bool use_hidden_project_data_directory = cf->get_value("application", "config/use_hidden_project_data_directory", true);
 
 	String icon = cf->get_value("application", "config/icon", "");
 	if (icon.begins_with("uid://")) {
@@ -900,7 +989,12 @@ ProjectList::Item ProjectList::load_project_data(const String &p_path, bool p_fa
 	String recovery_mode_lock_file = OS::get_singleton()->get_user_data_dir(user_dir).path_join(".recovery_mode_lock");
 	recovery_mode = FileAccess::exists(recovery_mode_lock_file);
 
-	return Item(project_name, description, project_version, tags, p_path, icon, main_scene, unsupported_features, last_edited, p_favorite, grayed, missing, recovery_mode, config_version);
+	Item item(project_name, description, project_version, tags, p_path, icon, main_scene, unsupported_features, last_edited, p_favorite, grayed, missing, recovery_mode, config_version);
+	item.use_hidden_project_data_directory = use_hidden_project_data_directory;
+	if (!missing) {
+		item.recent_scenes = _load_recent_run_scenes(p_path, use_hidden_project_data_directory);
+	}
+	return item;
 }
 
 void ProjectList::_update_icons_async() {
@@ -1232,6 +1326,7 @@ void ProjectList::_create_project_item_control(int p_index) {
 	hb->connect("explore_pressed", callable_mp(this, &ProjectList::_on_explore_pressed).bind(item.path));
 #endif
 	hb->connect("request_menu", callable_mp(this, &ProjectList::_open_menu).bind(hb));
+	hb->connect("recent_scene_pressed", callable_mp(this, &ProjectList::_on_recent_scene_pressed).bind(item.path));
 
 	if (item.project_title_index == -1) {
 		project_title_index_count++;
@@ -1243,6 +1338,7 @@ void ProjectList::_create_project_item_control(int p_index) {
 	}
 
 	project_list_vbox->add_child(hb);
+	hb->set_recent_scenes(item.recent_scenes);
 }
 
 void ProjectList::_update_project_control_translatable_fields(const Item &item) {
@@ -1376,6 +1472,55 @@ void ProjectList::_on_favorite_pressed(Node *p_hb) {
 
 void ProjectList::_on_explore_pressed(const String &p_path) {
 	OS::get_singleton()->shell_show_in_file_manager(p_path, true);
+}
+
+void ProjectList::_on_recent_scene_pressed(const String &p_scene_path, const String &p_project_path) {
+	emit_signal(SNAME(SIGNAL_RECENT_SCENE_RUN_REQUESTED), p_project_path, p_scene_path);
+}
+
+void ProjectList::_refresh_recent_run_scenes() {
+	for (Item &item : _projects) {
+		if (item.missing) {
+			continue;
+		}
+
+		const PackedStringArray recent_scenes = _load_recent_run_scenes(item.path, item.use_hidden_project_data_directory);
+		if (recent_scenes != item.recent_scenes) {
+			item.recent_scenes = recent_scenes;
+			item.control->set_recent_scenes(item.recent_scenes);
+		}
+	}
+}
+
+void ProjectList::mark_scene_run(const String &p_project_path, const String &p_scene_path) {
+	for (Item &item : _projects) {
+		if (item.path != p_project_path || item.missing || !p_scene_path.begins_with("res://")) {
+			continue;
+		}
+
+		const int existing_index = item.recent_scenes.find(p_scene_path);
+		if (existing_index >= 0) {
+			item.recent_scenes.remove_at(existing_index);
+		}
+		item.recent_scenes.insert(0, p_scene_path);
+		if (item.recent_scenes.size() > 10) {
+			item.recent_scenes.resize(10);
+		}
+		item.control->set_recent_scenes(item.recent_scenes);
+
+		const String project_data_directory = item.use_hidden_project_data_directory ? ".godot" : "godot";
+		const String metadata_path = item.path.path_join(project_data_directory).path_join("editor/project_metadata.cfg");
+		Ref<ConfigFile> metadata_file = memnew(ConfigFile);
+		metadata_file->load(metadata_path);
+		Array stored_scenes;
+		for (const String &scene_path : item.recent_scenes) {
+			stored_scenes.push_back(scene_path);
+		}
+		metadata_file->set_value("recent_files", "run_scenes", stored_scenes);
+		const Error save_error = metadata_file->save(metadata_path);
+		ERR_FAIL_COND_MSG(save_error != OK, vformat("Could not save recent scene metadata for project at '%s'.", item.path));
+		return;
+	}
 }
 
 void ProjectList::_open_menu(const Vector2 &p_at, Control *p_hb) {
@@ -1726,6 +1871,7 @@ void ProjectList::_bind_methods() {
 	ADD_SIGNAL(MethodInfo(SIGNAL_SELECTION_CHANGED));
 	ADD_SIGNAL(MethodInfo(SIGNAL_PROJECT_ASK_OPEN));
 	ADD_SIGNAL(MethodInfo(SIGNAL_MENU_OPTION_SELECTED));
+	ADD_SIGNAL(MethodInfo(SIGNAL_RECENT_SCENE_RUN_REQUESTED, PropertyInfo(Variant::STRING, "project_path"), PropertyInfo(Variant::STRING, "scene_path")));
 }
 
 ProjectList::ProjectList() {

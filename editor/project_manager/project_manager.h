@@ -189,6 +189,8 @@ class ProjectManager : public Control {
 	void _scan_projects();
 	void _run_project();
 	void _run_project_confirm();
+	void _run_recent_scene(const String &p_project_path, const String &p_scene_path);
+	bool _launch_project(const String &p_project_path, const String &p_scene_path = String());
 	void _open_selected_projects();
 	void _open_selected_projects_with_migration();
 	void _open_selected_projects_check_warnings();

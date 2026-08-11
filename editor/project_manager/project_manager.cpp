@@ -553,28 +553,51 @@ void ProjectManager::_run_project_confirm() {
 			continue;
 		}
 
-		const String &path = selected_list[i].path;
-
-		// `.substr(6)` on `ProjectSettings::get_singleton()->get_imported_files_path()` strips away the leading "res://".
-		if (!DirAccess::exists(path.path_join(ProjectSettings::get_singleton()->get_imported_files_path().substr(6)))) {
-			_show_error(TTRC("Can't run project: Assets need to be imported first.\nPlease edit the project to trigger the initial import."));
-			continue;
+		if (_launch_project(selected_list[i].path) && selected_main.begins_with("res://")) {
+			project_list->mark_scene_run(selected_list[i].path, selected_main);
 		}
-
-		print_line("Running project: " + path);
-
-		List<String> args;
-
-		for (const String &a : Main::get_forwardable_cli_arguments(Main::CLI_SCOPE_PROJECT)) {
-			args.push_back(a);
-		}
-
-		args.push_back("--path");
-		args.push_back(path);
-
-		Error err = OS::get_singleton()->create_instance(args);
-		ERR_FAIL_COND(err);
 	}
+}
+
+void ProjectManager::_run_recent_scene(const String &p_project_path, const String &p_scene_path) {
+	if (_launch_project(p_project_path, p_scene_path)) {
+		project_list->mark_scene_run(p_project_path, p_scene_path);
+	}
+}
+
+bool ProjectManager::_launch_project(const String &p_project_path, const String &p_scene_path) {
+	if (!p_scene_path.is_empty()) {
+		if (!p_scene_path.begins_with("res://") || !FileAccess::exists(p_project_path.path_join(p_scene_path.trim_prefix("res://")))) {
+			_show_error(vformat(TTR("Can't run scene '%s': The scene no longer exists."), p_scene_path));
+			project_list->refresh_project(p_project_path);
+			return false;
+		}
+	}
+
+	// `.substr(6)` on `ProjectSettings::get_singleton()->get_imported_files_path()` strips away the leading "res://".
+	if (!DirAccess::exists(p_project_path.path_join(ProjectSettings::get_singleton()->get_imported_files_path().substr(6)))) {
+		_show_error(TTRC("Can't run project: Assets need to be imported first.\nPlease edit the project to trigger the initial import."));
+		return false;
+	}
+
+	print_line(p_scene_path.is_empty() ? "Running project: " + p_project_path : vformat("Running scene %s from project: %s", p_scene_path, p_project_path));
+
+	List<String> args;
+	for (const String &argument : Main::get_forwardable_cli_arguments(Main::CLI_SCOPE_PROJECT)) {
+		args.push_back(argument);
+	}
+	args.push_back("--path");
+	args.push_back(p_project_path);
+	if (!p_scene_path.is_empty()) {
+		args.push_back(p_scene_path);
+	}
+
+	const Error launch_error = OS::get_singleton()->create_instance(args);
+	if (launch_error != OK) {
+		_show_error(vformat(TTR("Could not start project at '%s'."), p_project_path));
+		return false;
+	}
+	return true;
 }
 
 void ProjectManager::_open_selected_projects() {
@@ -1630,6 +1653,7 @@ ProjectManager::ProjectManager() {
 			project_list->connect(ProjectList::SIGNAL_SELECTION_CHANGED, callable_mp(this, &ProjectManager::_update_project_buttons));
 			project_list->connect(ProjectList::SIGNAL_PROJECT_ASK_OPEN, callable_mp(this, &ProjectManager::_open_selected_projects_check_recovery_mode));
 			project_list->connect(ProjectList::SIGNAL_MENU_OPTION_SELECTED, callable_mp(this, &ProjectManager::_project_list_menu_option));
+			project_list->connect(ProjectList::SIGNAL_RECENT_SCENE_RUN_REQUESTED, callable_mp(this, &ProjectManager::_run_recent_scene));
 
 			// Empty project list placeholder.
 			{
