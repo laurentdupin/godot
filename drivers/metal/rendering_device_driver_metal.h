@@ -274,6 +274,7 @@ public:
 	virtual void semaphore_free(SemaphoreID p_semaphore) override = 0;
 	virtual uint64_t external_timeline_create(uint64_t p_initial_value) override final;
 	virtual uint64_t external_timeline_import(uint64_t p_native_handle) override final;
+	virtual uint64_t external_timeline_retain(uint64_t p_native_timeline) override final;
 	virtual uint64_t external_timeline_export(uint64_t p_timeline) override final;
 	virtual void external_timeline_export_free(uint64_t p_native_handle) override final;
 	virtual void external_timeline_free(uint64_t p_timeline) override final;

@@ -435,6 +435,9 @@ public:
 	// signals are GPU queue operations; completion queries must never block the CPU.
 	virtual uint64_t external_timeline_create(uint64_t p_initial_value) { return 0; }
 	virtual uint64_t external_timeline_import(uint64_t p_native_handle) { return 0; }
+	// Retains an in-process backend timeline object. This is intentionally
+	// distinct from importing a transferable OS/shared handle.
+	virtual uint64_t external_timeline_retain(uint64_t p_native_timeline) { return 0; }
 	virtual uint64_t external_timeline_export(uint64_t p_timeline) { return 0; }
 	virtual void external_timeline_export_free(uint64_t p_native_handle) {}
 	virtual void external_timeline_free(uint64_t p_timeline) {}

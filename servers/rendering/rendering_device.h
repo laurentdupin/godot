@@ -475,7 +475,7 @@ public:
 	static RDG::ResourceUsage _external_layout_to_resource_usage(RDD::TextureLayout p_layout);
 	void _external_texture_set_layout(Texture *p_texture, RDD::TextureLayout p_layout);
 	RID _texture_create_from_external_source(TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_image, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, bool p_shared_handle, bool p_android_hardware_buffer = false);
-	int32_t _external_texture_pool_add_slot(RID p_pool, TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_native_texture, uint64_t p_producer_timeline, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, ExternalTextureState p_initial_state, bool p_shared_handle);
+	int32_t _external_texture_pool_add_slot(RID p_pool, TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_native_texture, uint64_t p_producer_timeline, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, ExternalTextureState p_initial_state, bool p_shared_handle, bool p_local_timeline);
 	uint32_t texture_upload_region_size_px = 0;
 	uint32_t texture_download_region_size_px = 0;
 
@@ -538,6 +538,7 @@ public:
 	// sampled by regular CanvasItem and 3D materials.
 	RID external_texture_pool_create();
 	int32_t external_texture_pool_add_slot(RID p_pool, TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_native_texture, uint64_t p_producer_timeline, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, ExternalTextureState p_initial_state);
+	int32_t external_texture_pool_add_local_slot(RID p_pool, TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_native_texture, uint64_t p_producer_timeline, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, ExternalTextureState p_initial_state);
 	int32_t external_texture_pool_add_shared_slot(RID p_pool, TextureType p_type, DataFormat p_format, TextureSamples p_samples, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_shared_texture, uint64_t p_producer_timeline, uint64_t p_width, uint64_t p_height, uint64_t p_depth, uint64_t p_layers, uint64_t p_mipmaps, ExternalTextureState p_initial_state);
 	int32_t external_texture_pool_add_android_hardware_buffer_slot(RID p_pool, uint64_t p_hardware_buffer, DataFormat p_format, BitField<RenderingDevice::TextureUsageBits> p_usage, uint64_t p_width, uint64_t p_height, ExternalTextureState p_initial_state);
 	Error external_texture_pool_publish(RID p_pool, int32_t p_slot, uint64_t p_producer_value, uint64_t p_generation, ExternalTextureState p_published_state);

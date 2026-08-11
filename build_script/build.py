@@ -290,6 +290,8 @@ def build_command(
     ]
     if clean:
         command.append("--clean")
+    if godot_platform == "macos" and settings.target == "editor":
+        command.append("generate_bundle=yes")
     if godot_platform == "windows":
         command.extend((f"angle={'yes' if settings.angle else 'no'}", "d3d12=yes", "vulkan=yes"))
     command.extend(extra_arguments)
@@ -300,6 +302,47 @@ def format_command(command: Sequence[str]) -> str:
     if sys.platform == "win32":
         return subprocess.list2cmdline(command)
     return shlex.join(command)
+
+
+def force_macos_hcsr_relink(settings: BuildSettings, godot_platform: str) -> None:
+    if godot_platform != "macos" or settings.target != "editor" or not settings.hcsr:
+        return
+
+    runtime_identifier = "osx-arm64" if settings.architecture == "arm64" else "osx-x64"
+    publish_directory = (
+        GODOT_ROOT
+        / "thirdparty"
+        / "hcsr"
+        / "src"
+        / "Renderer.NativeBridge"
+        / "bin"
+        / "Release"
+        / "net10.0"
+        / runtime_identifier
+        / "publish"
+    )
+    hcsr_inputs = (
+        publish_directory / "hcsr_renderer_combined.a",
+        publish_directory / "hcsr_renderer_initializer.o",
+    )
+    editor_suffix = ".mono" if settings.mono else ""
+    editor_binary = (
+        GODOT_ROOT
+        / "bin"
+        / f"godot.macos.editor.{settings.architecture}{editor_suffix}"
+    )
+    existing_inputs = [path for path in hcsr_inputs if path.is_file()]
+    if not editor_binary.is_file() or not existing_inputs:
+        return
+    if max(path.stat().st_mtime_ns for path in existing_inputs) <= editor_binary.stat().st_mtime_ns:
+        return
+
+    print(
+        "HCSR static package is newer than the editor; forcing a fresh link: "
+        f"{editor_binary}",
+        flush=True,
+    )
+    editor_binary.unlink()
 
 
 def parse_arguments() -> tuple[argparse.Namespace, list[str]]:
@@ -335,7 +378,10 @@ def run() -> int:
 
     arguments, extra_arguments = parse_arguments()
     python_executable = bootstrap_virtual_environment()
-    if Path(sys.executable).resolve() != python_executable.resolve():
+    # A virtual environment's Python executable is commonly a symlink to the
+    # base interpreter on POSIX hosts. Comparing resolved executable paths
+    # therefore cannot tell whether this process is running inside the venv.
+    if Path(sys.prefix).resolve() != VIRTUAL_ENVIRONMENT.resolve():
         sys.stdout.flush()
         completed = subprocess.run(
             [str(python_executable), str(Path(__file__).resolve()), *sys.argv[1:]],
@@ -365,6 +411,7 @@ def run() -> int:
     if arguments.print_command:
         return 0
 
+    force_macos_hcsr_relink(settings, godot_platform)
     sys.stdout.flush()
     completed = subprocess.run(command, cwd=GODOT_ROOT, check=False)
     return completed.returncode

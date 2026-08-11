@@ -415,6 +415,8 @@ RDD::TextureID RenderingDeviceDriverMetal::texture_create(const TextureFormat &p
 
 RDD::TextureID RenderingDeviceDriverMetal::texture_create_from_extension(uint64_t p_native_texture, const TextureFormat &p_format) {
 	MTL::Texture *res = reinterpret_cast<MTL::Texture *>(p_native_texture);
+	ERR_FAIL_NULL_V(res, TextureID());
+	ERR_FAIL_COND_V_MSG(res->device() != device, TextureID(), "The external Metal texture belongs to a different MTLDevice.");
 
 	// If the requested format is different, we need to create a view.
 	MTL::PixelFormat format = (MTL::PixelFormat)pixel_formats->getMTLPixelFormat(p_format.format);
@@ -551,6 +553,17 @@ uint64_t RenderingDeviceDriverMetal::external_timeline_import(uint64_t p_native_
 		MTL::SharedEvent *event = device->newSharedEvent(handle);
 		ERR_FAIL_NULL_V_MSG(event, 0, "Unable to import Metal external shared event.");
 		return uint64_t(reinterpret_cast<uintptr_t>(event));
+	}
+	return 0;
+}
+
+uint64_t RenderingDeviceDriverMetal::external_timeline_retain(uint64_t p_native_timeline) {
+	ERR_FAIL_COND_V(p_native_timeline == 0, 0);
+	if (__builtin_available(macOS 10.14, iOS 12.0, tvOS 12.0, visionOS 1.0, *)) {
+		MTL::SharedEvent *event = reinterpret_cast<MTL::SharedEvent *>(uintptr_t(p_native_timeline));
+		ERR_FAIL_COND_V_MSG(event->device() != device, 0, "The external Metal shared event belongs to a different MTLDevice.");
+		event->retain();
+		return p_native_timeline;
 	}
 	return 0;
 }
