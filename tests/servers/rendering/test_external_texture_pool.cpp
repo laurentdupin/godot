@@ -19,6 +19,11 @@ TEST_FORCE_LINK(test_external_texture_pool)
 #include <wrl/client.h>
 #endif
 
+#ifdef METAL_ENABLED
+#include "drivers/metal/rendering_context_driver_metal.h"
+#include <Metal/Metal.hpp>
+#endif
+
 #if defined(VULKAN_ENABLED) && (defined(WINDOWS_ENABLED) || defined(ANDROID_ENABLED))
 #include "drivers/vulkan/rendering_context_driver_vulkan.h"
 #include <vulkan/vulkan.h>
@@ -366,6 +371,64 @@ TEST_CASE("[RenderingDevice][D3D12] External texture pool imports Win32 shared r
 	rd->sync();
 	memdelete(rd);
 	memdelete(context);
+}
+#endif
+
+#ifdef METAL_ENABLED
+TEST_CASE("[RenderingDevice][Metal] External texture pool retains in-process texture and event objects") {
+	NS::AutoreleasePool *autorelease_pool = NS::AutoreleasePool::alloc()->init();
+	RenderingContextDriverMetal *context = memnew(RenderingContextDriverMetal);
+	REQUIRE(context->initialize() == OK);
+	RenderingDevice *rd = memnew(RenderingDevice);
+	REQUIRE(rd->initialize(context) == OK);
+	REQUIRE(rd->get_device_api_name().contains("Metal"));
+
+	MTL::Device *device = reinterpret_cast<MTL::Device *>(rd->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_LOGICAL_DEVICE));
+	REQUIRE(device != nullptr);
+	MTL::TextureDescriptor *texture_description = MTL::TextureDescriptor::texture2DDescriptor(MTL::PixelFormatR32Float, 32, 24, false);
+	texture_description->setStorageMode(MTL::StorageModePrivate);
+	texture_description->setUsage(MTL::TextureUsageShaderRead | MTL::TextureUsageShaderWrite);
+	MTL::Texture *producer_texture = device->newTexture(texture_description);
+	MTL::SharedEvent *producer_event = device->newSharedEvent();
+	REQUIRE(producer_texture != nullptr);
+	REQUIRE(producer_event != nullptr);
+	producer_event->setSignaledValue(1);
+
+	RID pool = rd->external_texture_pool_create();
+	REQUIRE(pool.is_valid());
+	REQUIRE(rd->external_texture_pool_add_local_slot(
+				pool,
+				RenderingDevice::TEXTURE_TYPE_2D,
+				RenderingDevice::DATA_FORMAT_R32_SFLOAT,
+				RenderingDevice::TEXTURE_SAMPLES_1,
+				RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT,
+				uint64_t(producer_texture),
+				uint64_t(producer_event),
+				32, 24, 1, 1, 1,
+				RenderingDevice::EXTERNAL_TEXTURE_STATE_GENERAL) == 0);
+
+	// The pool owns independent references after registration. The producer's
+	// lease may therefore release its references without invalidating Godot.
+	producer_texture->release();
+	producer_event->release();
+	REQUIRE(rd->external_texture_pool_publish(pool, 0, 1, 1, RenderingDevice::EXTERNAL_TEXTURE_STATE_GENERAL) == OK);
+	RID imported_texture = rd->external_texture_pool_acquire_latest(pool);
+	REQUIRE(imported_texture.is_valid());
+	CHECK(rd->texture_get_format(imported_texture).format == RenderingDevice::DATA_FORMAT_R32_SFLOAT);
+	CHECK(rd->texture_size(imported_texture) == Size2i(32, 24));
+	Dictionary status = rd->external_texture_pool_get_slot_status(pool, 0);
+	CHECK(bool(status["current"]));
+	CHECK(uint64_t(status["release_timeline"]) != 0);
+
+	rd->external_texture_pool_stop(pool);
+	rd->submit();
+	rd->sync();
+	rd->free_rid(pool);
+	rd->submit();
+	rd->sync();
+	memdelete(rd);
+	memdelete(context);
+	autorelease_pool->release();
 }
 #endif
 
