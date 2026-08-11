@@ -586,6 +586,8 @@ bool HTMLSurfaceHCSRBackend::_read_gpu_packet_metadata(hcsr_gpu_frame_packet_t *
 	r_metadata.frame_metadata.host_frame_number = source.host_frame_number;
 	r_metadata.frame_metadata.timeline_time_seconds = source.timeline_time_seconds;
 	r_metadata.viewport_revision = viewport_revision.get();
+	r_metadata.semantic_state_revision = semantic_state_revision.get();
+	r_metadata.frame_request_revision = frame_request_revision.get();
 	if (r_metadata.css_viewport_size != size
 			|| r_metadata.physical_size != physical_size
 			|| !Math::is_equal_approx(r_metadata.device_scale_factor, device_scale_factor)) {
@@ -776,6 +778,9 @@ Error HTMLSurfaceHCSRBackend::_apply_dom_mutation(hcsr_dom_mutation_operation_ki
 	if (hcsr_renderer_apply_dom_mutations(renderer, &mutation, 1, &changed) != HCSR_STATUS_OK) {
 		_record_error("HCSR could not apply a Godot DOM mutation");
 		return FAILED;
+	}
+	if (changed != 0) {
+		semantic_state_revision.increment();
 	}
 	return OK;
 }
@@ -1556,10 +1561,16 @@ bool HTMLSurfaceHCSRBackend::_activate_completed_engine_ordered_output_group_on_
 		}
 	}
 
-	// This render-thread callback is the publication transaction. Every proxy
-	// switches only after the producer fence completed, so ordinary drawing and
-	// synchronous readback observe either the previous complete group or this one.
-	return _activate_engine_ordered_gpu_frame_on_render_thread(p_primary_output);
+	// This render-thread callback is the publication transaction. Texture proxies
+	// are switched on the render thread, then one atomic generation is released to
+	// game-thread observers only after the complete group is active. Without the
+	// final publication point, a capacity-retry callback can be sampled between a
+	// secondary proxy update and the primary proxy update.
+	if (!_activate_engine_ordered_gpu_frame_on_render_thread(p_primary_output)) {
+		return false;
+	}
+	synchronized_active_generation.set(p_primary_output.frame_generation);
+	return true;
 }
 
 bool HTMLSurfaceHCSRBackend::_activate_completed_gpu_frame_on_render_thread(const hcsr_gpu_frame_t &p_output) {
@@ -1707,7 +1718,8 @@ bool HTMLSurfaceHCSRBackend::_uses_async_gpu_presentation() const {
 
 bool HTMLSurfaceHCSRBackend::_uses_presentation_texture_import_cache() const {
 	return render_backend == HCSR_RENDER_BACKEND_D3D12
-			|| render_backend == HCSR_RENDER_BACKEND_VULKAN;
+			|| render_backend == HCSR_RENDER_BACKEND_VULKAN
+			|| render_backend == HCSR_RENDER_BACKEND_METAL;
 }
 
 void HTMLSurfaceHCSRBackend::_poll_gpu_presentation_on_render_thread() {
@@ -1819,6 +1831,7 @@ void HTMLSurfaceHCSRBackend::_destroy_renderer_on_render_thread() {
 			active_hit_test_snapshot = nullptr;
 		}
 		active_gpu_frame_generation = 0;
+		synchronized_active_generation.set(0);
 		last_queued_frame_generation = 0;
 		latest_submitted_gpu_submission_token = 0;
 		completed_gpu_submission_token = 0;
@@ -2010,7 +2023,16 @@ void HTMLSurfaceHCSRBackend::_retry_deferred_gpu_frame_on_render_thread() {
 
 	uint64_t packet_generation = 0;
 	(void)hcsr_renderer_gpu_frame_packet_generation(deferred_gpu_packet, &packet_generation);
-	if (gpu_submission_lock_deferred.is_set()) {
+	bool semantic_state_is_current = false;
+	{
+		MutexLock metadata_lock(prepared_gpu_frame_metadata_mutex);
+		const PreparedGPUFrameMetadata *metadata = prepared_gpu_frame_metadata.getptr(packet_generation);
+		semantic_state_is_current = metadata != nullptr
+				&& metadata->semantic_state_revision == semantic_state_revision.get()
+				&& metadata->frame_request_revision == frame_request_revision.get()
+				&& metadata->viewport_revision == viewport_revision.get();
+	}
+	if (semantic_state_is_current) {
 		hcsr_gpu_frame_t output = {};
 		output.struct_size = sizeof(output);
 		uint8_t submitted = 0;
@@ -2104,6 +2126,7 @@ void HTMLSurfaceHCSRBackend::_poll_gpu_presentation_on_render_thread_callback(ui
 }
 
 bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
+	frame_request_revision.increment();
 	RenderingServer *rendering_server = RenderingServer::get_singleton();
 	if (rendering_server == nullptr) {
 		terminal_failure_reason = "RenderingServer is unavailable for HCSR GPU rendering.";
@@ -2677,6 +2700,16 @@ uint64_t HTMLSurfaceHCSRBackend::get_last_queued_frame_generation() const {
 }
 
 uint64_t HTMLSurfaceHCSRBackend::get_active_frame_generation() const {
+	if (gpu_capabilities.synchronization_mode == HCSR_GPU_SYNCHRONIZATION_ENGINE_QUEUE_ORDERED) {
+		uint64_t generation = synchronized_active_generation.get();
+		MutexLock output_lock(presentation_outputs_mutex);
+		for (const KeyValue<uint64_t, PresentationOutputState *> &entry : presentation_outputs) {
+			if (entry.value != nullptr) {
+				generation = MIN(generation, entry.value->active_generation);
+			}
+		}
+		return generation;
+	}
 	MutexLock lock(frame_metadata_mutex);
 	return active_gpu_frame_generation;
 }
@@ -2723,6 +2756,9 @@ Error HTMLSurfaceHCSRBackend::mouse_move(const Point2 &p_position, int p_modifie
 		input_state_cache.mark_synchronized(pointer_position, primary_button_pressed, scroll_offset);
 	}
 	r_visual_state_changed = (damage_flags & HCSR_POINTER_DAMAGE_VISUAL) != 0;
+	if (r_visual_state_changed) {
+		semantic_state_revision.increment();
+	}
 	return status == HCSR_STATUS_OK ? OK : ERR_CANT_ACQUIRE_RESOURCE;
 }
 
@@ -2737,7 +2773,11 @@ Error HTMLSurfaceHCSRBackend::mouse_down(const Point2 &p_position, HTMLSurfaceMo
 	if (input_error != OK) {
 		return input_error;
 	}
-	return hcsr_renderer_dispatch_pointer_down(renderer, p_position.x, p_position.y, (hcsr_pointer_button_t)p_button, 1) == HCSR_STATUS_OK ? OK : ERR_CANT_ACQUIRE_RESOURCE;
+	const bool dispatched = hcsr_renderer_dispatch_pointer_down(renderer, p_position.x, p_position.y, (hcsr_pointer_button_t)p_button, 1) == HCSR_STATUS_OK;
+	if (dispatched) {
+		semantic_state_revision.increment();
+	}
+	return dispatched ? OK : ERR_CANT_ACQUIRE_RESOURCE;
 }
 
 Error HTMLSurfaceHCSRBackend::mouse_up(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) {
@@ -2751,7 +2791,11 @@ Error HTMLSurfaceHCSRBackend::mouse_up(const Point2 &p_position, HTMLSurfaceMous
 	if (input_error != OK) {
 		return input_error;
 	}
-	return hcsr_renderer_dispatch_pointer_up(renderer, p_position.x, p_position.y, (hcsr_pointer_button_t)p_button, 1) == HCSR_STATUS_OK ? OK : ERR_CANT_ACQUIRE_RESOURCE;
+	const bool dispatched = hcsr_renderer_dispatch_pointer_up(renderer, p_position.x, p_position.y, (hcsr_pointer_button_t)p_button, 1) == HCSR_STATUS_OK;
+	if (dispatched) {
+		semantic_state_revision.increment();
+	}
+	return dispatched ? OK : ERR_CANT_ACQUIRE_RESOURCE;
 }
 
 Error HTMLSurfaceHCSRBackend::pointer_cancel(const Point2 &p_position, int p_pointer_id) {
@@ -2761,7 +2805,11 @@ Error HTMLSurfaceHCSRBackend::pointer_cancel(const Point2 &p_position, int p_poi
 	if (input_error != OK) {
 		return input_error;
 	}
-	return hcsr_renderer_dispatch_pointer_cancel(renderer, p_position.x, p_position.y, p_pointer_id) == HCSR_STATUS_OK ? OK : ERR_CANT_ACQUIRE_RESOURCE;
+	const bool dispatched = hcsr_renderer_dispatch_pointer_cancel(renderer, p_position.x, p_position.y, p_pointer_id) == HCSR_STATUS_OK;
+	if (dispatched) {
+		semantic_state_revision.increment();
+	}
+	return dispatched ? OK : ERR_CANT_ACQUIRE_RESOURCE;
 }
 
 Error HTMLSurfaceHCSRBackend::notify_pointer_leave(const Point2 &p_position, bool p_cancel_pressed_interaction, int p_pointer_id) {
@@ -2773,7 +2821,11 @@ Error HTMLSurfaceHCSRBackend::notify_pointer_leave(const Point2 &p_position, boo
 	if (input_error != OK) {
 		return input_error;
 	}
-	return hcsr_renderer_notify_pointer_leave(renderer, p_position.x, p_position.y, p_cancel_pressed_interaction ? 1 : 0, p_pointer_id) == HCSR_STATUS_OK ? OK : ERR_CANT_ACQUIRE_RESOURCE;
+	const bool dispatched = hcsr_renderer_notify_pointer_leave(renderer, p_position.x, p_position.y, p_cancel_pressed_interaction ? 1 : 0, p_pointer_id) == HCSR_STATUS_OK;
+	if (dispatched) {
+		semantic_state_revision.increment();
+	}
+	return dispatched ? OK : ERR_CANT_ACQUIRE_RESOURCE;
 }
 
 Error HTMLSurfaceHCSRBackend::begin_scrollbar_interaction(const Point2 &p_position, double p_event_time_seconds, bool &r_consumed) {
@@ -2790,6 +2842,9 @@ Error HTMLSurfaceHCSRBackend::begin_scrollbar_interaction(const Point2 &p_positi
 		return ERR_CANT_ACQUIRE_RESOURCE;
 	}
 	r_consumed = consumed != 0;
+	if (r_consumed) {
+		semantic_state_revision.increment();
+	}
 	return OK;
 }
 
@@ -2801,6 +2856,9 @@ Error HTMLSurfaceHCSRBackend::update_scrollbar_interaction(const Point2 &p_posit
 		return ERR_CANT_ACQUIRE_RESOURCE;
 	}
 	r_consumed = consumed != 0;
+	if (r_consumed) {
+		semantic_state_revision.increment();
+	}
 	return OK;
 }
 
@@ -2811,6 +2869,9 @@ Error HTMLSurfaceHCSRBackend::end_scrollbar_interaction(bool &r_consumed) {
 		return ERR_CANT_ACQUIRE_RESOURCE;
 	}
 	r_consumed = consumed != 0;
+	if (r_consumed) {
+		semantic_state_revision.increment();
+	}
 	return OK;
 }
 
@@ -2868,16 +2929,24 @@ Error HTMLSurfaceHCSRBackend::wheel(const Point2 &p_position, const Vector2 &p_d
 		// Nested scrolling is committed through HCSR's scroll property tree: the
 		// content transform advances while its scrollport clip remains anchored.
 		// Mirroring the delta into the document offset would apply it twice.
+		semantic_state_revision.increment();
 		return OK;
 	}
 
 	// HTMLView supplies a signed pixel delta. Positive values move the viewport
 	// toward increasing document coordinates. Only fall back to document scrolling
 	// when no hovered scrollable ancestor could consume the delta.
+	const Point2 previous_scroll_offset = scroll_offset;
 	scroll_offset.x = MAX(0, scroll_offset.x + Math::round(p_delta.x));
 	scroll_offset.y = MAX(0, scroll_offset.y + Math::round(p_delta.y));
 	bool scroll_offset_changed = false;
-	return _clamp_scroll_offset_to_content(scroll_offset_changed) ? OK : FAILED;
+	if (!_clamp_scroll_offset_to_content(scroll_offset_changed)) {
+		return FAILED;
+	}
+	if (scroll_offset != previous_scroll_offset) {
+		semantic_state_revision.increment();
+	}
+	return OK;
 }
 
 bool HTMLSurfaceHCSRBackend::hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const {
@@ -2953,6 +3022,7 @@ Error HTMLSurfaceHCSRBackend::scroll_element_into_view(const StringName &p_id, c
 		_record_error("HCSR rejected an element scroll-into-view request");
 		return ERR_INVALID_PARAMETER;
 	}
+	semantic_state_revision.increment();
 	return OK;
 }
 
@@ -2966,6 +3036,7 @@ Error HTMLSurfaceHCSRBackend::set_form_control_value(const StringName &p_id, con
 		_record_error("HCSR rejected a form-control value update");
 		return ERR_INVALID_PARAMETER;
 	}
+	semantic_state_revision.increment();
 	return OK;
 }
 
@@ -2978,6 +3049,7 @@ Error HTMLSurfaceHCSRBackend::set_form_control_checked(const StringName &p_id, b
 		_record_error("HCSR rejected a form-control checked update");
 		return ERR_INVALID_PARAMETER;
 	}
+	semantic_state_revision.increment();
 	return OK;
 }
 
@@ -3098,7 +3170,13 @@ Ref<Texture2D> HTMLSurfaceHCSRBackend::get_presentation_output_texture(uint64_t 
 uint64_t HTMLSurfaceHCSRBackend::get_presentation_output_generation(uint64_t p_output_id) const {
 	MutexLock lock(presentation_outputs_mutex);
 	PresentationOutputState *const *found = presentation_outputs.getptr(p_output_id);
-	return found != nullptr ? (*found)->active_generation : 0;
+	if (found == nullptr) {
+		return 0;
+	}
+	if (gpu_capabilities.synchronization_mode == HCSR_GPU_SYNCHRONIZATION_ENGINE_QUEUE_ORDERED) {
+		return MIN((*found)->active_generation, synchronized_active_generation.get());
+	}
+	return (*found)->active_generation;
 }
 
 HTMLSurfaceHCSRBackend::HTMLSurfaceHCSRBackend(hcsr_render_backend_t p_render_backend) :

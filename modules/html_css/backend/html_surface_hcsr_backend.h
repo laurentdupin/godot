@@ -38,6 +38,8 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 		Size2i physical_size;
 		float device_scale_factor = 1.0f;
 		uint64_t viewport_revision = 0;
+		uint64_t semantic_state_revision = 0;
+		uint64_t frame_request_revision = 0;
 		int content_width = 0;
 		int content_height = 0;
 		Point2 scroll_offset;
@@ -100,6 +102,9 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	SafeFlag presentation_output_topology_sync_pending;
 	SafeFlag presentation_output_topology_sync_required;
 	SafeNumeric<uint64_t> viewport_revision;
+	SafeNumeric<uint64_t> semantic_state_revision;
+	SafeNumeric<uint64_t> frame_request_revision;
+	SafeNumeric<uint64_t> synchronized_active_generation;
 	Vector<uint64_t> pending_document_commits;
 	HashMap<uint64_t, PresentationOutputState *> presentation_outputs;
 	mutable Mutex presentation_outputs_mutex;

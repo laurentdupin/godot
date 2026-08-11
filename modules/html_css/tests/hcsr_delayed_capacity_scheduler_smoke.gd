@@ -4,7 +4,10 @@ var backend := HTMLView.BACKEND_D3D12
 var backend_name := "D3D12"
 
 func _initialize() -> void:
-	if "--vulkan" in OS.get_cmdline_user_args():
+	if "--metal" in OS.get_cmdline_user_args():
+		backend = HTMLView.BACKEND_METAL
+		backend_name = "Metal"
+	elif "--vulkan" in OS.get_cmdline_user_args():
 		backend = HTMLView.BACKEND_VULKAN
 		backend_name = "Vulkan"
 	ProjectSettings.set_setting(
@@ -94,6 +97,10 @@ func _run() -> void:
 		_fail("The resumed frame did not contain the latest semantic state: %s." % pixel)
 		return
 
+	# Metal completion can publish the synchronized generation after this frame's
+	# internal-process notification. Let the view consume that activation before
+	# inspecting its completed frame-budget result.
+	await process_frame
 	var budget := view.get_last_frame_budget_result()
 	if budget.is_empty() or StringName(budget.stage) == &"no_visual_output":
 		_fail("The coalesced request did not receive an activation outcome: %s." % budget)
@@ -136,6 +143,9 @@ func _run() -> void:
 		_fail("The successful fault-injection path reported a renderer failure outcome.")
 		return
 
+	if not await _run_current_packet_capacity_case(root):
+		return
+
 	ProjectSettings.set_setting(
 			"rendering/html_css/hcsr/testing/capacity_block_after_submissions", null)
 	ProjectSettings.set_setting(
@@ -149,6 +159,46 @@ func _run() -> void:
 	])
 	quit(0)
 
+func _run_current_packet_capacity_case(root: Control) -> bool:
+	# Capacity alone must not discard an immutable packet whose semantic inputs
+	# are still current. This is the normal case for a timeline animation that
+	# temporarily outruns the three physical frame slots.
+	ProjectSettings.set_setting(
+			"rendering/html_css/hcsr/testing/capacity_block_after_submissions", 1)
+	ProjectSettings.set_setting(
+			"rendering/html_css/hcsr/testing/capacity_block_arm", 2)
+	var view := HTMLView.new()
+	view.backend_preference = backend
+	view.logical_size = Vector2i(64, 64)
+	view.size = Vector2(64, 64)
+	view.frame_budget_milliseconds = 10000.0
+	view.html = (
+			"<html><style>html,body{margin:0}.card{width:64px;height:64px}"
+			+ ".initial{background:#102030}.stable{background:#705030}</style>"
+			+ "<body><div id='card' class='card initial'></div></body></html>")
+	root.add_child(view)
+	var output := view.create_output(Vector2i(64, 64))
+	if output == null or not await _wait_for_new_generation(view, output, 0):
+		return false
+	var generation_before := view.get_generation()
+	var cancellations_before: float = Performance.get_custom_monitor("HCSR/Capacity Probe Cancellations")
+	if view.set_element_attribute("card", "class", "card stable") != OK:
+		_fail("Could not queue the stable capacity-probe mutation.")
+		return false
+	if not await _wait_for_new_generation(view, output, generation_before):
+		return false
+	var cancellations_after: float = Performance.get_custom_monitor("HCSR/Capacity Probe Cancellations")
+	if view.get_generation() != generation_before + 1:
+		_fail("A current capacity-deferred packet was replaced instead of submitted unchanged.")
+		return false
+	if cancellations_after != cancellations_before:
+		_fail("A current capacity-deferred packet was incorrectly counted as canceled: %s -> %s." % [
+			cancellations_before,
+			cancellations_after,
+		])
+		return false
+	return true
+
 func _mutate_and_wait(view: HTMLView, output: HTMLViewOutput, css_class: String) -> bool:
 	var previous := view.get_generation()
 	if view.set_element_attribute("card", "class", css_class) != OK:
@@ -160,7 +210,11 @@ func _wait_for_new_generation(view: HTMLView, output: HTMLViewOutput, after_gene
 	for _frame in range(240):
 		await process_frame
 		if view.get_generation() != output.generation:
-			_fail("Primary and required secondary outputs exposed mixed generations.")
+			_fail("Primary and required secondary outputs exposed mixed generations while waiting after %d: primary=%d secondary=%d." % [
+				after_generation,
+				view.get_generation(),
+				output.generation,
+			])
 			return false
 		if view.get_generation() > after_generation:
 			return true
