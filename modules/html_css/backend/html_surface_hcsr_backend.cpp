@@ -1528,6 +1528,14 @@ bool HTMLSurfaceHCSRBackend::_queue_engine_ordered_output_group_on_render_thread
 			queued.state->submitted_generations.insert(queued.frame.submission_token, queued.frame.frame_generation);
 		}
 	}
+
+	if (render_backend == HCSR_RENDER_BACKEND_METAL) {
+		// Every producer command buffer was committed to Godot's borrowed Metal queue
+		// before this callback. Publishing now is safe: Godot's later sampling work is
+		// ordered after those producers by the queue itself. Producer completion still
+		// retires independently, and consumer release remains deferred by RenderingDevice.
+		return _activate_completed_engine_ordered_output_group_on_render_thread(p_primary_output, {});
+	}
 	return true;
 }
 
@@ -1605,14 +1613,26 @@ bool HTMLSurfaceHCSRBackend::_activate_completed_gpu_frame_on_render_thread(cons
 		submitted_gpu_frame_generations.erase(p_output.submission_token);
 		completed_gpu_submission_token = p_output.submission_token;
 	}
+	if (gpu_capabilities.synchronization_mode == HCSR_GPU_SYNCHRONIZATION_ENGINE_QUEUE_ORDERED) {
+		if (render_backend == HCSR_RENDER_BACKEND_METAL) {
+			// Metal queue-ordered frames were activated at submission. Completion
+			// advances producer retirement only; consumer retirement was already
+			// registered when a later synchronized group replaced each frame.
+			return true;
+		}
+		for (uint64_t generation : superseded_generations) {
+			_discard_gpu_packet_metadata(generation);
+		}
+		for (const hcsr_gpu_frame_t &frame : superseded_frames) {
+			_defer_gpu_resource_release_on_render_thread(frame);
+		}
+		return _activate_completed_engine_ordered_output_group_on_render_thread(completed_frame, superseded_generations);
+	}
 	for (uint64_t generation : superseded_generations) {
 		_discard_gpu_packet_metadata(generation);
 	}
 	for (const hcsr_gpu_frame_t &frame : superseded_frames) {
 		_defer_gpu_resource_release_on_render_thread(frame);
-	}
-	if (gpu_capabilities.synchronization_mode == HCSR_GPU_SYNCHRONIZATION_ENGINE_QUEUE_ORDERED) {
-		return _activate_completed_engine_ordered_output_group_on_render_thread(completed_frame, superseded_generations);
 	}
 
 	PreparedGPUFrameMetadata prepared_metadata;
