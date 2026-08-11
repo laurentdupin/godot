@@ -335,7 +335,10 @@ def run() -> int:
 
     arguments, extra_arguments = parse_arguments()
     python_executable = bootstrap_virtual_environment()
-    if Path(sys.executable).resolve() != python_executable.resolve():
+    # A virtual environment's Python executable is commonly a symlink to the
+    # base interpreter on POSIX hosts. Comparing resolved executable paths
+    # therefore cannot tell whether this process is running inside the venv.
+    if Path(sys.prefix).resolve() != VIRTUAL_ENVIRONMENT.resolve():
         sys.stdout.flush()
         completed = subprocess.run(
             [str(python_executable), str(Path(__file__).resolve()), *sys.argv[1:]],
