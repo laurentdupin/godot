@@ -108,11 +108,11 @@ ordering and never waits for a fence on the game or render thread. HCSR's
 opaque submission token correlates the queued frame with later nonblocking
 producer-completion polling. It is not exposed as a native D3D12, Vulkan, or
 Metal synchronization object and must not be CPU-waited. Godot keeps sampling
-the last active texture while a newer packet is pending. A submitted packet is
-retained with its metadata and hit-test snapshot but is not imported or exposed
-to rendering until producer completion identifies the same generation and
-submission token. Godot then atomically activates that texture, metadata, and
-snapshot; superseded submissions are retired without becoming visible. Each
+the last active texture while a newer packet is pending. Once an engine-queue-
+ordered packet is submitted, Godot atomically activates its primary and every
+secondary texture together with the matching metadata and hit-test snapshot.
+Later engine consumers are ordered after all of those producers on the same
+queue. Producer completion is polled asynchronously for retirement only. Each
 activated native resource remains borrowed until the engine frame that last
 sampled it retires on the GPU. `RenderingDevice` then returns its exact handle,
 resource generation, logical frame generation, and submission token through
@@ -124,7 +124,7 @@ contract.
 
 The render-thread activation edge is published back to the scene-thread surface
 as a one-shot changed flag. Consuming that flag refreshes the cached texture and
-frame metadata before `frame_activated` observers use them; a completion racing
+frame metadata before `frame_activated` observers use them; an activation racing
 the poll remains set for the following engine frame.
 
 To prepare Unix packages explicitly before invoking SCons, run one of:

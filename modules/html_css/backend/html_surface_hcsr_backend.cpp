@@ -945,10 +945,6 @@ void HTMLSurfaceHCSRBackend::_detach_presentation_output_on_render_thread(Presen
 				active_imported != nullptr ? *active_imported : p_state->texture_rid);
 		p_state->active_frame = {};
 	}
-	for (const KeyValue<uint64_t, hcsr_gpu_frame_t> &entry : p_state->queued_frames) {
-		_defer_presentation_output_resource_release_on_render_thread(p_state->output, entry.value);
-	}
-	p_state->queued_frames.clear();
 	RenderingServer *rendering_server = RenderingServer::get_singleton();
 	if (rendering_server != nullptr) {
 		if (p_state->mipmapped_texture_rid.is_valid()) {
@@ -1464,7 +1460,7 @@ bool HTMLSurfaceHCSRBackend::_activate_engine_ordered_gpu_frame_on_render_thread
 	return true;
 }
 
-bool HTMLSurfaceHCSRBackend::_queue_engine_ordered_output_group_on_render_thread(const hcsr_gpu_frame_t &p_primary_output) {
+bool HTMLSurfaceHCSRBackend::_activate_engine_ordered_output_group_on_render_thread(const hcsr_gpu_frame_t &p_primary_output) {
 	ERR_FAIL_COND_V(gpu_capabilities.synchronization_mode != HCSR_GPU_SYNCHRONIZATION_ENGINE_QUEUE_ORDERED, false);
 
 	struct QueuedPresentationFrame {
@@ -1517,53 +1513,9 @@ bool HTMLSurfaceHCSRBackend::_queue_engine_ordered_output_group_on_render_thread
 		}
 
 		for (QueuedPresentationFrame &queued : queued_outputs) {
-			if (queued.state->queued_frames.has(p_primary_output.frame_generation)) {
-				release_acquired_outputs();
-				_record_error("HCSR queued a duplicate synchronized secondary presentation generation");
-				return false;
-			}
-		}
-		for (QueuedPresentationFrame &queued : queued_outputs) {
-			queued.state->queued_frames.insert(p_primary_output.frame_generation, queued.frame);
 			queued.state->submitted_generations.insert(queued.frame.submission_token, queued.frame.frame_generation);
-		}
-	}
-
-	if (render_backend == HCSR_RENDER_BACKEND_METAL) {
-		// Every producer command buffer was committed to Godot's borrowed Metal queue
-		// before this callback. Publishing now is safe: Godot's later sampling work is
-		// ordered after those producers by the queue itself. Producer completion still
-		// retires independently, and consumer release remains deferred by RenderingDevice.
-		return _activate_completed_engine_ordered_output_group_on_render_thread(p_primary_output, {});
-	}
-	return true;
-}
-
-bool HTMLSurfaceHCSRBackend::_activate_completed_engine_ordered_output_group_on_render_thread(const hcsr_gpu_frame_t &p_primary_output, const Vector<uint64_t> &p_superseded_generations) {
-	ERR_FAIL_COND_V(gpu_capabilities.synchronization_mode != HCSR_GPU_SYNCHRONIZATION_ENGINE_QUEUE_ORDERED, false);
-
-	{
-		MutexLock lock(presentation_outputs_mutex);
-		for (const KeyValue<uint64_t, PresentationOutputState *> &entry : presentation_outputs) {
-			PresentationOutputState *state = entry.value;
-			if (state == nullptr || state->output == nullptr) {
-				continue;
-			}
-			for (uint64_t generation : p_superseded_generations) {
-				hcsr_gpu_frame_t *superseded = state->queued_frames.getptr(generation);
-				if (superseded != nullptr) {
-					_defer_presentation_output_resource_release_on_render_thread(state->output, *superseded);
-					state->queued_frames.erase(generation);
-				}
-			}
-			hcsr_gpu_frame_t *completed = state->queued_frames.getptr(p_primary_output.frame_generation);
-			if (completed == nullptr) {
-				continue;
-			}
-			const hcsr_gpu_frame_t completed_frame = *completed;
-			state->queued_frames.erase(p_primary_output.frame_generation);
-			if (!_activate_presentation_output_on_render_thread(state, completed_frame, true)) {
-				_record_error("Godot could not activate a completed synchronized secondary presentation output");
+			if (!_activate_presentation_output_on_render_thread(queued.state, queued.frame, true)) {
+				_record_error("Godot could not activate a synchronized secondary presentation output");
 				return false;
 			}
 		}
@@ -1614,19 +1566,10 @@ bool HTMLSurfaceHCSRBackend::_activate_completed_gpu_frame_on_render_thread(cons
 		completed_gpu_submission_token = p_output.submission_token;
 	}
 	if (gpu_capabilities.synchronization_mode == HCSR_GPU_SYNCHRONIZATION_ENGINE_QUEUE_ORDERED) {
-		if (render_backend == HCSR_RENDER_BACKEND_METAL) {
-			// Metal queue-ordered frames were activated at submission. Completion
-			// advances producer retirement only; consumer retirement was already
-			// registered when a later synchronized group replaced each frame.
-			return true;
-		}
-		for (uint64_t generation : superseded_generations) {
-			_discard_gpu_packet_metadata(generation);
-		}
-		for (const hcsr_gpu_frame_t &frame : superseded_frames) {
-			_defer_gpu_resource_release_on_render_thread(frame);
-		}
-		return _activate_completed_engine_ordered_output_group_on_render_thread(completed_frame, superseded_generations);
+		// Queue-ordered frames were activated as one output group at submission.
+		// Completion advances producer retirement only; replacing a synchronized
+		// group already registered consumer retirement with RenderingDevice.
+		return true;
 	}
 	for (uint64_t generation : superseded_generations) {
 		_discard_gpu_packet_metadata(generation);
@@ -1988,7 +1931,7 @@ void HTMLSurfaceHCSRBackend::_render_gpu_frame_on_render_thread(hcsr_gpu_frame_p
 	}
 	if (gpu_render_succeeded
 			&& gpu_capabilities.synchronization_mode == HCSR_GPU_SYNCHRONIZATION_ENGINE_QUEUE_ORDERED) {
-		gpu_render_succeeded = _queue_engine_ordered_output_group_on_render_thread(output);
+		gpu_render_succeeded = _activate_engine_ordered_output_group_on_render_thread(output);
 	}
 	if (_uses_async_gpu_presentation()) {
 		gpu_presentation_work_pending.set();
@@ -2093,7 +2036,7 @@ void HTMLSurfaceHCSRBackend::_retry_deferred_gpu_frame_on_render_thread() {
 		}
 		if (gpu_render_succeeded
 				&& gpu_capabilities.synchronization_mode == HCSR_GPU_SYNCHRONIZATION_ENGINE_QUEUE_ORDERED) {
-			gpu_render_succeeded = _queue_engine_ordered_output_group_on_render_thread(output);
+			gpu_render_succeeded = _activate_engine_ordered_output_group_on_render_thread(output);
 		}
 		if (_uses_async_gpu_presentation()) {
 			gpu_presentation_work_pending.set();

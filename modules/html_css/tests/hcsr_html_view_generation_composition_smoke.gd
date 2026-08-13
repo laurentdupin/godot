@@ -2,13 +2,13 @@ extends SceneTree
 
 const LOGICAL_SIZE := Vector2i(2648, 1440)
 const PHYSICAL_SIZE := Vector2i(2560, 1392)
+const SECONDARY_SIZE := LOGICAL_SIZE / 2
 
 var backend_preference := HTMLView.BACKEND_CPU
 var backend_name := "CPU"
 var active_generation := 0
 var queued_generation := 0
-var view_under_test: HTMLView
-var queued_generation_was_inactive := false
+var secondary_output: HTMLViewOutput
 
 
 func _initialize() -> void:
@@ -38,26 +38,33 @@ func _initialize() -> void:
 		PHYSICAL_SIZE.y / float(LOGICAL_SIZE.y))
 	viewport.add_child(transform_parent)
 	var view := HTMLView.new()
-	view_under_test = view
 	view.backend_preference = backend_preference
 	view.viewport_size_mode = HTMLView.VIEWPORT_SIZE_CONTROL_PHYSICAL_ADJUSTED
+	view.logical_size = LOGICAL_SIZE
 	view.size = Vector2(LOGICAL_SIZE)
 	view.frame_queued.connect(_on_frame_queued)
 	view.frame_activated.connect(_on_frame_activated)
 	view.document = document
 	transform_parent.add_child(view)
+	await process_frame
+	secondary_output = view.create_output(SECONDARY_SIZE)
+	if secondary_output == null or not secondary_output.is_valid():
+		_fail("%s could not create the different-resolution synchronized output." % backend_name)
+		return
 
 	if not await _wait_for_activation(0):
 		return
 	var baseline_generation := active_generation
-	queued_generation_was_inactive = false
 	if view.set_element_attribute(&"target", &"class", "target new") != OK:
 		_fail("%s HTMLView generation smoke could not queue its mutation." % backend_name)
 		return
 	if not await _wait_for_activation(baseline_generation):
 		return
-	if not queued_generation_was_inactive:
-		_fail("%s exposed the queued HTMLView texture before producer completion." % backend_name)
+	if queued_generation != active_generation:
+		_fail("%s did not activate the complete queue-ordered generation transaction: queued=%d active=%d." % [backend_name, queued_generation, active_generation])
+		return
+	if secondary_output.generation != active_generation:
+		_fail("%s exposed mixed primary/secondary generations: primary=%d secondary=%d." % [backend_name, active_generation, secondary_output.generation])
 		return
 
 	RenderingServer.force_draw(false)
@@ -83,7 +90,16 @@ func _initialize() -> void:
 	if differing_pixels != 0:
 		_fail("%s activated HTMLView texture and composed viewport differed for generation %d (pixels=%d max=%f)." % [backend_name, active_generation, differing_pixels, maximum_difference])
 		return
+	var secondary_image := secondary_output.texture.get_image()
+	if secondary_image == null or secondary_image.get_size() != SECONDARY_SIZE:
+		_fail("%s could not capture the different-resolution synchronized output." % backend_name)
+		return
+	var secondary_center := secondary_image.get_pixel(secondary_image.get_width() / 2, secondary_image.get_height() / 2)
+	if secondary_center.r < 0.7 or secondary_center.g > 0.3 or secondary_center.b > 0.3:
+		_fail("%s different-resolution output did not contain the activated red generation: %s." % [backend_name, secondary_center])
+		return
 
+	secondary_output.release()
 	print("HCSR HTMLView same-generation composition smoke passed on %s." % backend_name)
 	quit()
 
@@ -94,7 +110,7 @@ func _wait_for_activation(after_generation: int) -> bool:
 		RenderingServer.force_draw(false)
 		await RenderingServer.frame_post_draw
 		await process_frame
-		if active_generation > after_generation:
+		if active_generation > after_generation and secondary_output != null and secondary_output.generation == active_generation:
 			return true
 	_fail("%s HTMLView generation smoke timed out after generation %d (queued=%d active=%d)." % [backend_name, after_generation, queued_generation, active_generation])
 	return false
@@ -106,8 +122,6 @@ func _on_frame_activated(generation: int) -> void:
 
 func _on_frame_queued(generation: int) -> void:
 	queued_generation = generation
-	if view_under_test != null and view_under_test.get_generation() < generation:
-		queued_generation_was_inactive = true
 
 
 func _fail(message: String) -> void:

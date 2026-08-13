@@ -77,7 +77,7 @@
 		<signal name="frame_activated">
 			<param index="0" name="generation" type="int" />
 			<description>
-				Emitted after GPU producer completion when the view atomically activates the texture and immutable interaction metadata for this generation.
+				Emitted after the view atomically activates the texture and immutable interaction metadata for this generation. Engine-queue-ordered GPU output activates at submission; producer completion remains asynchronous retirement authority.
 			</description>
 		</signal>
 		<signal name="frame_queued">
