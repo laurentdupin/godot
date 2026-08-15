@@ -607,6 +607,14 @@ Error HTMLRenderSurface::set_element_text(const StringName &p_id, const String &
 	return backend->set_element_text(p_id, p_text);
 }
 
+Error HTMLRenderSurface::apply_element_mutations(const Array &p_mutations) {
+	if (p_mutations.is_empty()) {
+		return OK;
+	}
+	_ensure_backend();
+	return backend->apply_element_mutations(p_mutations);
+}
+
 Error HTMLRenderSurface::set_element_inner_html(const StringName &p_id, const String &p_html_fragment) {
 	_ensure_backend();
 	return backend->set_element_inner_html(p_id, p_html_fragment);

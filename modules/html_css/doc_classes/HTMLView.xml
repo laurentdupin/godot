@@ -209,6 +209,13 @@
 				Sets an attribute on an element in the live rendered document without reloading the document. Returns [constant OK] on success. The no-script profile rejects inline event handlers and [code]javascript:[/code] URL surfaces with a recoverable error.
 			</description>
 		</method>
+		<method name="apply_element_mutations">
+			<return type="int" enum="Error" />
+			<param index="0" name="mutations" type="Array" />
+			<description>
+				Applies an ordered array of element mutations as one atomic author revision and queues one render request. Each entry is a [Dictionary] with [code]operation[/code] ([code]set_attribute[/code], [code]remove_attribute[/code], or [code]set_text[/code]) and [code]id[/code]. Attribute operations also use [code]name[/code], and set operations use [code]value[/code]. If validation or any operation fails, none of the mutations are applied. An empty array is a no-op.
+			</description>
+		</method>
 		<method name="remove_element_attribute">
 			<return type="int" enum="Error" />
 			<param index="0" name="id" type="StringName" />

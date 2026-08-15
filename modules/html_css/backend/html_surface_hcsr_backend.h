@@ -235,6 +235,7 @@ public:
 	virtual Error wheel(const Point2 &p_position, const Vector2 &p_delta) override;
 	virtual bool hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const override;
 	virtual Error set_element_text(const StringName &p_id, const String &p_text) override;
+	virtual Error apply_element_mutations(const Array &p_mutations) override;
 	virtual Error set_element_inner_html(const StringName &p_id, const String &p_html_fragment) override;
 	virtual Error set_body_inner_html(const String &p_html_fragment) override;
 	virtual Error set_element_attribute(const StringName &p_id, const StringName &p_name, const String &p_value) override;

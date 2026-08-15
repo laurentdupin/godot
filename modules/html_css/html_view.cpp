@@ -361,6 +361,7 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("create_output", "size", "mipmaps"), &HTMLView::create_output, DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("local_to_html_position", "position"), &HTMLView::local_to_html_position);
 	ClassDB::bind_method(D_METHOD("set_element_text", "id", "text"), &HTMLView::set_element_text);
+	ClassDB::bind_method(D_METHOD("apply_element_mutations", "mutations"), &HTMLView::apply_element_mutations);
 	ClassDB::bind_method(D_METHOD("set_element_inner_html", "id", "html_fragment"), &HTMLView::set_element_inner_html);
 	ClassDB::bind_method(D_METHOD("set_body_inner_html", "html_fragment"), &HTMLView::set_body_inner_html);
 	ClassDB::bind_method(D_METHOD("set_element_attribute", "id", "name", "value"), &HTMLView::set_element_attribute);
@@ -1769,6 +1770,14 @@ Vector2 HTMLView::local_to_html_position(const Vector2 &p_position) const {
 Error HTMLView::set_element_text(const StringName &p_id, const String &p_text) {
 	Error err = surface->set_element_text(p_id, p_text);
 	if (err == OK) {
+		_queue_frame_render();
+	}
+	return err;
+}
+
+Error HTMLView::apply_element_mutations(const Array &p_mutations) {
+	Error err = surface->apply_element_mutations(p_mutations);
+	if (err == OK && !p_mutations.is_empty()) {
 		_queue_frame_render();
 	}
 	return err;

@@ -2951,6 +2951,82 @@ Error HTMLSurfaceHCSRBackend::set_element_text(const StringName &p_id, const Str
 	return _apply_dom_mutation(HCSR_DOM_MUTATION_SET_TEXT, HCSR_DOM_TARGET_ID, String(p_id), String(), p_text);
 }
 
+Error HTMLSurfaceHCSRBackend::apply_element_mutations(const Array &p_mutations) {
+	if (p_mutations.is_empty()) {
+		return OK;
+	}
+	if (!_sync_document()) {
+		return ERR_UNAVAILABLE;
+	}
+
+	hcsr_dom_mutation_journal_t *journal = nullptr;
+	if (hcsr_renderer_begin_dom_mutation_journal(renderer, &journal) != HCSR_STATUS_OK || journal == nullptr) {
+		_record_error("HCSR could not begin a Godot DOM mutation journal");
+		return FAILED;
+	}
+
+	for (int mutation_index = 0; mutation_index < p_mutations.size(); mutation_index++) {
+		const Variant &mutation_value = p_mutations[mutation_index];
+		if (mutation_value.get_type() != Variant::DICTIONARY) {
+			hcsr_dom_mutation_journal_release(journal);
+			return ERR_INVALID_PARAMETER;
+		}
+
+		const Dictionary mutation = mutation_value;
+		const String operation = mutation.get("operation", String());
+		const String element_id = mutation.get("id", String());
+		if (operation.is_empty() || element_id.is_empty()) {
+			hcsr_dom_mutation_journal_release(journal);
+			return ERR_INVALID_PARAMETER;
+		}
+
+		const CharString element_id_utf8 = element_id.utf8();
+		hcsr_dom_node_t *node = nullptr;
+		if (hcsr_renderer_get_element_by_id(renderer, element_id_utf8.ptr(), &node) != HCSR_STATUS_OK || node == nullptr) {
+			if (node != nullptr) {
+				hcsr_dom_node_release(node);
+			}
+			hcsr_dom_mutation_journal_release(journal);
+			return ERR_DOES_NOT_EXIST;
+		}
+
+		hcsr_status_t mutation_status = HCSR_STATUS_INVALID_ARGUMENT;
+		if (operation == "set_text") {
+			const String text = mutation.get("value", String());
+			const CharString text_utf8 = text.utf8();
+			mutation_status = hcsr_dom_mutation_journal_set_text(journal, node, text_utf8.ptr());
+		} else if (operation == "set_attribute" || operation == "remove_attribute") {
+			const String attribute_name = mutation.get("name", String());
+			if (!attribute_name.is_empty()) {
+				const CharString attribute_name_utf8 = attribute_name.utf8();
+				if (operation == "set_attribute") {
+					const String attribute_value = mutation.get("value", String());
+					const CharString attribute_value_utf8 = attribute_value.utf8();
+					mutation_status = hcsr_dom_mutation_journal_set_attribute(journal, node, attribute_name_utf8.ptr(), attribute_value_utf8.ptr());
+				} else {
+					mutation_status = hcsr_dom_mutation_journal_remove_attribute(journal, node, attribute_name_utf8.ptr());
+				}
+			}
+		}
+		hcsr_dom_node_release(node);
+
+		if (mutation_status != HCSR_STATUS_OK) {
+			hcsr_dom_mutation_journal_release(journal);
+			_record_error("HCSR rejected a Godot DOM mutation journal operation");
+			return ERR_INVALID_PARAMETER;
+		}
+	}
+
+	uint64_t commit_id = 0;
+	if (hcsr_dom_mutation_journal_commit(journal, &commit_id) != HCSR_STATUS_OK || commit_id == 0) {
+		_record_error("HCSR could not commit a Godot DOM mutation journal");
+		return FAILED;
+	}
+	pending_document_commits.push_back(commit_id);
+	semantic_state_revision.increment();
+	return OK;
+}
+
 Error HTMLSurfaceHCSRBackend::set_element_inner_html(const StringName &p_id, const String &p_html_fragment) {
 	return _apply_dom_mutation(HCSR_DOM_MUTATION_SET_INNER_CONTENT, HCSR_DOM_TARGET_ID, String(p_id), String(), p_html_fragment, HCSR_DOM_MUTATION_CONTENT_HTML);
 }

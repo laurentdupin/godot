@@ -125,6 +125,7 @@ public:
 	virtual Error key_up(HTMLSurfaceInputKey, int) { return ERR_UNAVAILABLE; }
 	virtual Error text_input(const String &) { return ERR_UNAVAILABLE; }
 	virtual Error set_element_text(const StringName &, const String &) { return ERR_UNAVAILABLE; }
+	virtual Error apply_element_mutations(const Array &) { return ERR_UNAVAILABLE; }
 	virtual Error set_element_inner_html(const StringName &, const String &) { return ERR_UNAVAILABLE; }
 	virtual Error set_body_inner_html(const String &) { return ERR_UNAVAILABLE; }
 	virtual Error set_element_attribute(const StringName &, const StringName &, const String &) { return ERR_UNAVAILABLE; }

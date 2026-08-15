@@ -135,6 +135,7 @@ public:
 	Error key_up(HTMLSurfaceInputKey p_key, int p_modifiers);
 	Error text_input(const String &p_text);
 	Error set_element_text(const StringName &p_id, const String &p_text);
+	Error apply_element_mutations(const Array &p_mutations);
 	Error set_element_inner_html(const StringName &p_id, const String &p_html_fragment);
 	Error set_body_inner_html(const String &p_html_fragment);
 	Error set_element_attribute(const StringName &p_id, const StringName &p_name, const String &p_value);
