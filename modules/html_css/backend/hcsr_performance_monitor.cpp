@@ -3,6 +3,8 @@
 /**************************************************************************/
 
 #include "hcsr_performance_monitor.h"
+
+#include "hcsr_frame_budget_service.h"
 #include "hcsr_session_retirement_service.h"
 
 #include "core/debugger/engine_debugger.h"
@@ -183,6 +185,7 @@ void HCSRPerformanceMonitor::initialize() {
 		{ "HCSR/RuntimeSession Changed Tile Bytes", MONITOR_RUNTIME_CHANGED_TILE_BYTES, Performance::MONITOR_TYPE_MEMORY },
 		{ "HCSR/RuntimeSession Texture Upload Bytes", MONITOR_RUNTIME_TEXTURE_UPLOAD_BYTES, Performance::MONITOR_TYPE_MEMORY },
 		{ "HCSR/RuntimeSession Staged Tiles", MONITOR_RUNTIME_STAGED_TILES, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/RuntimeSession Scheduler Owner Inspections", MONITOR_RUNTIME_SCHEDULER_OWNER_INSPECTIONS, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/RuntimeSession Retiring Sessions", MONITOR_RUNTIME_RETIRING_SESSIONS, Performance::MONITOR_TYPE_QUANTITY },
 	};
 
@@ -303,6 +306,7 @@ void HCSRPerformanceMonitor::finalize() {
 			"HCSR/RuntimeSession Changed Tile Bytes",
 			"HCSR/RuntimeSession Texture Upload Bytes",
 			"HCSR/RuntimeSession Staged Tiles",
+			"HCSR/RuntimeSession Scheduler Owner Inspections",
 			"HCSR/RuntimeSession Retiring Sessions",
 		};
 		for (const char *monitor_name : monitor_names) {
@@ -430,6 +434,9 @@ void HCSRPerformanceMonitor::remove(uint64_t p_instance_id) {
 }
 
 double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
+	if ((Monitor)p_monitor == MONITOR_RUNTIME_SCHEDULER_OWNER_INSPECTIONS) {
+		return HCSRFrameBudgetService::get_owner_records_inspected();
+	}
 	if (p_monitor == MONITOR_RUNTIME_RETIRING_SESSIONS) {
 		return HCSRSessionRetirementService::pending_count();
 	}

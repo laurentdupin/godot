@@ -136,6 +136,31 @@ func _exercise_three_view_fairness() -> bool:
 		view.queue_free()
 	return false
 
+func _exercise_many_owner_indexing() -> bool:
+	const OWNER_COUNT := 32
+	var views: Array[HTMLView] = []
+	for _index in range(OWNER_COUNT):
+		var view := _make_view(0, Vector2i(64, 64))
+		views.push_back(view)
+		for _frame in range(1200):
+			if view.get_generation() > 0:
+				break
+			await process_frame
+		if view.get_generation() == 0:
+			return false
+	var before: float = Performance.get_custom_monitor("HCSR/RuntimeSession Scheduler Owner Inspections")
+	for view in views:
+		if _set_red(view, true) != OK:
+			return false
+	await process_frame
+	var inspected := int(Performance.get_custom_monitor("HCSR/RuntimeSession Scheduler Owner Inspections") - before)
+	for view in views:
+		view.queue_free()
+	if inspected > OWNER_COUNT * 32:
+		print("many-owner indexing amplified: owners=%d inspected=%d" % [OWNER_COUNT, inspected])
+		return false
+	return true
+
 func _run() -> void:
 	OS.set_environment("HCSR_RUNTIME_TEST_PRESENTATION_UNIT_LIMIT", "")
 	var retained := _make_view()
@@ -151,6 +176,9 @@ func _run() -> void:
 		await process_frame
 	if !await _exercise_three_view_fairness():
 		_fail("Three continuously busy RuntimeSession views did not all receive bounded round-robin progress.")
+		return
+	if !await _exercise_many_owner_indexing():
+		_fail("RuntimeSession scheduler owner lookup was not structurally bounded across 32 views.")
 		return
 	for _frame in range(8):
 		await process_frame
