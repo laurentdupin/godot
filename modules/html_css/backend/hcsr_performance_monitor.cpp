@@ -3,6 +3,7 @@
 /**************************************************************************/
 
 #include "hcsr_performance_monitor.h"
+#include "hcsr_session_retirement_service.h"
 
 #include "core/debugger/engine_debugger.h"
 #include "core/object/callable_mp.h"
@@ -177,6 +178,7 @@ void HCSRPerformanceMonitor::initialize() {
 		{ "HCSR/Semantic Worker Supersessions", MONITOR_SEMANTIC_WORKER_SUPERSESSIONS, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Semantic Worker Host Call Time", MONITOR_SEMANTIC_WORKER_HOST_CALL_TIME, Performance::MONITOR_TYPE_TIME },
 		{ "HCSR/RuntimeSession Step Time", MONITOR_RUNTIME_SESSION_STEP_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/RuntimeSession Presentation Slice Time", MONITOR_RUNTIME_PRESENTATION_SLICE_TIME, Performance::MONITOR_TYPE_TIME },
 		{ "HCSR/RuntimeSession Work Units", MONITOR_RUNTIME_SESSION_WORK_UNITS, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/RuntimeSession Changed Tile Bytes", MONITOR_RUNTIME_CHANGED_TILE_BYTES, Performance::MONITOR_TYPE_MEMORY },
 		{ "HCSR/RuntimeSession Texture Upload Bytes", MONITOR_RUNTIME_TEXTURE_UPLOAD_BYTES, Performance::MONITOR_TYPE_MEMORY },
@@ -295,6 +297,7 @@ void HCSRPerformanceMonitor::finalize() {
 			"HCSR/Semantic Worker Supersessions",
 			"HCSR/Semantic Worker Host Call Time",
 			"HCSR/RuntimeSession Step Time",
+			"HCSR/RuntimeSession Presentation Slice Time",
 			"HCSR/RuntimeSession Work Units",
 			"HCSR/RuntimeSession Changed Tile Bytes",
 			"HCSR/RuntimeSession Texture Upload Bytes",
@@ -425,6 +428,9 @@ void HCSRPerformanceMonitor::remove(uint64_t p_instance_id) {
 }
 
 double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
+	if (p_monitor == MONITOR_RUNTIME_RETIRING_SESSIONS) {
+		return HCSRSessionRetirementService::pending_count();
+	}
 	double value = 0.0;
 	MutexLock lock(mutex);
 	if (p_monitor >= MONITOR_TEXTURE_RESOURCE_CREATES) {
@@ -474,6 +480,9 @@ double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
 					break;
 				case MONITOR_RUNTIME_SESSION_STEP_TIME:
 					value += entry.value.runtime_session_step_milliseconds / 1000.0;
+					break;
+				case MONITOR_RUNTIME_PRESENTATION_SLICE_TIME:
+					value += entry.value.runtime_presentation_slice_milliseconds / 1000.0;
 					break;
 				case MONITOR_RUNTIME_SESSION_WORK_UNITS:
 					value += entry.value.runtime_session_work_units;

@@ -20,15 +20,31 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 		Size2i requested_size;
 		bool mipmaps = false;
 		Ref<HTMLTexture2D> texture;
-		PackedByteArray rgba_pixels;
 		uint64_t generation = 0;
 		uint64_t copied_tile_bytes = 0;
+	};
+	struct PresentationOutputCandidate {
+		bool primary = false;
+		OutputState *output_state = nullptr;
+		Ref<HTMLTexture2D> target_texture;
+		hcsr_runtime_frame_t *frame = nullptr;
+		hcsr_runtime_frame_info_t frame_info = {};
+		int32_t next_tile = 0;
+		bool sync_initialized = false;
+	};
+	struct PresentationCandidate {
+		hcsr_runtime_publication_t *publication = nullptr;
+		hcsr_runtime_publication_info_t publication_info = {};
+		Vector<PresentationOutputCandidate> outputs;
+		int32_t next_output_to_acquire = 0;
+		int32_t active_output = 0;
+		bool activated = false;
 	};
 
 	Ref<HTMLDocument> document;
 	hcsr_runtime_document_t *compiled_document = nullptr;
 	hcsr_runtime_session_t *session = nullptr;
-	Vector<hcsr_runtime_session_t *> retiring_sessions;
+	PresentationCandidate *presentation_candidate = nullptr;
 	HashMap<uint64_t, OutputState *> presentation_outputs;
 	uint64_t next_presentation_output_id = 2;
 	uint64_t next_document_request_id = 1;
@@ -40,12 +56,13 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool document_dirty = false;
 	bool session_configuration_dirty = true;
 	bool derivation_pending = false;
+	bool publication_probe_pending = false;
 	bool terminal_failure = false;
 	String terminal_failure_reason;
 	HTMLFrameMetadata frame_metadata;
-	PackedByteArray primary_rgba_pixels;
 	uint64_t primary_copied_tile_bytes = 0;
 	double last_step_milliseconds = 0.0;
+	double last_presentation_slice_milliseconds = 0.0;
 	double last_tile_copy_milliseconds = 0.0;
 	double last_texture_upload_milliseconds = 0.0;
 	int64_t last_step_work_units = 0;
@@ -63,15 +80,12 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool _compile_document();
 	bool _recreate_session();
 	void _begin_session_retirement();
-	void _service_retirement(uint64_t p_budget_usec);
 	bool _step_session(uint64_t p_budget_usec);
 	bool _consume_publication();
-	bool _apply_output_frame(
-			hcsr_runtime_publication_t *p_publication,
-			uint64_t p_publication_generation,
-			int32_t p_output_index,
-			OutputState *p_output_state,
-			bool p_primary);
+	bool _begin_presentation_candidate();
+	bool _advance_presentation_candidate();
+	bool _copy_candidate_tile(PresentationOutputCandidate &p_output);
+	void _release_presentation_candidate(bool p_keep_standby);
 	Error _submit_attribute_mutations(const Array &p_mutations);
 	Error _submit_attribute_mutation(const StringName &p_id, const StringName &p_name, const String &p_value);
 	void _report_compilation(hcsr_runtime_compilation_report_t *p_report);

@@ -133,6 +133,7 @@ public:
 		MONITOR_SEMANTIC_WORKER_SUPERSESSIONS,
 		MONITOR_SEMANTIC_WORKER_HOST_CALL_TIME,
 		MONITOR_RUNTIME_SESSION_STEP_TIME,
+		MONITOR_RUNTIME_PRESENTATION_SLICE_TIME,
 		MONITOR_RUNTIME_SESSION_WORK_UNITS,
 		MONITOR_RUNTIME_CHANGED_TILE_BYTES,
 		MONITOR_RUNTIME_TEXTURE_UPLOAD_BYTES,
@@ -154,6 +155,7 @@ public:
 		uint64_t semantic_worker_supersessions = 0;
 		double semantic_worker_host_call_milliseconds = 0.0;
 		double runtime_session_step_milliseconds = 0.0;
+		double runtime_presentation_slice_milliseconds = 0.0;
 		uint64_t runtime_session_work_units = 0;
 		uint64_t runtime_changed_tile_bytes = 0;
 		uint64_t runtime_texture_upload_bytes = 0;

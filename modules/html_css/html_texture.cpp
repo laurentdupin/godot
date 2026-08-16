@@ -144,11 +144,58 @@ void HTMLTexture2D::update_regions(const Size2i &p_size, const Vector<Rect2i> &p
 	_notify_changed();
 }
 
+bool HTMLTexture2D::begin_region_candidate(const Size2i &p_size, bool p_has_alpha) {
+	ERR_FAIL_COND_V(p_size.x <= 0 || p_size.y <= 0, false);
+	if (standby_texture.is_null()) {
+		standby_texture.instantiate();
+	}
+	bool initialized = false;
+	if (standby_image.is_null() || standby_image->get_size() != p_size || standby_image->get_format() != Image::FORMAT_RGBA8) {
+		standby_image = Image::create_empty(p_size.x, p_size.y, false, Image::FORMAT_RGBA8);
+		standby_image->fill(Color(0, 0, 0, 0));
+		standby_texture->set_image(standby_image);
+		initialized = true;
+	}
+	alpha = p_has_alpha;
+	return initialized;
+}
+
+void HTMLTexture2D::update_candidate_region(const Rect2i &p_region, const Ref<Image> &p_image) {
+	ERR_FAIL_COND(standby_image.is_null() || standby_texture.is_null());
+	ERR_FAIL_COND(p_image.is_null() || p_image->is_empty() || p_image->get_format() != Image::FORMAT_RGBA8);
+	ERR_FAIL_COND(p_region.size != p_image->get_size());
+	ERR_FAIL_COND(!Rect2i(Vector2i(), standby_image->get_size()).encloses(p_region));
+	standby_image->blit_rect(p_image, Rect2i(Vector2i(), p_region.size), p_region.position);
+	RenderingServer::get_singleton()->texture_2d_update_region(standby_texture->get_rid(), p_image, p_region, 0);
+}
+
+void HTMLTexture2D::activate_region_candidate(bool p_notify) {
+	ERR_FAIL_COND(standby_image.is_null() || standby_texture.is_null());
+	SWAP(texture, standby_texture);
+	SWAP(latest_image, standby_image);
+	external_texture_rid = RID();
+	size = latest_image->get_size();
+	RenderingServer::get_singleton()->texture_proxy_update(proxy_texture_rid, texture->get_rid());
+	if (p_notify) {
+		_notify_changed();
+	}
+}
+
+void HTMLTexture2D::notify_region_candidate_activation() {
+	_notify_changed();
+}
+
+void HTMLTexture2D::cancel_region_candidate() {
+	standby_texture.unref();
+	standby_image.unref();
+}
+
 void HTMLTexture2D::set_external_texture(const RID &p_texture_rid, const Size2i &p_size, bool p_alpha) {
 	html_css_texture_trace(vformat("set_external_texture: rid_valid=%s size=%dx%d alpha=%s", p_texture_rid.is_valid() ? "true" : "false", p_size.x, p_size.y, p_alpha ? "true" : "false"));
 	external_texture_rid = p_texture_rid;
 	RenderingServer::get_singleton()->texture_proxy_update(proxy_texture_rid, external_texture_rid);
 	latest_image.unref();
+	standby_image.unref();
 	size = Size2i(MAX(1, p_size.x), MAX(1, p_size.y));
 	alpha = p_alpha;
 	_notify_changed();
@@ -178,6 +225,7 @@ void HTMLTexture2D::release_resources() {
 	}
 	proxy_texture_rid = RID();
 	texture.unref();
+	standby_texture.unref();
 	size = Size2i();
 }
 

@@ -41,6 +41,9 @@
 #if defined(DEBUG_ENABLED) && defined(HTML_CSS_USE_HCSR)
 #include "backend/hcsr_performance_monitor.h"
 #endif
+#ifdef HTML_CSS_USE_HCSR
+#include "backend/hcsr_session_retirement_service.h"
+#endif
 
 #ifndef _3D_DISABLED
 #include "html_surface_3d.h"
@@ -70,5 +73,8 @@ void uninitialize_html_css_module(ModuleInitializationLevel p_level) {
 	}
 #if defined(DEBUG_ENABLED) && defined(HTML_CSS_USE_HCSR)
 	HCSRPerformanceMonitor::finalize();
+#endif
+#ifdef HTML_CSS_USE_HCSR
+	HCSRSessionRetirementService::finalize();
 #endif
 }

@@ -77,6 +77,11 @@ func _run() -> void:
 	if view.get_generation() <= before_generation:
 		_fail("RuntimeSession HTMLView mutation did not advance its active generation.")
 		return
+	# Activation is atomic, while the hidden double buffer is synchronized in
+	# later bounded slices. Let both independent surfaces finish that work before
+	# reading aggregate upload telemetry.
+	for _frame in range(16):
+		await process_frame
 	if DisplayServer.get_name() != "headless":
 		await RenderingServer.frame_post_draw
 		var viewport_image := root.get_texture().get_image()
@@ -87,11 +92,15 @@ func _run() -> void:
 	var changed_tile_bytes: float = Performance.get_custom_monitor("HCSR/RuntimeSession Changed Tile Bytes")
 	var texture_upload_bytes: float = Performance.get_custom_monitor("HCSR/RuntimeSession Texture Upload Bytes")
 	var step_seconds: float = Performance.get_custom_monitor("HCSR/RuntimeSession Step Time")
-	if changed_tile_bytes <= 0.0 or texture_upload_bytes != changed_tile_bytes:
-		_fail("RuntimeSession did not preserve changed-tile locality through the Godot texture upload.")
+	var presentation_slice_seconds: float = Performance.get_custom_monitor("HCSR/RuntimeSession Presentation Slice Time")
+	if changed_tile_bytes <= 0.0 or texture_upload_bytes != changed_tile_bytes * 2.0:
+		_fail("RuntimeSession double-buffer upload did not remain tile-local: changed=%d B, uploaded=%d B." % [int(changed_tile_bytes), int(texture_upload_bytes)])
 		return
 	if step_seconds > 0.004:
 		_fail("RuntimeSession exceeded the 4 ms aggregate Godot stepping gate: %.3f ms." % (step_seconds * 1000.0))
+		return
+	if presentation_slice_seconds > 0.004:
+		_fail("RuntimeSession exceeded the 4 ms Godot presentation-slice gate: %.3f ms." % (presentation_slice_seconds * 1000.0))
 		return
 
 	var clean_target := _make_target(_make_document(true))
@@ -100,7 +109,7 @@ func _run() -> void:
 		_fail("Retained RuntimeSession mutation pixels differ from a clean target publication.")
 		return
 
-	print("HCSR RuntimeSession Godot CPU HTMLView/HTMLRenderTarget smoke passed: generation %d -> %d, changed/upload=%d B, step=%.3f ms." % [before_generation, view.get_generation(), int(changed_tile_bytes), step_seconds * 1000.0])
+	print("HCSR RuntimeSession Godot CPU HTMLView/HTMLRenderTarget smoke passed: generation %d -> %d, changed/upload=%d/%d B, step/presentation=%.3f/%.3f ms." % [before_generation, view.get_generation(), int(changed_tile_bytes), int(texture_upload_bytes), step_seconds * 1000.0, presentation_slice_seconds * 1000.0])
 	retained_target.queue_free()
 	clean_target.queue_free()
 	view.queue_free()
