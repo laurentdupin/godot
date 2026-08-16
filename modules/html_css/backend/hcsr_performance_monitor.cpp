@@ -4,9 +4,6 @@
 
 #include "hcsr_performance_monitor.h"
 
-#include "hcsr_frame_budget_service.h"
-#include "hcsr_session_retirement_service.h"
-
 #include "core/debugger/engine_debugger.h"
 #include "core/object/callable_mp.h"
 #include "main/performance.h"
@@ -179,14 +176,6 @@ void HCSRPerformanceMonitor::initialize() {
 		{ "HCSR/Semantic Worker Mailbox Delay Time", MONITOR_SEMANTIC_WORKER_MAILBOX_DELAY_TIME, Performance::MONITOR_TYPE_TIME },
 		{ "HCSR/Semantic Worker Supersessions", MONITOR_SEMANTIC_WORKER_SUPERSESSIONS, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Semantic Worker Host Call Time", MONITOR_SEMANTIC_WORKER_HOST_CALL_TIME, Performance::MONITOR_TYPE_TIME },
-		{ "HCSR/RuntimeSession Step Time", MONITOR_RUNTIME_SESSION_STEP_TIME, Performance::MONITOR_TYPE_TIME },
-		{ "HCSR/RuntimeSession Presentation Slice Time", MONITOR_RUNTIME_PRESENTATION_SLICE_TIME, Performance::MONITOR_TYPE_TIME },
-		{ "HCSR/RuntimeSession Work Units", MONITOR_RUNTIME_SESSION_WORK_UNITS, Performance::MONITOR_TYPE_QUANTITY },
-		{ "HCSR/RuntimeSession Changed Tile Bytes", MONITOR_RUNTIME_CHANGED_TILE_BYTES, Performance::MONITOR_TYPE_MEMORY },
-		{ "HCSR/RuntimeSession Texture Upload Bytes", MONITOR_RUNTIME_TEXTURE_UPLOAD_BYTES, Performance::MONITOR_TYPE_MEMORY },
-		{ "HCSR/RuntimeSession Staged Tiles", MONITOR_RUNTIME_STAGED_TILES, Performance::MONITOR_TYPE_QUANTITY },
-		{ "HCSR/RuntimeSession Scheduler Owner Inspections", MONITOR_RUNTIME_SCHEDULER_OWNER_INSPECTIONS, Performance::MONITOR_TYPE_QUANTITY },
-		{ "HCSR/RuntimeSession Retiring Sessions", MONITOR_RUNTIME_RETIRING_SESSIONS, Performance::MONITOR_TYPE_QUANTITY },
 	};
 
 	for (const HCSRMonitorDefinition &definition : definitions) {
@@ -300,14 +289,6 @@ void HCSRPerformanceMonitor::finalize() {
 			"HCSR/Semantic Worker Mailbox Delay Time",
 			"HCSR/Semantic Worker Supersessions",
 			"HCSR/Semantic Worker Host Call Time",
-			"HCSR/RuntimeSession Step Time",
-			"HCSR/RuntimeSession Presentation Slice Time",
-			"HCSR/RuntimeSession Work Units",
-			"HCSR/RuntimeSession Changed Tile Bytes",
-			"HCSR/RuntimeSession Texture Upload Bytes",
-			"HCSR/RuntimeSession Staged Tiles",
-			"HCSR/RuntimeSession Scheduler Owner Inspections",
-			"HCSR/RuntimeSession Retiring Sessions",
 		};
 		for (const char *monitor_name : monitor_names) {
 			const StringName name(monitor_name);
@@ -434,12 +415,6 @@ void HCSRPerformanceMonitor::remove(uint64_t p_instance_id) {
 }
 
 double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
-	if ((Monitor)p_monitor == MONITOR_RUNTIME_SCHEDULER_OWNER_INSPECTIONS) {
-		return HCSRFrameBudgetService::get_owner_records_inspected();
-	}
-	if (p_monitor == MONITOR_RUNTIME_RETIRING_SESSIONS) {
-		return HCSRSessionRetirementService::pending_count();
-	}
 	double value = 0.0;
 	MutexLock lock(mutex);
 	if (p_monitor >= MONITOR_TEXTURE_RESOURCE_CREATES) {
@@ -486,27 +461,6 @@ double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
 					break;
 				case MONITOR_SEMANTIC_WORKER_HOST_CALL_TIME:
 					value += entry.value.semantic_worker_host_call_milliseconds / 1000.0;
-					break;
-				case MONITOR_RUNTIME_SESSION_STEP_TIME:
-					value += entry.value.runtime_session_step_milliseconds / 1000.0;
-					break;
-				case MONITOR_RUNTIME_PRESENTATION_SLICE_TIME:
-					value += entry.value.runtime_presentation_slice_milliseconds / 1000.0;
-					break;
-				case MONITOR_RUNTIME_SESSION_WORK_UNITS:
-					value += entry.value.runtime_session_work_units;
-					break;
-				case MONITOR_RUNTIME_CHANGED_TILE_BYTES:
-					value += entry.value.runtime_changed_tile_bytes;
-					break;
-				case MONITOR_RUNTIME_TEXTURE_UPLOAD_BYTES:
-					value += entry.value.runtime_texture_upload_bytes;
-					break;
-				case MONITOR_RUNTIME_STAGED_TILES:
-					value += entry.value.runtime_staged_tiles;
-					break;
-				case MONITOR_RUNTIME_RETIRING_SESSIONS:
-					value += entry.value.runtime_retiring_sessions;
 					break;
 				default:
 					break;

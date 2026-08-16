@@ -41,8 +41,17 @@
 #if defined(DEBUG_ENABLED) && defined(HTML_CSS_USE_HCSR)
 #include "backend/hcsr_performance_monitor.h"
 #endif
-#ifdef HTML_CSS_USE_HCSR
-#include "backend/hcsr_session_retirement_service.h"
+
+#if defined(TOOLS_ENABLED) && defined(HTML_CSS_USE_HCSR)
+#include "editor/html_package_export_plugin.h"
+#include "editor/export/editor_export.h"
+#include "editor/editor_node.h"
+
+static void html_package_editor_init() {
+	Ref<HTMLPackageExportPlugin> export_plugin;
+	export_plugin.instantiate();
+	EditorExport::get_singleton()->add_export_plugin(export_plugin);
+}
 #endif
 
 #ifndef _3D_DISABLED
@@ -65,6 +74,9 @@ void initialize_html_css_module(ModuleInitializationLevel p_level) {
 #if defined(DEBUG_ENABLED) && defined(HTML_CSS_USE_HCSR)
 	HCSRPerformanceMonitor::initialize();
 #endif
+#if defined(TOOLS_ENABLED) && defined(HTML_CSS_USE_HCSR)
+	EditorNode::add_init_callback(html_package_editor_init);
+#endif
 }
 
 void uninitialize_html_css_module(ModuleInitializationLevel p_level) {
@@ -73,8 +85,5 @@ void uninitialize_html_css_module(ModuleInitializationLevel p_level) {
 	}
 #if defined(DEBUG_ENABLED) && defined(HTML_CSS_USE_HCSR)
 	HCSRPerformanceMonitor::finalize();
-#endif
-#ifdef HTML_CSS_USE_HCSR
-	HCSRSessionRetirementService::finalize();
 #endif
 }

@@ -1074,36 +1074,6 @@ void TextureStorage::texture_2d_initialize(RID p_texture, const Ref<Image> &p_im
 	texture_set_data(p_texture, p_image);
 }
 
-void TextureStorage::texture_2d_empty_initialize(RID p_texture, int p_width, int p_height, Image::Format p_format) {
-	ERR_FAIL_COND(p_width <= 0 || p_height <= 0);
-	ERR_FAIL_INDEX(p_format, Image::FORMAT_MAX);
-
-	Texture texture;
-	texture.width = p_width;
-	texture.height = p_height;
-	texture.alloc_width = p_width;
-	texture.alloc_height = p_height;
-	texture.mipmaps = 1;
-	texture.format = p_format;
-	texture.type = Texture::TYPE_2D;
-	texture.target = GL_TEXTURE_2D;
-	_get_gl_image_and_format(Ref<Image>(), texture.format, texture.real_format, texture.gl_format_cache, texture.gl_internal_format_cache, texture.gl_type_cache, texture.compressed, false);
-	ERR_FAIL_COND(texture.compressed);
-	texture.total_data_size = Image::get_image_data_size(texture.width, texture.height, texture.format, false);
-	texture.active = true;
-	glGenTextures(1, &texture.tex_id);
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(texture.target, texture.tex_id);
-	_texture_set_swizzle(&texture, texture.real_format);
-	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-	glTexImage2D(texture.target, 0, texture.gl_internal_format_cache, texture.width, texture.height, 0, texture.gl_format_cache, texture.gl_type_cache, nullptr);
-	texture.gl_set_filter(RSE::CANVAS_ITEM_TEXTURE_FILTER_NEAREST);
-	texture.gl_set_repeat(RSE::CANVAS_ITEM_TEXTURE_REPEAT_ENABLED);
-	glBindTexture(texture.target, 0);
-	GLES3::Utilities::get_singleton()->texture_allocated_data(texture.tex_id, texture.total_data_size, "Texture 2D Empty");
-	texture_owner.initialize_rid(p_texture, texture);
-}
-
 void TextureStorage::texture_external_initialize(RID p_texture, int p_width, int p_height, uint64_t p_external_buffer) {
 	Texture texture;
 	texture.active = true;
@@ -1338,73 +1308,6 @@ void TextureStorage::texture_2d_update(RID p_texture, const Ref<Image> &p_image,
 
 #ifdef TOOLS_ENABLED
 	tex->image_cache_2d.unref();
-#endif
-}
-
-void TextureStorage::texture_2d_update_region(RID p_texture, const Ref<Image> &p_image, const Rect2i &p_region, int p_layer) {
-	Texture *texture = texture_owner.get_or_null(p_texture);
-	ERR_FAIL_NULL(texture);
-	ERR_FAIL_COND(!texture->active || texture->is_render_target || texture->resize_to_po2);
-	ERR_FAIL_COND(texture->target != GL_TEXTURE_2D && texture->target != GL_TEXTURE_2D_ARRAY);
-	ERR_FAIL_COND(texture->mipmaps != 1);
-	ERR_FAIL_COND(p_image.is_null() || p_image->is_empty());
-	ERR_FAIL_COND(p_image->get_format() != texture->format);
-	ERR_FAIL_COND(p_region.size != Size2i(p_image->get_width(), p_image->get_height()));
-	ERR_FAIL_COND(p_region.position.x < 0 || p_region.position.y < 0
-			|| p_region.position.x + p_region.size.x > texture->width
-			|| p_region.position.y + p_region.size.y > texture->height);
-	if (texture->target == GL_TEXTURE_2D_ARRAY) {
-		ERR_FAIL_INDEX(p_layer, texture->layers);
-	}
-
-	GLenum type;
-	GLenum format;
-	GLenum internal_format;
-	bool compressed = false;
-	Image::Format real_format;
-	Ref<Image> image = _get_gl_image_and_format(
-			p_image,
-			p_image->get_format(),
-			real_format,
-			format,
-			internal_format,
-			type,
-			compressed,
-			false);
-	ERR_FAIL_COND(image.is_null() || compressed || image->is_compressed());
-	const Vector<uint8_t> data = image->get_data();
-
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(texture->target, texture->tex_id);
-	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-	if (texture->target == GL_TEXTURE_2D_ARRAY) {
-		glTexSubImage3D(
-				GL_TEXTURE_2D_ARRAY,
-				0,
-				p_region.position.x,
-				p_region.position.y,
-				p_layer,
-				p_region.size.x,
-				p_region.size.y,
-				1,
-				format,
-				type,
-				data.ptr());
-	} else {
-		glTexSubImage2D(
-				GL_TEXTURE_2D,
-				0,
-				p_region.position.x,
-				p_region.position.y,
-				p_region.size.x,
-				p_region.size.y,
-				format,
-				type,
-				data.ptr());
-	}
-
-#ifdef TOOLS_ENABLED
-	texture->image_cache_2d.unref();
 #endif
 }
 

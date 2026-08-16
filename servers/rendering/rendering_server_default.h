@@ -212,7 +212,6 @@ public:
 
 	//these go pass-through, as they can be called from any thread
 	FUNCRIDTEX1(texture_2d, const Ref<Image> &)
-	FUNCRIDTEX3(texture_2d_empty, int, int, Image::Format)
 	FUNCRIDTEX2(texture_2d_layered, const Vector<Ref<Image>> &, RSE::TextureLayeredType)
 	FUNCRIDTEX6(texture_3d, Image::Format, int, int, int, bool, const Vector<Ref<Image>> &)
 	FUNCRIDTEX3(texture_external, int, int, uint64_t)
@@ -226,7 +225,6 @@ public:
 
 	//these go through command queue if they are in another thread
 	FUNC3(texture_2d_update, RID, const Ref<Image> &, int)
-	FUNC4(texture_2d_update_region, RID, const Ref<Image> &, const Rect2i &, int)
 	FUNC2(texture_3d_update, RID, const Vector<Ref<Image>> &)
 	FUNC4(texture_external_update, RID, int, int, uint64_t)
 	FUNC2(texture_proxy_update, RID, RID)

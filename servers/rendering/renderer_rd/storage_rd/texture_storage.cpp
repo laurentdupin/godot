@@ -1057,67 +1057,6 @@ void TextureStorage::texture_2d_initialize(RID p_texture, const Ref<Image> &p_im
 	texture_owner.initialize_rid(p_texture, texture);
 }
 
-void TextureStorage::texture_2d_empty_initialize(RID p_texture, int p_width, int p_height, Image::Format p_format) {
-	ERR_FAIL_COND(p_width <= 0 || p_height <= 0);
-	ERR_FAIL_INDEX(p_format, Image::FORMAT_MAX);
-
-	TextureToRDFormat ret_format;
-	Ref<Image> format_probe = Image::create_empty(1, 1, false, p_format);
-	Ref<Image> validated_probe = _validate_texture_format(format_probe, ret_format);
-	ERR_FAIL_COND(validated_probe.is_null());
-
-	Texture texture;
-	texture.type = TextureStorage::TYPE_2D;
-	texture.width = p_width;
-	texture.height = p_height;
-	texture.layers = 1;
-	texture.mipmaps = 1;
-	texture.depth = 1;
-	texture.format = p_format;
-	texture.validated_format = validated_probe->get_format();
-	texture.rd_type = RD::TEXTURE_TYPE_2D;
-	texture.rd_format = ret_format.format;
-	texture.rd_format_srgb = ret_format.format_srgb;
-
-	RD::TextureFormat rd_format;
-	rd_format.format = texture.rd_format;
-	rd_format.width = texture.width;
-	rd_format.height = texture.height;
-	rd_format.depth = 1;
-	rd_format.array_layers = 1;
-	rd_format.mipmaps = 1;
-	rd_format.texture_type = texture.rd_type;
-	rd_format.samples = RD::TEXTURE_SAMPLES_1;
-	rd_format.usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_UPDATE_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT;
-	if (texture.rd_format_srgb != RD::DATA_FORMAT_MAX) {
-		rd_format.shareable_formats.push_back(texture.rd_format);
-		rd_format.shareable_formats.push_back(texture.rd_format_srgb);
-	}
-
-	RD::TextureView rd_view;
-	rd_view.swizzle_r = ret_format.swizzle_r;
-	rd_view.swizzle_g = ret_format.swizzle_g;
-	rd_view.swizzle_b = ret_format.swizzle_b;
-	rd_view.swizzle_a = ret_format.swizzle_a;
-	texture.rd_texture = RD::get_singleton()->texture_create(rd_format, rd_view);
-	ERR_FAIL_COND(texture.rd_texture.is_null());
-	if (texture.rd_format_srgb != RD::DATA_FORMAT_MAX) {
-		rd_view.format_override = texture.rd_format_srgb;
-		texture.rd_texture_srgb = RD::get_singleton()->texture_create_shared(rd_view, texture.rd_texture);
-		if (texture.rd_texture_srgb.is_null()) {
-			RD::get_singleton()->free_rid(texture.rd_texture);
-			ERR_FAIL_COND(texture.rd_texture_srgb.is_null());
-		}
-	}
-
-	texture.width_2d = texture.width;
-	texture.height_2d = texture.height;
-	texture.is_render_target = false;
-	texture.rd_view = rd_view;
-	texture.is_proxy = false;
-	texture_owner.initialize_rid(p_texture, texture);
-}
-
 void TextureStorage::texture_2d_layered_initialize(RID p_texture, const Vector<Ref<Image>> &p_layers, RSE::TextureLayeredType p_layered_type) {
 	ERR_FAIL_COND(p_layers.is_empty());
 
@@ -1788,30 +1727,6 @@ void TextureStorage::_texture_2d_update(RID p_texture, const Ref<Image> &p_image
 
 void TextureStorage::texture_2d_update(RID p_texture, const Ref<Image> &p_image, int p_layer) {
 	_texture_2d_update(p_texture, p_image, p_layer, false);
-}
-
-void TextureStorage::texture_2d_update_region(RID p_texture, const Ref<Image> &p_image, const Rect2i &p_region, int p_layer) {
-	ERR_FAIL_COND(p_image.is_null() || p_image->is_empty());
-	Texture *tex = texture_owner.get_or_null(p_texture);
-	ERR_FAIL_NULL(tex);
-	ERR_FAIL_COND(tex->is_render_target);
-	ERR_FAIL_COND(p_region.size != Size2i(p_image->get_width(), p_image->get_height()));
-	ERR_FAIL_COND(p_region.position.x < 0 || p_region.position.y < 0
-			|| p_region.position.x + p_region.size.x > tex->width
-			|| p_region.position.y + p_region.size.y > tex->height);
-	ERR_FAIL_COND(p_image->get_format() != tex->format);
-	if (tex->type == TextureStorage::TYPE_LAYERED) {
-		ERR_FAIL_INDEX(p_layer, tex->layers);
-	}
-
-#ifdef TOOLS_ENABLED
-	tex->image_cache_2d.unref();
-#endif
-	TextureToRDFormat format;
-	Ref<Image> validated = _validate_texture_format(p_image, format);
-	ERR_FAIL_COND(validated.is_null() || validated->is_compressed());
-	const Error error = RD::get_singleton()->texture_update_region(tex->rd_texture, p_layer, p_region, validated->get_data());
-	ERR_FAIL_COND_MSG(error != OK, "Could not update the requested 2D texture region.");
 }
 
 void TextureStorage::texture_3d_update(RID p_texture, const Vector<Ref<Image>> &p_data) {

@@ -30,19 +30,13 @@
 
 #pragma once
 
-#include "core/templates/hash_map.h"
 #include "scene/resources/image_texture.h"
 
 class HTMLTexture2D : public Texture2D {
 	GDCLASS(HTMLTexture2D, Texture2D);
 
 	Ref<ImageTexture> texture;
-	mutable Ref<Image> latest_image;
-	RID region_texture_rid;
-	RID standby_region_texture_rid;
-	Size2i standby_region_size;
-	HashMap<Vector2i, Ref<Image>> region_tiles;
-	HashMap<Vector2i, Ref<Image>> standby_region_tiles;
+	Ref<Image> latest_image;
 	RID external_texture_rid;
 	RID proxy_texture_rid;
 	Size2i size;
@@ -50,8 +44,6 @@ class HTMLTexture2D : public Texture2D {
 
 	void _emit_changed_on_main_thread();
 	void _notify_changed();
-	void _release_region_textures();
-	Ref<Image> _materialize_region_image() const;
 
 protected:
 	static void _bind_methods();
@@ -60,12 +52,6 @@ public:
 	void update_placeholder(const Size2i &p_size, const Color &p_background, const String &p_marker = String());
 	void update_from_image(const Ref<Image> &p_image);
 	void update_from_image(const Ref<Image> &p_image, bool p_has_alpha);
-	void update_regions(const Size2i &p_size, const Vector<Rect2i> &p_regions, const Vector<Ref<Image>> &p_images, bool p_has_alpha);
-	bool begin_region_candidate(const Size2i &p_size, bool p_has_alpha);
-	void update_candidate_region(const Rect2i &p_region, const Ref<Image> &p_image);
-	void activate_region_candidate(bool p_notify = true);
-	void notify_region_candidate_activation();
-	void cancel_region_candidate();
 	void set_external_texture(const RID &p_texture_rid, const Size2i &p_size, bool p_alpha);
 	void clear_external_texture();
 	void release_resources();
