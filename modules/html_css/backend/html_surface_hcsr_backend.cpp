@@ -189,11 +189,6 @@ void HTMLSurfaceHCSRBackend::_begin_session_retirement() {
 	publication_cursor_runtime_generation = 0;
 	visible_runtime_generation = 0;
 	standby_runtime_generation = 0;
-	pending_interactive_submission_id = 0;
-	pending_interactive_author_revision = 0;
-	pending_interactive_frame_id = 0;
-	pending_interactive_activation_cutoff_usec = 0;
-	pending_interactive_step = false;
 }
 
 bool HTMLSurfaceHCSRBackend::_recreate_session() {
@@ -225,11 +220,6 @@ bool HTMLSurfaceHCSRBackend::_recreate_session() {
 
 	if (session != nullptr) {
 		_release_presentation_candidate(false);
-		pending_interactive_submission_id = 0;
-		pending_interactive_author_revision = 0;
-		pending_interactive_frame_id = 0;
-		pending_interactive_activation_cutoff_usec = 0;
-		pending_interactive_step = false;
 		const hcsr_runtime_status_t configuration_status = hcsr_runtime_session_submit_configuration(
 				session,
 				MAX(1, size.x),
@@ -281,50 +271,6 @@ bool HTMLSurfaceHCSRBackend::_step_session(uint64_t p_budget_usec) {
 		return false;
 	}
 	HCSRFrameBudgetService::set_semantic_pending((uint64_t)this, true);
-	if (pending_interactive_step) {
-		const uint64_t interactive_budget_usec = HCSRFrameBudgetService::claim_interactive_semantic((uint64_t)this, 8000);
-		if (interactive_budget_usec == 0) {
-			return false;
-		}
-		const uint64_t start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
-		hcsr_runtime_interactive_step_info_t interactive_info;
-		_initialize_abi(interactive_info);
-		const hcsr_runtime_status_t interactive_status = hcsr_runtime_session_step_interactive(
-				session,
-				INT32_MAX,
-				&interactive_info);
-		const uint64_t elapsed_usec = start_usec == 0 ? 0 : OS::get_singleton()->get_ticks_usec() - start_usec;
-		HCSRFrameBudgetService::consume_interactive_semantic((uint64_t)this, elapsed_usec);
-		last_step_milliseconds = elapsed_usec / 1000.0;
-		last_step_work_units = interactive_info.work_units;
-		last_interactive_outcome = interactive_info.outcome;
-		if (interactive_info.submission_id != pending_interactive_submission_id
-				|| interactive_info.target_author_revision != pending_interactive_author_revision
-				|| interactive_info.frame_id != pending_interactive_frame_id) {
-			_set_terminal_failure("HCSR RuntimeSession interactive result did not match its submitted author authority.");
-			derivation_pending = false;
-			pending_interactive_step = false;
-			return false;
-		}
-		if (interactive_status == HCSR_RUNTIME_OK
-				&& interactive_info.outcome == HCSR_RUNTIME_INTERACTIVE_CPU_PUBLISHED_BEFORE_CUTOFF) {
-			derivation_pending = false;
-			pending_interactive_step = false;
-			publication_probe_pending = true;
-			HCSRFrameBudgetService::set_semantic_pending((uint64_t)this, false);
-			return true;
-		}
-		if (interactive_status != HCSR_RUNTIME_OK) {
-			_set_terminal_failure(vformat("HCSR RuntimeSession interactive step failed with status %d.", (int)interactive_status));
-			derivation_pending = false;
-		} else {
-			// A missed or structural interactive candidate remains valid normal-priority work.
-			derivation_pending = true;
-		}
-		pending_interactive_step = false;
-		HCSRFrameBudgetService::set_semantic_pending((uint64_t)this, derivation_pending);
-		return false;
-	}
 	const uint64_t allowed_budget_usec = HCSRFrameBudgetService::claim_semantic((uint64_t)this, p_budget_usec);
 	if (allowed_budget_usec == 0) {
 		return false;
@@ -552,27 +498,6 @@ bool HTMLSurfaceHCSRBackend::_advance_presentation_candidate() {
 		}
 		candidate.sync_base_runtime_generation = visible_runtime_generation;
 		const uint64_t visible_generation = next_activation_generation++;
-		bool interactive_presented_same_frame = false;
-		if (candidate.publication_info.interactive_submission_id != 0) {
-			const Engine *engine = Engine::get_singleton();
-			const OS *os = OS::get_singleton();
-			const bool exact_lineage = candidate.publication_info.interactive_submission_id == pending_interactive_submission_id
-					&& candidate.publication_info.target_author_revision == pending_interactive_author_revision
-					&& candidate.publication_info.interactive_frame_id == pending_interactive_frame_id;
-			if (!exact_lineage) {
-				// A newer interactive submission may supersede a publication after it
-				// was acquired. Retain it only as the next staging base; never expose it.
-				publication_cursor_runtime_generation = candidate.publication_info.generation;
-				standby_runtime_generation = candidate.publication_info.generation;
-				_release_presentation_candidate(true);
-				_publish_metrics();
-				return false;
-			}
-			interactive_presented_same_frame = engine != nullptr
-					&& engine->get_process_frames() == pending_interactive_frame_id
-					&& os != nullptr
-					&& os->get_ticks_usec() <= pending_interactive_activation_cutoff_usec;
-		}
 		for (PresentationOutputCandidate &output : candidate.outputs) {
 			if (output.frame != nullptr) {
 				if (hcsr_runtime_frame_release(candidate.publication, output.frame) != HCSR_RUNTIME_OK) {
@@ -594,20 +519,10 @@ bool HTMLSurfaceHCSRBackend::_advance_presentation_candidate() {
 		frame_metadata.physical_size = Size2i(primary->frame_info.pixel_width, primary->frame_info.pixel_height);
 		frame_metadata.device_scale_factor = device_scale_factor;
 		frame_metadata.generation = visible_generation;
-		frame_metadata.host_frame_number = Engine::get_singleton() != nullptr ? Engine::get_singleton()->get_process_frames() : 0;
 		frame_metadata.hits.clear();
 		frame_metadata.backdrop_filter_regions.clear();
 		active_generation = visible_generation;
 		visible_runtime_generation = candidate.publication_info.generation;
-		if (candidate.publication_info.interactive_submission_id != 0) {
-			last_interactive_outcome = interactive_presented_same_frame
-					? HCSR_RUNTIME_INTERACTIVE_CPU_PUBLISHED_BEFORE_CUTOFF
-					: HCSR_RUNTIME_INTERACTIVE_MISSED_CUTOFF;
-			pending_interactive_submission_id = 0;
-			pending_interactive_author_revision = 0;
-			pending_interactive_frame_id = 0;
-			pending_interactive_activation_cutoff_usec = 0;
-		}
 		candidate.activated = true;
 		candidate.active_output = 0;
 		for (PresentationOutputCandidate &output : candidate.outputs) {
@@ -686,14 +601,7 @@ void HTMLSurfaceHCSRBackend::_release_presentation_candidate(bool p_keep_standby
 
 bool HTMLSurfaceHCSRBackend::_consume_publication() {
 	HCSRFrameBudgetService::set_presentation_pending((uint64_t)this, true);
-	if (presentation_candidate == nullptr && publication_probe_pending) {
-		_begin_presentation_candidate();
-	}
-	const bool interactive = presentation_candidate != nullptr
-			&& presentation_candidate->publication_info.interactive_submission_id != 0;
-	const uint64_t allowed_budget_usec = interactive
-			? HCSRFrameBudgetService::claim_interactive_presentation((uint64_t)this, 6000)
-			: HCSRFrameBudgetService::claim_presentation((uint64_t)this, 1000);
+	const uint64_t allowed_budget_usec = HCSRFrameBudgetService::claim_presentation((uint64_t)this, 1000);
 	if (allowed_budget_usec == 0) {
 		return false;
 	}
@@ -716,11 +624,7 @@ bool HTMLSurfaceHCSRBackend::_consume_publication() {
 	} while (work_units < test_work_unit_limit
 			&& ((start_usec != 0 && OS::get_singleton()->get_ticks_usec() - start_usec < allowed_budget_usec) || (start_usec == 0 && work_units < 1024)));
 	const uint64_t elapsed_usec = start_usec == 0 ? 0 : OS::get_singleton()->get_ticks_usec() - start_usec;
-	if (interactive) {
-		HCSRFrameBudgetService::consume_interactive_presentation((uint64_t)this, elapsed_usec);
-	} else {
-		HCSRFrameBudgetService::consume_presentation((uint64_t)this, elapsed_usec);
-	}
+	HCSRFrameBudgetService::consume_presentation((uint64_t)this, elapsed_usec);
 	HCSRFrameBudgetService::set_presentation_pending((uint64_t)this, presentation_candidate != nullptr || publication_probe_pending);
 	const double elapsed_milliseconds = elapsed_usec / 1000.0;
 	last_presentation_slice_milliseconds = MAX(last_presentation_slice_milliseconds, elapsed_milliseconds);
@@ -785,26 +689,13 @@ Error HTMLSurfaceHCSRBackend::_submit_attribute_mutations(const Array &p_mutatio
 		return ERR_INVALID_PARAMETER;
 	}
 
-	hcsr_runtime_submission_info_t submission_info;
-	_initialize_abi(submission_info);
-	const hcsr_runtime_status_t submit_status = hcsr_runtime_session_submit_mutation_with_priority(
-			session,
-			mutation,
-			HCSR_RUNTIME_MUTATION_PRIORITY_INTERACTIVE,
-			Engine::get_singleton() != nullptr ? Engine::get_singleton()->get_process_frames() : 0,
-			hcsr_runtime_get_monotonic_timestamp_microseconds() + 8000,
-			&submission_info);
+	const hcsr_runtime_status_t submit_status = hcsr_runtime_session_submit_mutation(session, mutation);
 	if (submit_status != HCSR_RUNTIME_OK) {
 		hcsr_runtime_mutation_release(mutation);
 		return submit_status == HCSR_RUNTIME_LIMIT_EXCEEDED ? ERR_OUT_OF_MEMORY : FAILED;
 	}
 	queued_generation++;
 	author_submission_generation++;
-	pending_interactive_submission_id = submission_info.submission_id;
-	pending_interactive_author_revision = submission_info.target_author_revision;
-	pending_interactive_frame_id = submission_info.frame_id;
-	pending_interactive_activation_cutoff_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() + 12000 : 0;
-	pending_interactive_step = true;
 	derivation_pending = true;
 	return OK;
 }

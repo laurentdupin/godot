@@ -60,12 +60,6 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	uint64_t visible_runtime_generation = 0;
 	uint64_t standby_runtime_generation = 0;
 	uint64_t author_submission_generation = 0;
-	uint64_t pending_interactive_submission_id = 0;
-	uint64_t pending_interactive_author_revision = 0;
-	uint64_t pending_interactive_frame_id = 0;
-	uint64_t pending_interactive_activation_cutoff_usec = 0;
-	bool pending_interactive_step = false;
-	hcsr_runtime_interactive_outcome_t last_interactive_outcome = HCSR_RUNTIME_INTERACTIVE_MISSED_CUTOFF;
 	uint64_t configuration_generation = 1;
 	Size2i physical_size = Size2i(512, 512);
 	float device_scale_factor = 1.0f;
