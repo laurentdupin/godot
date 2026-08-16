@@ -9,11 +9,13 @@
 namespace {
 constexpr uint64_t HCSR_SEMANTIC_FRAME_BUDGET_USEC = 2000;
 constexpr uint64_t HCSR_PRESENTATION_FRAME_BUDGET_USEC = 2000;
+constexpr uint64_t HCSR_INTERACTIVE_FRAME_BUDGET_USEC = 12000;
 }
 
 uint64_t HCSRFrameBudgetService::process_frame = UINT64_MAX;
 uint64_t HCSRFrameBudgetService::semantic_used_usec = 0;
 uint64_t HCSRFrameBudgetService::presentation_used_usec = 0;
+uint64_t HCSRFrameBudgetService::interactive_used_usec = 0;
 uint64_t HCSRFrameBudgetService::semantic_head = 0;
 uint64_t HCSRFrameBudgetService::presentation_head = 0;
 uint64_t HCSRFrameBudgetService::semantic_cursor = 0;
@@ -68,6 +70,7 @@ void HCSRFrameBudgetService::_refresh_frame() {
 	process_frame = current_frame;
 	semantic_used_usec = 0;
 	presentation_used_usec = 0;
+	interactive_used_usec = 0;
 	_build_grants(true, semantic_grants, semantic_cursor, semantic_head);
 	_build_grants(false, presentation_grants, presentation_cursor, presentation_head);
 }
@@ -214,6 +217,62 @@ void HCSRFrameBudgetService::consume_presentation(uint64_t p_owner, uint64_t p_e
 			owner->presentation_used_usec = 0;
 		}
 		owner->presentation_used_usec = MIN(uint64_t(1000), owner->presentation_used_usec + p_elapsed_usec);
+	}
+}
+
+uint64_t HCSRFrameBudgetService::claim_interactive_semantic(uint64_t p_owner, uint64_t p_maximum_usec) {
+	_refresh_frame();
+	OwnerState *owner = _find_owner(p_owner);
+	if (owner == nullptr || !owner->semantic_pending) {
+		return 0;
+	}
+	if (owner->interactive_usage_frame != process_frame) {
+		owner->interactive_usage_frame = process_frame;
+		owner->interactive_used_usec = 0;
+	}
+	const uint64_t owner_remaining = HCSR_INTERACTIVE_FRAME_BUDGET_USEC - MIN(owner->interactive_used_usec, HCSR_INTERACTIVE_FRAME_BUDGET_USEC);
+	const uint64_t global_remaining = HCSR_INTERACTIVE_FRAME_BUDGET_USEC - MIN(interactive_used_usec, HCSR_INTERACTIVE_FRAME_BUDGET_USEC);
+	return MIN(p_maximum_usec, MIN(owner_remaining, global_remaining));
+}
+
+void HCSRFrameBudgetService::consume_interactive_semantic(uint64_t p_owner, uint64_t p_elapsed_usec) {
+	_refresh_frame();
+	interactive_used_usec = MIN(HCSR_INTERACTIVE_FRAME_BUDGET_USEC, interactive_used_usec + p_elapsed_usec);
+	OwnerState *owner = _find_owner(p_owner);
+	if (owner != nullptr) {
+		if (owner->interactive_usage_frame != process_frame) {
+			owner->interactive_usage_frame = process_frame;
+			owner->interactive_used_usec = 0;
+		}
+		owner->interactive_used_usec = MIN(HCSR_INTERACTIVE_FRAME_BUDGET_USEC, owner->interactive_used_usec + p_elapsed_usec);
+	}
+}
+
+uint64_t HCSRFrameBudgetService::claim_interactive_presentation(uint64_t p_owner, uint64_t p_maximum_usec) {
+	_refresh_frame();
+	OwnerState *owner = _find_owner(p_owner);
+	if (owner == nullptr || !owner->presentation_pending) {
+		return 0;
+	}
+	if (owner->interactive_usage_frame != process_frame) {
+		owner->interactive_usage_frame = process_frame;
+		owner->interactive_used_usec = 0;
+	}
+	const uint64_t owner_remaining = HCSR_INTERACTIVE_FRAME_BUDGET_USEC - MIN(owner->interactive_used_usec, HCSR_INTERACTIVE_FRAME_BUDGET_USEC);
+	const uint64_t global_remaining = HCSR_INTERACTIVE_FRAME_BUDGET_USEC - MIN(interactive_used_usec, HCSR_INTERACTIVE_FRAME_BUDGET_USEC);
+	return MIN(p_maximum_usec, MIN(owner_remaining, global_remaining));
+}
+
+void HCSRFrameBudgetService::consume_interactive_presentation(uint64_t p_owner, uint64_t p_elapsed_usec) {
+	_refresh_frame();
+	interactive_used_usec = MIN(HCSR_INTERACTIVE_FRAME_BUDGET_USEC, interactive_used_usec + p_elapsed_usec);
+	OwnerState *owner = _find_owner(p_owner);
+	if (owner != nullptr) {
+		if (owner->interactive_usage_frame != process_frame) {
+			owner->interactive_usage_frame = process_frame;
+			owner->interactive_used_usec = 0;
+		}
+		owner->interactive_used_usec = MIN(HCSR_INTERACTIVE_FRAME_BUDGET_USEC, owner->interactive_used_usec + p_elapsed_usec);
 	}
 }
 

@@ -21,11 +21,14 @@ class HCSRFrameBudgetService {
 		uint64_t presentation_usage_frame = UINT64_MAX;
 		uint64_t semantic_used_usec = 0;
 		uint64_t presentation_used_usec = 0;
+		uint64_t interactive_usage_frame = UINT64_MAX;
+		uint64_t interactive_used_usec = 0;
 	};
 
 	static uint64_t process_frame;
 	static uint64_t semantic_used_usec;
 	static uint64_t presentation_used_usec;
+	static uint64_t interactive_used_usec;
 	static uint64_t semantic_head;
 	static uint64_t presentation_head;
 	static uint64_t semantic_cursor;
@@ -50,5 +53,9 @@ public:
 	static void consume_semantic(uint64_t p_owner, uint64_t p_elapsed_usec);
 	static uint64_t claim_presentation(uint64_t p_owner, uint64_t p_maximum_usec);
 	static void consume_presentation(uint64_t p_owner, uint64_t p_elapsed_usec);
+	static uint64_t claim_interactive_semantic(uint64_t p_owner, uint64_t p_maximum_usec);
+	static void consume_interactive_semantic(uint64_t p_owner, uint64_t p_elapsed_usec);
+	static uint64_t claim_interactive_presentation(uint64_t p_owner, uint64_t p_maximum_usec);
+	static void consume_interactive_presentation(uint64_t p_owner, uint64_t p_elapsed_usec);
 	static uint64_t get_owner_records_inspected();
 };

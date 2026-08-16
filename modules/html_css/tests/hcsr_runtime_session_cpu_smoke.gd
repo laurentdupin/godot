@@ -56,6 +56,7 @@ func _run() -> void:
 		return
 
 	var before_generation: int = view.get_generation()
+	var submission_frame: int = Engine.get_process_frames()
 	var journal := [{
 		"operation": "set_attribute",
 		"id": "panel",
@@ -76,6 +77,9 @@ func _run() -> void:
 		await process_frame
 	if view.get_generation() <= before_generation:
 		_fail("RuntimeSession HTMLView mutation did not advance its active generation.")
+		return
+	if view.get_host_frame_number() != submission_frame:
+		_fail("RuntimeSession interactive mutation missed same-frame host activation: submitted=%d activated=%d." % [submission_frame, view.get_host_frame_number()])
 		return
 	# Activation is atomic, while the hidden double buffer is synchronized in
 	# later bounded slices. Let both independent surfaces finish that work before
@@ -109,7 +113,7 @@ func _run() -> void:
 		_fail("Retained RuntimeSession mutation pixels differ from a clean target publication.")
 		return
 
-	print("HCSR RuntimeSession Godot CPU HTMLView/HTMLRenderTarget smoke passed: generation %d -> %d, changed/upload=%d/%d B, step/presentation=%.3f/%.3f ms." % [before_generation, view.get_generation(), int(changed_tile_bytes), int(texture_upload_bytes), step_seconds * 1000.0, presentation_slice_seconds * 1000.0])
+	print("HCSR RuntimeSession Godot CPU same-frame smoke passed: generation %d -> %d on host frame %d, changed/upload=%d/%d B, step/presentation=%.3f/%.3f ms." % [before_generation, view.get_generation(), submission_frame, int(changed_tile_bytes), int(texture_upload_bytes), step_seconds * 1000.0, presentation_slice_seconds * 1000.0])
 	retained_target.queue_free()
 	clean_target.queue_free()
 	view.queue_free()
