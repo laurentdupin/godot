@@ -30,6 +30,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 		hcsr_runtime_frame_t *frame = nullptr;
 		hcsr_runtime_frame_info_t frame_info = {};
 		int32_t next_tile = 0;
+		int32_t publication_output_index = -1;
 		bool sync_initialized = false;
 	};
 	struct PresentationCandidate {
@@ -37,6 +38,8 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 		hcsr_runtime_publication_info_t publication_info = {};
 		uint64_t author_submission_generation = 0;
 		uint64_t configuration_generation = 0;
+		uint64_t staging_base_runtime_generation = 0;
+		uint64_t sync_base_runtime_generation = 0;
 		Vector<PresentationOutputCandidate> outputs;
 		int32_t next_output_to_acquire = 0;
 		int32_t active_output = 0;
@@ -53,7 +56,9 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	uint64_t queued_generation = 0;
 	uint64_t active_generation = 0;
 	uint64_t next_activation_generation = 1;
-	uint64_t consumed_runtime_generation = 0;
+	uint64_t publication_cursor_runtime_generation = 0;
+	uint64_t visible_runtime_generation = 0;
+	uint64_t standby_runtime_generation = 0;
 	uint64_t author_submission_generation = 0;
 	uint64_t configuration_generation = 1;
 	Size2i physical_size = Size2i(512, 512);

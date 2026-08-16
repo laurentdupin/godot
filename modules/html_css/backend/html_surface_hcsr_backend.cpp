@@ -186,7 +186,9 @@ void HTMLSurfaceHCSRBackend::_begin_session_retirement() {
 	session = nullptr;
 	derivation_pending = false;
 	publication_probe_pending = false;
-	consumed_runtime_generation = 0;
+	publication_cursor_runtime_generation = 0;
+	visible_runtime_generation = 0;
+	standby_runtime_generation = 0;
 }
 
 bool HTMLSurfaceHCSRBackend::_recreate_session() {
@@ -247,7 +249,9 @@ bool HTMLSurfaceHCSRBackend::_recreate_session() {
 	}
 
 	session_configuration_dirty = false;
-	consumed_runtime_generation = 0;
+	publication_cursor_runtime_generation = 0;
+	visible_runtime_generation = 0;
+	standby_runtime_generation = 0;
 	if (compiled_document != nullptr) {
 		const uint64_t request_id = next_document_request_id++;
 		if (hcsr_runtime_session_submit_document(session, request_id, compiled_document) != HCSR_RUNTIME_OK) {
@@ -263,9 +267,11 @@ bool HTMLSurfaceHCSRBackend::_recreate_session() {
 
 bool HTMLSurfaceHCSRBackend::_step_session(uint64_t p_budget_usec) {
 	if (session == nullptr || !derivation_pending) {
+		HCSRFrameBudgetService::set_semantic_pending((uint64_t)this, false);
 		return false;
 	}
-	const uint64_t allowed_budget_usec = HCSRFrameBudgetService::claim_semantic(p_budget_usec);
+	HCSRFrameBudgetService::set_semantic_pending((uint64_t)this, true);
+	const uint64_t allowed_budget_usec = HCSRFrameBudgetService::claim_semantic((uint64_t)this, p_budget_usec);
 	if (allowed_budget_usec == 0) {
 		return false;
 	}
@@ -292,7 +298,8 @@ bool HTMLSurfaceHCSRBackend::_step_session(uint64_t p_budget_usec) {
 		step_count++;
 	} while ((start_usec != 0 && OS::get_singleton()->get_ticks_usec() - start_usec < allowed_budget_usec) || (start_usec == 0 && step_count < 1024));
 	const uint64_t elapsed_usec = start_usec == 0 ? 0 : OS::get_singleton()->get_ticks_usec() - start_usec;
-	HCSRFrameBudgetService::consume_semantic(elapsed_usec);
+	HCSRFrameBudgetService::consume_semantic((uint64_t)this, elapsed_usec);
+	HCSRFrameBudgetService::set_semantic_pending((uint64_t)this, derivation_pending);
 	last_step_milliseconds = elapsed_usec / 1000.0;
 	return completed;
 }
@@ -307,7 +314,7 @@ bool HTMLSurfaceHCSRBackend::_begin_presentation_candidate() {
 	_initialize_abi(publication_info);
 	const hcsr_runtime_status_t status = hcsr_runtime_session_acquire_publication(
 			session,
-			consumed_runtime_generation,
+			publication_cursor_runtime_generation,
 			&publication,
 			&publication_info);
 	if (status == HCSR_RUNTIME_NO_NEW_PUBLICATION) {
@@ -324,6 +331,7 @@ bool HTMLSurfaceHCSRBackend::_begin_presentation_candidate() {
 	presentation_candidate->publication_info = publication_info;
 	presentation_candidate->author_submission_generation = author_submission_generation;
 	presentation_candidate->configuration_generation = configuration_generation;
+	presentation_candidate->staging_base_runtime_generation = standby_runtime_generation;
 	presentation_candidate->outputs.resize(publication_info.output_count);
 	last_presentation_slice_milliseconds = 0.0;
 	last_texture_upload_bytes = 0;
@@ -409,6 +417,7 @@ bool HTMLSurfaceHCSRBackend::_advance_presentation_candidate() {
 			return false;
 		}
 		PresentationOutputCandidate &output = candidate.outputs.write[output_index];
+		output.publication_output_index = output_index;
 		output.primary = output_info.output_id == 1;
 		if (output.primary) {
 			output.target_texture = texture;
@@ -427,7 +436,7 @@ bool HTMLSurfaceHCSRBackend::_advance_presentation_candidate() {
 						candidate.publication,
 						candidate.publication_info.generation,
 						output_index,
-						consumed_runtime_generation,
+						candidate.staging_base_runtime_generation,
 						&output.frame,
 						&output.frame_info) != HCSR_RUNTIME_OK
 				|| output.frame == nullptr
@@ -451,7 +460,8 @@ bool HTMLSurfaceHCSRBackend::_advance_presentation_candidate() {
 			if (output.next_tile < output.frame_info.changed_tile_count) {
 				const String failure_output = OS::get_singleton() != nullptr ? OS::get_singleton()->get_environment("HCSR_RUNTIME_TEST_FAIL_PRESENTATION_OUTPUT") : String();
 				if (!failure_output.is_empty() && failure_output.to_int() == candidate.active_output && output.next_tile == 0) {
-					consumed_runtime_generation = candidate.publication_info.generation;
+					publication_cursor_runtime_generation = candidate.publication_info.generation;
+					standby_runtime_generation = 0;
 					_release_presentation_candidate(false);
 					return false;
 				}
@@ -468,7 +478,8 @@ bool HTMLSurfaceHCSRBackend::_advance_presentation_candidate() {
 			return false;
 		}
 		if (candidate.author_submission_generation != author_submission_generation) {
-			consumed_runtime_generation = candidate.publication_info.generation;
+			publication_cursor_runtime_generation = candidate.publication_info.generation;
+			standby_runtime_generation = candidate.publication_info.generation;
 			_release_presentation_candidate(true);
 			_publish_metrics();
 			return false;
@@ -485,13 +496,24 @@ bool HTMLSurfaceHCSRBackend::_advance_presentation_candidate() {
 			_release_presentation_candidate(false);
 			return false;
 		}
+		candidate.sync_base_runtime_generation = visible_runtime_generation;
 		const uint64_t visible_generation = next_activation_generation++;
+		for (PresentationOutputCandidate &output : candidate.outputs) {
+			if (output.frame != nullptr) {
+				if (hcsr_runtime_frame_release(candidate.publication, output.frame) != HCSR_RUNTIME_OK) {
+					_set_terminal_failure("HCSR RuntimeSession could not release a staged output frame.");
+					_release_presentation_candidate(false);
+					return false;
+				}
+				output.frame = nullptr;
+			}
+			output.next_tile = 0;
+		}
 		for (PresentationOutputCandidate &output : candidate.outputs) {
 			output.target_texture->activate_region_candidate(false);
 			if (!output.primary) {
 				output.output_state->generation = visible_generation;
 			}
-			output.next_tile = 0;
 		}
 		frame_metadata.logical_size = size;
 		frame_metadata.physical_size = Size2i(primary->frame_info.pixel_width, primary->frame_info.pixel_height);
@@ -500,6 +522,7 @@ bool HTMLSurfaceHCSRBackend::_advance_presentation_candidate() {
 		frame_metadata.hits.clear();
 		frame_metadata.backdrop_filter_regions.clear();
 		active_generation = visible_generation;
+		visible_runtime_generation = candidate.publication_info.generation;
 		candidate.activated = true;
 		candidate.active_output = 0;
 		for (PresentationOutputCandidate &output : candidate.outputs) {
@@ -512,6 +535,19 @@ bool HTMLSurfaceHCSRBackend::_advance_presentation_candidate() {
 	while (candidate.active_output < candidate.outputs.size()) {
 		PresentationOutputCandidate &output = candidate.outputs.write[candidate.active_output];
 		if (!output.sync_initialized) {
+			_initialize_abi(output.frame_info);
+			if (hcsr_runtime_publication_acquire_output_frame_for_base(
+					candidate.publication,
+					candidate.publication_info.generation,
+					output.publication_output_index,
+					candidate.sync_base_runtime_generation,
+					&output.frame,
+					&output.frame_info) != HCSR_RUNTIME_OK
+					|| output.frame == nullptr) {
+				_set_terminal_failure("HCSR RuntimeSession could not acquire standby synchronization authority.");
+				_release_presentation_candidate(false);
+				return false;
+			}
 			const uint64_t initialization_start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
 			output.target_texture->begin_region_candidate(Size2i(output.frame_info.pixel_width, output.frame_info.pixel_height), true);
 			if (initialization_start_usec != 0) {
@@ -529,7 +565,8 @@ bool HTMLSurfaceHCSRBackend::_advance_presentation_candidate() {
 		}
 		candidate.active_output++;
 	}
-	consumed_runtime_generation = candidate.publication_info.generation;
+	publication_cursor_runtime_generation = candidate.publication_info.generation;
+	standby_runtime_generation = candidate.publication_info.generation;
 	_release_presentation_candidate(true);
 	_publish_metrics();
 	return false;
@@ -549,6 +586,9 @@ void HTMLSurfaceHCSRBackend::_release_presentation_candidate(bool p_keep_standby
 			output.target_texture->cancel_region_candidate();
 		}
 	}
+	if (!p_keep_standby) {
+		standby_runtime_generation = 0;
+	}
 	if (presentation_candidate->publication != nullptr && session != nullptr) {
 		release_succeeded = hcsr_runtime_publication_release(session, presentation_candidate->publication) == HCSR_RUNTIME_OK && release_succeeded;
 	}
@@ -560,7 +600,8 @@ void HTMLSurfaceHCSRBackend::_release_presentation_candidate(bool p_keep_standby
 }
 
 bool HTMLSurfaceHCSRBackend::_consume_publication() {
-	const uint64_t allowed_budget_usec = HCSRFrameBudgetService::claim_presentation(1000);
+	HCSRFrameBudgetService::set_presentation_pending((uint64_t)this, true);
+	const uint64_t allowed_budget_usec = HCSRFrameBudgetService::claim_presentation((uint64_t)this, 1000);
 	if (allowed_budget_usec == 0) {
 		return false;
 	}
@@ -583,7 +624,8 @@ bool HTMLSurfaceHCSRBackend::_consume_publication() {
 	} while (work_units < test_work_unit_limit
 			&& ((start_usec != 0 && OS::get_singleton()->get_ticks_usec() - start_usec < allowed_budget_usec) || (start_usec == 0 && work_units < 1024)));
 	const uint64_t elapsed_usec = start_usec == 0 ? 0 : OS::get_singleton()->get_ticks_usec() - start_usec;
-	HCSRFrameBudgetService::consume_presentation(elapsed_usec);
+	HCSRFrameBudgetService::consume_presentation((uint64_t)this, elapsed_usec);
+	HCSRFrameBudgetService::set_presentation_pending((uint64_t)this, presentation_candidate != nullptr || publication_probe_pending);
 	const double elapsed_milliseconds = elapsed_usec / 1000.0;
 	last_presentation_slice_milliseconds = MAX(last_presentation_slice_milliseconds, elapsed_milliseconds);
 	return changed;
@@ -851,7 +893,7 @@ void HTMLSurfaceHCSRBackend::destroy_presentation_output(uint64_t p_output_id) {
 	}
 	if (presentation_candidate != nullptr) {
 		if (presentation_candidate->activated) {
-			consumed_runtime_generation = presentation_candidate->publication_info.generation;
+			publication_cursor_runtime_generation = presentation_candidate->publication_info.generation;
 		}
 		_release_presentation_candidate(false);
 	}
@@ -875,6 +917,7 @@ uint64_t HTMLSurfaceHCSRBackend::get_presentation_output_generation(uint64_t p_o
 }
 
 HTMLSurfaceHCSRBackend::HTMLSurfaceHCSRBackend() {
+	HCSRFrameBudgetService::register_owner((uint64_t)this);
 	if (hcsr_runtime_get_abi_version() != HCSR_RUNTIME_ABI_VERSION) {
 		_set_terminal_failure(vformat(
 				"HCSR RuntimeSession ABI mismatch: Godot expects %d, library reports %d.",
@@ -884,6 +927,7 @@ HTMLSurfaceHCSRBackend::HTMLSurfaceHCSRBackend() {
 }
 
 HTMLSurfaceHCSRBackend::~HTMLSurfaceHCSRBackend() {
+	HCSRFrameBudgetService::unregister_owner((uint64_t)this);
 	_begin_session_retirement();
 	if (compiled_document != nullptr) {
 		hcsr_runtime_document_release(compiled_document);

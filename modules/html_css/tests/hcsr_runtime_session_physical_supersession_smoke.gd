@@ -7,30 +7,33 @@ const RESIZED_SECONDARY_SIZE := Vector2i(1280, 720)
 func _initialize() -> void:
 	call_deferred("_run")
 
-func _document(red: bool) -> HTMLDocument:
+func _document(state: int) -> HTMLDocument:
 	var result := HTMLDocument.new()
-	result.html = "<root><item id=\"panel\" class=\"panel%s\">frame</item></root>" % (" red" if red else "")
-	result.css = ".panel { width: 2560px; height: 1440px; color: #0000ff; } .red { color: #ff0000; }"
+	result.html = "<root><item id=\"top\" class=\"band%s\">top</item><item id=\"middle\" class=\"band%s\">middle</item><item id=\"bottom\" class=\"band%s\">bottom</item></root>" % [" red" if state == 1 else "", " green" if state == 2 else "", " yellow" if state == 2 else ""]
+	result.css = ".band { width: 2560px; height: 480px; color: #0000ff; } .red { color: #ff0000; } .green { color: #00ff00; } .yellow { color: #ffff00; }"
 	return result
 
-func _make_view(red: bool = false) -> HTMLView:
+func _make_view(state: int = 0, viewport_size: Vector2i = PRIMARY_SIZE) -> HTMLView:
 	var view := HTMLView.new()
 	view.backend_preference = HTMLView.BACKEND_CPU
 	view.viewport_size_mode = HTMLView.VIEWPORT_SIZE_FIXED
-	view.logical_size = PRIMARY_SIZE
-	view.fixed_viewport_size = PRIMARY_SIZE
-	view.size = Vector2(PRIMARY_SIZE)
-	view.document = _document(red)
+	view.logical_size = viewport_size
+	view.fixed_viewport_size = viewport_size
+	view.size = Vector2(viewport_size)
+	view.document = _document(state)
 	root.add_child(view)
 	return view
 
-func _set_red(view: HTMLView, red: bool) -> Error:
+func _set_class(view: HTMLView, id: String, value: String) -> Error:
 	return view.apply_element_mutations([{
 		"operation": "set_attribute",
-		"id": "panel",
+		"id": id,
 		"name": "class",
-		"value": "panel red" if red else "panel",
+		"value": value,
 	}])
+
+func _set_red(view: HTMLView, red: bool) -> Error:
+	return _set_class(view, "top", "band red" if red else "band")
 
 func _wait_for_atomic(view: HTMLView, secondary: HTMLViewOutput, color: Color, minimum_generation: int = 0, maximum_frames: int = 3000) -> bool:
 	for _frame in range(maximum_frames):
@@ -74,11 +77,70 @@ func _wait_for_initial_standby_sync() -> bool:
 		await process_frame
 	return false
 
+func _wait_for_three_colors(view: HTMLView, secondary: HTMLViewOutput, colors: Array[Color], minimum_generation: int) -> bool:
+	var primary_points := [Vector2i(16, 16), Vector2i(16, 496), Vector2i(16, 976)]
+	for _frame in range(3000):
+		var primary := view.get_texture().get_image()
+		var projected_band_height := secondary.size.y / 3
+		var secondary_points := [Vector2i(10, 10), Vector2i(10, projected_band_height + 10), Vector2i(10, projected_band_height * 2 + 10)]
+		var secondary_image := secondary.texture.get_image()
+		var exact := primary != null and secondary_image != null and view.get_generation() > minimum_generation and secondary.generation == view.get_generation()
+		for index in range(3):
+			exact = exact and primary.get_pixelv(primary_points[index]).is_equal_approx(colors[index]) and secondary_image.get_pixelv(secondary_points[index]).is_equal_approx(colors[index])
+		if exact:
+			return true
+		await process_frame
+	return false
+
+func _wait_for_full_hidden_sync(primary_size: Vector2i, secondary_size: Vector2i) -> bool:
+	var full_bytes := (primary_size.x * primary_size.y + secondary_size.x * secondary_size.y) * 4
+	for _frame in range(3000):
+		if Performance.get_custom_monitor("HCSR/RuntimeSession Texture Upload Bytes") >= full_bytes:
+			return true
+		await process_frame
+	return false
+
+func _exercise_three_view_fairness() -> bool:
+	var views: Array[HTMLView] = []
+	var generations: Array[int] = []
+	var changes: Array[int] = [0, 0, 0]
+	var red: Array[bool] = [false, false, false]
+	for index in range(3):
+		var view := _make_view(0, Vector2i(640, 360))
+		views.push_back(view)
+		for _frame in range(1200):
+			if view.get_generation() > 0 and view.get_texture().get_image() != null:
+				break
+			await process_frame
+		if view.get_generation() == 0:
+			return false
+		generations.push_back(view.get_generation())
+		red[index] = true
+		if _set_red(view, true) != OK:
+			return false
+	for _frame in range(900):
+		for index in range(3):
+			if views[index].get_generation() > generations[index]:
+				generations[index] = views[index].get_generation()
+				changes[index] += 1
+				red[index] = !red[index]
+				if _set_red(views[index], red[index]) != OK:
+					return false
+		if changes[0] >= 4 and changes[1] >= 4 and changes[2] >= 4:
+			for view in views:
+				view.queue_free()
+			return true
+		await process_frame
+	print("three-view fairness timeout: changes=%s generations=%s" % [changes, generations])
+	for view in views:
+		view.queue_free()
+	return false
+
 func _run() -> void:
 	OS.set_environment("HCSR_RUNTIME_TEST_PRESENTATION_UNIT_LIMIT", "")
-	var retained := _make_view(false)
+	var retained := _make_view()
 	var retained_secondary: HTMLViewOutput = retained.create_output(SECONDARY_SIZE)
-	var peer := _make_view(false)
+	var peer := _make_view()
 	var peer_secondary: HTMLViewOutput = peer.create_output(Vector2i(640, 360))
 	if !await _wait_for_atomic(retained, retained_secondary, Color("0000ff")) \
 			or !await _wait_for_atomic(peer, peer_secondary, Color("0000ff")):
@@ -86,6 +148,11 @@ func _run() -> void:
 		return
 	peer.queue_free()
 	for _frame in range(4):
+		await process_frame
+	if !await _exercise_three_view_fairness():
+		_fail("Three continuously busy RuntimeSession views did not all receive bounded round-robin progress.")
+		return
+	for _frame in range(8):
 		await process_frame
 	if !await _wait_for_initial_standby_sync():
 		_fail("The initial hidden standby did not finish bounded synchronization.")
@@ -128,7 +195,7 @@ func _run() -> void:
 		_fail("Configuration replacement did not preserve monotonic atomic visible generations.")
 		return
 
-	var clean := _make_view(true)
+	var clean := _make_view(1)
 	var clean_secondary: HTMLViewOutput = clean.create_output(RESIZED_SECONDARY_SIZE)
 	if !await _wait_for_atomic(clean, clean_secondary, Color("ff0000")):
 		_fail("The independent clean reference did not publish.")
@@ -139,11 +206,46 @@ func _run() -> void:
 			or retained_secondary_image.get_data() != clean_secondary.texture.get_image().get_data():
 		_fail("Superseded/resized primary or secondary output differs from a clean publication.")
 		return
+	clean.queue_free()
+	for _frame in range(4):
+		await process_frame
+
+	# B changes the top band, C retains B while changing the middle, and D changes
+	# the bottom. Replaying only B-to-C onto the older visible A buffer corrupts
+	# the top band and is exposed when D later activates that buffer.
+	var before_b := retained.get_generation()
+	OS.set_environment("HCSR_RUNTIME_TEST_PRESENTATION_UNIT_LIMIT", "1")
+	if _set_class(retained, "top", "band") != OK or !await _wait_for_partial_staging(retained, before_b, Color("ff0000")):
+		_fail("Independent-region publication B did not stage while A remained visible.")
+		return
+	if _set_class(retained, "middle", "band green") != OK:
+		_fail("Independent-region publication C was rejected.")
+		return
+	OS.set_environment("HCSR_RUNTIME_TEST_PRESENTATION_UNIT_LIMIT", "")
+	if !await _wait_for_three_colors(retained, retained_secondary, [Color("0000ff"), Color("00ff00"), Color("0000ff")], before_b):
+		_fail("Independent-region publication C did not preserve B and publish atomically.")
+		return
+	if !await _wait_for_full_hidden_sync(PRIMARY_SIZE, RESIZED_SECONDARY_SIZE):
+		_fail("The old visible buffer did not finish exact generation-qualified synchronization.")
+		return
+	var before_d := retained.get_generation()
+	if _set_class(retained, "bottom", "band yellow") != OK \
+			or !await _wait_for_three_colors(retained, retained_secondary, [Color("0000ff"), Color("00ff00"), Color("ffff00")], before_d):
+		_fail("Publication D exposed a hidden buffer reconstructed from the wrong runtime base.")
+		return
+
+	var clean_final := _make_view(2)
+	var clean_final_secondary: HTMLViewOutput = clean_final.create_output(RESIZED_SECONDARY_SIZE)
+	if !await _wait_for_three_colors(clean_final, clean_final_secondary, [Color("0000ff"), Color("00ff00"), Color("ffff00")], 0) \
+			or retained.get_texture().get_image().get_data() != clean_final.get_texture().get_image().get_data() \
+			or retained_secondary.texture.get_image().get_data() != clean_final_secondary.texture.get_image().get_data():
+		_fail("Independent B/C/D continuation differs from a clean primary or secondary output.")
+		return
 
 	OS.set_environment("HCSR_RUNTIME_TEST_PRESENTATION_UNIT_LIMIT", "")
 	print("HCSR RuntimeSession 2560x1440 physical supersession/resize smoke passed: visible generation %d." % retained.get_generation())
 	retained.queue_free()
-	clean.queue_free()
+	clean_final.queue_free()
 	quit()
 
 func _fail(message: String) -> void:
