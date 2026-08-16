@@ -5,6 +5,7 @@
 #include "html_surface_hcsr_backend.h"
 
 #include "../bridge/html_asset_provider.h"
+#include "hcsr_frame_budget_service.h"
 #include "hcsr_session_retirement_service.h"
 
 #include "core/os/os.h"
@@ -13,7 +14,6 @@
 namespace {
 
 constexpr uint64_t HCSR_RUNTIME_FRAME_STEP_BUDGET_USEC = 1000;
-constexpr uint64_t HCSR_RUNTIME_RETIREMENT_BUDGET_USEC = 500;
 constexpr int32_t HCSR_RUNTIME_TILE_SIZE = 64;
 
 static String copy_report_text(hcsr_runtime_compilation_report_t *p_report, int p_index, bool p_message, int p_byte_count) {
@@ -159,7 +159,7 @@ bool HTMLSurfaceHCSRBackend::_compile_document() {
 	terminal_failure = false;
 	terminal_failure_reason = String();
 
-	if (session != nullptr && !session_configuration_dirty) {
+	if (session != nullptr) {
 		const uint64_t request_id = next_document_request_id++;
 		if (hcsr_runtime_session_submit_document(session, request_id, compiled_document) != HCSR_RUNTIME_OK) {
 			compiled_document = previous_document;
@@ -168,6 +168,7 @@ bool HTMLSurfaceHCSRBackend::_compile_document() {
 			return false;
 		}
 		queued_generation++;
+		author_submission_generation++;
 		derivation_pending = true;
 	}
 	if (previous_document != nullptr) {
@@ -192,10 +193,6 @@ bool HTMLSurfaceHCSRBackend::_recreate_session() {
 	if (!session_configuration_dirty && session != nullptr) {
 		return true;
 	}
-	if (presentation_candidate != nullptr) {
-		return true;
-	}
-	_begin_session_retirement();
 
 	Vector<hcsr_runtime_output_configuration_t> outputs;
 	outputs.resize(1 + presentation_outputs.size());
@@ -219,6 +216,25 @@ bool HTMLSurfaceHCSRBackend::_recreate_session() {
 		output_index++;
 	}
 
+	if (session != nullptr) {
+		_release_presentation_candidate(false);
+		const hcsr_runtime_status_t configuration_status = hcsr_runtime_session_submit_configuration(
+				session,
+				MAX(1, size.x),
+				MAX(1, size.y),
+				outputs.ptr(),
+				outputs.size());
+		if (configuration_status != HCSR_RUNTIME_OK) {
+			_set_terminal_failure(vformat("HCSR RuntimeSession reconfiguration failed with status %d.", (int)configuration_status));
+			return false;
+		}
+		session_configuration_dirty = false;
+		queued_generation++;
+		derivation_pending = true;
+		publication_probe_pending = false;
+		return true;
+	}
+
 	const hcsr_runtime_status_t create_status = hcsr_runtime_session_create(
 			MAX(1, size.x),
 			MAX(1, size.y),
@@ -239,6 +255,7 @@ bool HTMLSurfaceHCSRBackend::_recreate_session() {
 			return false;
 		}
 		queued_generation++;
+		author_submission_generation++;
 		derivation_pending = true;
 	}
 	return true;
@@ -246,6 +263,10 @@ bool HTMLSurfaceHCSRBackend::_recreate_session() {
 
 bool HTMLSurfaceHCSRBackend::_step_session(uint64_t p_budget_usec) {
 	if (session == nullptr || !derivation_pending) {
+		return false;
+	}
+	const uint64_t allowed_budget_usec = HCSRFrameBudgetService::claim_semantic(p_budget_usec);
+	if (allowed_budget_usec == 0) {
 		return false;
 	}
 	const uint64_t start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
@@ -269,8 +290,10 @@ bool HTMLSurfaceHCSRBackend::_step_session(uint64_t p_budget_usec) {
 			break;
 		}
 		step_count++;
-	} while ((start_usec != 0 && OS::get_singleton()->get_ticks_usec() - start_usec < p_budget_usec) || (start_usec == 0 && step_count < 1024));
-	last_step_milliseconds = start_usec == 0 ? 0.0 : (OS::get_singleton()->get_ticks_usec() - start_usec) / 1000.0;
+	} while ((start_usec != 0 && OS::get_singleton()->get_ticks_usec() - start_usec < allowed_budget_usec) || (start_usec == 0 && step_count < 1024));
+	const uint64_t elapsed_usec = start_usec == 0 ? 0 : OS::get_singleton()->get_ticks_usec() - start_usec;
+	HCSRFrameBudgetService::consume_semantic(elapsed_usec);
+	last_step_milliseconds = elapsed_usec / 1000.0;
 	return completed;
 }
 
@@ -299,9 +322,12 @@ bool HTMLSurfaceHCSRBackend::_begin_presentation_candidate() {
 	publication_probe_pending = false;
 	presentation_candidate->publication = publication;
 	presentation_candidate->publication_info = publication_info;
+	presentation_candidate->author_submission_generation = author_submission_generation;
+	presentation_candidate->configuration_generation = configuration_generation;
 	presentation_candidate->outputs.resize(publication_info.output_count);
 	last_presentation_slice_milliseconds = 0.0;
 	last_texture_upload_bytes = 0;
+	staged_tile_count = 0;
 	last_tile_copy_milliseconds = 0.0;
 	last_texture_upload_milliseconds = 0.0;
 	primary_copied_tile_bytes = 0;
@@ -357,6 +383,7 @@ bool HTMLSurfaceHCSRBackend::_copy_candidate_tile(PresentationOutputCandidate &p
 	if (!presentation_candidate->activated) {
 		uint64_t &copied_bytes = p_output.primary ? primary_copied_tile_bytes : p_output.output_state->copied_tile_bytes;
 		copied_bytes += tile_bytes;
+		staged_tile_count++;
 	}
 	last_texture_upload_bytes += tile_bytes;
 	p_output.next_tile++;
@@ -396,10 +423,11 @@ bool HTMLSurfaceHCSRBackend::_advance_presentation_candidate() {
 		}
 		_initialize_abi(output.frame_info);
 		if (output.target_texture.is_null()
-				|| hcsr_runtime_publication_acquire_output_frame(
+				|| hcsr_runtime_publication_acquire_output_frame_for_base(
 						candidate.publication,
 						candidate.publication_info.generation,
 						output_index,
+						consumed_runtime_generation,
 						&output.frame,
 						&output.frame_info) != HCSR_RUNTIME_OK
 				|| output.frame == nullptr
@@ -409,9 +437,7 @@ bool HTMLSurfaceHCSRBackend::_advance_presentation_candidate() {
 			return false;
 		}
 		const uint64_t initialization_start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
-		if (output.target_texture->begin_region_candidate(Size2i(output.frame_info.pixel_width, output.frame_info.pixel_height), true)) {
-			last_texture_upload_bytes += uint64_t(output.frame_info.pixel_width) * output.frame_info.pixel_height * 4;
-		}
+		output.target_texture->begin_region_candidate(Size2i(output.frame_info.pixel_width, output.frame_info.pixel_height), true);
 		if (initialization_start_usec != 0) {
 			last_texture_upload_milliseconds += (OS::get_singleton()->get_ticks_usec() - initialization_start_usec) / 1000.0;
 		}
@@ -437,6 +463,16 @@ bool HTMLSurfaceHCSRBackend::_advance_presentation_candidate() {
 			}
 			candidate.active_output++;
 		}
+		if (candidate.configuration_generation != configuration_generation) {
+			_release_presentation_candidate(false);
+			return false;
+		}
+		if (candidate.author_submission_generation != author_submission_generation) {
+			consumed_runtime_generation = candidate.publication_info.generation;
+			_release_presentation_candidate(true);
+			_publish_metrics();
+			return false;
+		}
 		PresentationOutputCandidate *primary = nullptr;
 		for (PresentationOutputCandidate &output : candidate.outputs) {
 			if (output.primary) {
@@ -449,20 +485,21 @@ bool HTMLSurfaceHCSRBackend::_advance_presentation_candidate() {
 			_release_presentation_candidate(false);
 			return false;
 		}
+		const uint64_t visible_generation = next_activation_generation++;
 		for (PresentationOutputCandidate &output : candidate.outputs) {
 			output.target_texture->activate_region_candidate(false);
 			if (!output.primary) {
-				output.output_state->generation = candidate.publication_info.generation;
+				output.output_state->generation = visible_generation;
 			}
 			output.next_tile = 0;
 		}
 		frame_metadata.logical_size = size;
 		frame_metadata.physical_size = Size2i(primary->frame_info.pixel_width, primary->frame_info.pixel_height);
 		frame_metadata.device_scale_factor = device_scale_factor;
-		frame_metadata.generation = candidate.publication_info.generation;
+		frame_metadata.generation = visible_generation;
 		frame_metadata.hits.clear();
 		frame_metadata.backdrop_filter_regions.clear();
-		active_generation = candidate.publication_info.generation;
+		active_generation = visible_generation;
 		candidate.activated = true;
 		candidate.active_output = 0;
 		for (PresentationOutputCandidate &output : candidate.outputs) {
@@ -476,9 +513,7 @@ bool HTMLSurfaceHCSRBackend::_advance_presentation_candidate() {
 		PresentationOutputCandidate &output = candidate.outputs.write[candidate.active_output];
 		if (!output.sync_initialized) {
 			const uint64_t initialization_start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
-			if (output.target_texture->begin_region_candidate(Size2i(output.frame_info.pixel_width, output.frame_info.pixel_height), true)) {
-				last_texture_upload_bytes += uint64_t(output.frame_info.pixel_width) * output.frame_info.pixel_height * 4;
-			}
+			output.target_texture->begin_region_candidate(Size2i(output.frame_info.pixel_width, output.frame_info.pixel_height), true);
 			if (initialization_start_usec != 0) {
 				last_texture_upload_milliseconds += (OS::get_singleton()->get_ticks_usec() - initialization_start_usec) / 1000.0;
 			}
@@ -525,9 +560,31 @@ void HTMLSurfaceHCSRBackend::_release_presentation_candidate(bool p_keep_standby
 }
 
 bool HTMLSurfaceHCSRBackend::_consume_publication() {
+	const uint64_t allowed_budget_usec = HCSRFrameBudgetService::claim_presentation(1000);
+	if (allowed_budget_usec == 0) {
+		return false;
+	}
 	const uint64_t start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
-	const bool changed = _advance_presentation_candidate();
-	const double elapsed_milliseconds = start_usec == 0 ? 0.0 : (OS::get_singleton()->get_ticks_usec() - start_usec) / 1000.0;
+	bool changed = false;
+	uint32_t work_units = 0;
+	uint32_t test_work_unit_limit = UINT32_MAX;
+	if (OS::get_singleton() != nullptr) {
+		const String configured_limit = OS::get_singleton()->get_environment("HCSR_RUNTIME_TEST_PRESENTATION_UNIT_LIMIT");
+		if (!configured_limit.is_empty()) {
+			test_work_unit_limit = MAX(1, configured_limit.to_int());
+		}
+	}
+	do {
+		changed = _advance_presentation_candidate();
+		work_units++;
+		if (changed || (presentation_candidate == nullptr && !publication_probe_pending)) {
+			break;
+		}
+	} while (work_units < test_work_unit_limit
+			&& ((start_usec != 0 && OS::get_singleton()->get_ticks_usec() - start_usec < allowed_budget_usec) || (start_usec == 0 && work_units < 1024)));
+	const uint64_t elapsed_usec = start_usec == 0 ? 0 : OS::get_singleton()->get_ticks_usec() - start_usec;
+	HCSRFrameBudgetService::consume_presentation(elapsed_usec);
+	const double elapsed_milliseconds = elapsed_usec / 1000.0;
 	last_presentation_slice_milliseconds = MAX(last_presentation_slice_milliseconds, elapsed_milliseconds);
 	return changed;
 }
@@ -545,6 +602,7 @@ void HTMLSurfaceHCSRBackend::_publish_metrics() {
 		counters.runtime_changed_tile_bytes += entry.value->copied_tile_bytes;
 	}
 	counters.runtime_texture_upload_bytes = last_texture_upload_bytes;
+	counters.runtime_staged_tiles = staged_tile_count;
 	counters.runtime_retiring_sessions = HCSRSessionRetirementService::pending_count();
 	HCSRPerformanceMonitor::update_integration((uint64_t)this, counters);
 }
@@ -595,6 +653,7 @@ Error HTMLSurfaceHCSRBackend::_submit_attribute_mutations(const Array &p_mutatio
 		return submit_status == HCSR_RUNTIME_LIMIT_EXCEEDED ? ERR_OUT_OF_MEMORY : FAILED;
 	}
 	queued_generation++;
+	author_submission_generation++;
 	derivation_pending = true;
 	return OK;
 }
@@ -621,6 +680,7 @@ void HTMLSurfaceHCSRBackend::set_size(const Size2i &p_size) {
 	}
 	size = new_size;
 	session_configuration_dirty = true;
+	configuration_generation++;
 }
 
 void HTMLSurfaceHCSRBackend::set_device_scale_factor(float p_device_scale_factor) {
@@ -630,6 +690,7 @@ void HTMLSurfaceHCSRBackend::set_device_scale_factor(float p_device_scale_factor
 	}
 	device_scale_factor = new_scale;
 	session_configuration_dirty = true;
+	configuration_generation++;
 }
 
 void HTMLSurfaceHCSRBackend::set_physical_size(const Size2i &p_physical_size) {
@@ -639,6 +700,7 @@ void HTMLSurfaceHCSRBackend::set_physical_size(const Size2i &p_physical_size) {
 	}
 	physical_size = new_size;
 	session_configuration_dirty = true;
+	configuration_generation++;
 }
 
 void HTMLSurfaceHCSRBackend::set_document(const Ref<HTMLDocument> &p_document) {
@@ -661,7 +723,6 @@ Error HTMLSurfaceHCSRBackend::update_compositor(double p_timeline_time_seconds, 
 	if (!terminal_failure && document.is_valid() && _compile_document() && _recreate_session()) {
 		ready = _step_session(HCSR_RUNTIME_FRAME_STEP_BUDGET_USEC);
 	}
-	HCSRSessionRetirementService::service(HCSR_RUNTIME_RETIREMENT_BUDGET_USEC);
 	_publish_metrics();
 	if (r_needs_output != nullptr) {
 		*r_needs_output = ready;
@@ -694,7 +755,6 @@ bool HTMLSurfaceHCSRBackend::poll_pending_output(bool *r_waiting_for_completion)
 		}
 		changed = _consume_publication();
 	}
-	HCSRSessionRetirementService::service(HCSR_RUNTIME_RETIREMENT_BUDGET_USEC);
 	_publish_metrics();
 	if (r_waiting_for_completion != nullptr) {
 		*r_waiting_for_completion = derivation_pending || presentation_candidate != nullptr || publication_probe_pending;
@@ -711,7 +771,7 @@ HTMLPendingOutputState HTMLSurfaceHCSRBackend::consume_pending_output_state() {
 }
 
 void HTMLSurfaceHCSRBackend::schedule_retirement_service() {
-	HCSRSessionRetirementService::service(HCSR_RUNTIME_RETIREMENT_BUDGET_USEC);
+	// Retirement is serviced once per SceneTree frame by the module-owned queue.
 }
 
 bool HTMLSurfaceHCSRBackend::has_pending_output() const {
@@ -768,6 +828,7 @@ uint64_t HTMLSurfaceHCSRBackend::create_presentation_output(const Size2i &p_size
 	state->texture.instantiate();
 	presentation_outputs.insert(output_id, state);
 	session_configuration_dirty = true;
+	configuration_generation++;
 	return output_id;
 }
 
@@ -778,6 +839,7 @@ Error HTMLSurfaceHCSRBackend::resize_presentation_output(uint64_t p_output_id, c
 	if ((*state)->requested_size != new_size) {
 		(*state)->requested_size = new_size;
 		session_configuration_dirty = true;
+		configuration_generation++;
 	}
 	return OK;
 }
@@ -796,6 +858,7 @@ void HTMLSurfaceHCSRBackend::destroy_presentation_output(uint64_t p_output_id) {
 	memdelete(*state);
 	presentation_outputs.erase(p_output_id);
 	session_configuration_dirty = true;
+	configuration_generation++;
 }
 
 Ref<Texture2D> HTMLSurfaceHCSRBackend::get_presentation_output_texture(uint64_t p_output_id) const {

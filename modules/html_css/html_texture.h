@@ -30,15 +30,19 @@
 
 #pragma once
 
+#include "core/templates/hash_map.h"
 #include "scene/resources/image_texture.h"
 
 class HTMLTexture2D : public Texture2D {
 	GDCLASS(HTMLTexture2D, Texture2D);
 
 	Ref<ImageTexture> texture;
-	Ref<Image> latest_image;
-	Ref<ImageTexture> standby_texture;
-	Ref<Image> standby_image;
+	mutable Ref<Image> latest_image;
+	RID region_texture_rid;
+	RID standby_region_texture_rid;
+	Size2i standby_region_size;
+	HashMap<Vector2i, Ref<Image>> region_tiles;
+	HashMap<Vector2i, Ref<Image>> standby_region_tiles;
 	RID external_texture_rid;
 	RID proxy_texture_rid;
 	Size2i size;
@@ -46,6 +50,8 @@ class HTMLTexture2D : public Texture2D {
 
 	void _emit_changed_on_main_thread();
 	void _notify_changed();
+	void _release_region_textures();
+	Ref<Image> _materialize_region_image() const;
 
 protected:
 	static void _bind_methods();

@@ -589,6 +589,7 @@ public:
 	virtual void texture_free(RID p_rid) override;
 
 	virtual void texture_2d_initialize(RID p_texture, const Ref<Image> &p_image) override;
+	virtual void texture_2d_empty_initialize(RID p_texture, int p_width, int p_height, Image::Format p_format) override;
 	virtual void texture_2d_layered_initialize(RID p_texture, const Vector<Ref<Image>> &p_layers, RSE::TextureLayeredType p_layered_type) override;
 	virtual void texture_3d_initialize(RID p_texture, Image::Format, int p_width, int p_height, int p_depth, bool p_mipmaps, const Vector<Ref<Image>> &p_data) override;
 	virtual void texture_external_initialize(RID p_texture, int p_width, int p_height, uint64_t p_external_buffer) override;

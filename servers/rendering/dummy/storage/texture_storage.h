@@ -41,6 +41,8 @@ private:
 
 	struct DummyTexture {
 		Ref<Image> image;
+		Size2i size;
+		Image::Format format = Image::FORMAT_MAX;
 	};
 	mutable RID_PtrOwner<DummyTexture> texture_owner;
 
@@ -84,6 +86,14 @@ public:
 		DummyTexture *t = texture_owner.get_or_null(p_texture);
 		ERR_FAIL_NULL(t);
 		t->image = p_image->duplicate();
+		t->size = p_image->get_size();
+		t->format = p_image->get_format();
+	}
+	virtual void texture_2d_empty_initialize(RID p_texture, int p_width, int p_height, Image::Format p_format) override {
+		DummyTexture *t = texture_owner.get_or_null(p_texture);
+		ERR_FAIL_NULL(t);
+		t->size = Size2i(p_width, p_height);
+		t->format = p_format;
 	}
 	virtual void texture_2d_layered_initialize(RID p_texture, const Vector<Ref<Image>> &p_layers, RSE::TextureLayeredType p_layered_type) override {}
 	virtual void texture_3d_initialize(RID p_texture, Image::Format, int p_width, int p_height, int p_depth, bool p_mipmaps, const Vector<Ref<Image>> &p_data) override {}

@@ -151,6 +151,7 @@ if _html_css_renderer == "hcsr":
     hcsr_link_library, hcsr_shared_library, hcsr_deployed_library = _html_css_ensure_hcsr_runtime()
     print("HTML/CSS RuntimeSession library: " + hcsr_link_library)
     hcsr_module_sources = []
+    env_html_css.add_source_files(hcsr_module_sources, "backend/hcsr_frame_budget_service.cpp")
     env_html_css.add_source_files(hcsr_module_sources, "backend/hcsr_performance_monitor.cpp")
     env_html_css.add_source_files(hcsr_module_sources, "backend/hcsr_session_retirement_service.cpp")
     env_html_css.add_source_files(hcsr_module_sources, "backend/html_surface_hcsr_backend.cpp")

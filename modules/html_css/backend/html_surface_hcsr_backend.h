@@ -35,6 +35,8 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	struct PresentationCandidate {
 		hcsr_runtime_publication_t *publication = nullptr;
 		hcsr_runtime_publication_info_t publication_info = {};
+		uint64_t author_submission_generation = 0;
+		uint64_t configuration_generation = 0;
 		Vector<PresentationOutputCandidate> outputs;
 		int32_t next_output_to_acquire = 0;
 		int32_t active_output = 0;
@@ -50,7 +52,10 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	uint64_t next_document_request_id = 1;
 	uint64_t queued_generation = 0;
 	uint64_t active_generation = 0;
+	uint64_t next_activation_generation = 1;
 	uint64_t consumed_runtime_generation = 0;
+	uint64_t author_submission_generation = 0;
+	uint64_t configuration_generation = 1;
 	Size2i physical_size = Size2i(512, 512);
 	float device_scale_factor = 1.0f;
 	bool document_dirty = false;
@@ -67,6 +72,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	double last_texture_upload_milliseconds = 0.0;
 	int64_t last_step_work_units = 0;
 	uint64_t last_texture_upload_bytes = 0;
+	uint64_t staged_tile_count = 0;
 
 	template <typename T>
 	static void _initialize_abi(T &r_value) {

@@ -137,6 +137,7 @@ public:
 		MONITOR_RUNTIME_SESSION_WORK_UNITS,
 		MONITOR_RUNTIME_CHANGED_TILE_BYTES,
 		MONITOR_RUNTIME_TEXTURE_UPLOAD_BYTES,
+		MONITOR_RUNTIME_STAGED_TILES,
 		MONITOR_RUNTIME_RETIRING_SESSIONS,
 	};
 	struct IntegrationCounters {
@@ -159,6 +160,7 @@ public:
 		uint64_t runtime_session_work_units = 0;
 		uint64_t runtime_changed_tile_bytes = 0;
 		uint64_t runtime_texture_upload_bytes = 0;
+		uint64_t runtime_staged_tiles = 0;
 		uint64_t runtime_retiring_sessions = 0;
 	};
 

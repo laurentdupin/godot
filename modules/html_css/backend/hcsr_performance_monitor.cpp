@@ -182,6 +182,7 @@ void HCSRPerformanceMonitor::initialize() {
 		{ "HCSR/RuntimeSession Work Units", MONITOR_RUNTIME_SESSION_WORK_UNITS, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/RuntimeSession Changed Tile Bytes", MONITOR_RUNTIME_CHANGED_TILE_BYTES, Performance::MONITOR_TYPE_MEMORY },
 		{ "HCSR/RuntimeSession Texture Upload Bytes", MONITOR_RUNTIME_TEXTURE_UPLOAD_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/RuntimeSession Staged Tiles", MONITOR_RUNTIME_STAGED_TILES, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/RuntimeSession Retiring Sessions", MONITOR_RUNTIME_RETIRING_SESSIONS, Performance::MONITOR_TYPE_QUANTITY },
 	};
 
@@ -301,6 +302,7 @@ void HCSRPerformanceMonitor::finalize() {
 			"HCSR/RuntimeSession Work Units",
 			"HCSR/RuntimeSession Changed Tile Bytes",
 			"HCSR/RuntimeSession Texture Upload Bytes",
+			"HCSR/RuntimeSession Staged Tiles",
 			"HCSR/RuntimeSession Retiring Sessions",
 		};
 		for (const char *monitor_name : monitor_names) {
@@ -492,6 +494,9 @@ double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
 					break;
 				case MONITOR_RUNTIME_TEXTURE_UPLOAD_BYTES:
 					value += entry.value.runtime_texture_upload_bytes;
+					break;
+				case MONITOR_RUNTIME_STAGED_TILES:
+					value += entry.value.runtime_staged_tiles;
 					break;
 				case MONITOR_RUNTIME_RETIRING_SESSIONS:
 					value += entry.value.runtime_retiring_sessions;

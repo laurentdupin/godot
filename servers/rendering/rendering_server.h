@@ -108,6 +108,7 @@ public:
 	/* TEXTURE API */
 
 	virtual RID texture_2d_create(const Ref<Image> &p_image) = 0;
+	virtual RID texture_2d_empty_create(int p_width, int p_height, Image::Format p_format) = 0;
 	virtual RID texture_2d_layered_create(const Vector<Ref<Image>> &p_layers, RSE::TextureLayeredType p_layered_type) = 0;
 	virtual RID texture_3d_create(Image::Format, int p_width, int p_height, int p_depth, bool p_mipmaps, const Vector<Ref<Image>> &p_data) = 0; //all slices, then all the mipmaps, must be coherent
 	virtual RID texture_external_create(int p_width, int p_height, uint64_t p_external_buffer = 0) = 0;

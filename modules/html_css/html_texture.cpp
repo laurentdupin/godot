@@ -59,6 +59,41 @@ void HTMLTexture2D::_notify_changed() {
 	}
 }
 
+void HTMLTexture2D::_release_region_textures() {
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	if (rendering_server != nullptr) {
+		if (region_texture_rid.is_valid()) {
+			rendering_server->free_rid(region_texture_rid);
+		}
+		if (standby_region_texture_rid.is_valid()) {
+			rendering_server->free_rid(standby_region_texture_rid);
+		}
+	}
+	region_texture_rid = RID();
+	standby_region_texture_rid = RID();
+	standby_region_size = Size2i();
+	region_tiles.clear();
+	standby_region_tiles.clear();
+}
+
+Ref<Image> HTMLTexture2D::_materialize_region_image() const {
+	if (!region_texture_rid.is_valid() || size.x <= 0 || size.y <= 0) {
+		return Ref<Image>();
+	}
+	if (latest_image.is_valid() && latest_image->get_size() == size && latest_image->get_format() == Image::FORMAT_RGBA8) {
+		return latest_image;
+	}
+	Ref<Image> image = Image::create_empty(size.x, size.y, false, Image::FORMAT_RGBA8);
+	image->fill(Color(0, 0, 0, 0));
+	for (const KeyValue<Vector2i, Ref<Image>> &entry : region_tiles) {
+		if (entry.value.is_valid()) {
+			image->blit_rect(entry.value, Rect2i(Vector2i(), entry.value->get_size()), entry.key);
+		}
+	}
+	latest_image = image;
+	return latest_image;
+}
+
 void HTMLTexture2D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("update_placeholder", "size", "background", "marker"), &HTMLTexture2D::update_placeholder, DEFVAL(String()));
 	ClassDB::bind_method(D_METHOD("get_latest_image"), &HTMLTexture2D::get_latest_image);
@@ -86,6 +121,7 @@ void HTMLTexture2D::update_from_image(const Ref<Image> &p_image, bool p_has_alph
 	ERR_FAIL_COND(p_image.is_null());
 	ERR_FAIL_COND(p_image->is_empty());
 
+	_release_region_textures();
 	latest_image = p_image;
 	external_texture_rid = RID();
 
@@ -146,14 +182,17 @@ void HTMLTexture2D::update_regions(const Size2i &p_size, const Vector<Rect2i> &p
 
 bool HTMLTexture2D::begin_region_candidate(const Size2i &p_size, bool p_has_alpha) {
 	ERR_FAIL_COND_V(p_size.x <= 0 || p_size.y <= 0, false);
-	if (standby_texture.is_null()) {
-		standby_texture.instantiate();
-	}
 	bool initialized = false;
-	if (standby_image.is_null() || standby_image->get_size() != p_size || standby_image->get_format() != Image::FORMAT_RGBA8) {
-		standby_image = Image::create_empty(p_size.x, p_size.y, false, Image::FORMAT_RGBA8);
-		standby_image->fill(Color(0, 0, 0, 0));
-		standby_texture->set_image(standby_image);
+	if (!standby_region_texture_rid.is_valid() || standby_region_size != p_size) {
+		RenderingServer *rendering_server = RenderingServer::get_singleton();
+		ERR_FAIL_NULL_V(rendering_server, false);
+		if (standby_region_texture_rid.is_valid()) {
+			rendering_server->free_rid(standby_region_texture_rid);
+		}
+		standby_region_texture_rid = rendering_server->texture_2d_empty_create(p_size.x, p_size.y, Image::FORMAT_RGBA8);
+		ERR_FAIL_COND_V(!standby_region_texture_rid.is_valid(), false);
+		standby_region_size = p_size;
+		standby_region_tiles.clear();
 		initialized = true;
 	}
 	alpha = p_has_alpha;
@@ -161,21 +200,22 @@ bool HTMLTexture2D::begin_region_candidate(const Size2i &p_size, bool p_has_alph
 }
 
 void HTMLTexture2D::update_candidate_region(const Rect2i &p_region, const Ref<Image> &p_image) {
-	ERR_FAIL_COND(standby_image.is_null() || standby_texture.is_null());
+	ERR_FAIL_COND(!standby_region_texture_rid.is_valid());
 	ERR_FAIL_COND(p_image.is_null() || p_image->is_empty() || p_image->get_format() != Image::FORMAT_RGBA8);
 	ERR_FAIL_COND(p_region.size != p_image->get_size());
-	ERR_FAIL_COND(!Rect2i(Vector2i(), standby_image->get_size()).encloses(p_region));
-	standby_image->blit_rect(p_image, Rect2i(Vector2i(), p_region.size), p_region.position);
-	RenderingServer::get_singleton()->texture_2d_update_region(standby_texture->get_rid(), p_image, p_region, 0);
+	ERR_FAIL_COND(!Rect2i(Vector2i(), standby_region_size).encloses(p_region));
+	standby_region_tiles.insert(p_region.position, p_image);
+	RenderingServer::get_singleton()->texture_2d_update_region(standby_region_texture_rid, p_image, p_region, 0);
 }
 
 void HTMLTexture2D::activate_region_candidate(bool p_notify) {
-	ERR_FAIL_COND(standby_image.is_null() || standby_texture.is_null());
-	SWAP(texture, standby_texture);
-	SWAP(latest_image, standby_image);
+	ERR_FAIL_COND(!standby_region_texture_rid.is_valid());
+	SWAP(region_texture_rid, standby_region_texture_rid);
+	SWAP(region_tiles, standby_region_tiles);
+	SWAP(size, standby_region_size);
+	latest_image.unref();
 	external_texture_rid = RID();
-	size = latest_image->get_size();
-	RenderingServer::get_singleton()->texture_proxy_update(proxy_texture_rid, texture->get_rid());
+	RenderingServer::get_singleton()->texture_proxy_update(proxy_texture_rid, region_texture_rid);
 	if (p_notify) {
 		_notify_changed();
 	}
@@ -186,16 +226,21 @@ void HTMLTexture2D::notify_region_candidate_activation() {
 }
 
 void HTMLTexture2D::cancel_region_candidate() {
-	standby_texture.unref();
-	standby_image.unref();
+	RenderingServer *rendering_server = RenderingServer::get_singleton();
+	if (rendering_server != nullptr && standby_region_texture_rid.is_valid()) {
+		rendering_server->free_rid(standby_region_texture_rid);
+	}
+	standby_region_texture_rid = RID();
+	standby_region_size = Size2i();
+	standby_region_tiles.clear();
 }
 
 void HTMLTexture2D::set_external_texture(const RID &p_texture_rid, const Size2i &p_size, bool p_alpha) {
 	html_css_texture_trace(vformat("set_external_texture: rid_valid=%s size=%dx%d alpha=%s", p_texture_rid.is_valid() ? "true" : "false", p_size.x, p_size.y, p_alpha ? "true" : "false"));
+	_release_region_textures();
 	external_texture_rid = p_texture_rid;
 	RenderingServer::get_singleton()->texture_proxy_update(proxy_texture_rid, external_texture_rid);
 	latest_image.unref();
-	standby_image.unref();
 	size = Size2i(MAX(1, p_size.x), MAX(1, p_size.y));
 	alpha = p_alpha;
 	_notify_changed();
@@ -219,13 +264,13 @@ void HTMLTexture2D::release_resources() {
 	html_css_texture_trace(vformat("release_resources: proxy_valid=%s fallback_valid=%s", proxy_texture_rid.is_valid() ? "true" : "false", texture.is_valid() && texture->get_rid().is_valid() ? "true" : "false"));
 	external_texture_rid = RID();
 	latest_image.unref();
+	_release_region_textures();
 	RenderingServer *rendering_server = RenderingServer::get_singleton();
 	if (rendering_server != nullptr && proxy_texture_rid.is_valid()) {
 		rendering_server->free_rid(proxy_texture_rid);
 	}
 	proxy_texture_rid = RID();
 	texture.unref();
-	standby_texture.unref();
 	size = Size2i();
 }
 
@@ -251,15 +296,18 @@ Ref<Image> HTMLTexture2D::get_image() const {
 		ERR_FAIL_NULL_V(rendering_server, Ref<Image>());
 		return rendering_server->texture_2d_get(external_texture_rid);
 	}
+	if (region_texture_rid.is_valid()) {
+		return _materialize_region_image();
+	}
 	return latest_image;
 }
 
 Ref<Image> HTMLTexture2D::get_latest_image() const {
-	return latest_image;
+	return get_image();
 }
 
 void HTMLTexture2D::draw(RID p_canvas_item, const Point2 &p_pos, const Color &p_modulate, bool p_transpose) const {
-	if (external_texture_rid.is_valid()) {
+	if (external_texture_rid.is_valid() || region_texture_rid.is_valid()) {
 		html_css_texture_trace(vformat("draw: external rid size=%dx%d", size.x, size.y));
 		RenderingServer::get_singleton()->canvas_item_add_texture_rect(p_canvas_item, Rect2(p_pos, Size2(size)), proxy_texture_rid, false, p_modulate, p_transpose);
 		return;
@@ -270,7 +318,7 @@ void HTMLTexture2D::draw(RID p_canvas_item, const Point2 &p_pos, const Color &p_
 }
 
 void HTMLTexture2D::draw_rect(RID p_canvas_item, const Rect2 &p_rect, bool p_tile, const Color &p_modulate, bool p_transpose) const {
-	if (external_texture_rid.is_valid()) {
+	if (external_texture_rid.is_valid() || region_texture_rid.is_valid()) {
 		html_css_texture_trace(vformat("draw_rect: external rid rect=%s", p_rect));
 		RenderingServer::get_singleton()->canvas_item_add_texture_rect(p_canvas_item, p_rect, proxy_texture_rid, p_tile, p_modulate, p_transpose);
 		return;
@@ -281,7 +329,7 @@ void HTMLTexture2D::draw_rect(RID p_canvas_item, const Rect2 &p_rect, bool p_til
 }
 
 void HTMLTexture2D::draw_rect_region(RID p_canvas_item, const Rect2 &p_rect, const Rect2 &p_src_rect, const Color &p_modulate, bool p_transpose, bool p_clip_uv) const {
-	if (external_texture_rid.is_valid()) {
+	if (external_texture_rid.is_valid() || region_texture_rid.is_valid()) {
 		html_css_texture_trace(vformat("draw_rect_region: external rid rect=%s src=%s", p_rect, p_src_rect));
 		RenderingServer::get_singleton()->canvas_item_add_texture_rect_region(p_canvas_item, p_rect, proxy_texture_rid, p_src_rect, p_modulate, p_transpose, p_clip_uv);
 		return;
@@ -294,6 +342,15 @@ void HTMLTexture2D::draw_rect_region(RID p_canvas_item, const Rect2 &p_rect, con
 bool HTMLTexture2D::is_pixel_opaque(int p_x, int p_y) const {
 	if (external_texture_rid.is_valid()) {
 		return true;
+	}
+	if (region_texture_rid.is_valid()) {
+		Ref<Image> image = _materialize_region_image();
+		if (image.is_null() || image->is_empty()) {
+			return true;
+		}
+		const int x = CLAMP(p_x, 0, image->get_width() - 1);
+		const int y = CLAMP(p_y, 0, image->get_height() - 1);
+		return image->get_pixel(x, y).a > 0.5f;
 	}
 	if (texture.is_null()) {
 		return false;
