@@ -1311,6 +1311,73 @@ void TextureStorage::texture_2d_update(RID p_texture, const Ref<Image> &p_image,
 #endif
 }
 
+void TextureStorage::texture_2d_update_region(RID p_texture, const Ref<Image> &p_image, const Rect2i &p_region, int p_layer) {
+	Texture *texture = texture_owner.get_or_null(p_texture);
+	ERR_FAIL_NULL(texture);
+	ERR_FAIL_COND(!texture->active || texture->is_render_target || texture->resize_to_po2);
+	ERR_FAIL_COND(texture->target != GL_TEXTURE_2D && texture->target != GL_TEXTURE_2D_ARRAY);
+	ERR_FAIL_COND(texture->mipmaps != 1);
+	ERR_FAIL_COND(p_image.is_null() || p_image->is_empty());
+	ERR_FAIL_COND(p_image->get_format() != texture->format);
+	ERR_FAIL_COND(p_region.size != Size2i(p_image->get_width(), p_image->get_height()));
+	ERR_FAIL_COND(p_region.position.x < 0 || p_region.position.y < 0
+			|| p_region.position.x + p_region.size.x > texture->width
+			|| p_region.position.y + p_region.size.y > texture->height);
+	if (texture->target == GL_TEXTURE_2D_ARRAY) {
+		ERR_FAIL_INDEX(p_layer, texture->layers);
+	}
+
+	GLenum type;
+	GLenum format;
+	GLenum internal_format;
+	bool compressed = false;
+	Image::Format real_format;
+	Ref<Image> image = _get_gl_image_and_format(
+			p_image,
+			p_image->get_format(),
+			real_format,
+			format,
+			internal_format,
+			type,
+			compressed,
+			false);
+	ERR_FAIL_COND(image.is_null() || compressed || image->is_compressed());
+	const Vector<uint8_t> data = image->get_data();
+
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(texture->target, texture->tex_id);
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	if (texture->target == GL_TEXTURE_2D_ARRAY) {
+		glTexSubImage3D(
+				GL_TEXTURE_2D_ARRAY,
+				0,
+				p_region.position.x,
+				p_region.position.y,
+				p_layer,
+				p_region.size.x,
+				p_region.size.y,
+				1,
+				format,
+				type,
+				data.ptr());
+	} else {
+		glTexSubImage2D(
+				GL_TEXTURE_2D,
+				0,
+				p_region.position.x,
+				p_region.position.y,
+				p_region.size.x,
+				p_region.size.y,
+				format,
+				type,
+				data.ptr());
+	}
+
+#ifdef TOOLS_ENABLED
+	texture->image_cache_2d.unref();
+#endif
+}
+
 void TextureStorage::texture_3d_update(RID p_texture, const Vector<Ref<Image>> &p_data) {
 	Texture *tex = texture_owner.get_or_null(p_texture);
 	ERR_FAIL_NULL(tex);

@@ -176,6 +176,11 @@ void HCSRPerformanceMonitor::initialize() {
 		{ "HCSR/Semantic Worker Mailbox Delay Time", MONITOR_SEMANTIC_WORKER_MAILBOX_DELAY_TIME, Performance::MONITOR_TYPE_TIME },
 		{ "HCSR/Semantic Worker Supersessions", MONITOR_SEMANTIC_WORKER_SUPERSESSIONS, Performance::MONITOR_TYPE_QUANTITY },
 		{ "HCSR/Semantic Worker Host Call Time", MONITOR_SEMANTIC_WORKER_HOST_CALL_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/RuntimeSession Step Time", MONITOR_RUNTIME_SESSION_STEP_TIME, Performance::MONITOR_TYPE_TIME },
+		{ "HCSR/RuntimeSession Work Units", MONITOR_RUNTIME_SESSION_WORK_UNITS, Performance::MONITOR_TYPE_QUANTITY },
+		{ "HCSR/RuntimeSession Changed Tile Bytes", MONITOR_RUNTIME_CHANGED_TILE_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/RuntimeSession Texture Upload Bytes", MONITOR_RUNTIME_TEXTURE_UPLOAD_BYTES, Performance::MONITOR_TYPE_MEMORY },
+		{ "HCSR/RuntimeSession Retiring Sessions", MONITOR_RUNTIME_RETIRING_SESSIONS, Performance::MONITOR_TYPE_QUANTITY },
 	};
 
 	for (const HCSRMonitorDefinition &definition : definitions) {
@@ -289,6 +294,11 @@ void HCSRPerformanceMonitor::finalize() {
 			"HCSR/Semantic Worker Mailbox Delay Time",
 			"HCSR/Semantic Worker Supersessions",
 			"HCSR/Semantic Worker Host Call Time",
+			"HCSR/RuntimeSession Step Time",
+			"HCSR/RuntimeSession Work Units",
+			"HCSR/RuntimeSession Changed Tile Bytes",
+			"HCSR/RuntimeSession Texture Upload Bytes",
+			"HCSR/RuntimeSession Retiring Sessions",
 		};
 		for (const char *monitor_name : monitor_names) {
 			const StringName name(monitor_name);
@@ -461,6 +471,21 @@ double HCSRPerformanceMonitor::_read_monitor(int p_monitor) {
 					break;
 				case MONITOR_SEMANTIC_WORKER_HOST_CALL_TIME:
 					value += entry.value.semantic_worker_host_call_milliseconds / 1000.0;
+					break;
+				case MONITOR_RUNTIME_SESSION_STEP_TIME:
+					value += entry.value.runtime_session_step_milliseconds / 1000.0;
+					break;
+				case MONITOR_RUNTIME_SESSION_WORK_UNITS:
+					value += entry.value.runtime_session_work_units;
+					break;
+				case MONITOR_RUNTIME_CHANGED_TILE_BYTES:
+					value += entry.value.runtime_changed_tile_bytes;
+					break;
+				case MONITOR_RUNTIME_TEXTURE_UPLOAD_BYTES:
+					value += entry.value.runtime_texture_upload_bytes;
+					break;
+				case MONITOR_RUNTIME_RETIRING_SESSIONS:
+					value += entry.value.runtime_retiring_sessions;
 					break;
 				default:
 					break;

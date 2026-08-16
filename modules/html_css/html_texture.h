@@ -52,6 +52,7 @@ public:
 	void update_placeholder(const Size2i &p_size, const Color &p_background, const String &p_marker = String());
 	void update_from_image(const Ref<Image> &p_image);
 	void update_from_image(const Ref<Image> &p_image, bool p_has_alpha);
+	void update_regions(const Size2i &p_size, const Vector<Rect2i> &p_regions, const Vector<Ref<Image>> &p_images, bool p_has_alpha);
 	void set_external_texture(const RID &p_texture_rid, const Size2i &p_size, bool p_alpha);
 	void clear_external_texture();
 	void release_resources();

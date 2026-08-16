@@ -10,13 +10,13 @@ def get_opts(platform):
         ),
         PathVariable(
             "module_html_css_hcsr_lib_path",
-            "Optional path to a prebuilt static HCSR NativeAOT library. Defaults to the nested thirdparty/hcsr publish output.",
+            "Optional path to a prebuilt HCSR RuntimeSession NativeAOT import/shared library. Defaults to the nested thirdparty/hcsr publish output.",
             "",
             PathVariable.PathAccept,
         ),
         BoolVariable(
             "module_html_css_hcsr_auto_build",
-            "Build the nested platform-specific HCSR static NativeAOT package when its archive is missing.",
+            "Build the nested platform-specific HCSR RuntimeSession NativeAOT package when it is missing or stale.",
             True,
         ),
     ]

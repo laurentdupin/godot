@@ -1729,6 +1729,30 @@ void TextureStorage::texture_2d_update(RID p_texture, const Ref<Image> &p_image,
 	_texture_2d_update(p_texture, p_image, p_layer, false);
 }
 
+void TextureStorage::texture_2d_update_region(RID p_texture, const Ref<Image> &p_image, const Rect2i &p_region, int p_layer) {
+	ERR_FAIL_COND(p_image.is_null() || p_image->is_empty());
+	Texture *tex = texture_owner.get_or_null(p_texture);
+	ERR_FAIL_NULL(tex);
+	ERR_FAIL_COND(tex->is_render_target);
+	ERR_FAIL_COND(p_region.size != Size2i(p_image->get_width(), p_image->get_height()));
+	ERR_FAIL_COND(p_region.position.x < 0 || p_region.position.y < 0
+			|| p_region.position.x + p_region.size.x > tex->width
+			|| p_region.position.y + p_region.size.y > tex->height);
+	ERR_FAIL_COND(p_image->get_format() != tex->format);
+	if (tex->type == TextureStorage::TYPE_LAYERED) {
+		ERR_FAIL_INDEX(p_layer, tex->layers);
+	}
+
+#ifdef TOOLS_ENABLED
+	tex->image_cache_2d.unref();
+#endif
+	TextureToRDFormat format;
+	Ref<Image> validated = _validate_texture_format(p_image, format);
+	ERR_FAIL_COND(validated.is_null() || validated->is_compressed());
+	const Error error = RD::get_singleton()->texture_update_region(tex->rd_texture, p_layer, p_region, validated->get_data());
+	ERR_FAIL_COND_MSG(error != OK, "Could not update the requested 2D texture region.");
+}
+
 void TextureStorage::texture_3d_update(RID p_texture, const Vector<Ref<Image>> &p_data) {
 	Texture *tex = texture_owner.get_or_null(p_texture);
 	ERR_FAIL_NULL(tex);

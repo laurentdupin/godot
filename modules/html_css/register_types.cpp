@@ -42,18 +42,6 @@
 #include "backend/hcsr_performance_monitor.h"
 #endif
 
-#if defined(TOOLS_ENABLED) && defined(HTML_CSS_USE_HCSR)
-#include "editor/html_package_export_plugin.h"
-#include "editor/export/editor_export.h"
-#include "editor/editor_node.h"
-
-static void html_package_editor_init() {
-	Ref<HTMLPackageExportPlugin> export_plugin;
-	export_plugin.instantiate();
-	EditorExport::get_singleton()->add_export_plugin(export_plugin);
-}
-#endif
-
 #ifndef _3D_DISABLED
 #include "html_surface_3d.h"
 #endif
@@ -73,9 +61,6 @@ void initialize_html_css_module(ModuleInitializationLevel p_level) {
 #endif
 #if defined(DEBUG_ENABLED) && defined(HTML_CSS_USE_HCSR)
 	HCSRPerformanceMonitor::initialize();
-#endif
-#if defined(TOOLS_ENABLED) && defined(HTML_CSS_USE_HCSR)
-	EditorNode::add_init_callback(html_package_editor_init);
 #endif
 }
 
