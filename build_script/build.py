@@ -349,6 +349,43 @@ def build_managed_editor_assemblies(settings: BuildSettings, godot_platform: str
     if not settings.mono or settings.target != "editor":
         return
 
+    editor_suffix = ".mono"
+    if godot_platform == "windows":
+        editor_candidates = (
+            GODOT_ROOT
+            / "bin"
+            / f"godot.windows.editor.{settings.architecture}{editor_suffix}.console.exe",
+            GODOT_ROOT / "bin" / f"godot.windows.editor.{settings.architecture}{editor_suffix}.exe",
+        )
+    elif godot_platform == "macos":
+        editor_candidates = (
+            GODOT_ROOT / "bin" / "Godot.app" / "Contents" / "MacOS" / "Godot",
+            GODOT_ROOT / "bin" / f"godot.macos.editor.{settings.architecture}{editor_suffix}",
+        )
+    else:
+        editor_candidates = (
+            GODOT_ROOT / "bin" / f"godot.linuxbsd.editor.{settings.architecture}{editor_suffix}",
+        )
+
+    editor_binary = next((path for path in editor_candidates if path.is_file()), None)
+    if editor_binary is None:
+        raise RuntimeError(
+            "Godot Mono editor build did not produce any expected executable: "
+            + ", ".join(str(path) for path in editor_candidates)
+        )
+
+    glue_directory = GODOT_ROOT / "modules" / "mono" / "glue"
+    glue_command = [
+        str(editor_binary),
+        "--headless",
+        "--generate-mono-glue",
+        str(glue_directory),
+    ]
+    print(f"\nMono glue command: {format_command(glue_command)}\n", flush=True)
+    completed = subprocess.run(glue_command, cwd=GODOT_ROOT, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError("Godot Mono glue generation failed.")
+
     build_script = GODOT_ROOT / "modules" / "mono" / "build_scripts" / "build_assemblies.py"
     command = [
         sys.executable,
