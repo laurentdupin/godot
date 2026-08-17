@@ -8494,7 +8494,13 @@ void RenderingDevice::_free_pending_resources(int p_frame) {
 		frames[p_frame].external_binary_semaphores_to_dispose_of.pop_front();
 	}
 
-	while (frames[p_frame].external_resource_release_callbacks.front()) {
+	// A release callback may discover that a producer-owned resource is not
+	// retired yet and defer itself again. Only run callbacks that were queued
+	// before this frame slot began draining; callbacks queued while draining
+	// belong to the next reuse of the slot, after the work recorded below has
+	// passed through the same frame fence.
+	const int external_release_callback_count = frames[p_frame].external_resource_release_callbacks.size();
+	for (int callback_index = 0; callback_index < external_release_callback_count; callback_index++) {
 		Callable callback = frames[p_frame].external_resource_release_callbacks.front()->get();
 		frames[p_frame].external_resource_release_callbacks.pop_front();
 		callback.call();

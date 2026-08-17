@@ -225,6 +225,7 @@ public:
 
 	Ref<Texture2D> get_texture() const;
 	uint64_t get_generation() const;
+	uint64_t get_queued_generation() const;
 	uint64_t get_host_frame_number() const;
 	double get_timeline_time_seconds() const;
 	void set_frame_budget_milliseconds(double p_budget_milliseconds);

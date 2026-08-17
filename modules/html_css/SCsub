@@ -3,7 +3,7 @@ import os
 import subprocess
 import sys
 
-from SCons.Script import Exit
+from SCons.Script import Copy, Exit
 from misc.utility.scons_hints import *
 
 Import("env")
@@ -23,6 +23,108 @@ if _html_css_renderer == "hcsr":
     if env["tests"]:
         env_html_css.Append(CPPDEFINES=["HTML_CSS_HCSR_TESTS_ENABLED"])
     env_html_css.Prepend(CPPPATH=["#thirdparty/hcsr/native/include"])
+elif _html_css_renderer == "hcsr_runtime":
+    if env["platform"] != "windows" or env["arch"] != "x86_64":
+        print("HTML/CSS hcsr_runtime validation currently requires Windows x86_64 and Godot's D3D12 driver.")
+        Exit(1)
+    runtime_root_option = env["module_html_css_hcsr_runtime_root"]
+    if not runtime_root_option:
+        print("module_html_css_hcsr_runtime_root must identify the accepted HCSR replacement checkout.")
+        Exit(1)
+    hcsr_runtime_root = os.path.normpath(runtime_root_option)
+    if not os.path.isabs(hcsr_runtime_root):
+        hcsr_runtime_root = env.Dir("#" + hcsr_runtime_root).abspath
+    runtime_header = os.path.join(hcsr_runtime_root, "native", "include", "hcsr_runtime.h")
+    runtime_project = os.path.join(
+        hcsr_runtime_root,
+        "src",
+        "Renderer.PresentationNativeBridge",
+        "Renderer.PresentationNativeBridge.Shared.csproj",
+    )
+    runtime_output = os.path.join(
+        hcsr_runtime_root,
+        "src",
+        "Renderer.PresentationNativeBridge",
+        "bin",
+        "Release",
+        "net10.0",
+        "win-x64",
+    )
+    runtime_import_library = os.path.join(runtime_output, "native", "hcsr_runtime.lib")
+    runtime_publish_directory = os.path.join(runtime_output, "publish")
+    runtime_library = os.path.join(runtime_publish_directory, "hcsr_runtime.dll")
+    runtime_codecs = os.path.join(runtime_publish_directory, "hcsr_native_codecs.dll")
+    # The header, import library, and runtime DLL are one ABI product. Rebuild
+    # that product when any replacement-runtime source is newer, then let SCons
+    # copy the resulting DLLs by timestamp. This keeps incremental builds cached
+    # without allowing an older runtime DLL beside a newer Godot module.
+    runtime_source_directories = [
+        os.path.join(hcsr_runtime_root, "native", "codecs"),
+        os.path.join(hcsr_runtime_root, "native", "include"),
+    ]
+    runtime_project_names = [
+        "Renderer.Authoring",
+        "Renderer.DocumentCompiler",
+        "Renderer.FrameScheduler",
+        "Renderer.LayoutWorld",
+        "Renderer.Presentation.D3D12",
+        "Renderer.PresentationNativeBridge",
+        "Renderer.PresentationWorld",
+        "Renderer.RuntimeSession",
+        "Renderer.SceneWorld",
+        "Renderer.StyleWorld",
+    ]
+    runtime_source_directories += [
+        os.path.join(hcsr_runtime_root, "src", project_name)
+        for project_name in runtime_project_names
+    ]
+    runtime_input_extensions = (".c", ".cpp", ".cs", ".csproj", ".def", ".h", ".props", ".targets")
+    runtime_input_files = []
+    for source_directory in runtime_source_directories:
+        for directory, subdirectories, filenames in os.walk(source_directory):
+            subdirectories[:] = [name for name in subdirectories if name not in ("bin", "obj")]
+            runtime_input_files += [
+                os.path.join(directory, filename)
+                for filename in filenames
+                if filename.lower().endswith(runtime_input_extensions)
+            ]
+    runtime_input_files += [
+        os.path.join(hcsr_runtime_root, filename)
+        for filename in ("Directory.Build.props", "Directory.Build.targets", "global.json")
+        if os.path.isfile(os.path.join(hcsr_runtime_root, filename))
+    ]
+    runtime_products = (runtime_import_library, runtime_library, runtime_codecs)
+    runtime_publish_stamp = os.path.join(runtime_publish_directory, ".godot_hcsr_runtime_publish.stamp")
+    runtime_publish_required = not all(os.path.isfile(path) for path in runtime_products)
+    runtime_publish_required = runtime_publish_required or not os.path.isfile(runtime_publish_stamp)
+    if not runtime_publish_required and runtime_input_files:
+        newest_input_time = max(os.path.getmtime(path) for path in runtime_input_files)
+        runtime_publish_required = newest_input_time > os.path.getmtime(runtime_publish_stamp)
+    if runtime_publish_required:
+        completed = subprocess.run(
+            [
+                "dotnet",
+                "publish",
+                runtime_project,
+                "-c",
+                "Release",
+                "-r",
+                "win-x64",
+                "--self-contained",
+                "--nologo",
+            ],
+            cwd=hcsr_runtime_root,
+        )
+        if completed.returncode != 0:
+            print("HTML/CSS hcsr_runtime NativeAOT publish failed.")
+            Exit(1)
+        with open(runtime_publish_stamp, "w", encoding="utf-8") as stamp_file:
+            stamp_file.write("Godot HCSR runtime ABI product is current.\n")
+    if not all(os.path.isfile(path) for path in (runtime_header, runtime_import_library, runtime_library, runtime_codecs)):
+        print("HTML/CSS hcsr_runtime publish did not produce its header, import library, runtime DLL, and codec DLL.")
+        Exit(1)
+    env_html_css.Append(CPPDEFINES=["HTML_CSS_USE_HCSR_RUNTIME"])
+    env_html_css.Prepend(CPPPATH=[os.path.join(hcsr_runtime_root, "native", "include")])
 
 def _html_css_resolve_repo_path(p_path):
     if not p_path:
@@ -306,6 +408,11 @@ if _html_css_renderer == "hcsr":
                 "ws2_32.lib",
             ]
         )
+elif _html_css_renderer == "hcsr_runtime":
+    env_html_css.add_source_files(env.modules_sources, "backend/html_surface_hcsr_runtime_backend.cpp")
+    env.Append(LINKFLAGS=[runtime_import_library])
+    env.CommandNoCache("#bin/hcsr_runtime.dll", runtime_library, Copy("$TARGET", "$SOURCE"))
+    env.CommandNoCache("#bin/hcsr_native_codecs.dll", runtime_codecs, Copy("$TARGET", "$SOURCE"))
 env_html_css.add_source_files(env.modules_sources, "html_document.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_render_target.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_render_surface.cpp")

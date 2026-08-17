@@ -8,6 +8,7 @@
 
 #include "tests/test_macros.h"
 
+#include "core/object/callable_mp.h"
 #include "core/os/os.h"
 
 TEST_FORCE_LINK(test_external_texture_pool)
@@ -38,7 +39,66 @@ TEST_FORCE_LINK(test_external_texture_pool)
 
 namespace TestExternalTexturePool {
 
+struct DeferredExternalReleaseProbe {
+	RenderingDevice *rendering_device = nullptr;
+	Vector<int> order;
+};
+
+static void deferred_external_release_probe_callback(
+		uint64_t p_probe_pointer,
+		int p_value,
+		int p_follow_up_value) {
+	DeferredExternalReleaseProbe *probe = reinterpret_cast<DeferredExternalReleaseProbe *>(p_probe_pointer);
+	probe->order.push_back(p_value);
+	if (p_follow_up_value != 0) {
+		probe->rendering_device->external_resource_defer_release(
+				callable_mp_static(&deferred_external_release_probe_callback)
+						.bind(p_probe_pointer, p_follow_up_value, 0));
+	}
+}
+
 #ifdef D3D12_ENABLED
+TEST_CASE("[RenderingDevice][D3D12] Deferred external callbacks preserve fenced generations and shutdown") {
+	RenderingContextDriverD3D12 *context = memnew(RenderingContextDriverD3D12);
+	REQUIRE(context->initialize() == OK);
+	RenderingDevice *rd = memnew(RenderingDevice);
+	REQUIRE(rd->initialize(context) == OK);
+
+	DeferredExternalReleaseProbe probe;
+	probe.rendering_device = rd;
+	const uint64_t probe_pointer = reinterpret_cast<uint64_t>(&probe);
+	rd->external_resource_defer_release(
+			callable_mp_static(&deferred_external_release_probe_callback)
+					.bind(probe_pointer, 1, 3));
+	rd->external_resource_defer_release(
+			callable_mp_static(&deferred_external_release_probe_callback)
+					.bind(probe_pointer, 2, 0));
+
+	for (uint32_t frame = 0; frame < rd->get_frame_delay() + 2 && probe.order.size() < 2; frame++) {
+		rd->submit();
+		rd->sync();
+	}
+	REQUIRE(probe.order.size() == 2);
+	CHECK(probe.order[0] == 1);
+	CHECK(probe.order[1] == 2);
+
+	for (uint32_t frame = 0; frame < rd->get_frame_delay() + 2 && probe.order.size() < 3; frame++) {
+		rd->submit();
+		rd->sync();
+	}
+	REQUIRE(probe.order.size() == 3);
+	CHECK(probe.order[2] == 3);
+
+	rd->external_resource_defer_release(
+			callable_mp_static(&deferred_external_release_probe_callback)
+					.bind(probe_pointer, 4, 5));
+	memdelete(rd);
+	REQUIRE(probe.order.size() == 5);
+	CHECK(probe.order[3] == 4);
+	CHECK(probe.order[4] == 5);
+	memdelete(context);
+}
+
 TEST_CASE("[RenderingDevice][D3D12] External producer texture pool uses nonblocking three-slot timeline handoff") {
 	RenderingContextDriverD3D12 *context = memnew(RenderingContextDriverD3D12);
 	REQUIRE(context->initialize() == OK);

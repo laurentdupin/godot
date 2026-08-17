@@ -6,7 +6,7 @@ def get_opts(platform):
             "module_html_css_renderer",
             "HTML/CSS renderer implementation compiled into the module. 'none' keeps only the raw CPU frame receiver.",
             "none",
-            allowed_values=("none", "hcsr"),
+            allowed_values=("none", "hcsr", "hcsr_runtime"),
         ),
         PathVariable(
             "module_html_css_hcsr_lib_path",
@@ -18,6 +18,12 @@ def get_opts(platform):
             "module_html_css_hcsr_auto_build",
             "Build the nested platform-specific HCSR static NativeAOT package when its archive is missing.",
             True,
+        ),
+        PathVariable(
+            "module_html_css_hcsr_runtime_root",
+            "HCSR replacement checkout containing hcsr_runtime v4. Required by the mutually exclusive hcsr_runtime integration build.",
+            "",
+            PathVariable.PathAccept,
         ),
     ]
 

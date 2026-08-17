@@ -350,6 +350,7 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_backdrop_filter_regions"), &HTMLView::get_backdrop_filter_regions);
 	ClassDB::bind_method(D_METHOD("get_texture"), &HTMLView::get_texture);
 	ClassDB::bind_method(D_METHOD("get_generation"), &HTMLView::get_generation);
+	ClassDB::bind_method(D_METHOD("get_queued_generation"), &HTMLView::get_queued_generation);
 	ClassDB::bind_method(D_METHOD("get_host_frame_number"), &HTMLView::get_host_frame_number);
 	ClassDB::bind_method(D_METHOD("get_timeline_time_seconds"), &HTMLView::get_timeline_time_seconds);
 	ClassDB::bind_method(D_METHOD("set_frame_budget_milliseconds", "frame_budget_milliseconds"), &HTMLView::set_frame_budget_milliseconds);
@@ -620,7 +621,13 @@ bool HTMLView::_has_current_viewport_size() const {
 }
 
 bool HTMLView::_should_defer_backend_activation() const {
+#ifdef HTML_CSS_USE_HCSR_RUNTIME
+	// The replacement build has no CPU compatibility backend. Its GPU backend
+	// accepts the final viewport configuration once the control enters the tree.
+	return false;
+#else
 	return html_view_backend_preference_can_use_gpu(backend_preference) && !_has_current_viewport_size();
+#endif
 }
 
 void HTMLView::_apply_surface_backend_preference() {
@@ -1027,6 +1034,10 @@ bool HTMLView::_is_output_aspect_compatible(const Size2i &p_logical_size, const 
 
 uint64_t HTMLView::get_generation() const {
 	return surface->get_active_frame_generation();
+}
+
+uint64_t HTMLView::get_queued_generation() const {
+	return surface->get_last_queued_frame_generation();
 }
 
 uint64_t HTMLView::get_host_frame_number() const {
@@ -2117,7 +2128,11 @@ HTMLView::HTMLView() {
 	surface->set_changed_callback(callable_mp(this, &HTMLView::_surface_changed));
 	surface->set_frame_queued_callback(callable_mp(this, &HTMLView::_surface_frame_queued));
 	surface->set_frame_activated_callback(callable_mp(this, &HTMLView::_surface_frame_activated));
+#ifdef HTML_CSS_USE_HCSR_RUNTIME
+	surface->set_backend_preference(HTML_SURFACE_BACKEND_GPU_AUTO);
+#else
 	surface->set_backend_preference(HTML_SURFACE_BACKEND_CPU);
+#endif
 	surface->set_placeholder_background(Color(0.08, 0.09, 0.1, 1.0));
 	_ensure_backdrop_filter_canvas();
 	set_focus_mode(FOCUS_CLICK);

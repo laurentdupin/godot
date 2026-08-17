@@ -32,6 +32,8 @@
 
 #ifdef HTML_CSS_USE_HCSR
 #include "backend/html_surface_hcsr_backend.h"
+#elif defined(HTML_CSS_USE_HCSR_RUNTIME)
+#include "backend/html_surface_hcsr_runtime_backend.h"
 #endif
 #include "backend/html_surface_cpu_backend.h"
 #include "backend/html_surface_unsupported_backend.h"
@@ -41,7 +43,10 @@
 #include "core/os/os.h"
 
 static bool html_surface_auto_can_use_gpu_backend() {
-#ifdef HTML_CSS_USE_HCSR
+#ifdef HTML_CSS_USE_HCSR_RUNTIME
+	const String rendering_driver = OS::get_singleton() != nullptr ? OS::get_singleton()->get_current_rendering_driver_name().to_lower() : String();
+	return rendering_driver == "d3d12";
+#elif defined(HTML_CSS_USE_HCSR)
 	const String rendering_driver = OS::get_singleton() != nullptr ? OS::get_singleton()->get_current_rendering_driver_name().to_lower() : String();
 	return rendering_driver == "d3d12" || rendering_driver == "vulkan" || rendering_driver == "metal";
 #else
@@ -96,7 +101,11 @@ void HTMLRenderSurface::_ensure_backend() {
 	}
 
 	if (backend_preference == HTML_SURFACE_BACKEND_AUTO) {
-#ifdef HTML_CSS_USE_HCSR
+#ifdef HTML_CSS_USE_HCSR_RUNTIME
+		backend = html_surface_auto_can_use_gpu_backend()
+				? (HTMLSurfaceBackend *)memnew(HTMLSurfaceHCSRRuntimeBackend)
+				: (HTMLSurfaceBackend *)memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS replacement runtime currently requires Godot's D3D12 rendering driver."));
+#elif defined(HTML_CSS_USE_HCSR)
 		if (html_surface_auto_can_use_gpu_backend()) {
 			const String rendering_driver = OS::get_singleton()->get_current_rendering_driver_name().to_lower();
 			backend = memnew(HTMLSurfaceHCSRBackend(html_surface_hcsr_backend_for_driver(rendering_driver)));
@@ -109,7 +118,11 @@ void HTMLRenderSurface::_ensure_backend() {
 		backend = memnew(HTMLSurfaceCPUBackend);
 #endif
 	} else if (backend_preference == HTML_SURFACE_BACKEND_GPU_AUTO) {
-#ifdef HTML_CSS_USE_HCSR
+#ifdef HTML_CSS_USE_HCSR_RUNTIME
+		backend = html_surface_auto_can_use_gpu_backend()
+				? (HTMLSurfaceBackend *)memnew(HTMLSurfaceHCSRRuntimeBackend)
+				: (HTMLSurfaceBackend *)memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS replacement GPU runtime currently requires Godot's D3D12 rendering driver."));
+#elif defined(HTML_CSS_USE_HCSR)
 		if (html_surface_auto_can_use_gpu_backend()) {
 			const String rendering_driver = OS::get_singleton()->get_current_rendering_driver_name().to_lower();
 			backend = memnew(HTMLSurfaceHCSRBackend(html_surface_hcsr_backend_for_driver(rendering_driver)));
@@ -120,7 +133,9 @@ void HTMLRenderSurface::_ensure_backend() {
 		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS GPU backend requested, but HCSR is not compiled in. Explicit GPU requests do not fall back to CPU output."));
 #endif
 	} else if (backend_preference == HTML_SURFACE_BACKEND_VULKAN) {
-#ifdef HTML_CSS_USE_HCSR
+#ifdef HTML_CSS_USE_HCSR_RUNTIME
+		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS replacement Vulkan presentation is not implemented; no legacy fallback is permitted."));
+#elif defined(HTML_CSS_USE_HCSR)
 		backend = OS::get_singleton() != nullptr && OS::get_singleton()->get_current_rendering_driver_name().to_lower() == "vulkan"
 				? (HTMLSurfaceBackend *)memnew(HTMLSurfaceHCSRBackend(HCSR_RENDER_BACKEND_VULKAN))
 				: (HTMLSurfaceBackend *)memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS Vulkan backend requested, but Godot is not running its Vulkan rendering driver."));
@@ -128,7 +143,11 @@ void HTMLRenderSurface::_ensure_backend() {
 		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS Vulkan GPU backend requested, but HCSR is not compiled in. Explicit GPU requests do not fall back to CPU output."));
 #endif
 	} else if (backend_preference == HTML_SURFACE_BACKEND_D3D12) {
-#ifdef HTML_CSS_USE_HCSR
+#ifdef HTML_CSS_USE_HCSR_RUNTIME
+		backend = OS::get_singleton() != nullptr && OS::get_singleton()->get_current_rendering_driver_name().to_lower() == "d3d12"
+				? (HTMLSurfaceBackend *)memnew(HTMLSurfaceHCSRRuntimeBackend)
+				: (HTMLSurfaceBackend *)memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS replacement D3D12 runtime requested, but Godot is not running its D3D12 driver."));
+#elif defined(HTML_CSS_USE_HCSR)
 		backend = OS::get_singleton() != nullptr && OS::get_singleton()->get_current_rendering_driver_name().to_lower() == "d3d12"
 				? (HTMLSurfaceBackend *)memnew(HTMLSurfaceHCSRBackend(HCSR_RENDER_BACKEND_D3D12))
 				: (HTMLSurfaceBackend *)memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS D3D12 backend requested, but Godot is not running its D3D12 rendering driver."));
@@ -136,7 +155,9 @@ void HTMLRenderSurface::_ensure_backend() {
 		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS D3D12 GPU backend requested, but HCSR is not compiled in. Explicit GPU requests do not fall back to CPU output."));
 #endif
 	} else if (backend_preference == HTML_SURFACE_BACKEND_METAL) {
-#ifdef HTML_CSS_USE_HCSR
+#ifdef HTML_CSS_USE_HCSR_RUNTIME
+		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS replacement Metal presentation is not implemented; no legacy fallback is permitted."));
+#elif defined(HTML_CSS_USE_HCSR)
 		backend = OS::get_singleton() != nullptr && OS::get_singleton()->get_current_rendering_driver_name().to_lower() == "metal"
 				? (HTMLSurfaceBackend *)memnew(HTMLSurfaceHCSRBackend(HCSR_RENDER_BACKEND_METAL))
 				: (HTMLSurfaceBackend *)memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS Metal backend requested, but Godot is not running its Metal rendering driver."));
@@ -144,7 +165,9 @@ void HTMLRenderSurface::_ensure_backend() {
 		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS Metal GPU backend requires the HCSR renderer provider. Explicit GPU requests do not fall back to CPU output."));
 #endif
 	} else if (backend_preference == HTML_SURFACE_BACKEND_CPU) {
-#ifdef HTML_CSS_USE_HCSR
+#ifdef HTML_CSS_USE_HCSR_RUNTIME
+		backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS replacement CPU presentation is not implemented; no legacy fallback is permitted."));
+#elif defined(HTML_CSS_USE_HCSR)
 		backend = memnew(HTMLSurfaceHCSRBackend);
 #else
 		backend = memnew(HTMLSurfaceCPUBackend);
@@ -156,7 +179,11 @@ void HTMLRenderSurface::_ensure_backend() {
 		return;
 	}
 
+#ifdef HTML_CSS_USE_HCSR_RUNTIME
+	backend = memnew(HTMLSurfaceUnsupportedBackend("HTML/CSS replacement runtime could not resolve a supported backend."));
+#else
 	backend = memnew(HTMLSurfaceCPUBackend);
+#endif
 	_sync_backend_state();
 }
 
@@ -193,6 +220,10 @@ void HTMLRenderSurface::_detach_backend_presentation_outputs() {
 }
 
 bool HTMLRenderSurface::_fallback_auto_gpu_to_cpu(const String &p_reason) {
+#ifdef HTML_CSS_USE_HCSR_RUNTIME
+	(void)p_reason;
+	return false;
+#else
 	if (backend_preference != HTML_SURFACE_BACKEND_AUTO || backend == nullptr || !backend->has_terminal_render_failure()) {
 		return false;
 	}
@@ -209,6 +240,7 @@ bool HTMLRenderSurface::_fallback_auto_gpu_to_cpu(const String &p_reason) {
 	_sync_backend_state();
 	html_surface_warn_auto_cpu_fallback(p_reason.is_empty() ? String("GPU target rendering failed.") : p_reason);
 	return true;
+#endif
 }
 
 void HTMLRenderSurface::_document_changed() {

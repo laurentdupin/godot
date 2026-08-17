@@ -16,6 +16,7 @@ var maximum_frame_budget_milliseconds := 0.0
 var last_validated_generation := 0
 var last_validated_cube_center := Vector2.ZERO
 var cumulative_projected_motion := 0.0
+var projected_history: Array[Vector2] = []
 
 
 func _ready() -> void:
@@ -36,20 +37,22 @@ func _process(delta: float) -> void:
 	)
 	var projected := camera.unproject_position(cube.global_position)
 	projected_cube_center = projected
+	projected_history.push_front(projected)
+	if projected_history.size() > 16:
+		projected_history.pop_back()
 	if html_view.get_generation() == 0:
 		return
-	var tracker_style := (
-		"left:%.4fpx;top:%.4fpx;width:%.1fpx;height:%.1fpx;"
-		% [
-			projected.x - TRACKER_SIZE * 0.5,
-			projected.y - TRACKER_SIZE * 0.5,
-			TRACKER_SIZE,
-			TRACKER_SIZE,
-		]
-	)
-	var error := html_view.set_element_style("cube-tracker", tracker_style)
+	var left := projected.x - TRACKER_SIZE * 0.5
+	var top := projected.y - TRACKER_SIZE * 0.5
+	var mutations: Array[Dictionary] = [
+		{ "operation": "set_style", "id": "tracker-top", "value": "left:%.4fpx;top:%.4fpx;width:54px;height:4px;" % [left, top] },
+		{ "operation": "set_style", "id": "tracker-right", "value": "left:%.4fpx;top:%.4fpx;width:4px;height:54px;" % [left + 50.0, top] },
+		{ "operation": "set_style", "id": "tracker-bottom", "value": "left:%.4fpx;top:%.4fpx;width:54px;height:4px;" % [left, top + 50.0] },
+		{ "operation": "set_style", "id": "tracker-left", "value": "left:%.4fpx;top:%.4fpx;width:4px;height:54px;" % [left, top] },
+	]
+	var error := html_view.apply_element_mutations(mutations)
 	if error != OK:
-		push_error("Could not update the synchronized HTML cube tracker: %s" % error_string(error))
+		push_error("Could not update the synchronized HTML tracker atomically: %s" % error_string(error))
 
 
 func _validate_composed_frame() -> void:
@@ -83,9 +86,17 @@ func _validate_composed_frame() -> void:
 	if alignment_error > 1.5:
 		validated_frame_count = 0
 		if validation_warmup_frames >= 120:
+			image.save_png("res://validation-failure.png")
+			var nearest_history_index := -1
+			var nearest_history_error := INF
+			for history_index in range(projected_history.size()):
+				var history_error := tracker_center.distance_to(projected_history[history_index])
+				if history_error < nearest_history_error:
+					nearest_history_error = history_error
+					nearest_history_index = history_index
 			push_error(
-				"HTML/3D frame alignment diverged by %.3f pixels in one composed frame: tracker=%s cube=%s."
-				% [alignment_error, tracker_center, cube_center]
+				"HTML/3D frame alignment diverged by %.3f pixels in one composed frame: tracker=%s cube=%s projected=%s generation=%d nearest_history=%d/%.3fpx."
+				% [alignment_error, tracker_center, cube_center, projected_cube_center, html_view.get_generation(), nearest_history_index, nearest_history_error]
 			)
 			get_tree().quit(1)
 		return
@@ -184,40 +195,15 @@ func _build_html_overlay() -> void:
 		HTMLView.BACKEND_CPU if "--cpu" in OS.get_cmdline_user_args() else HTMLView.BACKEND_GPU_AUTO
 	)
 	html_view.html = """
-		<!DOCTYPE html>
 		<html>
-		<head>
-			<style>
-				html, body {
-					width: 100vw;
-					height: 100vh;
-					margin: 0;
-					overflow: hidden;
-					background: transparent;
-				}
-				#cube-tracker {
-					position: absolute;
-					box-sizing: border-box;
-					border: 4px solid rgb(255, 80, 70);
-					border-radius: 8px;
-					background: rgba(255, 80, 70, 0.08);
-				}
-				#contract {
-					position: absolute;
-					left: 18px;
-					top: 14px;
-					padding: 8px 12px;
-					color: white;
-					background: rgba(0, 0, 0, 0.65);
-					font: 18px sans-serif;
-					border-radius: 6px;
-				}
-			</style>
-		</head>
-		<body>
-			<div id="cube-tracker"></div>
-			<div id="contract">Engine-frame synchronized HTML overlay</div>
-		</body>
+			<head><style>
+				html { display:block; position:relative; width:1152px; height:648px; }
+				.edge { display:block; position:absolute; left:0px; top:0px; background:#ff5046; }
+			</style></head>
+			<div id="tracker-top" class="edge"></div>
+			<div id="tracker-right" class="edge"></div>
+			<div id="tracker-bottom" class="edge"></div>
+			<div id="tracker-left" class="edge"></div>
 		</html>
 	"""
 	add_child(html_view)

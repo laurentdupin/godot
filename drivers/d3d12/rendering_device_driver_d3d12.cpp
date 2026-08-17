@@ -2531,6 +2531,13 @@ uint64_t RenderingDeviceDriverD3D12::external_timeline_import(uint64_t p_native_
 	return (uint64_t)timeline;
 }
 
+uint64_t RenderingDeviceDriverD3D12::external_timeline_retain(uint64_t p_native_timeline) {
+	ID3D12Fence *timeline = (ID3D12Fence *)p_native_timeline;
+	ERR_FAIL_NULL_V(timeline, 0);
+	timeline->AddRef();
+	return p_native_timeline;
+}
+
 uint64_t RenderingDeviceDriverD3D12::external_timeline_export(uint64_t p_timeline) {
 	ID3D12Fence *timeline = (ID3D12Fence *)p_timeline;
 	ERR_FAIL_NULL_V(timeline, 0);
