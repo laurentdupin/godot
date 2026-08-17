@@ -345,6 +345,38 @@ def force_macos_hcsr_relink(settings: BuildSettings, godot_platform: str) -> Non
     editor_binary.unlink()
 
 
+def build_managed_editor_assemblies(settings: BuildSettings, godot_platform: str) -> None:
+    if not settings.mono or settings.target != "editor":
+        return
+
+    build_script = GODOT_ROOT / "modules" / "mono" / "build_scripts" / "build_assemblies.py"
+    command = [
+        sys.executable,
+        str(build_script),
+        "--godot-output-dir",
+        str(GODOT_ROOT / "bin"),
+        "--godot-platform",
+        godot_platform,
+    ]
+    if settings.developer_build:
+        command.append("--dev-debug")
+
+    print(f"\nManaged assembly command: {format_command(command)}\n", flush=True)
+    completed = subprocess.run(command, cwd=GODOT_ROOT, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError("Godot managed assembly build failed.")
+
+    required_assemblies = (
+        GODOT_ROOT / "bin" / "GodotSharp" / "Api" / "Debug" / "GodotSharp.dll",
+        GODOT_ROOT / "bin" / "GodotSharp" / "Api" / "Debug" / "GodotSharpEditor.dll",
+        GODOT_ROOT / "bin" / "GodotSharp" / "Api" / "Release" / "GodotSharp.dll",
+        GODOT_ROOT / "bin" / "GodotSharp" / "Api" / "Release" / "GodotSharpEditor.dll",
+    )
+    missing_assemblies = [str(path) for path in required_assemblies if not path.is_file()]
+    if missing_assemblies:
+        raise RuntimeError("Godot managed assembly build did not produce: " + ", ".join(missing_assemblies))
+
+
 def parse_arguments() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(
         description="Configure and build Godot using a cached local Python/SCons environment.",
@@ -414,7 +446,11 @@ def run() -> int:
     force_macos_hcsr_relink(settings, godot_platform)
     sys.stdout.flush()
     completed = subprocess.run(command, cwd=GODOT_ROOT, check=False)
-    return completed.returncode
+    if completed.returncode != 0 or arguments.clean:
+        return completed.returncode
+
+    build_managed_editor_assemblies(settings, godot_platform)
+    return 0
 
 
 def main() -> int:
