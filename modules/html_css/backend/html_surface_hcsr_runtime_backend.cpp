@@ -4,6 +4,7 @@
 
 #include "html_surface_hcsr_runtime_backend.h"
 
+#include "../bridge/html_asset_provider.h"
 #include "core/config/engine.h"
 #include "core/object/callable_mp.h"
 #include "core/os/os.h"
@@ -16,6 +17,7 @@ enum RuntimeMutationKind {
 	RUNTIME_MUTATION_ATTRIBUTE,
 	RUNTIME_MUTATION_STYLE,
 	RUNTIME_MUTATION_CHECKED,
+	RUNTIME_MUTATION_INNER_HTML,
 };
 
 static constexpr int RUNTIME_INTERACTIVE_STEP_SLICE_UNITS = 256;
@@ -37,6 +39,44 @@ struct RuntimePublicationLineage {
 	uint64_t interactive_submission_id = 0;
 	uint64_t interactive_frame_id = 0;
 };
+
+static bool runtime_load_document_source(
+		const Ref<HTMLDocument> &p_document,
+		String &r_html,
+		String &r_css,
+		String &r_error) {
+	r_html = String();
+	r_css = String();
+	r_error = String();
+	if (p_document.is_null() || !p_document->is_source_valid()) {
+		r_error = "HCSR replacement received an invalid HTMLDocument source.";
+		return false;
+	}
+
+	r_html = p_document->get_html();
+	const String html_file = p_document->get_html_file();
+	if (r_html.is_empty() && !html_file.is_empty()) {
+		HTMLAssetResource asset;
+		if (HTMLGodotAssetProvider::load_asset(p_document, html_file, asset, &r_error) != OK) {
+			return false;
+		}
+		r_html = String::utf8((const char *)asset.bytes.ptr(), asset.bytes.size());
+	}
+	if (r_html.strip_edges().is_empty()) {
+		r_error = "HCSR replacement requires non-empty HTML source.";
+		return false;
+	}
+
+	for (const String &css_file : p_document->get_css_files()) {
+		HTMLAssetResource asset;
+		if (HTMLGodotAssetProvider::load_asset(p_document, css_file, asset, &r_error) != OK) {
+			return false;
+		}
+		r_css += "\n" + String::utf8((const char *)asset.bytes.ptr(), asset.bytes.size()) + "\n";
+	}
+	r_css += p_document->get_css();
+	return true;
+}
 
 struct RuntimeExternalSurfaceSlot {
 	uint64_t hcsr_slot_id = 0;
@@ -79,6 +119,7 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	bool configuration_dirty = false;
 	bool work_scheduled = false;
 	bool pending_work = false;
+	bool semantic_pending = false;
 	bool interactive_pending = false;
 	bool activation_pending = false;
 	bool cutoff_scheduled = false;
@@ -356,6 +397,7 @@ static bool runtime_submit_document(
 		hcsr_runtime_document_release(p_state->compiled_document);
 	}
 	p_state->compiled_document = document;
+	p_state->semantic_pending = true;
 	p_state->pending_work = true;
 	return true;
 }
@@ -386,6 +428,7 @@ static bool runtime_submit_configuration(
 				p_state->physical_size.y));
 		return false;
 	}
+	p_state->semantic_pending = true;
 	p_state->pending_work = true;
 	return true;
 }
@@ -422,6 +465,9 @@ static bool runtime_submit_mutations(
 			case RUNTIME_MUTATION_CHECKED:
 				status = hcsr_runtime_mutation_set_control_checked_by_id(journal, id.get_data(), mutation.value == "1" ? 1 : 0);
 				break;
+			case RUNTIME_MUTATION_INNER_HTML:
+				status = hcsr_runtime_mutation_set_inner_html_by_id(journal, id.get_data(), value.get_data());
+				break;
 		}
 		if (status != HCSR_RUNTIME_OK) {
 			hcsr_runtime_mutation_release(journal);
@@ -444,6 +490,7 @@ static bool runtime_submit_mutations(
 		runtime_set_terminal(p_state, "HCSR replacement rejected the Godot interactive mutation journal.");
 		return false;
 	}
+	p_state->semantic_pending = true;
 	p_state->pending_work = true;
 	p_state->interactive_pending = true;
 	p_state->submitted_request_serial = p_request_serial;
@@ -962,11 +1009,15 @@ static bool runtime_step_active(
 			p_state->activation_pending = true;
 		}
 	}
-	p_state->pending_work = p_state->active_binding->presenter_pending
-			|| (p_state->successor_binding != nullptr && p_state->successor_binding->presenter_pending)
-			|| p_state->activation_pending
-			|| p_state->retiring_binding != nullptr
-			|| semantic_pending;
+	{
+		MutexLock lock(p_state->mutex);
+		p_state->semantic_pending = semantic_pending;
+		p_state->pending_work = p_state->active_binding->presenter_pending
+				|| (p_state->successor_binding != nullptr && p_state->successor_binding->presenter_pending)
+				|| p_state->activation_pending
+				|| p_state->retiring_binding != nullptr
+				|| p_state->semantic_pending;
+	}
 	return true;
 }
 
@@ -1045,9 +1096,12 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 	bool document_dirty = false;
 	bool configuration_dirty = false;
 	bool closing = false;
-	{
+	auto finish_scheduled_work = [runtime]() {
 		MutexLock lock(runtime->mutex);
 		runtime->work_scheduled = false;
+	};
+	{
+		MutexLock lock(runtime->mutex);
 		closing = runtime->closing;
 		if (!closing && !runtime->terminal) {
 			document_dirty = runtime->document_dirty;
@@ -1077,10 +1131,12 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 		// Do not freeze the constructor's placeholder dimensions into a session.
 		// The first real document snapshot and the final control size establish
 		// the initial atomic configuration together.
+		finish_scheduled_work();
 		return;
 	}
 	const bool initialized_before_step = runtime->session != nullptr;
 	if (runtime->terminal || !runtime_ensure_initialized(runtime)) {
+		finish_scheduled_work();
 		return;
 	}
 	if (!initialized_before_step) {
@@ -1088,20 +1144,29 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 		configuration_dirty = false;
 	}
 	if (document_dirty && !runtime_submit_document(runtime, html, css)) {
+		finish_scheduled_work();
 		return;
 	}
 	if (configuration_dirty && !runtime_submit_configuration(runtime)) {
+		finish_scheduled_work();
 		return;
 	}
 	if (!runtime_submit_mutations(runtime, mutations, mutation_request_process_frame, request_serial)) {
+		finish_scheduled_work();
 		return;
 	}
 	if (mutations.is_empty() && (document_dirty || configuration_dirty)) {
 		runtime->submitted_request_serial = request_serial;
 	}
-	if (runtime->pending_work) {
+	bool has_pending_work = false;
+	{
+		MutexLock lock(runtime->mutex);
+		has_pending_work = runtime->pending_work;
+	}
+	if (has_pending_work) {
 		runtime_step_active(runtime);
 	}
+	finish_scheduled_work();
 }
 
 void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_callback(uint64_t p_state_ptr) {
@@ -1147,10 +1212,14 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 		runtime->staged_lineage = RuntimePublicationLineage();
 		runtime->last_activation_process_frame = cutoff_process_frame;
 	}
-	runtime->pending_work = (runtime->active_binding != nullptr && runtime->active_binding->presenter_pending)
-			|| (runtime->successor_binding != nullptr && runtime->successor_binding->presenter_pending)
-			|| runtime->activation_pending
-			|| runtime->retiring_binding != nullptr;
+	{
+		MutexLock lock(runtime->mutex);
+		runtime->pending_work = (runtime->active_binding != nullptr && runtime->active_binding->presenter_pending)
+				|| (runtime->successor_binding != nullptr && runtime->successor_binding->presenter_pending)
+				|| runtime->activation_pending
+				|| runtime->retiring_binding != nullptr
+				|| runtime->semantic_pending;
+	}
 }
 
 void HTMLSurfaceHCSRRuntimeBackend::_destroy_state_on_render_thread_callback(uint64_t p_state_ptr) {
@@ -1169,11 +1238,11 @@ void HTMLSurfaceHCSRRuntimeBackend::_queue_document_snapshot() {
 	}
 	String html;
 	String css;
-	if (document.is_valid()) {
-		html = document->get_html();
-		css = document->get_css();
-	}
-	if (html.strip_edges().is_empty()) {
+	String error;
+	if (!runtime_load_document_source(document, html, css, error)) {
+		if (document.is_valid() && (!document->get_html().is_empty() || !document->get_html_file().is_empty())) {
+			runtime_set_terminal(state, error);
+		}
 		return;
 	}
 	{
@@ -1434,6 +1503,11 @@ Error HTMLSurfaceHCSRRuntimeBackend::set_element_attribute(
 Error HTMLSurfaceHCSRRuntimeBackend::set_element_style(
 		const StringName &p_id, const String &p_css_text) {
 	return _queue_mutation(RUNTIME_MUTATION_STYLE, p_id, StringName(), p_css_text);
+}
+
+Error HTMLSurfaceHCSRRuntimeBackend::set_element_inner_html(
+		const StringName &p_id, const String &p_html_fragment) {
+	return _queue_mutation(RUNTIME_MUTATION_INNER_HTML, p_id, StringName(), p_html_fragment);
 }
 
 Error HTMLSurfaceHCSRRuntimeBackend::set_form_control_checked(

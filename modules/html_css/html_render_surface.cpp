@@ -406,6 +406,22 @@ void HTMLRenderSurface::set_backend_preference(HTMLSurfaceBackendPreference p_ba
 		backend_preference = p_backend_preference;
 		return;
 	}
+#elif defined(HTML_CSS_USE_HCSR_RUNTIME)
+	const bool current_uses_runtime = html_surface_auto_can_use_gpu_backend()
+			&& (backend_preference == HTML_SURFACE_BACKEND_AUTO
+					|| backend_preference == HTML_SURFACE_BACKEND_GPU_AUTO
+					|| backend_preference == HTML_SURFACE_BACKEND_D3D12);
+	const bool requested_uses_runtime = html_surface_auto_can_use_gpu_backend()
+			&& (p_backend_preference == HTML_SURFACE_BACKEND_AUTO
+					|| p_backend_preference == HTML_SURFACE_BACKEND_GPU_AUTO
+					|| p_backend_preference == HTML_SURFACE_BACKEND_D3D12);
+	if (backend != nullptr
+			&& !backend->has_terminal_render_failure()
+			&& current_uses_runtime
+			&& requested_uses_runtime) {
+		backend_preference = p_backend_preference;
+		return;
+	}
 #endif
 	backend_preference = p_backend_preference;
 	if (backend != nullptr) {

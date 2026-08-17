@@ -64,6 +64,7 @@ elif _html_css_renderer == "hcsr_runtime":
     ]
     runtime_project_names = [
         "Renderer.Authoring",
+        "Renderer.ComputedStyleWorld",
         "Renderer.DocumentCompiler",
         "Renderer.FrameScheduler",
         "Renderer.LayoutWorld",
