@@ -261,8 +261,11 @@ def configure_interactively(settings: BuildSettings, godot_platform: str) -> Bui
 
 
 def validate_settings(settings: BuildSettings, godot_platform: str) -> None:
-    if settings.hcsr and settings.architecture not in ("x86_64", "arm64"):
-        raise RuntimeError("HCSR builds support x86_64 and arm64 architectures only.")
+    if settings.hcsr and (godot_platform != "windows" or settings.architecture != "x86_64"):
+        raise RuntimeError(
+            "The replacement HCSR runtime currently supports Windows x86_64 only. "
+            "Disable HCSR to build Godot on another host or architecture."
+        )
     if godot_platform == "macos" and settings.architecture == "x86_32":
         raise RuntimeError("Godot does not support x86_32 macOS builds.")
 
@@ -274,6 +277,7 @@ def build_command(
     extra_arguments: Sequence[str],
 ) -> list[str]:
     SCONS_CACHE_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    html_css_renderer = "hcsr_runtime" if settings.hcsr else "none"
     command = [
         sys.executable,
         "-m",
@@ -282,7 +286,7 @@ def build_command(
         f"arch={settings.architecture}",
         f"target={settings.target}",
         f"module_mono_enabled={'yes' if settings.mono else 'no'}",
-        f"module_html_css_renderer={'hcsr' if settings.hcsr else 'none'}",
+        f"module_html_css_renderer={html_css_renderer}",
         f"dev_build={'yes' if settings.developer_build else 'no'}",
         f"cache_path={SCONS_CACHE_DIRECTORY}",
         f"cache_limit={settings.cache_limit_gib}",
@@ -294,6 +298,8 @@ def build_command(
         command.append("generate_bundle=yes")
     if godot_platform == "windows":
         command.extend((f"angle={'yes' if settings.angle else 'no'}", "d3d12=yes", "vulkan=yes"))
+        if settings.hcsr:
+            command.append("module_html_css_hcsr_runtime_root=thirdparty/hcsr")
     command.extend(extra_arguments)
     return command
 

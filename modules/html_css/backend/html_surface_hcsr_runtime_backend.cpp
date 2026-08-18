@@ -340,11 +340,12 @@ static bool runtime_ensure_initialized(
 	output.logical_width = p_state->logical_size.x;
 	output.logical_height = p_state->logical_size.y;
 	output.tile_size = 64;
-	if (hcsr_runtime_session_create(
+	if (hcsr_runtime_session_create_with_presentation_mode(
 			p_state->logical_size.x,
 			p_state->logical_size.y,
 			&output,
 			1,
+			HCSR_RUNTIME_PRESENTATION_SEMANTIC_ONLY,
 			&p_state->session) != HCSR_RUNTIME_OK) {
 			runtime_set_terminal(p_state, "HCSR replacement could not create its RuntimeSession D3D12 presenter.");
 		return false;
