@@ -21,7 +21,7 @@ def get_opts(platform):
         ),
         PathVariable(
             "module_html_css_hcsr_runtime_root",
-            "HCSR replacement checkout containing hcsr_runtime v4. Required by the mutually exclusive hcsr_runtime integration build.",
+            "HCSR replacement checkout containing hcsr_runtime v6. Required by the mutually exclusive hcsr_runtime integration build.",
             "",
             PathVariable.PathAccept,
         ),

@@ -312,8 +312,8 @@ static bool runtime_ensure_initialized(
 		return true;
 	}
 	if (hcsr_runtime_get_abi_version() != HCSR_RUNTIME_ABI_VERSION
-			|| HCSR_RUNTIME_ABI_VERSION != 5) {
-		runtime_set_terminal(p_state, "HCSR replacement ABI mismatch; Godot requires runtime ABI v5.");
+			|| HCSR_RUNTIME_ABI_VERSION != 6) {
+		runtime_set_terminal(p_state, "HCSR replacement ABI mismatch; Godot requires runtime ABI v6.");
 		return false;
 	}
 	RenderingServer *rendering_server = RenderingServer::get_singleton();
@@ -1538,7 +1538,7 @@ HTMLSurfaceHCSRRuntimeBackend::HTMLSurfaceHCSRRuntimeBackend() {
 	texture.instantiate();
 	state = memnew(RuntimeState);
 	state->texture = texture;
-	if (hcsr_runtime_get_abi_version() != 5) {
+	if (hcsr_runtime_get_abi_version() != 6) {
 		runtime_set_terminal(state, "HCSR replacement ABI mismatch during Godot module initialization.");
 	}
 }
