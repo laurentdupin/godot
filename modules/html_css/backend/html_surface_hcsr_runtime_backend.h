@@ -45,6 +45,16 @@ public:
 	virtual uint64_t get_last_queued_frame_generation() const override;
 	virtual uint64_t get_active_frame_generation() const override;
 	virtual bool uses_generation_bound_input() const override;
+	virtual Error mouse_move(const Point2 &p_position, int p_modifiers, bool &r_visual_state_changed) override;
+	virtual Error mouse_down(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) override;
+	virtual Error mouse_up(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) override;
+	virtual Error pointer_cancel(const Point2 &p_position, int p_pointer_id) override;
+	virtual Error notify_pointer_leave(const Point2 &p_position, bool p_cancel_pressed_interaction, int p_pointer_id) override;
+	virtual Error begin_scrollbar_interaction(const Point2 &p_position, double p_event_time_seconds, bool &r_consumed) override;
+	virtual Error update_scrollbar_interaction(const Point2 &p_position, bool &r_consumed) override;
+	virtual Error end_scrollbar_interaction(bool &r_consumed) override;
+	virtual bool poll_pointer_event(HTMLPointerEvent &r_event) override;
+	virtual Error wheel(const Point2 &p_position, const Vector2 &p_delta) override;
 	virtual bool has_terminal_render_failure() const override;
 	virtual String get_terminal_render_failure_reason() const override;
 	virtual Error submit_cpu_frame(const HTMLCPUFrame &p_frame) override;
@@ -57,6 +67,11 @@ public:
 	virtual void get_frame_metadata(HTMLFrameMetadata &r_metadata) const override;
 	virtual Ref<Texture2D> get_texture() const override;
 	virtual Ref<HTMLTexture2D> get_html_texture() const override;
+	virtual uint64_t create_presentation_output(const Size2i &p_size, bool p_mipmaps) override;
+	virtual Error resize_presentation_output(uint64_t p_output_id, const Size2i &p_size) override;
+	virtual void destroy_presentation_output(uint64_t p_output_id) override;
+	virtual Ref<Texture2D> get_presentation_output_texture(uint64_t p_output_id) const override;
+	virtual uint64_t get_presentation_output_generation(uint64_t p_output_id) const override;
 
 	HTMLSurfaceHCSRRuntimeBackend();
 	~HTMLSurfaceHCSRRuntimeBackend();
