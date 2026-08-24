@@ -40,6 +40,7 @@ public:
 	virtual void render_placeholder(const String &p_marker) override;
 	virtual bool poll_pending_output(bool *r_waiting_for_completion = nullptr) override;
 	virtual HTMLPendingOutputState consume_pending_output_state() override;
+	virtual void schedule_retirement_service() override;
 	virtual bool has_pending_output() const override;
 	virtual bool has_pending_frame_request() const override;
 	virtual uint64_t get_last_queued_frame_generation() const override;

@@ -31,6 +31,48 @@
 #include "html_asset_provider.h"
 
 #include "core/io/file_access.h"
+#include "core/os/os.h"
+#include "core/templates/hash_map.h"
+#include "core/os/mutex.h"
+
+static const char *PLATFORM_FONT_SCHEME = "hcsr-platform-font://";
+static HashMap<String, String> platform_font_paths;
+static Mutex platform_font_paths_mutex;
+
+bool HTMLGodotAssetProvider::resolve_platform_font(const String &p_family, int p_weight, bool p_italic, String &r_reference) {
+	r_reference = String();
+	OS *os = OS::get_singleton();
+	if (os == nullptr) {
+		return false;
+	}
+	const String path = os->get_system_font_path(p_family, p_weight, 100, p_italic);
+	if (path.is_empty() || !FileAccess::exists(path)) {
+		return false;
+	}
+	const String key = String::num_uint64(path.hash64());
+	{
+		MutexLock lock(platform_font_paths_mutex);
+		platform_font_paths.insert(key, path.simplify_path());
+	}
+	r_reference = String(PLATFORM_FONT_SCHEME) + key;
+	return true;
+}
+
+static bool _resolve_platform_font_reference(const String &p_uri, String &r_path) {
+	if (!p_uri.begins_with(PLATFORM_FONT_SCHEME)) {
+		return false;
+	}
+	const String key = p_uri.trim_prefix(PLATFORM_FONT_SCHEME);
+	{
+		MutexLock lock(platform_font_paths_mutex);
+		const String *path = platform_font_paths.getptr(key);
+		if (path == nullptr || !FileAccess::exists(*path)) {
+			return false;
+		}
+		r_path = *path;
+	}
+	return true;
+}
 
 static bool _is_local_asset_path(const String &p_path) {
 	return p_path.begins_with("res://") || p_path.begins_with("user://");
@@ -94,6 +136,9 @@ Error HTMLGodotAssetProvider::resolve_asset_path(const Ref<HTMLDocument> &p_docu
 	if (uri.is_empty()) {
 		_set_error(r_error, "HTMLDocument resource URI cannot be empty.");
 		return ERR_INVALID_PARAMETER;
+	}
+	if (_resolve_platform_font_reference(uri, r_path)) {
+		return OK;
 	}
 
 	String resolved_path;

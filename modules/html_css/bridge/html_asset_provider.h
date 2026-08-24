@@ -40,6 +40,7 @@ struct HTMLAssetResource {
 
 class HTMLGodotAssetProvider {
 public:
+	static bool resolve_platform_font(const String &p_family, int p_weight, bool p_italic, String &r_reference);
 	static Error resolve_asset_path(const Ref<HTMLDocument> &p_document, const String &p_uri, String &r_path, String *r_error = nullptr);
 	static Error load_asset(const Ref<HTMLDocument> &p_document, const String &p_uri, HTMLAssetResource &r_asset, String *r_error = nullptr);
 	static String get_mime_type_for_path(const String &p_path);
