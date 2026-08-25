@@ -2135,7 +2135,7 @@ Error RenderingDevice::external_texture_pool_abandon_pending(RID p_pool, int32_t
 	return OK;
 }
 
-RID RenderingDevice::external_texture_pool_acquire_latest(RID p_pool) {
+RID RenderingDevice::external_texture_pool_acquire_latest(RID p_pool, bool p_allow_pending_producer) {
 	ERR_RENDER_THREAD_GUARD_V(RID());
 	ExternalTexturePool *pool = external_texture_pool_owner.get_or_null(p_pool);
 	ERR_FAIL_NULL_V(pool, RID());
@@ -2164,7 +2164,7 @@ RID RenderingDevice::external_texture_pool_acquire_latest(RID p_pool) {
 	uint64_t newest_generation = 0;
 	for (int32_t i = 0; i < pool->slots.size(); i++) {
 		const ExternalTexturePoolSlot &slot = pool->slots[i];
-		const bool producer_ready = slot.android_hardware_buffer || driver->external_timeline_is_complete(slot.producer_timeline, slot.producer_value);
+		const bool producer_ready = p_allow_pending_producer || slot.android_hardware_buffer || driver->external_timeline_is_complete(slot.producer_timeline, slot.producer_value);
 		if (slot.pending && producer_ready && (newest_slot < 0 || slot.generation > newest_generation)) {
 			newest_slot = i;
 			newest_generation = slot.generation;
@@ -2174,7 +2174,7 @@ RID RenderingDevice::external_texture_pool_acquire_latest(RID p_pool) {
 	if (newest_slot >= 0) {
 		for (int32_t i = 0; i < pool->slots.size(); i++) {
 			ExternalTexturePoolSlot &slot = pool->slots.write[i];
-			const bool producer_ready = slot.android_hardware_buffer || driver->external_timeline_is_complete(slot.producer_timeline, slot.producer_value);
+			const bool producer_ready = p_allow_pending_producer || slot.android_hardware_buffer || driver->external_timeline_is_complete(slot.producer_timeline, slot.producer_value);
 			if (!slot.pending || !producer_ready) {
 				continue;
 			}
@@ -9690,7 +9690,7 @@ void RenderingDevice::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("external_texture_pool_take_android_release_fence", "pool", "slot"), &RenderingDevice::external_texture_pool_take_android_release_fence);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_supports_android_hardware_buffer"), &RenderingDevice::external_texture_pool_supports_android_hardware_buffer);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_abandon_pending", "pool", "slot"), &RenderingDevice::external_texture_pool_abandon_pending);
-	ClassDB::bind_method(D_METHOD("external_texture_pool_acquire_latest", "pool"), &RenderingDevice::external_texture_pool_acquire_latest);
+	ClassDB::bind_method(D_METHOD("external_texture_pool_acquire_latest", "pool", "allow_pending_producer"), &RenderingDevice::external_texture_pool_acquire_latest, DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("external_texture_pool_get_slot_status", "pool", "slot"), &RenderingDevice::external_texture_pool_get_slot_status);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_stop", "pool"), &RenderingDevice::external_texture_pool_stop);
 	ClassDB::bind_method(D_METHOD("external_resource_defer_release", "callback"), &RenderingDevice::external_resource_defer_release);

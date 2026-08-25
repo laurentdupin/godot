@@ -21,14 +21,14 @@ enum RuntimeMutationKind {
 };
 
 static constexpr int RUNTIME_INTERACTIVE_STEP_SLICE_UNITS = 65536;
-static constexpr int RUNTIME_PRESENTER_STEP_SLICE_UNITS = 256;
+static constexpr int RUNTIME_PRESENTER_STEP_SLICE_UNITS = 4096;
 static constexpr int RUNTIME_SEMANTIC_STEP_SLICE_UNITS = 4096;
 static constexpr uint64_t RUNTIME_SEMANTIC_FRAME_BUDGET_MICROSECONDS = 8000;
 static constexpr uint64_t RUNTIME_INTERACTIVE_FRAME_BUDGET_MICROSECONDS = 16667;
-static constexpr uint32_t RUNTIME_REQUIRED_ABI_VERSION = 10;
+static constexpr uint32_t RUNTIME_REQUIRED_ABI_VERSION = 11;
 
 static_assert(HCSR_RUNTIME_ABI_VERSION == RUNTIME_REQUIRED_ABI_VERSION,
-		"The Godot HCSR replacement backend must be compiled against runtime ABI v10.");
+		"The Godot HCSR replacement backend must be compiled against runtime ABI v11.");
 
 struct RuntimeMutation {
 	int kind = RUNTIME_MUTATION_TEXT;
@@ -119,6 +119,7 @@ struct RuntimePublicationLineage {
 	uint64_t interactive_submission_id = 0;
 	uint64_t interactive_frame_id = 0;
 	uint64_t interaction_input_id = 0;
+	bool has_interaction_state = false;
 };
 
 static void initialize_abi(void *p_value, size_t p_size);
@@ -297,6 +298,8 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	Vector<RuntimeResolvedStylesheet> stylesheets;
 	Size2i logical_size = Size2i(512, 512);
 	Size2i physical_size = Size2i(512, 512);
+	Size2i submitted_logical_size;
+	Size2i submitted_physical_size;
 	Vector<RuntimeMutation> mutations;
 	Vector<RuntimePointerRequest> pointer_requests;
 	Vector<RuntimeScrollRequest> scroll_requests;
@@ -328,6 +331,7 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	uint64_t queued_generation = 0;
 	uint64_t active_generation = 0;
 	uint64_t active_interaction_input_id = 0;
+	bool active_has_interaction_state = false;
 	uint64_t active_scroll_input_id = 0;
 	uint64_t next_host_input_id = 1;
 	Vector<RuntimeResourceToken> completed_resource_tokens;
@@ -617,6 +621,8 @@ static RuntimePublicationLineage runtime_lineage_from_publication(
 	lineage.interactive_submission_id = p_info.interactive_submission_id;
 	lineage.interactive_frame_id = p_info.interactive_frame_id;
 	lineage.interaction_input_id = p_interaction.input_id;
+	lineage.has_interaction_state = p_interaction.has_interaction_world != 0
+			&& p_interaction.has_interaction_state != 0;
 	return lineage;
 }
 
@@ -694,6 +700,21 @@ static void runtime_replace_output_topology(RuntimeOutputTopologySnapshot &p_tar
 	}
 }
 
+static bool runtime_output_topologies_match(
+		const RuntimeOutputTopologySnapshot &p_left,
+		const RuntimeOutputTopologySnapshot &p_right) {
+	if (p_left.outputs.size() != p_right.outputs.size()) {
+		return false;
+	}
+	for (int index = 0; index < p_left.outputs.size(); index++) {
+		if (p_left.outputs[index].output_id != p_right.outputs[index].output_id
+				|| p_left.outputs[index].size != p_right.outputs[index].size) {
+			return false;
+		}
+	}
+	return true;
+}
+
 static Vector<hcsr_runtime_output_configuration_t> runtime_create_output_configurations(
 		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
 		const RuntimeOutputTopologySnapshot &p_topology) {
@@ -725,7 +746,7 @@ static bool runtime_ensure_initialized(
 		return true;
 	}
 	if (hcsr_runtime_get_abi_version() != RUNTIME_REQUIRED_ABI_VERSION) {
-		runtime_set_terminal(p_state, "HCSR replacement ABI mismatch; Godot requires runtime ABI v9.");
+		runtime_set_terminal(p_state, "HCSR replacement ABI mismatch; Godot requires runtime ABI v11.");
 		return false;
 	}
 	CharString codec_directory = OS::get_singleton()->get_executable_path().get_base_dir().utf8();
@@ -752,6 +773,8 @@ static bool runtime_ensure_initialized(
 	runtime_release_output_topology(p_state->candidate_topology);
 	p_state->candidate_topology = runtime_capture_output_topology(p_state);
 	runtime_replace_output_topology(p_state->submitted_topology, p_state->candidate_topology);
+	p_state->submitted_logical_size = p_state->logical_size;
+	p_state->submitted_physical_size = p_state->physical_size;
 	p_state->submitted_request_is_configuration_only = true;
 	Vector<hcsr_runtime_output_configuration_t> outputs = runtime_create_output_configurations(p_state, p_state->candidate_topology);
 	if (hcsr_runtime_session_create_with_presentation_mode(
@@ -864,6 +887,12 @@ static bool runtime_submit_configuration(
 		uint64_t p_request_serial) {
 	runtime_release_output_topology(p_state->candidate_topology);
 	p_state->candidate_topology = runtime_capture_output_topology(p_state);
+	if (p_state->logical_size == p_state->submitted_logical_size
+			&& p_state->physical_size == p_state->submitted_physical_size
+			&& runtime_output_topologies_match(
+					p_state->candidate_topology, p_state->submitted_topology)) {
+		return true;
+	}
 	Vector<hcsr_runtime_output_configuration_t> outputs = runtime_create_output_configurations(p_state, p_state->candidate_topology);
 	const hcsr_runtime_status_t configuration_status = hcsr_runtime_session_submit_configuration(
 			p_state->session,
@@ -872,16 +901,18 @@ static bool runtime_submit_configuration(
 			outputs.ptr(),
 			outputs.size());
 	if (configuration_status != HCSR_RUNTIME_OK) {
-		runtime_set_terminal(p_state, vformat(
+		runtime_set_terminal(p_state, runtime_copy_last_error(p_state, vformat(
 				"HCSR replacement rejected the Godot output configuration (status %d, logical %dx%d, physical %dx%d).",
 				(int)configuration_status,
 				p_state->logical_size.x,
 				p_state->logical_size.y,
 				p_state->physical_size.x,
-				p_state->physical_size.y));
+				p_state->physical_size.y)));
 		return false;
 	}
 	runtime_replace_output_topology(p_state->submitted_topology, p_state->candidate_topology);
+	p_state->submitted_logical_size = p_state->logical_size;
+	p_state->submitted_physical_size = p_state->physical_size;
 	p_state->submitted_request_is_configuration_only = true;
 	p_state->submitted_request_serial = p_request_serial;
 	p_state->semantic_pending = true;
@@ -1226,7 +1257,7 @@ static bool runtime_activate_surface(
 		slot->generation_surface = surface;
 		slot->runtime_generation = acquired.runtime_generation;
 		const RID acquired_rd_texture = rendering_device->external_texture_pool_acquire_latest(
-				p_binding->external_texture_pool);
+				p_binding->external_texture_pool, true);
 		RuntimeExternalSurfaceSlot *active_slot = nullptr;
 		for (RuntimeExternalSurfaceSlot &candidate : p_binding->slots) {
 			if (candidate.rd_texture == acquired_rd_texture) {
@@ -1442,15 +1473,26 @@ static bool runtime_step_active(
 	initialize_abi(&step, sizeof(step));
 	bool semantic_publication_ready = false;
 	bool semantic_pending = false;
+	int32_t interactive_work_units = 0;
 	hcsr_runtime_status_t status = HCSR_RUNTIME_OK;
 	if (p_state->interactive_pending) {
 		hcsr_runtime_interactive_step_info_t interactive;
 		initialize_abi(&interactive, sizeof(interactive));
 		status = hcsr_runtime_session_step_interactive(
 				p_state->session, RUNTIME_INTERACTIVE_STEP_SLICE_UNITS, &interactive);
+		interactive_work_units = interactive.work_units;
+		if (status != HCSR_RUNTIME_OK && status != HCSR_RUNTIME_PENDING) {
+			runtime_set_terminal(p_state, runtime_copy_last_error(
+					p_state, vformat("HCSR replacement interactive derivation failed with status %d.", (int)status)));
+			return false;
+		}
 		if (interactive.submission_id != p_state->newest_requested_submission_id
 				|| interactive.frame_id != p_state->newest_requested_frame_id) {
-			runtime_set_terminal(p_state, "HCSR replacement interactive stepping lost the newest input submission/frame identity.");
+			runtime_set_terminal(p_state, vformat(
+					"HCSR replacement interactive stepping lost the newest input submission/frame identity (actual %d/%d, expected %d/%d, status %d).",
+					interactive.submission_id, interactive.frame_id,
+					p_state->newest_requested_submission_id, p_state->newest_requested_frame_id,
+					(int)status));
 			return false;
 		}
 		if (interactive.target_author_revision != 0) {
@@ -1461,9 +1503,9 @@ static bool runtime_step_active(
 		} else {
 			p_state->interactive_pending = false;
 			if (status == HCSR_RUNTIME_OK
-					&& interactive.outcome != HCSR_RUNTIME_INTERACTIVE_CPU_PUBLISHED_BEFORE_CUTOFF) {
+					&& interactive.outcome != HCSR_RUNTIME_INTERACTIVE_SEMANTIC_PUBLISHED_BEFORE_CUTOFF) {
 				runtime_set_terminal(p_state, vformat(
-						"HCSR replacement interaction missed its mandatory next-frame CPU publication (outcome %d).",
+						"HCSR replacement interaction missed its mandatory next-frame semantic publication (outcome %d).",
 						(int)interactive.outcome));
 				return false;
 			}
@@ -1562,11 +1604,19 @@ static bool runtime_step_active(
 			RuntimePresentationBinding *target_binding = p_state->successor_binding != nullptr
 					? p_state->successor_binding
 					: p_state->active_binding;
-			hcsr_runtime_status_t submit_status = hcsr_runtime_d3d12_presenter_submit(
-					target_binding->presenter,
-					publication,
-					publication_info.generation,
-					0);
+			bool retained_primary_surface = p_state->submitted_request_is_configuration_only
+					&& target_binding == p_state->active_binding
+					&& p_state->active_generation != 0
+					&& output_info.output_id == p_state->active_output_id
+					&& output_info.pixel_width == p_state->active_pixel_width
+					&& output_info.pixel_height == p_state->active_pixel_height;
+			hcsr_runtime_status_t submit_status = retained_primary_surface
+					? HCSR_RUNTIME_OK
+					: hcsr_runtime_d3d12_presenter_submit(
+							target_binding->presenter,
+							publication,
+							publication_info.generation,
+							0);
 			bool submitted_to_successor = false;
 			if (submit_status == HCSR_RUNTIME_RECONFIGURATION_REQUIRED
 					&& target_binding == p_state->active_binding) {
@@ -1611,6 +1661,7 @@ static bool runtime_step_active(
 							p_state->submitted_request_serial, true, publication_info, interaction_info);
 					p_state->staged_binding = target_binding;
 					p_state->staged_lineage = target_binding->pending_lineage;
+					retained_primary_surface = true;
 				}
 			}
 			if (submit_status == HCSR_RUNTIME_STALE_REQUEST) {
@@ -1636,7 +1687,11 @@ static bool runtime_step_active(
 				p_state->queued_generation = publication_info.generation;
 				(void)submitted_to_successor;
 				target_binding->pending_lineage = lineage;
-				if (p_state->staged_binding != target_binding
+				if (retained_primary_surface) {
+					target_binding->presenter_pending = false;
+					p_state->staged_binding = target_binding;
+					p_state->staged_lineage = lineage;
+				} else if (p_state->staged_binding != target_binding
 						|| p_state->staged_lineage.runtime_generation != publication_info.generation) {
 					target_binding->presenter_pending = true;
 				}
@@ -1661,11 +1716,18 @@ static bool runtime_step_active(
 						output->active_binding = runtime_create_presentation_binding_from_device(rendering_device);
 						secondary_binding = output->active_binding;
 					}
-					hcsr_runtime_status_t secondary_submit_status = secondary_binding != nullptr
-							? hcsr_runtime_d3d12_presenter_submit(secondary_binding->presenter,
-									publication, publication_info.generation, output_index + 1)
-							: HCSR_RUNTIME_INTERNAL_ERROR;
-					bool retained_secondary_surface = false;
+					bool retained_secondary_surface = p_state->submitted_request_is_configuration_only
+							&& secondary_binding == output->active_binding
+							&& output->active_generation != 0
+							&& secondary_info.output_id == output->active_output_id
+							&& secondary_info.pixel_width == output->active_pixel_width
+							&& secondary_info.pixel_height == output->active_pixel_height;
+					hcsr_runtime_status_t secondary_submit_status = retained_secondary_surface
+							? HCSR_RUNTIME_OK
+							: secondary_binding != nullptr
+									? hcsr_runtime_d3d12_presenter_submit(secondary_binding->presenter,
+											publication, publication_info.generation, output_index + 1)
+									: HCSR_RUNTIME_INTERNAL_ERROR;
 					if (secondary_submit_status == HCSR_RUNTIME_STALE_REQUEST
 							&& p_state->submitted_request_is_configuration_only
 							&& output->active_generation != 0
@@ -1712,7 +1774,9 @@ static bool runtime_step_active(
 				p_state->active_binding->presenter, presenter_cutoff, &step);
 		if (status == HCSR_RUNTIME_PENDING && presenter_cutoff != 0
 				&& hcsr_runtime_get_monotonic_timestamp_microseconds() >= presenter_cutoff) {
-			runtime_set_terminal(p_state, "HCSR replacement missed the mandatory next-frame primary GPU presentation cutoff.");
+			runtime_set_terminal(p_state, vformat(
+					"HCSR replacement missed the mandatory next-frame primary GPU presentation cutoff (semantic work units %d).",
+					interactive_work_units));
 			return false;
 		}
 		if (status != HCSR_RUNTIME_OK && status != HCSR_RUNTIME_PENDING) {
@@ -1815,6 +1879,11 @@ static bool runtime_step_pointer_input(HTMLSurfaceHCSRRuntimeBackend::RuntimeSta
 		if (p_state->active_generation == 0) {
 			return true;
 		}
+		if (!p_state->active_has_interaction_state) {
+			MutexLock lock(p_state->mutex);
+			p_state->pointer_requests.clear();
+			return true;
+		}
 		RuntimePointerRequest request;
 		{
 			MutexLock lock(p_state->mutex);
@@ -1833,8 +1902,11 @@ static bool runtime_step_pointer_input(HTMLSurfaceHCSRRuntimeBackend::RuntimeSta
 		input.frame_id = p_state->next_host_frame_id++;
 		input.cutoff_timestamp_microseconds = hcsr_runtime_get_monotonic_timestamp_microseconds()
 				+ RUNTIME_INTERACTIVE_FRAME_BUDGET_MICROSECONDS;
-		input.logical_x = request.position.x;
-		input.logical_y = request.position.y;
+		const bool pointer_needs_position = request.kind == HCSR_RUNTIME_POINTER_MOVE
+				|| request.kind == HCSR_RUNTIME_POINTER_PRIMARY_DOWN
+				|| request.kind == HCSR_RUNTIME_POINTER_PRIMARY_UP;
+		input.logical_x = pointer_needs_position ? request.position.x : 0.0;
+		input.logical_y = pointer_needs_position ? request.position.y : 0.0;
 		input.buttons = request.buttons;
 		input.kind = request.kind;
 		input.focus_on_primary_down = request.focus_on_primary_down ? 1 : 0;
@@ -1849,7 +1921,10 @@ static bool runtime_step_pointer_input(HTMLSurfaceHCSRRuntimeBackend::RuntimeSta
 			return true;
 		}
 		if (submit_status != HCSR_RUNTIME_OK) {
-			runtime_set_terminal(p_state, vformat("HCSR replacement pointer submission failed (status %d).", (int)submit_status));
+			runtime_set_terminal(p_state, runtime_copy_last_error(p_state, vformat(
+					"HCSR replacement pointer submission failed (status %d, kind %d, buttons %d, generation %d, configuration %d, source input %d, position %s).",
+					(int)submit_status, input.kind, input.buttons, input.source_runtime_generation, input.configuration_id,
+					input.source_input_id, request.position)));
 			return false;
 		}
 		p_state->active_pointer_submission_id = submission.submission_id;
@@ -2240,6 +2315,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 			MutexLock lock(runtime->mutex);
 			runtime->active_generation = runtime->staged_lineage.runtime_generation;
 			runtime->active_interaction_input_id = runtime->staged_lineage.interaction_input_id;
+			runtime->active_has_interaction_state = runtime->staged_lineage.has_interaction_state;
 			runtime->queued_generation = runtime->staged_lineage.runtime_generation;
 			runtime->frame_metadata.generation = runtime->staged_lineage.runtime_generation;
 			for (const RuntimeOutputSnapshotEntry &entry : runtime->staged_topology.outputs) {

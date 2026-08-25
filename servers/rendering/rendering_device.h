@@ -546,7 +546,7 @@ public:
 	int external_texture_pool_take_android_release_fence(RID p_pool, int32_t p_slot);
 	bool external_texture_pool_supports_android_hardware_buffer() const;
 	Error external_texture_pool_abandon_pending(RID p_pool, int32_t p_slot);
-	RID external_texture_pool_acquire_latest(RID p_pool);
+	RID external_texture_pool_acquire_latest(RID p_pool, bool p_allow_pending_producer = false);
 	Dictionary external_texture_pool_get_slot_status(RID p_pool, int32_t p_slot);
 	void external_texture_pool_stop(RID p_pool);
 	// Runs after the current engine frame's GPU fence retires. Same-queue native
