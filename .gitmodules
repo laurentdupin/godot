@@ -1,3 +1,6 @@
 [submodule "thirdparty/hcsr"]
 	path = thirdparty/hcsr
 	url = https://github.com/laurentdupin/HTMLCSSSimpleRenderer.git
+[submodule "thirdparty/hcsr_old"]
+	path = thirdparty/hcsr_old
+	url = https://github.com/laurentdupin/HTMLCSSSimpleRenderer.git
