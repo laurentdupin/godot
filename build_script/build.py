@@ -23,9 +23,10 @@ PIP_CACHE_DIRECTORY = CACHE_DIRECTORY / "pip"
 SCONS_CACHE_DIRECTORY = CACHE_DIRECTORY / "scons"
 SETTINGS_PATH = SCRIPT_DIRECTORY / "settings.json"
 SCONS_VERSION = "4.10.1"
-SETTINGS_VERSION = 1
+SETTINGS_VERSION = 2
 TARGETS = ("editor", "template_debug", "template_release")
 ARCHITECTURES = ("x86_64", "arm64", "x86_32")
+HTML_CSS_RENDERERS = ("hcsr_old", "hcsr_runtime", "none")
 
 
 @dataclass
@@ -34,7 +35,7 @@ class BuildSettings:
     architecture: str = "x86_64"
     target: str = "editor"
     mono: bool = True
-    hcsr: bool = True
+    html_css_renderer: str = "hcsr_old"
     angle: bool = False
     developer_build: bool = False
     jobs: int = 1
@@ -93,7 +94,8 @@ def load_settings() -> BuildSettings:
     if settings.target not in TARGETS:
         settings.target = defaults.target
     settings.mono = bool(settings.mono)
-    settings.hcsr = bool(settings.hcsr)
+    if settings.html_css_renderer not in HTML_CSS_RENDERERS:
+        settings.html_css_renderer = defaults.html_css_renderer
     settings.angle = bool(settings.angle)
     settings.developer_build = bool(settings.developer_build)
     if not isinstance(settings.jobs, int) or isinstance(settings.jobs, bool):
@@ -204,7 +206,7 @@ def display_settings(settings: BuildSettings, godot_platform: str) -> None:
     print(f"  Architecture:   {settings.architecture}")
     print(f"  Target:         {settings.target}")
     print(f"  Mono:           {'included' if settings.mono else 'excluded'}")
-    print(f"  HCSR:           {'included' if settings.hcsr else 'excluded'}")
+    print(f"  HTML/CSS renderer: {settings.html_css_renderer}")
     if godot_platform == "windows":
         print(f"  ANGLE:          {'included' if settings.angle else 'excluded'}")
     print(f"  Developer build:{' yes' if settings.developer_build else ' no'}")
@@ -219,7 +221,7 @@ def configure_interactively(settings: BuildSettings, godot_platform: str) -> Bui
         print("\n  1. Change architecture")
         print("  2. Change target")
         print("  3. Toggle Mono")
-        print("  4. Toggle HCSR")
+        print("  4. Change HTML/CSS renderer")
         if godot_platform == "windows":
             print("  5. Toggle ANGLE")
         print("  6. Toggle developer build")
@@ -236,7 +238,11 @@ def configure_interactively(settings: BuildSettings, godot_platform: str) -> Bui
         elif response == "3":
             settings.mono = not settings.mono
         elif response == "4":
-            settings.hcsr = not settings.hcsr
+            settings.html_css_renderer = choose(
+                "HTML/CSS renderer",
+                HTML_CSS_RENDERERS,
+                settings.html_css_renderer,
+            )
         elif response == "5":
             if godot_platform != "windows":
                 print("ANGLE is available only for Windows builds.")
@@ -261,10 +267,12 @@ def configure_interactively(settings: BuildSettings, godot_platform: str) -> Bui
 
 
 def validate_settings(settings: BuildSettings, godot_platform: str) -> None:
-    if settings.hcsr and (godot_platform != "windows" or settings.architecture != "x86_64"):
+    if settings.html_css_renderer == "hcsr_runtime" and (
+        godot_platform != "windows" or settings.architecture != "x86_64"
+    ):
         raise RuntimeError(
             "The replacement HCSR runtime currently supports Windows x86_64 only. "
-            "Disable HCSR to build Godot on another host or architecture."
+            "Select hcsr_old or none to build Godot on another host or architecture."
         )
     if godot_platform == "macos" and settings.architecture == "x86_32":
         raise RuntimeError("Godot does not support x86_32 macOS builds.")
@@ -277,7 +285,6 @@ def build_command(
     extra_arguments: Sequence[str],
 ) -> list[str]:
     SCONS_CACHE_DIRECTORY.mkdir(parents=True, exist_ok=True)
-    html_css_renderer = "hcsr_runtime" if settings.hcsr else "none"
     command = [
         sys.executable,
         "-m",
@@ -286,7 +293,7 @@ def build_command(
         f"arch={settings.architecture}",
         f"target={settings.target}",
         f"module_mono_enabled={'yes' if settings.mono else 'no'}",
-        f"module_html_css_renderer={html_css_renderer}",
+        f"module_html_css_renderer={settings.html_css_renderer}",
         f"dev_build={'yes' if settings.developer_build else 'no'}",
         f"cache_path={SCONS_CACHE_DIRECTORY}",
         f"cache_limit={settings.cache_limit_gib}",
@@ -298,8 +305,8 @@ def build_command(
         command.append("generate_bundle=yes")
     if godot_platform == "windows":
         command.extend((f"angle={'yes' if settings.angle else 'no'}", "d3d12=yes", "vulkan=yes"))
-        if settings.hcsr:
-            command.append("module_html_css_hcsr_runtime_root=thirdparty/hcsr")
+        if settings.html_css_renderer == "hcsr_runtime":
+            command.append(f"module_html_css_hcsr_runtime_root={GODOT_ROOT.parent / 'HCSR'}")
     command.extend(extra_arguments)
     return command
 
@@ -311,14 +318,18 @@ def format_command(command: Sequence[str]) -> str:
 
 
 def force_macos_hcsr_relink(settings: BuildSettings, godot_platform: str) -> None:
-    if godot_platform != "macos" or settings.target != "editor" or not settings.hcsr:
+    if (
+        godot_platform != "macos"
+        or settings.target != "editor"
+        or settings.html_css_renderer != "hcsr_old"
+    ):
         return
 
     runtime_identifier = "osx-arm64" if settings.architecture == "arm64" else "osx-x64"
     publish_directory = (
         GODOT_ROOT
         / "thirdparty"
-        / "hcsr"
+        / "hcsr_old"
         / "src"
         / "Renderer.NativeBridge"
         / "bin"

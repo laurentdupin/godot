@@ -1,6 +1,6 @@
 param(
-    [ValidateSet("hcsr", "none")]
-    [string]$Renderer = "hcsr",
+    [ValidateSet("hcsr_old", "hcsr_runtime", "none")]
+    [string]$Renderer = "hcsr_old",
 
     [ValidateRange(1, 64)]
     [int]$Jobs = 6,
@@ -43,6 +43,10 @@ $sconsArguments = @(
     "-j$Jobs"
 )
 
+if ($Renderer -eq "hcsr_runtime") {
+    $sconsArguments += "module_html_css_hcsr_runtime_root=$(Join-Path (Split-Path $godotRoot -Parent) 'HCSR')"
+}
+
 Push-Location $godotRoot
 try {
     & py @sconsArguments
@@ -61,8 +65,8 @@ try {
         return
     }
 
-    if ($Renderer -ne "hcsr") {
-        throw "-ExportBackdrop currently requires -Renderer hcsr so the editor's HCSR package compiler and release runtime match."
+    if ($Renderer -ne "hcsr_old") {
+        throw "-ExportBackdrop currently requires -Renderer hcsr_old so the editor's HCSR package compiler and release runtime match."
     }
 
     $projectDirectory = Join-Path $godotRoot "modules\html_css\examples\backdrop_2d"

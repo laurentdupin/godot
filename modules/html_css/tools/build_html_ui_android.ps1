@@ -85,7 +85,7 @@ $sconsArguments = @(
     "module_msdfgen_enabled=yes",
     "module_svg_enabled=yes",
     "module_text_server_fb_enabled=yes",
-    "module_html_css_renderer=hcsr",
+    "module_html_css_renderer=hcsr_old",
     "build_profile=$buildProfile",
     "-j$Jobs"
 )

@@ -5,29 +5,40 @@
 The module has one mutually exclusive renderer selector:
 
 ```text
-module_html_css_renderer=none|hcsr
+module_html_css_renderer=hcsr_old|hcsr_runtime|none
 ```
 
-`none` keeps the raw CPU-frame receiver without compiling an HTML engine. `hcsr`
-uses the nested `thirdparty/hcsr` dependency and statically links its NativeAOT
-bridge, so an HCSR build does not ship an HCSR DLL.
+`hcsr_old` is the default. It uses the frozen old architecture in
+`thirdparty/hcsr_old` and statically links its NativeAOT bridge. `hcsr_runtime`
+uses the current architecture and its runtime ABI from the checkout selected by
+`module_html_css_hcsr_runtime_root`. The choices are mutually exclusive; one
+Godot executable contains at most one HCSR version and keeps the normal Godot
+executable name. `none` keeps the raw CPU-frame receiver without an HTML engine.
 
 The HCSR integration supports x86_64 and ARM64 builds on Windows, Linux, and
 macOS, plus Android ARM64 and x86_64. A Windows editor can be built with:
 
 ```text
-python -m SCons platform=windows target=editor module_html_css_renderer=hcsr
+python -m SCons platform=windows target=editor module_html_css_renderer=hcsr_old
 ```
 
-An HCSR-enabled Linux release template must select the provider explicitly:
+The repository build script selects the sibling `HCSR` checkout automatically
+when `hcsr_runtime` is chosen. A direct SCons build must provide that checkout;
+the current runtime editor is currently limited to Windows x86_64 with D3D12:
+
+```text
+python -m SCons platform=windows target=editor module_html_css_renderer=hcsr_runtime module_html_css_hcsr_runtime_root=../HCSR
+```
+
+An old-HCSR-enabled Linux release template can select the provider explicitly:
 
 ```bash
-scons platform=linuxbsd target=template_release production=yes module_html_css_renderer=hcsr -j8
+scons platform=linuxbsd target=template_release production=yes module_html_css_renderer=hcsr_old -j8
 ```
 
-Omitting `module_html_css_renderer=hcsr` intentionally builds the module without
-an external renderer provider and is not a valid packaged-player template for an
-HCSR project.
+Select `module_html_css_renderer=none` explicitly to build the module without an
+external renderer provider. Such a build is not a valid packaged-player template
+for an HCSR project.
 
 For Android, set `ANDROID_HOME` to an SDK containing Godot's pinned NDK
 `29.0.14206865`, set `JAVA_HOME`, and run:
@@ -71,7 +82,7 @@ Add `-ExportBackdrop` to also create a runnable backdrop gallery under
 `modules/html_css/examples/backdrop_2d/build-size-optimized`.
 
 By default, a missing HCSR archive is produced by the matching platform build
-script under `thirdparty/hcsr/tools`. Windows and Android packages can be built
+script under `thirdparty/hcsr_old/tools`. Windows and Android packages can be built
 from Windows. Linux packages must be built on the matching Linux architecture;
 macOS can produce either architecture from a macOS host. Set
 `module_html_css_hcsr_auto_build=no` to require an existing archive, or pass
@@ -130,10 +141,10 @@ the poll remains set for the following engine frame.
 To prepare Unix packages explicitly before invoking SCons, run one of:
 
 ```bash
-bash thirdparty/hcsr/tools/build-unix-native.sh --platform linux --architecture x86_64
-bash thirdparty/hcsr/tools/build-unix-native.sh --platform linux --architecture arm64
-bash thirdparty/hcsr/tools/build-unix-native.sh --platform macos --architecture x86_64
-bash thirdparty/hcsr/tools/build-unix-native.sh --platform macos --architecture arm64
+bash thirdparty/hcsr_old/tools/build-unix-native.sh --platform linux --architecture x86_64
+bash thirdparty/hcsr_old/tools/build-unix-native.sh --platform linux --architecture arm64
+bash thirdparty/hcsr_old/tools/build-unix-native.sh --platform macos --architecture x86_64
+bash thirdparty/hcsr_old/tools/build-unix-native.sh --platform macos --architecture arm64
 ```
 
 Linux ARM64 currently requires an ARM64 Linux build host. macOS packaging
@@ -152,12 +163,12 @@ After packaging, validate the static C ABI, system-font path, and raster-image
 codec without Godot:
 
 ```bash
-bash thirdparty/hcsr/tools/run-linux-static-smoke.sh --architecture x86_64
-bash thirdparty/hcsr/tools/run-linux-static-smoke.sh --architecture arm64
-bash thirdparty/hcsr/tools/run-macos-static-smoke.sh --architecture arm64
-bash thirdparty/hcsr/tools/run-macos-static-smoke.sh --architecture x86_64
-bash thirdparty/hcsr/tools/run-macos-metal-static-smoke.sh --architecture arm64
-bash thirdparty/hcsr/tools/run-macos-metal-static-smoke.sh --architecture x86_64
+bash thirdparty/hcsr_old/tools/run-linux-static-smoke.sh --architecture x86_64
+bash thirdparty/hcsr_old/tools/run-linux-static-smoke.sh --architecture arm64
+bash thirdparty/hcsr_old/tools/run-macos-static-smoke.sh --architecture arm64
+bash thirdparty/hcsr_old/tools/run-macos-static-smoke.sh --architecture x86_64
+bash thirdparty/hcsr_old/tools/run-macos-metal-static-smoke.sh --architecture arm64
+bash thirdparty/hcsr_old/tools/run-macos-metal-static-smoke.sh --architecture x86_64
 ```
 
 The smoke executables link only the public `hcsr_renderer.h`, the combined

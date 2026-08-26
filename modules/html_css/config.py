@@ -5,12 +5,12 @@ def get_opts(platform):
         EnumVariable(
             "module_html_css_renderer",
             "HTML/CSS renderer implementation compiled into the module. 'none' keeps only the raw CPU frame receiver.",
-            "none",
-            allowed_values=("none", "hcsr", "hcsr_runtime"),
+            "hcsr_old",
+            allowed_values=("none", "hcsr_old", "hcsr_runtime"),
         ),
         PathVariable(
             "module_html_css_hcsr_lib_path",
-            "Optional path to a prebuilt static HCSR NativeAOT library. Defaults to the nested thirdparty/hcsr publish output.",
+            "Optional path to a prebuilt old-HCSR NativeAOT library. Defaults to the nested thirdparty/hcsr_old publish output.",
             "",
             PathVariable.PathAccept,
         ),
@@ -21,7 +21,7 @@ def get_opts(platform):
         ),
         PathVariable(
             "module_html_css_hcsr_runtime_root",
-            "HCSR replacement checkout containing hcsr_runtime v6. Required by the mutually exclusive hcsr_runtime integration build.",
+            "Current HCSR checkout containing hcsr_runtime. Required by the mutually exclusive hcsr_runtime integration build.",
             "",
             PathVariable.PathAccept,
         ),

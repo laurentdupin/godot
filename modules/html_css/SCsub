@@ -18,18 +18,18 @@ _html_css_renderer = env["module_html_css_renderer"]
 # include backend headers when HCSR is selected, so configuring only the
 # backend-specific source block leaves those objects with an incomplete build
 # environment on clean builds.
-if _html_css_renderer == "hcsr":
+if _html_css_renderer == "hcsr_old":
     env_html_css.Append(CPPDEFINES=["HTML_CSS_USE_HCSR"])
     if env["tests"]:
         env_html_css.Append(CPPDEFINES=["HTML_CSS_HCSR_TESTS_ENABLED"])
-    env_html_css.Prepend(CPPPATH=["#thirdparty/hcsr/native/include"])
+    env_html_css.Prepend(CPPPATH=["#thirdparty/hcsr_old/native/include"])
 elif _html_css_renderer == "hcsr_runtime":
     if env["platform"] != "windows" or env["arch"] != "x86_64":
         print("HTML/CSS hcsr_runtime validation currently requires Windows x86_64 and Godot's D3D12 driver.")
         Exit(1)
     runtime_root_option = env["module_html_css_hcsr_runtime_root"]
     if not runtime_root_option:
-        print("module_html_css_hcsr_runtime_root must identify the accepted HCSR replacement checkout.")
+        print("module_html_css_hcsr_runtime_root must identify the current HCSR checkout.")
         Exit(1)
     hcsr_runtime_root = os.path.normpath(runtime_root_option)
     if not os.path.isabs(hcsr_runtime_root):
@@ -61,23 +61,7 @@ elif _html_css_renderer == "hcsr_runtime":
     runtime_source_directories = [
         os.path.join(hcsr_runtime_root, "native", "codecs"),
         os.path.join(hcsr_runtime_root, "native", "include"),
-    ]
-    runtime_project_names = [
-        "Renderer.Authoring",
-        "Renderer.ComputedStyleWorld",
-        "Renderer.DocumentCompiler",
-        "Renderer.FrameScheduler",
-        "Renderer.LayoutWorld",
-        "Renderer.Presentation.D3D12",
-        "Renderer.PresentationNativeBridge",
-        "Renderer.PresentationWorld",
-        "Renderer.RuntimeSession",
-        "Renderer.SceneWorld",
-        "Renderer.StyleWorld",
-    ]
-    runtime_source_directories += [
-        os.path.join(hcsr_runtime_root, "src", project_name)
-        for project_name in runtime_project_names
+        os.path.join(hcsr_runtime_root, "src"),
     ]
     runtime_input_extensions = (".c", ".cpp", ".cs", ".csproj", ".def", ".h", ".props", ".targets")
     runtime_input_files = []
@@ -155,7 +139,7 @@ def _html_css_hcsr_static_library_path():
         return _html_css_resolve_repo_file(
             os.path.join(
                 "thirdparty",
-                "hcsr",
+                "hcsr_old",
                 "src",
                 "Renderer.NativeBridge",
                 "bin",
@@ -171,7 +155,7 @@ def _html_css_hcsr_static_library_path():
         return _html_css_resolve_repo_file(
             os.path.join(
                 "thirdparty",
-                "hcsr",
+                "hcsr_old",
                 "src",
                 "Renderer.NativeBridge",
                 "bin",
@@ -187,7 +171,7 @@ def _html_css_hcsr_static_library_path():
         return _html_css_resolve_repo_file(
             os.path.join(
                 "thirdparty",
-                "hcsr",
+                "hcsr_old",
                 "src",
                 "Renderer.NativeBridge",
                 "bin",
@@ -202,7 +186,7 @@ def _html_css_hcsr_static_library_path():
     return _html_css_resolve_repo_file(
         os.path.join(
             "thirdparty",
-            "hcsr",
+            "hcsr_old",
             "src",
             "Renderer.NativeBridge",
             "bin",
@@ -225,7 +209,7 @@ def _html_css_ensure_hcsr_static_library():
         Exit(1)
 
     library_path = _html_css_hcsr_static_library_path()
-    hcsr_root = _html_css_resolve_repo_path(os.path.join("thirdparty", "hcsr"))
+    hcsr_root = _html_css_resolve_repo_path(os.path.join("thirdparty", "hcsr_old"))
     initializer_name = "hcsr_renderer_android_initializer.o" if env["platform"] == "android" else "hcsr_renderer_initializer.o"
     initializer_path = os.path.join(os.path.dirname(library_path), initializer_name)
     required_package_files = [library_path]
@@ -254,7 +238,7 @@ def _html_css_ensure_hcsr_static_library():
         Exit(1)
 
     if env["platform"] == "android":
-        build_script = _html_css_resolve_repo_file(os.path.join("thirdparty", "hcsr", "tools", "build-android-native.ps1"))
+        build_script = _html_css_resolve_repo_file(os.path.join("thirdparty", "hcsr_old", "tools", "build-android-native.ps1"))
         android_abi = "arm64-v8a" if env["arch"] == "arm64" else "x86_64"
         print("HTML/CSS HCSR Android archive is missing or stale; building nested %s NativeAOT bridge:" % android_abi)
         print("  " + build_script)
@@ -276,7 +260,7 @@ def _html_css_ensure_hcsr_static_library():
             cwd=hcsr_root,
         )
     elif env["platform"] in ("linuxbsd", "macos"):
-        build_script = _html_css_resolve_repo_file(os.path.join("thirdparty", "hcsr", "tools", "build-unix-native.sh"))
+        build_script = _html_css_resolve_repo_file(os.path.join("thirdparty", "hcsr_old", "tools", "build-unix-native.sh"))
         target_platform = "linux" if env["platform"] == "linuxbsd" else "macos"
         target_architecture = "arm64" if env["arch"] == "arm64" else "x86_64"
         print("HTML/CSS HCSR %s archive is missing or stale; building nested %s NativeAOT bridge:" % (target_platform, target_architecture))
@@ -286,14 +270,33 @@ def _html_css_ensure_hcsr_static_library():
             cwd=hcsr_root,
         )
     else:
-        build_script = _html_css_resolve_repo_file(os.path.join("thirdparty", "hcsr", "tools", "build-windows-native.ps1"))
+        build_script = _html_css_resolve_repo_file(os.path.join("thirdparty", "hcsr_old", "tools", "build-windows-native.ps1"))
+        codec_build_script = _html_css_resolve_repo_file(os.path.join("thirdparty", "hcsr_old", "tools", "build-native-codecs.ps1"))
         target_architecture = "arm64" if env["arch"] == "arm64" else "x86_64"
         print("HTML/CSS HCSR Windows archive is missing or stale; building nested %s NativeAOT bridge:" % target_architecture)
         print("  " + build_script)
+        # The frozen old build expects the host codec DLL to exist while it
+        # publishes the final static archive, even though that DLL is removed
+        # from the package afterward. Prepare that input without modifying the
+        # pinned old source tree.
         completed = subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", build_script, "-Architecture", target_architecture],
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                codec_build_script,
+                "-RepositoryRoot",
+                hcsr_root,
+            ],
             cwd=hcsr_root,
         )
+        if completed.returncode == 0:
+            completed = subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", build_script, "-Architecture", target_architecture],
+                cwd=hcsr_root,
+            )
     if completed.returncode != 0 or not os.path.isfile(library_path):
         print("HTML/CSS HCSR NativeAOT publish failed or did not produce its combined static library.")
         print("  " + library_path)
@@ -314,7 +317,7 @@ env_html_css.add_source_files(env.modules_sources, "bridge/html_asset_provider.c
 env_html_css.add_source_files(env.modules_sources, "bridge/html_source_validator.cpp")
 env_html_css.add_source_files(env.modules_sources, "backend/html_surface_cpu_backend.cpp")
 env_html_css.add_source_files(env.modules_sources, "backend/html_surface_unsupported_backend.cpp")
-if _html_css_renderer == "hcsr":
+if _html_css_renderer == "hcsr_old":
     _html_css_ensure_hcsr_static_library()
     hcsr_library_path = _html_css_hcsr_static_library_path()
     print("HTML/CSS HCSR static library: " + hcsr_library_path)

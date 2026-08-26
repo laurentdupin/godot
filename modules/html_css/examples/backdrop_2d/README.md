@@ -18,7 +18,7 @@ compositor limit with these filters:
 Build Godot with the statically linked HCSR provider, then run the scene:
 
 ```powershell
-python -m SCons platform=windows target=editor dev_build=yes module_html_css_renderer=hcsr angle=no -j1
+python -m SCons platform=windows target=editor dev_build=yes module_html_css_renderer=hcsr_old angle=no -j1
 .\bin\godot.windows.editor.dev.x86_64.exe --path modules\html_css\examples\backdrop_2d res://main.tscn
 ```
 
