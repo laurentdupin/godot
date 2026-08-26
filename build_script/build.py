@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import platform as host_platform
+import re
 import shlex
 import subprocess
 import sys
@@ -38,6 +39,7 @@ class BuildSettings:
     html_css_renderer: str = "hcsr_old"
     angle: bool = False
     developer_build: bool = False
+    suffix: str = ""
     jobs: int = 1
     cache_limit_gib: int = 20
 
@@ -98,6 +100,8 @@ def load_settings() -> BuildSettings:
         settings.html_css_renderer = defaults.html_css_renderer
     settings.angle = bool(settings.angle)
     settings.developer_build = bool(settings.developer_build)
+    if not isinstance(settings.suffix, str) or not is_valid_suffix(settings.suffix):
+        settings.suffix = defaults.suffix
     if not isinstance(settings.jobs, int) or isinstance(settings.jobs, bool):
         settings.jobs = defaults.jobs
     settings.jobs = max(1, min(settings.jobs, 256))
@@ -200,6 +204,22 @@ def choose_integer(label: str, current: int, minimum: int, maximum: int) -> int:
     return value
 
 
+def is_valid_suffix(value: str) -> bool:
+    return not value or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", value) is not None
+
+
+def choose_suffix(current: str) -> str:
+    response = input(f"Output suffix [{current or 'none'}]: ").strip()
+    if not response:
+        return current
+    if response.lower() in ("none", "clear"):
+        return ""
+    if not is_valid_suffix(response):
+        print("Suffixes may contain only ASCII letters, digits, underscores, and hyphens; keeping the current value.")
+        return current
+    return response
+
+
 def display_settings(settings: BuildSettings, godot_platform: str) -> None:
     print("\nGodot desktop build settings")
     print(f"  Host platform:  {godot_platform}")
@@ -210,6 +230,7 @@ def display_settings(settings: BuildSettings, godot_platform: str) -> None:
     if godot_platform == "windows":
         print(f"  ANGLE:          {'included' if settings.angle else 'excluded'}")
     print(f"  Developer build:{' yes' if settings.developer_build else ' no'}")
+    print(f"  Output suffix:  {settings.suffix or 'none'}")
     print(f"  Parallel jobs:  {settings.jobs}")
     cache_limit = "unlimited" if settings.cache_limit_gib == 0 else f"{settings.cache_limit_gib} GiB"
     print(f"  SCons cache:    {cache_limit}")
@@ -227,6 +248,7 @@ def configure_interactively(settings: BuildSettings, godot_platform: str) -> Bui
         print("  6. Toggle developer build")
         print("  7. Change parallel jobs")
         print("  8. Change SCons cache limit")
+        print("  9. Change output suffix")
         print("  R. Reset defaults")
         print("  B. Save and build")
         print("  Q. Quit")
@@ -256,6 +278,8 @@ def configure_interactively(settings: BuildSettings, godot_platform: str) -> Bui
             settings.cache_limit_gib = choose_integer(
                 "Cache limit in GiB (0 is unlimited)", settings.cache_limit_gib, 0, 1024
             )
+        elif response == "9":
+            settings.suffix = choose_suffix(settings.suffix)
         elif response == "r":
             settings = default_settings()
         elif response == "b":
@@ -267,6 +291,8 @@ def configure_interactively(settings: BuildSettings, godot_platform: str) -> Bui
 
 
 def validate_settings(settings: BuildSettings, godot_platform: str) -> None:
+    if not is_valid_suffix(settings.suffix):
+        raise RuntimeError("The output suffix may contain only ASCII letters, digits, underscores, and hyphens.")
     if settings.html_css_renderer == "hcsr_runtime" and (
         godot_platform != "windows" or settings.architecture != "x86_64"
     ):
@@ -299,6 +325,8 @@ def build_command(
         f"cache_limit={settings.cache_limit_gib}",
         f"-j{settings.jobs}",
     ]
+    if settings.suffix:
+        command.append(f"extra_suffix={settings.suffix}")
     if clean:
         command.append("--clean")
     if godot_platform == "macos" and settings.target == "editor":
@@ -342,7 +370,7 @@ def force_macos_hcsr_relink(settings: BuildSettings, godot_platform: str) -> Non
         publish_directory / "hcsr_renderer_combined.a",
         publish_directory / "hcsr_renderer_initializer.o",
     )
-    editor_suffix = ".mono" if settings.mono else ""
+    editor_suffix = (f".{settings.suffix}" if settings.suffix else "") + (".mono" if settings.mono else "")
     editor_binary = (
         GODOT_ROOT
         / "bin"
@@ -366,7 +394,7 @@ def build_managed_editor_assemblies(settings: BuildSettings, godot_platform: str
     if not settings.mono or settings.target != "editor":
         return
 
-    editor_suffix = ".mono"
+    editor_suffix = (f".{settings.suffix}" if settings.suffix else "") + ".mono"
     if godot_platform == "windows":
         editor_candidates = (
             GODOT_ROOT
@@ -375,7 +403,14 @@ def build_managed_editor_assemblies(settings: BuildSettings, godot_platform: str
             GODOT_ROOT / "bin" / f"godot.windows.editor.{settings.architecture}{editor_suffix}.exe",
         )
     elif godot_platform == "macos":
+        bundle_name = (
+            "godot_macos_editor"
+            + ("_dev" if settings.developer_build else "")
+            + (f"_{settings.suffix}" if settings.suffix else "")
+            + "_mono.app"
+        )
         editor_candidates = (
+            GODOT_ROOT / "bin" / bundle_name / "Contents" / "MacOS" / "Godot",
             GODOT_ROOT / "bin" / "Godot.app" / "Contents" / "MacOS" / "Godot",
             GODOT_ROOT / "bin" / f"godot.macos.editor.{settings.architecture}{editor_suffix}",
         )
@@ -452,6 +487,10 @@ def parse_arguments() -> tuple[argparse.Namespace, list[str]]:
         action="store_true",
         help="Print the final SCons command without running it.",
     )
+    parser.add_argument(
+        "--suffix",
+        help="Set or clear the persisted custom output suffix (for example, --suffix current or --suffix '').",
+    )
     arguments, extra_arguments = parser.parse_known_args()
     if extra_arguments and extra_arguments[0] == "--":
         extra_arguments = extra_arguments[1:]
@@ -480,6 +519,8 @@ def run() -> int:
     if arguments.reset_settings and SETTINGS_PATH.exists():
         SETTINGS_PATH.unlink()
     settings = load_settings()
+    if arguments.suffix is not None:
+        settings.suffix = arguments.suffix
 
     if not arguments.non_interactive and sys.stdin.isatty():
         configured_settings = configure_interactively(settings, godot_platform)
