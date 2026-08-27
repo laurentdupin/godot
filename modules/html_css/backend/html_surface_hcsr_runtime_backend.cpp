@@ -21,7 +21,9 @@ enum RuntimeMutationKind {
 };
 
 static constexpr int RUNTIME_INTERACTIVE_STEP_SLICE_UNITS = 65536;
-static constexpr int RUNTIME_PRESENTER_STEP_SLICE_UNITS = 4096;
+static constexpr int RUNTIME_PRESENTER_STEP_SLICE_UNITS = 262144;
+static constexpr int RUNTIME_INTERACTIVE_PRESENTER_MAX_SLICES = 16;
+static constexpr int RUNTIME_PRESENTER_STANDBY_STEP_UNITS = 262144;
 static constexpr int RUNTIME_SEMANTIC_STEP_SLICE_UNITS = 4096;
 static constexpr uint64_t RUNTIME_SEMANTIC_FRAME_BUDGET_MICROSECONDS = 8000;
 static constexpr uint64_t RUNTIME_INTERACTIVE_FRAME_BUDGET_MICROSECONDS = 16667;
@@ -95,16 +97,23 @@ static Vector<RuntimePlatformFontSource> runtime_discover_platform_fonts() {
 		"Times New Roman", "serif", "ui-serif",
 		"Consolas", "monospace", "ui-monospace",
 	};
+	static const int32_t weights[] = { 400, 700 };
 	Vector<RuntimePlatformFontSource> result;
 	for (const char *family : families) {
-		String reference;
-		if (!HTMLGodotAssetProvider::resolve_platform_font(family, 400, false, reference)) {
-			continue;
+		for (int32_t weight : weights) {
+			for (bool italic : { false, true }) {
+				String reference;
+				if (!HTMLGodotAssetProvider::resolve_platform_font(family, weight, italic, reference)) {
+					continue;
+				}
+				RuntimePlatformFontSource source;
+				source.family = family;
+				source.reference = reference;
+				source.weight = weight;
+				source.italic = italic;
+				result.push_back(source);
+			}
 		}
-		RuntimePlatformFontSource source;
-		source.family = family;
-		source.reference = reference;
-		result.push_back(source);
 	}
 	return result;
 }
@@ -119,6 +128,11 @@ struct RuntimePublicationLineage {
 	uint64_t interactive_submission_id = 0;
 	uint64_t interactive_frame_id = 0;
 	uint64_t interaction_input_id = 0;
+	uint64_t interaction_frame_id = 0;
+	uint64_t interaction_configuration_id = 0;
+	uint64_t scroll_input_id = 0;
+	uint64_t scroll_frame_id = 0;
+	uint64_t scroll_configuration_id = 0;
 	bool has_interaction_state = false;
 };
 
@@ -241,6 +255,7 @@ struct RuntimePresentationBinding {
 	Vector<RuntimeExternalSurfaceSlot> slots;
 	int32_t active_slot = -1;
 	bool presenter_pending = false;
+	bool standby_pending = false;
 	bool pool_stopped = false;
 	bool presenter_shutdown_started = false;
 	RuntimePublicationLineage pending_lineage;
@@ -320,6 +335,7 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	bool interactive_pending = false;
 	bool activation_pending = false;
 	bool activation_callback_scheduled = false;
+	bool activation_deferred_to_next_process_frame = false;
 	bool cutoff_scheduled = false;
 	bool presentation_changed = false;
 	bool closing = false;
@@ -331,8 +347,10 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	uint64_t queued_generation = 0;
 	uint64_t active_generation = 0;
 	uint64_t active_interaction_input_id = 0;
+	uint64_t active_interaction_configuration_id = 0;
 	bool active_has_interaction_state = false;
 	uint64_t active_scroll_input_id = 0;
+	uint64_t active_scroll_configuration_id = 0;
 	uint64_t next_host_input_id = 1;
 	Vector<RuntimeResourceToken> completed_resource_tokens;
 	uint64_t next_host_frame_id = 1;
@@ -357,6 +375,8 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	HTMLFrameMetadata frame_metadata;
 	hcsr_runtime_document_t *compiled_document = nullptr;
 	hcsr_runtime_session_t *session = nullptr;
+	hcsr_runtime_publication_t *active_publication = nullptr;
+	hcsr_runtime_publication_t *staged_publication = nullptr;
 	RuntimePresentationBinding *active_binding = nullptr;
 	RuntimePresentationBinding *successor_binding = nullptr;
 	RuntimePresentationBinding *retiring_binding = nullptr;
@@ -593,6 +613,12 @@ static bool runtime_schedule_frame_cutoff(
 	const uint64_t process_frame = Engine::get_singleton()->get_process_frames();
 	{
 		MutexLock lock(p_state->mutex);
+		if (p_state->activation_deferred_to_next_process_frame) {
+			if (process_frame == p_state->last_activation_process_frame) {
+				return true;
+			}
+			p_state->activation_deferred_to_next_process_frame = false;
+		}
 		if (p_state->cutoff_scheduled) {
 			p_state->cutoff_process_frame = MAX(p_state->cutoff_process_frame, process_frame);
 			return true;
@@ -610,7 +636,8 @@ static RuntimePublicationLineage runtime_lineage_from_publication(
 		uint64_t p_request_serial,
 		bool p_configuration_only,
 		const hcsr_runtime_publication_info_t &p_info,
-		const hcsr_runtime_interaction_publication_info_t &p_interaction) {
+		const hcsr_runtime_interaction_publication_info_t &p_interaction,
+		const hcsr_runtime_scroll_publication_info_t &p_scroll) {
 	RuntimePublicationLineage lineage;
 	lineage.valid = true;
 	lineage.configuration_only = p_configuration_only;
@@ -621,6 +648,11 @@ static RuntimePublicationLineage runtime_lineage_from_publication(
 	lineage.interactive_submission_id = p_info.interactive_submission_id;
 	lineage.interactive_frame_id = p_info.interactive_frame_id;
 	lineage.interaction_input_id = p_interaction.input_id;
+	lineage.interaction_frame_id = p_interaction.frame_id;
+	lineage.interaction_configuration_id = p_interaction.configuration_id;
+	lineage.scroll_input_id = p_scroll.input_id;
+	lineage.scroll_frame_id = p_scroll.frame_id;
+	lineage.scroll_configuration_id = p_scroll.configuration_id;
 	lineage.has_interaction_state = p_interaction.has_interaction_world != 0
 			&& p_interaction.has_interaction_state != 0;
 	return lineage;
@@ -925,6 +957,7 @@ static bool runtime_submit_mutations(
 		const Vector<RuntimeMutation> &p_mutations,
 		uint64_t p_request_process_frame,
 		uint64_t p_request_serial,
+		bool p_interactive,
 		int &r_consumed_count) {
 	r_consumed_count = 0;
 	if (p_mutations.is_empty()) {
@@ -986,27 +1019,29 @@ static bool runtime_submit_mutations(
 	hcsr_runtime_submission_info_t submission;
 	initialize_abi(&submission, sizeof(submission));
 	const uint64_t now = hcsr_runtime_get_monotonic_timestamp_microseconds();
-	const uint64_t cutoff_timestamp = now + 16667;
+	const uint64_t cutoff_timestamp = p_interactive ? now + 16667 : 0;
 	const hcsr_runtime_status_t status = hcsr_runtime_session_submit_mutation_with_priority(
 			p_state->session,
 			journal,
-			HCSR_RUNTIME_MUTATION_PRIORITY_INTERACTIVE,
-			MAX((uint64_t)1, p_request_process_frame),
+			p_interactive ? HCSR_RUNTIME_MUTATION_PRIORITY_INTERACTIVE : HCSR_RUNTIME_MUTATION_PRIORITY_NORMAL,
+			p_interactive ? MAX((uint64_t)1, p_request_process_frame) : 0,
 			cutoff_timestamp,
 			&submission);
 	if (status != HCSR_RUNTIME_OK) {
-		runtime_set_terminal(p_state, "HCSR replacement rejected the Godot interactive mutation journal.");
+		runtime_set_terminal(p_state, "HCSR replacement rejected the Godot mutation journal submission.");
 		return false;
 	}
 	p_state->semantic_pending = true;
 	p_state->pending_work = true;
-	p_state->interactive_pending = true;
 	p_state->submitted_request_serial = p_request_serial;
 	p_state->submitted_request_is_configuration_only = false;
-	p_state->newest_requested_submission_id = submission.submission_id;
-	p_state->newest_requested_author_revision = submission.target_author_revision;
-	p_state->newest_requested_frame_id = submission.frame_id;
-	p_state->newest_requested_cutoff_timestamp_microseconds = cutoff_timestamp;
+	if (p_interactive) {
+		p_state->interactive_pending = true;
+		p_state->newest_requested_submission_id = submission.submission_id;
+		p_state->newest_requested_author_revision = submission.target_author_revision;
+		p_state->newest_requested_frame_id = submission.frame_id;
+		p_state->newest_requested_cutoff_timestamp_microseconds = cutoff_timestamp;
+	}
 	return true;
 }
 
@@ -1015,14 +1050,68 @@ static hcsr_runtime_status_t runtime_step_presenter_sliced(
 		uint64_t p_cutoff_timestamp_microseconds,
 		hcsr_runtime_step_info_t *r_step) {
 	hcsr_runtime_status_t status = HCSR_RUNTIME_PENDING;
+	int slice_count = 0;
 	do {
 		initialize_abi(r_step, sizeof(*r_step));
 		status = hcsr_runtime_d3d12_presenter_step(
 				p_presenter, RUNTIME_PRESENTER_STEP_SLICE_UNITS, r_step);
+		slice_count++;
 	} while (status == HCSR_RUNTIME_PENDING
 			&& p_cutoff_timestamp_microseconds != 0
-			&& hcsr_runtime_get_monotonic_timestamp_microseconds() < p_cutoff_timestamp_microseconds);
+			&& slice_count < RUNTIME_INTERACTIVE_PRESENTER_MAX_SLICES);
 	return status;
+}
+
+static String runtime_presenter_diagnostics(RuntimePresentationBinding *p_binding) {
+	if (p_binding == nullptr) {
+		return "presenter=none";
+	}
+	hcsr_runtime_d3d12_presenter_diagnostics_t diagnostics;
+	initialize_abi(&diagnostics, sizeof(diagnostics));
+	if (hcsr_runtime_d3d12_presenter_query_diagnostics(p_binding->presenter, &diagnostics) != HCSR_RUNTIME_OK) {
+		return "presenter-diagnostics=unavailable";
+	}
+	return vformat(
+			"phase=%d requested=%d published=%d desired-plan=%d published-plan=%d surfaces=%d standby=%d candidates=%d gpu-pending=%d pins=%d handles=%d busy=%d",
+			diagnostics.phase,
+			diagnostics.requested_runtime_generation,
+			diagnostics.published_runtime_generation,
+			diagnostics.desired_plan_id,
+			diagnostics.published_plan_id,
+			diagnostics.surface_count,
+			diagnostics.ready_standby_count,
+			diagnostics.candidate_count,
+			diagnostics.gpu_pending_count,
+			diagnostics.total_pin_count,
+			diagnostics.active_surface_handle_count,
+			diagnostics.busy_rejection_count);
+}
+
+static bool runtime_service_presenter_standby(RuntimePresentationBinding *p_binding) {
+	if (p_binding == nullptr || !p_binding->standby_pending || p_binding->presenter_pending) {
+		return true;
+	}
+	hcsr_runtime_d3d12_presenter_diagnostics_t diagnostics;
+	initialize_abi(&diagnostics, sizeof(diagnostics));
+	if (hcsr_runtime_d3d12_presenter_query_diagnostics(p_binding->presenter, &diagnostics) != HCSR_RUNTIME_OK) {
+		return false;
+	}
+	if (diagnostics.ready_standby_count != 0) {
+		p_binding->standby_pending = false;
+		return true;
+	}
+	hcsr_runtime_step_info_t step;
+	initialize_abi(&step, sizeof(step));
+	if (hcsr_runtime_d3d12_presenter_step(
+			p_binding->presenter, RUNTIME_PRESENTER_STANDBY_STEP_UNITS, &step) != HCSR_RUNTIME_OK) {
+		return false;
+	}
+	initialize_abi(&diagnostics, sizeof(diagnostics));
+	if (hcsr_runtime_d3d12_presenter_query_diagnostics(p_binding->presenter, &diagnostics) != HCSR_RUNTIME_OK) {
+		return false;
+	}
+	p_binding->standby_pending = diagnostics.ready_standby_count == 0;
+	return true;
 }
 
 static RuntimeExternalSurfaceSlot *runtime_find_external_slot(
@@ -1049,9 +1138,8 @@ static bool runtime_release_completed_external_slots(
 			return false;
 		}
 		const bool current = bool(status.get("current", false));
-		const bool retired = bool(status.get("retired", false));
-		const bool release_complete = bool(status.get("release_complete", false));
-		if (!current && retired && release_complete) {
+		const bool available = bool(status.get("available", false));
+		if (!current && available) {
 			hcsr_runtime_d3d12_surface_release(slot.generation_surface);
 			slot.generation_surface = nullptr;
 		}
@@ -1329,6 +1417,7 @@ static bool runtime_activate_surface(
 		p_state->frame_metadata.host_frame_number = p_state->active_request_process_frame;
 		}
 	}
+	p_binding->standby_pending = true;
 	return true;
 }
 
@@ -1465,9 +1554,43 @@ static bool runtime_step_active(
 	if (p_state->terminal) {
 		return false;
 	}
+	if (!p_state->semantic_pending && !p_state->interactive_pending && !p_state->activation_pending) {
+		if (!runtime_service_presenter_standby(p_state->active_binding)) {
+			runtime_set_terminal(p_state, "HCSR replacement could not prepare its primary D3D12 standby surface.");
+			return false;
+		}
+		for (RuntimeOutputState *output : p_state->outputs) {
+			if (!runtime_service_presenter_standby(output->active_binding)) {
+				runtime_set_terminal(p_state, "HCSR replacement could not prepare a secondary D3D12 standby surface.");
+				return false;
+			}
+		}
+	}
 	int completed_resource_count = 0;
 	if (!runtime_complete_pending_resources(p_state, completed_resource_count)) {
 		return false;
+	}
+	if (!p_state->semantic_pending
+			&& !p_state->interactive_pending
+			&& !p_state->activation_pending) {
+		// Standby preparation and retirement are presentation work. Calling the
+		// semantic session with no admitted request can report Pending and invent
+		// semantic work that indefinitely blocks a queued configuration.
+		MutexLock lock(p_state->mutex);
+		p_state->pending_work = (p_state->active_binding != nullptr
+					&& p_state->active_binding->standby_pending)
+				|| (p_state->successor_binding != nullptr
+						&& p_state->successor_binding->standby_pending)
+				|| p_state->retiring_binding != nullptr
+				|| !p_state->retiring_outputs.is_empty();
+		for (RuntimeOutputState *output : p_state->outputs) {
+			p_state->pending_work = p_state->pending_work
+					|| (output->active_binding != nullptr
+							&& output->active_binding->standby_pending)
+					|| (output->successor_binding != nullptr
+							&& output->successor_binding->standby_pending);
+		}
+		return true;
 	}
 	hcsr_runtime_step_info_t step;
 	initialize_abi(&step, sizeof(step));
@@ -1589,6 +1712,14 @@ static bool runtime_step_active(
 				runtime_set_terminal(p_state, "HCSR replacement publication lost its interaction input authority.");
 				return false;
 			}
+			hcsr_runtime_scroll_publication_info_t scroll_info;
+			initialize_abi(&scroll_info, sizeof(scroll_info));
+			if (hcsr_runtime_publication_get_scroll_info(
+					publication, publication_info.generation, &scroll_info) != HCSR_RUNTIME_OK) {
+				hcsr_runtime_publication_release(p_state->session, publication);
+				runtime_set_terminal(p_state, "HCSR replacement publication lost its scroll input authority.");
+				return false;
+			}
 			hcsr_runtime_output_info_t output_info;
 			initialize_abi(&output_info, sizeof(output_info));
 			const hcsr_runtime_status_t output_status = hcsr_runtime_publication_get_output(
@@ -1658,7 +1789,7 @@ static bool runtime_step_active(
 						&& output_info.pixel_height == p_state->active_pixel_height) {
 					submit_status = HCSR_RUNTIME_OK;
 					target_binding->pending_lineage = runtime_lineage_from_publication(
-							p_state->submitted_request_serial, true, publication_info, interaction_info);
+							p_state->submitted_request_serial, true, publication_info, interaction_info, scroll_info);
 					p_state->staged_binding = target_binding;
 					p_state->staged_lineage = target_binding->pending_lineage;
 					retained_primary_surface = true;
@@ -1683,7 +1814,8 @@ static bool runtime_step_active(
 						p_state->submitted_request_serial,
 						p_state->submitted_request_is_configuration_only,
 						publication_info,
-						interaction_info);
+						interaction_info,
+						scroll_info);
 				p_state->queued_generation = publication_info.generation;
 				(void)submitted_to_successor;
 				target_binding->pending_lineage = lineage;
@@ -1761,8 +1893,15 @@ static bool runtime_step_active(
 					output->activation_ready = retained_secondary_surface;
 				}
 				runtime_replace_output_topology(p_state->staged_topology, p_state->submitted_topology);
+				if (p_state->staged_publication != nullptr) {
+					hcsr_runtime_publication_release(p_state->session, p_state->staged_publication);
+				}
+				p_state->staged_publication = publication;
+				publication = nullptr;
 			}
-			hcsr_runtime_publication_release(p_state->session, publication);
+			if (publication != nullptr) {
+				hcsr_runtime_publication_release(p_state->session, publication);
+			}
 		}
 	}
 	if (p_state->active_binding->presenter_pending) {
@@ -1772,11 +1911,11 @@ static bool runtime_step_active(
 			: 0;
 		status = runtime_step_presenter_sliced(
 				p_state->active_binding->presenter, presenter_cutoff, &step);
-		if (status == HCSR_RUNTIME_PENDING && presenter_cutoff != 0
-				&& hcsr_runtime_get_monotonic_timestamp_microseconds() >= presenter_cutoff) {
+		if (status == HCSR_RUNTIME_PENDING && presenter_cutoff != 0) {
 			runtime_set_terminal(p_state, vformat(
-					"HCSR replacement missed the mandatory next-frame primary GPU presentation cutoff (semantic work units %d).",
-					interactive_work_units));
+					"HCSR replacement exhausted the mandatory next-frame primary GPU presentation work budget (semantic work units %d; %s).",
+					interactive_work_units,
+					runtime_presenter_diagnostics(p_state->active_binding)));
 			return false;
 		}
 		if (status != HCSR_RUNTIME_OK && status != HCSR_RUNTIME_PENDING) {
@@ -1797,9 +1936,8 @@ static bool runtime_step_active(
 			: 0;
 		status = runtime_step_presenter_sliced(
 				p_state->successor_binding->presenter, presenter_cutoff, &step);
-		if (status == HCSR_RUNTIME_PENDING && presenter_cutoff != 0
-				&& hcsr_runtime_get_monotonic_timestamp_microseconds() >= presenter_cutoff) {
-			runtime_set_terminal(p_state, "HCSR replacement missed the mandatory next-frame successor GPU presentation cutoff.");
+		if (status == HCSR_RUNTIME_PENDING && presenter_cutoff != 0) {
+			runtime_set_terminal(p_state, "HCSR replacement exhausted the mandatory next-frame successor GPU presentation work budget.");
 			return false;
 		}
 		if (status != HCSR_RUNTIME_OK && status != HCSR_RUNTIME_PENDING) {
@@ -1823,9 +1961,8 @@ static bool runtime_step_active(
 				== p_state->newest_requested_submission_id
 			? p_state->newest_requested_cutoff_timestamp_microseconds : 0;
 		status = runtime_step_presenter_sliced(binding->presenter, presenter_cutoff, &step);
-		if (status == HCSR_RUNTIME_PENDING && presenter_cutoff != 0
-				&& hcsr_runtime_get_monotonic_timestamp_microseconds() >= presenter_cutoff) {
-			runtime_set_terminal(p_state, "HCSR replacement missed the mandatory next-frame secondary GPU presentation cutoff.");
+		if (status == HCSR_RUNTIME_PENDING && presenter_cutoff != 0) {
+			runtime_set_terminal(p_state, "HCSR replacement exhausted the mandatory next-frame secondary GPU presentation work budget.");
 			return false;
 		}
 		if (status != HCSR_RUNTIME_OK && status != HCSR_RUNTIME_PENDING) {
@@ -1896,7 +2033,7 @@ static bool runtime_step_pointer_input(HTMLSurfaceHCSRRuntimeBackend::RuntimeSta
 		hcsr_runtime_pointer_input_t input;
 		initialize_abi(&input, sizeof(input));
 		input.source_runtime_generation = p_state->active_generation;
-		input.configuration_id = p_state->active_configuration_id;
+		input.configuration_id = p_state->active_interaction_configuration_id;
 		input.source_input_id = p_state->active_interaction_input_id;
 		input.input_id = p_state->next_host_input_id++;
 		input.frame_id = p_state->next_host_frame_id++;
@@ -1986,7 +2123,7 @@ static bool runtime_submit_one_scroll_input(HTMLSurfaceHCSRRuntimeBackend::Runti
 	hcsr_runtime_scroll_input_t input;
 	initialize_abi(&input, sizeof(input));
 	input.source_runtime_generation = p_state->active_generation;
-	input.configuration_id = p_state->active_configuration_id;
+	input.configuration_id = p_state->active_scroll_configuration_id;
 	input.source_input_id = p_state->active_scroll_input_id;
 	input.input_id = p_state->next_host_input_id++;
 	input.frame_id = p_state->next_host_frame_id++;
@@ -2015,6 +2152,16 @@ static bool runtime_submit_one_scroll_input(HTMLSurfaceHCSRRuntimeBackend::Runti
 
 static bool runtime_step_shutdown(
 		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
+	if (p_state->session != nullptr) {
+		if (p_state->staged_publication != nullptr) {
+			hcsr_runtime_publication_release(p_state->session, p_state->staged_publication);
+			p_state->staged_publication = nullptr;
+		}
+		if (p_state->active_publication != nullptr) {
+			hcsr_runtime_publication_release(p_state->session, p_state->active_publication);
+			p_state->active_publication = nullptr;
+		}
+	}
 	runtime_release_output_topology(p_state->staged_topology);
 	runtime_release_output_topology(p_state->submitted_topology);
 	runtime_release_output_topology(p_state->candidate_topology);
@@ -2129,7 +2276,9 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 	uint64_t request_serial = 0;
 	bool document_dirty = false;
 	bool configuration_dirty = false;
+	bool mutation_has_input_boundary = false;
 	bool closing = false;
+	const uint64_t current_process_frame = Engine::get_singleton()->get_process_frames();
 	auto finish_scheduled_work = [runtime]() {
 		MutexLock lock(runtime->mutex);
 		runtime->work_scheduled = false;
@@ -2139,9 +2288,14 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 		closing = runtime->closing;
 		if (!closing && !runtime->terminal) {
 			document_dirty = runtime->document_dirty;
-			configuration_dirty = runtime->configuration_dirty;
+			configuration_dirty = runtime->configuration_dirty
+					&& !runtime->semantic_pending
+					&& !runtime->interactive_pending
+					&& !runtime->activation_pending;
 			runtime->document_dirty = false;
-			runtime->configuration_dirty = false;
+			if (configuration_dirty) {
+				runtime->configuration_dirty = false;
+			}
 			html = runtime->html;
 			css = runtime->css;
 			stylesheets = runtime->stylesheets;
@@ -2149,9 +2303,14 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 			// revision at MutationBegin. Keep host descriptions queued while a
 			// semantic/resource successor is deriving; otherwise the journal is
 			// stale before SubmitMutation and cannot be retried.
-			if (!runtime->semantic_pending && !runtime->interactive_pending) {
+			const bool input_boundary_ready = !runtime->pointer_requests.is_empty()
+					|| !runtime->scroll_requests.is_empty();
+			const bool mutation_batch_ready = runtime->mutation_request_process_frame < current_process_frame
+					|| input_boundary_ready;
+			if (!runtime->semantic_pending && !runtime->interactive_pending && mutation_batch_ready) {
 				mutations = runtime->mutations;
 				mutation_request_process_frame = runtime->mutation_request_process_frame;
+				mutation_has_input_boundary = input_boundary_ready;
 				runtime->mutations.clear();
 			}
 			request_serial = runtime->request_serial;
@@ -2202,7 +2361,8 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 		mutations.clear();
 	}
 	int consumed_mutation_count = 0;
-	if (!runtime_submit_mutations(runtime, mutations, mutation_request_process_frame, request_serial, consumed_mutation_count)) {
+	if (!runtime_submit_mutations(runtime, mutations, mutation_request_process_frame, request_serial,
+			mutation_has_input_boundary, consumed_mutation_count)) {
 		finish_scheduled_work();
 		return;
 	}
@@ -2216,11 +2376,13 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 		runtime->mutations = remaining;
 		runtime->pending_work = true;
 	}
-	if (!runtime_step_pointer_input(runtime) || !runtime_submit_one_scroll_input(runtime)) {
+	if (!runtime->activation_pending
+			&& (!runtime_step_pointer_input(runtime) || !runtime_submit_one_scroll_input(runtime))) {
 		finish_scheduled_work();
 		return;
 	}
 	bool has_pending_work = false;
+	bool has_standby_work = false;
 	{
 		MutexLock lock(runtime->mutex);
 		has_pending_work = runtime->pending_work
@@ -2229,8 +2391,14 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 				|| !runtime->pointer_requests.is_empty()
 				|| !runtime->scroll_requests.is_empty();
 		runtime->pending_work = has_pending_work;
+		has_standby_work = runtime->active_binding != nullptr
+				&& runtime->active_binding->standby_pending;
+		for (RuntimeOutputState *output : runtime->outputs) {
+			has_standby_work = has_standby_work
+					|| (output->active_binding != nullptr && output->active_binding->standby_pending);
+		}
 	}
-	if (has_pending_work) {
+	if (has_pending_work || has_standby_work) {
 		runtime_step_active(runtime);
 	}
 	finish_scheduled_work();
@@ -2257,6 +2425,38 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 		}
 	}
 	const uint64_t current_process_frame = Engine::get_singleton()->get_process_frames();
+	bool staged_configuration_superseded = false;
+	{
+		MutexLock lock(runtime->mutex);
+		staged_configuration_superseded = runtime->activation_pending
+				&& (runtime->submitted_logical_size != runtime->logical_size
+						|| runtime->submitted_physical_size != runtime->physical_size);
+	}
+	if (staged_configuration_superseded) {
+		// A session can finish its bootstrap publication while HTMLView is still
+		// replacing the constructor's placeholder viewport. Never expose that
+		// obsolete-sized surface, even for one frame; retire its host lease and let
+		// the already-queued configuration derive the first visible publication.
+		if (runtime->staged_publication != nullptr) {
+			hcsr_runtime_publication_release(runtime->session, runtime->staged_publication);
+			runtime->staged_publication = nullptr;
+		}
+		for (const RuntimeOutputSnapshotEntry &entry : runtime->staged_topology.outputs) {
+			entry.state->activation_ready = false;
+			entry.state->staged_binding = nullptr;
+			entry.state->staged_lineage = RuntimePublicationLineage();
+		}
+		runtime_release_output_topology(runtime->staged_topology);
+		runtime->activation_pending = false;
+		runtime->activation_deferred_to_next_process_frame = false;
+		runtime->staged_binding = nullptr;
+		runtime->staged_lineage = RuntimePublicationLineage();
+		{
+			MutexLock lock(runtime->mutex);
+			runtime->pending_work = true;
+		}
+		return;
+	}
 	const bool exact_request_serial = runtime->staged_lineage.configuration_only
 			|| runtime->staged_lineage.request_serial == cutoff_request_serial;
 	const bool exact_requested_authority = runtime->staged_lineage.valid
@@ -2276,6 +2476,19 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 		runtime_set_terminal(runtime, "HCSR replacement could not activate the input-qualified output in its mandatory next presented frame.");
 		return;
 	}
+	const bool activation_turn_is_stale = runtime->activation_pending
+			&& exact_requested_authority
+			&& runtime->staged_binding != nullptr
+			&& !runtime->staged_binding->presenter_pending
+			&& !exact_interactive_frame
+			&& (current_process_frame != cutoff_process_frame
+					|| cutoff_process_frame == runtime->last_activation_process_frame);
+	if (activation_turn_is_stale) {
+		MutexLock lock(runtime->mutex);
+		runtime->activation_deferred_to_next_process_frame = true;
+		runtime->pending_work = false;
+		return;
+	}
 	if (runtime->activation_pending
 			&& exact_requested_authority
 			&& runtime->staged_binding != nullptr
@@ -2283,7 +2496,8 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 			&& (runtime->staged_binding != runtime->successor_binding
 					|| runtime->retiring_binding == nullptr)
 			&& current_process_frame == cutoff_process_frame
-			&& cutoff_process_frame != runtime->last_activation_process_frame) {
+			&& (cutoff_process_frame != runtime->last_activation_process_frame
+					|| exact_interactive_frame)) {
 		runtime->active_request_process_frame = runtime->staged_lineage.interactive_frame_id;
 		RuntimePresentationBinding *activated_binding = runtime->staged_binding;
 		if (!runtime_activate_surface(runtime, activated_binding, nullptr)) {
@@ -2311,20 +2525,50 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 			runtime->active_binding = runtime->successor_binding;
 			runtime->successor_binding = nullptr;
 		}
+		if (runtime->staged_publication == nullptr
+				|| hcsr_runtime_session_set_presented_publication(
+						runtime->session,
+						runtime->staged_publication,
+						runtime->staged_lineage.runtime_generation) != HCSR_RUNTIME_OK) {
+			runtime_set_terminal(runtime, "Godot could not pin the exact publication authority of the activated HCSR frame.");
+			return;
+		}
+		if (runtime->active_publication != nullptr) {
+			hcsr_runtime_publication_release(runtime->session, runtime->active_publication);
+		}
+		runtime->active_publication = runtime->staged_publication;
+		runtime->staged_publication = nullptr;
 		{
 			MutexLock lock(runtime->mutex);
 			runtime->active_generation = runtime->staged_lineage.runtime_generation;
 			runtime->active_interaction_input_id = runtime->staged_lineage.interaction_input_id;
+			runtime->active_interaction_configuration_id = runtime->staged_lineage.interaction_configuration_id;
 			runtime->active_has_interaction_state = runtime->staged_lineage.has_interaction_state;
+			runtime->active_scroll_input_id = runtime->staged_lineage.scroll_input_id;
+			runtime->active_scroll_configuration_id = runtime->staged_lineage.scroll_configuration_id;
+			runtime->next_host_input_id = MAX(runtime->next_host_input_id,
+					MAX(runtime->staged_lineage.interaction_input_id,
+							runtime->staged_lineage.scroll_input_id) + 1);
+			runtime->next_host_frame_id = MAX(runtime->next_host_frame_id,
+					MAX(runtime->staged_lineage.interaction_frame_id,
+							runtime->staged_lineage.scroll_frame_id) + 1);
 			runtime->queued_generation = runtime->staged_lineage.runtime_generation;
 			runtime->frame_metadata.generation = runtime->staged_lineage.runtime_generation;
 			for (const RuntimeOutputSnapshotEntry &entry : runtime->staged_topology.outputs) {
 				entry.state->active_generation = runtime->staged_lineage.runtime_generation;
 			}
+			if (runtime->staged_lineage.interactive_submission_id != 0
+					&& runtime->staged_lineage.interactive_submission_id == runtime->newest_requested_submission_id) {
+				runtime->newest_requested_submission_id = 0;
+				runtime->newest_requested_author_revision = 0;
+				runtime->newest_requested_frame_id = 0;
+				runtime->newest_requested_cutoff_timestamp_microseconds = 0;
+			}
 			runtime->presentation_changed = true;
 		}
 		runtime->activation_pending = false;
 		runtime->activation_callback_scheduled = false;
+		runtime->activation_deferred_to_next_process_frame = false;
 		runtime->staged_binding = nullptr;
 		runtime->staged_lineage = RuntimePublicationLineage();
 		runtime_release_output_topology(runtime->staged_topology);
@@ -2413,15 +2657,21 @@ void HTMLSurfaceHCSRRuntimeBackend::mark_document_dirty() {
 
 void HTMLSurfaceHCSRRuntimeBackend::set_size(const Size2i &p_size) {
 	ERR_FAIL_NULL(state);
-	MutexLock lock(state->mutex);
-	const Size2i requested_size = Size2i(MAX(1, p_size.x), MAX(1, p_size.y));
-	if (state->logical_size == requested_size) {
-		return;
+	{
+		MutexLock lock(state->mutex);
+		const Size2i requested_size = Size2i(MAX(1, p_size.x), MAX(1, p_size.y));
+		if (state->logical_size == requested_size) {
+			return;
+		}
+		state->logical_size = requested_size;
+		// Session creation and viewport synchronization run on different
+		// threads. A resize that races the first render callback must remain a
+		// pending configuration even while the session pointer is still null.
+		state->configuration_dirty = true;
+		state->request_serial++;
+		state->pending_work = true;
 	}
-	state->logical_size = requested_size;
-	state->configuration_dirty = state->session != nullptr;
-	state->request_serial++;
-	state->pending_work = true;
+	_schedule_work();
 }
 
 void HTMLSurfaceHCSRRuntimeBackend::set_device_scale_factor(float p_device_scale_factor) {
@@ -2430,15 +2680,18 @@ void HTMLSurfaceHCSRRuntimeBackend::set_device_scale_factor(float p_device_scale
 
 void HTMLSurfaceHCSRRuntimeBackend::set_physical_size(const Size2i &p_physical_size) {
 	ERR_FAIL_NULL(state);
-	MutexLock lock(state->mutex);
-	const Size2i requested_size = Size2i(MAX(1, p_physical_size.x), MAX(1, p_physical_size.y));
-	if (state->physical_size == requested_size) {
-		return;
+	{
+		MutexLock lock(state->mutex);
+		const Size2i requested_size = Size2i(MAX(1, p_physical_size.x), MAX(1, p_physical_size.y));
+		if (state->physical_size == requested_size) {
+			return;
+		}
+		state->physical_size = requested_size;
+		state->configuration_dirty = true;
+		state->request_serial++;
+		state->pending_work = true;
 	}
-	state->physical_size = requested_size;
-	state->configuration_dirty = state->session != nullptr;
-	state->request_serial++;
-	state->pending_work = true;
+	_schedule_work();
 }
 
 void HTMLSurfaceHCSRRuntimeBackend::set_document(const Ref<HTMLDocument> &p_document) {
@@ -2531,7 +2784,12 @@ bool HTMLSurfaceHCSRRuntimeBackend::has_pending_frame_request() const {
 		return false;
 	}
 	MutexLock lock(state->mutex);
-	return state->document_dirty || state->configuration_dirty
+	bool standby_pending = state->active_binding != nullptr && state->active_binding->standby_pending;
+	for (RuntimeOutputState *output : state->outputs) {
+		standby_pending = standby_pending
+				|| (output->active_binding != nullptr && output->active_binding->standby_pending);
+	}
+	return standby_pending || state->document_dirty || state->configuration_dirty
 			|| !state->mutations.is_empty() || !state->pointer_requests.is_empty()
 			|| !state->scroll_requests.is_empty();
 }
@@ -2990,6 +3248,10 @@ HTMLSurfaceHCSRRuntimeBackend::~HTMLSurfaceHCSRRuntimeBackend() {
 		MutexLock lock(retiring->mutex);
 		retiring->closing = true;
 		retiring->pending_work = true;
+		// Resource admission cannot run after closing begins. Release the Godot
+		// object authority on the main thread instead of retaining it until the
+		// asynchronous render-thread retirement completes during engine teardown.
+		retiring->document.unref();
 		retiring_texture = retiring->texture;
 		retiring->texture.unref();
 		canvas_textures = retiring->owned_canvas_textures;
