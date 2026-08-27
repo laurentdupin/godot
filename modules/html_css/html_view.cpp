@@ -1764,6 +1764,21 @@ Array HTMLView::get_backdrop_filter_regions() const {
 	for (const HTMLBackdropFilterRegion &region : surface->get_backdrop_filter_regions()) {
 		regions.push_back(html_backdrop_filter_region_to_dictionary(region));
 	}
+	if (regions.is_empty()) {
+		for (const HTMLGPUBackdropEffect &effect : surface->get_gpu_backdrop_frame().effects) {
+			HTMLBackdropFilterRegion region;
+			region.bounds = effect.bounds;
+			region.blur_radius_css_px = effect.blur_radius_css_px;
+			region.border_radius_top_left = effect.border_radius_top_left;
+			region.border_radius_top_right = effect.border_radius_top_right;
+			region.border_radius_bottom_right = effect.border_radius_bottom_right;
+			region.border_radius_bottom_left = effect.border_radius_bottom_left;
+			region.opacity = effect.opacity;
+			region.flags = effect.flags;
+			region.filter_operations = effect.filter_operations;
+			regions.push_back(html_backdrop_filter_region_to_dictionary(region));
+		}
+	}
 	return regions;
 }
 

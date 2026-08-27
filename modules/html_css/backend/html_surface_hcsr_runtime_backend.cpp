@@ -8,6 +8,7 @@
 #include "core/config/engine.h"
 #include "core/object/callable_mp.h"
 #include "core/os/os.h"
+#include "scene/resources/image_texture.h"
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/rendering_server.h"
 
@@ -27,10 +28,10 @@ static constexpr int RUNTIME_PRESENTER_STANDBY_STEP_UNITS = 262144;
 static constexpr int RUNTIME_SEMANTIC_STEP_SLICE_UNITS = 4096;
 static constexpr uint64_t RUNTIME_SEMANTIC_FRAME_BUDGET_MICROSECONDS = 8000;
 static constexpr uint64_t RUNTIME_INTERACTIVE_FRAME_BUDGET_MICROSECONDS = 16667;
-static constexpr uint32_t RUNTIME_REQUIRED_ABI_VERSION = 11;
+static constexpr uint32_t RUNTIME_REQUIRED_ABI_VERSION = 12;
 
 static_assert(HCSR_RUNTIME_ABI_VERSION == RUNTIME_REQUIRED_ABI_VERSION,
-		"The Godot HCSR replacement backend must be compiled against runtime ABI v11.");
+		"The Godot HCSR replacement backend must be compiled against runtime ABI v12.");
 
 struct RuntimeMutation {
 	int kind = RUNTIME_MUTATION_TEXT;
@@ -373,6 +374,11 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	uint64_t active_request_process_frame = 0;
 	uint64_t last_activation_process_frame = UINT64_MAX;
 	HTMLFrameMetadata frame_metadata;
+	HTMLGPUBackdropFrame gpu_backdrop_frame;
+	Ref<ImageTexture> backdrop_mask_texture;
+	uint64_t backdrop_mask_fingerprint = 0;
+	uint64_t backdrop_mask_generation = 0;
+	bool backdrop_filter_enabled = false;
 	hcsr_runtime_document_t *compiled_document = nullptr;
 	hcsr_runtime_session_t *session = nullptr;
 	hcsr_runtime_publication_t *active_publication = nullptr;
@@ -391,6 +397,199 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	int32_t active_pixel_height = 0;
 	hcsr_runtime_d3d12_surface_format_t active_pixel_format = HCSR_RUNTIME_D3D12_SURFACE_FORMAT_RGBA8_UNORM;
 };
+
+static uint64_t runtime_backdrop_hash_bytes(uint64_t p_hash, const void *p_bytes, size_t p_size) {
+	const uint8_t *bytes = static_cast<const uint8_t *>(p_bytes);
+	for (size_t index = 0; index < p_size; index++) {
+		p_hash ^= bytes[index];
+		p_hash *= UINT64_C(1099511628211);
+	}
+	return p_hash;
+}
+
+static bool runtime_backdrop_sample_inside(
+		const hcsr_runtime_backdrop_effect_info_t &p_effect, double p_x, double p_y) {
+	if (p_effect.has_clip != 0
+			&& (p_x < p_effect.clip_left || p_x >= p_effect.clip_right
+					|| p_y < p_effect.clip_top || p_y >= p_effect.clip_bottom)) {
+		return false;
+	}
+	if (p_x < p_effect.left || p_x >= p_effect.right || p_y < p_effect.top || p_y >= p_effect.bottom) {
+		return false;
+	}
+	double radius = 0.0;
+	double center_x = p_x;
+	double center_y = p_y;
+	if (p_x < p_effect.left + p_effect.border_radius_top_left
+			&& p_y < p_effect.top + p_effect.border_radius_top_left) {
+		radius = p_effect.border_radius_top_left;
+		center_x = p_effect.left + radius;
+		center_y = p_effect.top + radius;
+	} else if (p_x > p_effect.right - p_effect.border_radius_top_right
+			&& p_y < p_effect.top + p_effect.border_radius_top_right) {
+		radius = p_effect.border_radius_top_right;
+		center_x = p_effect.right - radius;
+		center_y = p_effect.top + radius;
+	} else if (p_x > p_effect.right - p_effect.border_radius_bottom_right
+			&& p_y > p_effect.bottom - p_effect.border_radius_bottom_right) {
+		radius = p_effect.border_radius_bottom_right;
+		center_x = p_effect.right - radius;
+		center_y = p_effect.bottom - radius;
+	} else if (p_x < p_effect.left + p_effect.border_radius_bottom_left
+			&& p_y > p_effect.bottom - p_effect.border_radius_bottom_left) {
+		radius = p_effect.border_radius_bottom_left;
+		center_x = p_effect.left + radius;
+		center_y = p_effect.bottom - radius;
+	}
+	if (radius <= 0.0) {
+		return true;
+	}
+	const double dx = p_x - center_x;
+	const double dy = p_y - center_y;
+	return dx * dx + dy * dy <= radius * radius;
+}
+
+static bool runtime_update_backdrop_frame(HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
+	ERR_FAIL_NULL_V(p_state, false);
+	bool enabled = false;
+	{
+		MutexLock lock(p_state->mutex);
+		enabled = p_state->backdrop_filter_enabled;
+	}
+	if (!enabled || p_state->active_publication == nullptr || p_state->active_generation == 0) {
+		MutexLock lock(p_state->mutex);
+		p_state->gpu_backdrop_frame.clear();
+		return true;
+	}
+	int32_t effect_count = 0;
+	if (hcsr_runtime_publication_get_backdrop_effect_count(
+			p_state->active_publication, p_state->active_generation, &effect_count) != HCSR_RUNTIME_OK
+			|| effect_count < 0) {
+		return false;
+	}
+	effect_count = MIN(effect_count, 8);
+	Vector<hcsr_runtime_backdrop_effect_info_t> native_effects;
+	native_effects.resize(effect_count);
+	uint64_t fingerprint = UINT64_C(1469598103934665603);
+	fingerprint = runtime_backdrop_hash_bytes(fingerprint, &p_state->active_pixel_width, sizeof(p_state->active_pixel_width));
+	fingerprint = runtime_backdrop_hash_bytes(fingerprint, &p_state->active_pixel_height, sizeof(p_state->active_pixel_height));
+	for (int index = 0; index < effect_count; index++) {
+		hcsr_runtime_backdrop_effect_info_t &effect = native_effects.write[index];
+		initialize_abi(&effect, sizeof(effect));
+		if (hcsr_runtime_publication_get_backdrop_effect(
+				p_state->active_publication, p_state->active_generation, index, &effect) != HCSR_RUNTIME_OK
+				|| effect.runtime_generation != p_state->active_generation
+				|| effect.effect_id == 0 || effect.operation_count < 0
+				|| effect.operation_count > HCSR_RUNTIME_MAX_BACKDROP_FILTER_OPERATIONS
+				|| effect.right <= effect.left || effect.bottom <= effect.top) {
+			return false;
+		}
+		fingerprint = runtime_backdrop_hash_bytes(fingerprint, &effect.effect_id,
+				sizeof(effect) - offsetof(hcsr_runtime_backdrop_effect_info_t, effect_id));
+	}
+
+	Ref<ImageTexture> mask_texture;
+	uint64_t mask_generation = 0;
+	{
+		MutexLock lock(p_state->mutex);
+		mask_texture = p_state->backdrop_mask_texture;
+		mask_generation = p_state->backdrop_mask_generation;
+	}
+	if (effect_count > 0 && (mask_texture.is_null() || p_state->backdrop_mask_fingerprint != fingerprint)) {
+		const int width = p_state->active_pixel_width;
+		const int height = p_state->active_pixel_height;
+		if (width <= 0 || height <= 0 || (int64_t)width * height > INT32_MAX / 4) {
+			return false;
+		}
+		PackedByteArray pixels;
+		pixels.resize(width * height * 4);
+		memset(pixels.ptrw(), 0, pixels.size());
+		const double scale_x = width / MAX(1.0, (double)p_state->logical_size.x);
+		const double scale_y = height / MAX(1.0, (double)p_state->logical_size.y);
+		static const double sample_offsets[2] = { 0.25, 0.75 };
+		for (const hcsr_runtime_backdrop_effect_info_t &effect : native_effects) {
+			const int left = CLAMP((int)Math::floor(effect.left * scale_x), 0, width);
+			const int top = CLAMP((int)Math::floor(effect.top * scale_y), 0, height);
+			const int right = CLAMP((int)Math::ceil(effect.right * scale_x), 0, width);
+			const int bottom = CLAMP((int)Math::ceil(effect.bottom * scale_y), 0, height);
+			for (int y = top; y < bottom; y++) {
+				for (int x = left; x < right; x++) {
+					int covered = 0;
+					for (double offset_y : sample_offsets) {
+						for (double offset_x : sample_offsets) {
+							covered += runtime_backdrop_sample_inside(effect,
+									(x + offset_x) / scale_x, (y + offset_y) / scale_y) ? 1 : 0;
+						}
+					}
+					if (covered == 0) {
+						continue;
+					}
+					uint8_t *pixel = pixels.ptrw() + ((y * width + x) * 4);
+					pixel[0] = (uint8_t)effect.effect_id;
+					pixel[1] = (uint8_t)((covered * 255 + 2) / 4);
+					pixel[2] = 0;
+					pixel[3] = 255;
+				}
+			}
+		}
+		Ref<Image> image = Image::create_from_data(width, height, false, Image::FORMAT_RGBA8, pixels);
+		if (image.is_null()) {
+			return false;
+		}
+		mask_texture = ImageTexture::create_from_image(image);
+		if (mask_texture.is_null()) {
+			return false;
+		}
+		mask_generation++;
+		if (mask_generation == 0) {
+			mask_generation = 1;
+		}
+	}
+
+	HTMLGPUBackdropFrame frame;
+	if (effect_count > 0) {
+		frame.mask_texture = mask_texture;
+		frame.logical_size = p_state->logical_size;
+		frame.physical_size = Size2i(p_state->active_pixel_width, p_state->active_pixel_height);
+		frame.device_scale_factor = 1.0f;
+		frame.backend = 1; // Stable GPU backdrop backend identity: D3D12.
+		frame.mask_encoding = HTML_GPU_BACKDROP_MASK_ENCODING_RGBA8_ID_COVERAGE;
+		frame.max_effect_id = native_effects[effect_count - 1].effect_id;
+		frame.frame_generation = p_state->active_generation;
+		frame.main_target_generation = p_state->active_generation;
+		frame.backdrop_mask_generation = mask_generation;
+		for (const hcsr_runtime_backdrop_effect_info_t &source : native_effects) {
+			HTMLGPUBackdropEffect effect;
+			effect.id = source.effect_id;
+			effect.generation = source.runtime_generation;
+			effect.bounds = Rect2(source.left, source.top, source.right - source.left, source.bottom - source.top);
+			effect.border_radius_top_left = source.border_radius_top_left;
+			effect.border_radius_top_right = source.border_radius_top_right;
+			effect.border_radius_bottom_right = source.border_radius_bottom_right;
+			effect.border_radius_bottom_left = source.border_radius_bottom_left;
+			effect.opacity = source.opacity;
+			effect.flags = source.flags;
+			for (int operation_index = 0; operation_index < source.operation_count; operation_index++) {
+				HTMLBackdropFilterOperation operation;
+				operation.type = (HTMLBackdropFilterOperationType)source.operation_kinds[operation_index];
+				operation.amount = source.operation_amounts[operation_index];
+				effect.filter_operations.push_back(operation);
+				if (operation.type == HTML_BACKDROP_FILTER_OPERATION_BLUR) {
+					effect.blur_radius_css_px = MAX(effect.blur_radius_css_px, operation.amount);
+				}
+			}
+			frame.effects.push_back(effect);
+		}
+	}
+	{
+		MutexLock lock(p_state->mutex);
+		p_state->backdrop_mask_texture = mask_texture;
+		p_state->backdrop_mask_fingerprint = fingerprint;
+		p_state->backdrop_mask_generation = mask_generation;
+		p_state->gpu_backdrop_frame = frame;
+	}
+	return true;
+}
 
 static bool runtime_track_canvas_texture(
 		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
@@ -2538,6 +2737,10 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 		}
 		runtime->active_publication = runtime->staged_publication;
 		runtime->staged_publication = nullptr;
+		if (!runtime_update_backdrop_frame(runtime)) {
+			runtime_set_terminal(runtime, "Godot could not compose the exact HCSR backdrop effect mask publication.");
+			return;
+		}
 		{
 			MutexLock lock(runtime->mutex);
 			runtime->active_generation = runtime->staged_lineage.runtime_generation;
@@ -2712,6 +2915,22 @@ void HTMLSurfaceHCSRRuntimeBackend::set_background_color(const Color &p_backgrou
 
 void HTMLSurfaceHCSRRuntimeBackend::set_placeholder_background(const Color &p_color) {
 	(void)p_color;
+}
+
+void HTMLSurfaceHCSRRuntimeBackend::set_backdrop_filter_enabled(bool p_enabled) {
+	if (state == nullptr) {
+		return;
+	}
+	{
+		MutexLock lock(state->mutex);
+		if (state->backdrop_filter_enabled == p_enabled) {
+			return;
+		}
+		state->backdrop_filter_enabled = p_enabled;
+		state->gpu_backdrop_frame.clear();
+		state->pending_work = true;
+	}
+	_schedule_work();
 }
 
 Error HTMLSurfaceHCSRRuntimeBackend::update_compositor(
@@ -3104,6 +3323,15 @@ void HTMLSurfaceHCSRRuntimeBackend::get_frame_metadata(HTMLFrameMetadata &r_meta
 	r_metadata = state->frame_metadata;
 }
 
+void HTMLSurfaceHCSRRuntimeBackend::get_gpu_backdrop_frame(HTMLGPUBackdropFrame &r_frame) const {
+	if (state == nullptr) {
+		r_frame.clear();
+		return;
+	}
+	MutexLock lock(state->mutex);
+	r_frame = state->gpu_backdrop_frame;
+}
+
 Ref<Texture2D> HTMLSurfaceHCSRRuntimeBackend::get_texture() const {
 	return texture;
 }
@@ -3254,6 +3482,8 @@ HTMLSurfaceHCSRRuntimeBackend::~HTMLSurfaceHCSRRuntimeBackend() {
 		retiring->document.unref();
 		retiring_texture = retiring->texture;
 		retiring->texture.unref();
+		retiring->gpu_backdrop_frame.clear();
+		retiring->backdrop_mask_texture.unref();
 		canvas_textures = retiring->owned_canvas_textures;
 		retiring->owned_canvas_textures.clear();
 	}

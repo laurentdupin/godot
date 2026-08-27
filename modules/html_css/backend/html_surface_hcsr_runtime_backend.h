@@ -36,6 +36,7 @@ public:
 	virtual void set_transparent_background(bool p_transparent_background) override;
 	virtual void set_background_color(const Color &p_background_color) override;
 	virtual void set_placeholder_background(const Color &p_color) override;
+	virtual void set_backdrop_filter_enabled(bool p_enabled) override;
 	virtual Error update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame) override;
 	virtual void render_placeholder(const String &p_marker) override;
 	virtual bool poll_pending_output(bool *r_waiting_for_completion = nullptr) override;
@@ -66,6 +67,7 @@ public:
 	virtual Error set_element_inner_html(const StringName &p_id, const String &p_html_fragment) override;
 	virtual Error set_form_control_checked(const StringName &p_id, bool p_checked) override;
 	virtual void get_frame_metadata(HTMLFrameMetadata &r_metadata) const override;
+	virtual void get_gpu_backdrop_frame(HTMLGPUBackdropFrame &r_frame) const override;
 	virtual Ref<Texture2D> get_texture() const override;
 	virtual Ref<HTMLTexture2D> get_html_texture() const override;
 	virtual uint64_t create_presentation_output(const Size2i &p_size, bool p_mipmaps) override;

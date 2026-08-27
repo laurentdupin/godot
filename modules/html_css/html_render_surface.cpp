@@ -814,6 +814,7 @@ HTMLRenderSurface::HTMLRenderSurface() {
 }
 
 HTMLRenderSurface::~HTMLRenderSurface() {
+	gpu_backdrop_frame.clear();
 	if (document.is_valid()) {
 		document->disconnect_changed(callable_mp(this, &HTMLRenderSurface::_document_changed));
 	}
