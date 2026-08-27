@@ -18,7 +18,10 @@ _html_css_renderer = env["module_html_css_renderer"]
 # include backend headers when HCSR is selected, so configuring only the
 # backend-specific source block leaves those objects with an incomplete build
 # environment on clean builds.
-if _html_css_renderer == "hcsr_old":
+if _html_css_renderer in ("hcsr_old", "hcsr_old_dll"):
+    if _html_css_renderer == "hcsr_old_dll" and (env["platform"] != "windows" or env["arch"] != "x86_64"):
+        print("HTML/CSS hcsr_old_dll currently requires Windows x86_64.")
+        Exit(1)
     env_html_css.Append(CPPDEFINES=["HTML_CSS_USE_HCSR"])
     if env["tests"]:
         env_html_css.Append(CPPDEFINES=["HTML_CSS_HCSR_TESTS_ENABLED"])
@@ -312,6 +315,94 @@ def _html_css_ensure_hcsr_static_library():
             Exit(1)
 
 
+def _html_css_hcsr_old_shared_products():
+    hcsr_root = _html_css_resolve_repo_path(os.path.join("thirdparty", "hcsr_old"))
+    output_root = os.path.join(
+        hcsr_root,
+        "src",
+        "Renderer.NativeBridge",
+        "bin",
+        "Release",
+        "net10.0",
+        "win-x64",
+    )
+    return (
+        hcsr_root,
+        os.path.join(output_root, "native", "hcsr_renderer.lib"),
+        os.path.join(output_root, "publish", "hcsr_renderer.dll"),
+        os.path.join(output_root, "publish", "hcsr_renderer.godot.commit"),
+    )
+
+
+def _html_css_ensure_hcsr_old_shared_library():
+    hcsr_root, import_library, runtime_library, marker_path = _html_css_hcsr_old_shared_products()
+    source_commit = subprocess.run(
+        ["git", "-C", hcsr_root, "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    packaged_commit = ""
+    if os.path.isfile(marker_path):
+        with open(marker_path, "r", encoding="utf-8") as marker_file:
+            packaged_commit = marker_file.read().strip()
+    package_is_current = (
+        source_commit.returncode == 0
+        and packaged_commit == source_commit.stdout.strip()
+        and os.path.isfile(import_library)
+        and os.path.isfile(runtime_library)
+    )
+    if package_is_current:
+        return
+    if not env["module_html_css_hcsr_auto_build"]:
+        print("HTML/CSS HCSR shared library is missing or stale: " + runtime_library)
+        Exit(1)
+
+    codec_build_script = _html_css_resolve_repo_file(
+        os.path.join("thirdparty", "hcsr_old", "tools", "build-native-codecs.ps1")
+    )
+    shared_project = os.path.join(
+        hcsr_root,
+        "src",
+        "Renderer.NativeBridge",
+        "Renderer.NativeBridge.Shared.csproj",
+    )
+    print("HTML/CSS HCSR old Windows DLL is missing or stale; publishing the pinned NativeAOT bridge:")
+    print("  " + shared_project)
+    completed = subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            codec_build_script,
+            "-RepositoryRoot",
+            hcsr_root,
+        ],
+        cwd=hcsr_root,
+    )
+    if completed.returncode == 0:
+        completed = subprocess.run(
+            [
+                "dotnet",
+                "publish",
+                shared_project,
+                "-c",
+                "Release",
+                "-r",
+                "win-x64",
+                "--self-contained",
+                "--nologo",
+            ],
+            cwd=hcsr_root,
+        )
+    if completed.returncode != 0 or not os.path.isfile(import_library) or not os.path.isfile(runtime_library):
+        print("HTML/CSS HCSR old shared NativeAOT publish failed.")
+        Exit(1)
+    with open(marker_path, "w", encoding="utf-8") as marker_file:
+        marker_file.write(source_commit.stdout.strip() + "\n")
+
+
 env_html_css.add_source_files(env.modules_sources, "bridge/html_activation_engine.cpp")
 env_html_css.add_source_files(env.modules_sources, "bridge/html_asset_provider.cpp")
 env_html_css.add_source_files(env.modules_sources, "bridge/html_source_validator.cpp")
@@ -412,6 +503,19 @@ if _html_css_renderer == "hcsr_old":
                 "ws2_32.lib",
             ]
         )
+elif _html_css_renderer == "hcsr_old_dll":
+    _html_css_ensure_hcsr_old_shared_library()
+    _, hcsr_import_library, hcsr_runtime_library, _ = _html_css_hcsr_old_shared_products()
+    print("HTML/CSS HCSR old shared library: " + hcsr_runtime_library)
+    hcsr_module_sources = []
+    env_html_css.add_source_files(hcsr_module_sources, "backend/hcsr_performance_monitor.cpp")
+    env_html_css.add_source_files(hcsr_module_sources, "backend/html_surface_hcsr_backend.cpp")
+    env.Depends(hcsr_module_sources, [hcsr_import_library, hcsr_runtime_library])
+    env.modules_sources += hcsr_module_sources
+    if env.editor_build:
+        env_html_css.add_source_files(env.modules_sources, "editor/html_package_export_plugin.cpp")
+    env.Append(LINKFLAGS=[hcsr_import_library])
+    env.CommandNoCache("#bin/hcsr_renderer.dll", hcsr_runtime_library, Copy("$TARGET", "$SOURCE"))
 elif _html_css_renderer == "hcsr_runtime":
     env_html_css.add_source_files(env.modules_sources, "backend/html_surface_hcsr_runtime_backend.cpp")
     env.Append(LINKFLAGS=[runtime_import_library])

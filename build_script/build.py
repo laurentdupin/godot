@@ -27,7 +27,7 @@ SCONS_VERSION = "4.10.1"
 SETTINGS_VERSION = 2
 TARGETS = ("editor", "template_debug", "template_release")
 ARCHITECTURES = ("x86_64", "arm64", "x86_32")
-HTML_CSS_RENDERERS = ("hcsr_old", "hcsr_runtime", "none")
+HTML_CSS_RENDERERS = ("hcsr_old", "hcsr_old_dll", "hcsr_runtime", "none")
 
 
 @dataclass
@@ -299,6 +299,13 @@ def validate_settings(settings: BuildSettings, godot_platform: str) -> None:
         raise RuntimeError(
             "The replacement HCSR runtime currently supports Windows x86_64 only. "
             "Select hcsr_old or none to build Godot on another host or architecture."
+        )
+    if settings.html_css_renderer == "hcsr_old_dll" and (
+        godot_platform != "windows" or settings.architecture != "x86_64"
+    ):
+        raise RuntimeError(
+            "The DLL-backed old HCSR runtime currently supports Windows x86_64 only. "
+            "Select hcsr_old or none on another host or architecture."
         )
     if godot_platform == "macos" and settings.architecture == "x86_32":
         raise RuntimeError("Godot does not support x86_32 macOS builds.")

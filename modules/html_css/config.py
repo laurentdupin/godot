@@ -6,7 +6,7 @@ def get_opts(platform):
             "module_html_css_renderer",
             "HTML/CSS renderer implementation compiled into the module. 'none' keeps only the raw CPU frame receiver.",
             "hcsr_old",
-            allowed_values=("none", "hcsr_old", "hcsr_runtime"),
+            allowed_values=("none", "hcsr_old", "hcsr_old_dll", "hcsr_runtime"),
         ),
         PathVariable(
             "module_html_css_hcsr_lib_path",

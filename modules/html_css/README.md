@@ -5,7 +5,7 @@
 The module has one mutually exclusive renderer selector:
 
 ```text
-module_html_css_renderer=hcsr_old|hcsr_runtime|none
+module_html_css_renderer=hcsr_old|hcsr_old_dll|hcsr_runtime|none
 ```
 
 `hcsr_old` is the default. It uses the frozen old architecture in
@@ -14,6 +14,8 @@ uses the current architecture and its runtime ABI from the checkout selected by
 `module_html_css_hcsr_runtime_root`. The choices are mutually exclusive; one
 Godot executable contains at most one HCSR version and keeps the normal Godot
 executable name. `none` keeps the raw CPU-frame receiver without an HTML engine.
+On Windows x86_64, `hcsr_old_dll` uses the same frozen old backend and C ABI as
+`hcsr_old`, but links its NativeAOT publication through `hcsr_renderer.dll`.
 
 The HCSR integration supports x86_64 and ARM64 builds on Windows, Linux, and
 macOS, plus Android ARM64 and x86_64. A Windows editor can be built with:
