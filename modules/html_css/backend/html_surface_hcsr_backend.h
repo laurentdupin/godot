@@ -125,6 +125,7 @@ class HTMLSurfaceHCSRBackend : public HTMLSurfaceCPUBackend {
 	bool _ensure_renderer();
 	bool _sync_viewport();
 	bool _sync_document();
+	bool _service_resource_requests(bool &r_resources_completed);
 	bool _load_document_source(String &r_html, String &r_document_path, String &r_asset_root) const;
 	bool _load_document_package(PackedByteArray &r_package) const;
 	bool _render_frame();

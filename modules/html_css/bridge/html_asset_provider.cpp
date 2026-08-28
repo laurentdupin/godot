@@ -31,9 +31,11 @@
 #include "html_asset_provider.h"
 
 #include "core/io/file_access.h"
+#include "core/io/resource_loader.h"
 #include "core/os/os.h"
 #include "core/templates/hash_map.h"
 #include "core/os/mutex.h"
+#include "scene/resources/font.h"
 
 static const char *PLATFORM_FONT_SCHEME = "hcsr-platform-font://";
 static HashMap<String, String> platform_font_paths;
@@ -173,6 +175,18 @@ Error HTMLGodotAssetProvider::load_asset(const Ref<HTMLDocument> &p_document, co
 
 	Error file_error = OK;
 	Vector<uint8_t> bytes = FileAccess::get_file_as_bytes(path, &file_error);
+	if (file_error != OK && (path.get_extension().nocasecmp_to("ttf") == 0 || path.get_extension().nocasecmp_to("otf") == 0)) {
+		// Exported projects replace imported font sources with FontFile resources.
+		// CSS still addresses the source path, so recover the embedded source bytes
+		// through ResourceLoader when the raw file is no longer present in the PCK.
+		Ref<FontFile> font = ResourceLoader::load(path);
+		if (font.is_valid()) {
+			bytes = font->get_data();
+			if (!bytes.is_empty()) {
+				file_error = OK;
+			}
+		}
+	}
 	if (file_error != OK) {
 		_set_error(r_error, vformat("Could not load HTMLDocument resource '%s'.", path));
 		return file_error;

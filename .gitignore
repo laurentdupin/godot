@@ -377,6 +377,7 @@ cpp.hint
 
 # Repository-local build toolchains
 /.build-tools/
+/build_script/.dotnet/
 
 # macOS
 .DS_Store
