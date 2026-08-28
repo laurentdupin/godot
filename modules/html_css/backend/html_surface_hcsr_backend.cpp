@@ -151,6 +151,12 @@ bool HTMLSurfaceHCSRBackend::_ensure_renderer() {
 		ERR_PRINT(terminal_failure_reason);
 		return false;
 	}
+	if (hcsr_renderer_set_resource_request_protocol_enabled(renderer, 1) != HCSR_STATUS_OK) {
+		_record_error("HCSR rejected Godot resource request integration");
+		hcsr_renderer_destroy(renderer);
+		renderer = nullptr;
+		return false;
+	}
 	input_state_cache.reset();
 
 #ifdef DEBUG_ENABLED
@@ -515,6 +521,89 @@ bool HTMLSurfaceHCSRBackend::_sync_document() {
 	pending_document_commits.clear();
 	terminal_failure = false;
 	terminal_failure_reason = String();
+	return true;
+}
+
+bool HTMLSurfaceHCSRBackend::_service_resource_requests(bool &r_resources_completed) {
+	r_resources_completed = false;
+	if (renderer == nullptr || document.is_null()) {
+		return true;
+	}
+
+	for (int request_index = 0; request_index < 256 && hcsr_renderer_resource_request_count(renderer) > 0; request_index++) {
+		hcsr_renderer_resource_request_t request = {};
+		request.struct_size = sizeof(request);
+		hcsr_status_t poll_status = hcsr_renderer_poll_resource_request(
+				renderer, &request, nullptr, 0, nullptr, 0);
+		if (poll_status != HCSR_STATUS_INVALID_ARGUMENT && poll_status != HCSR_STATUS_OK) {
+			_record_error("HCSR could not size a Godot resource request");
+			return false;
+		}
+		if (request.requested_url_capacity == 0 || request.resolved_url_capacity == 0) {
+			_record_error("HCSR returned an invalid Godot resource request");
+			return false;
+		}
+
+		Vector<char> requested_url_bytes;
+		requested_url_bytes.resize(request.requested_url_capacity);
+		Vector<char> resolved_url_bytes;
+		resolved_url_bytes.resize(request.resolved_url_capacity);
+		request.struct_size = sizeof(request);
+		poll_status = hcsr_renderer_poll_resource_request(
+				renderer,
+				&request,
+				requested_url_bytes.ptrw(), requested_url_bytes.size(),
+				resolved_url_bytes.ptrw(), resolved_url_bytes.size());
+		if (poll_status != HCSR_STATUS_OK) {
+			_record_error("HCSR could not transfer a Godot resource request");
+			return false;
+		}
+
+		const String requested_url = String::utf8(requested_url_bytes.ptr());
+		const String resolved_url = String::utf8(resolved_url_bytes.ptr());
+		String godot_path = ProjectSettings::get_singleton()->localize_path(
+				resolved_url.replace("\\", "/"));
+		if (!godot_path.begins_with("res://") && !godot_path.begins_with("user://")) {
+			godot_path = requested_url;
+		}
+
+		HTMLAssetResource asset;
+		String asset_error;
+		const Error asset_status = HTMLGodotAssetProvider::load_asset(
+				document, godot_path, asset, &asset_error);
+		uint8_t accepted = 0;
+		if (asset_status == OK) {
+			const CharString final_url_utf8 = resolved_url.utf8();
+			const CharString mime_type_utf8 = asset.mime_type.utf8();
+			const hcsr_status_t completion_status = hcsr_renderer_complete_resource_request(
+					renderer,
+					request.request_id,
+					request.cancellation_generation,
+					HCSR_RENDERER_RESOURCE_COMPLETION_SUCCESS,
+					final_url_utf8.ptr(),
+					mime_type_utf8.ptr(),
+					asset.bytes.is_empty() ? nullptr : asset.bytes.ptr(),
+					asset.bytes.size(),
+					&accepted);
+			if (completion_status != HCSR_STATUS_OK) {
+				_record_error("HCSR rejected a Godot resource completion");
+				return false;
+			}
+		} else {
+			const hcsr_status_t completion_status = hcsr_renderer_complete_resource_request(
+					renderer,
+					request.request_id,
+					request.cancellation_generation,
+					HCSR_RENDERER_RESOURCE_COMPLETION_NOT_FOUND,
+					nullptr, nullptr, nullptr, 0, &accepted);
+			if (completion_status != HCSR_STATUS_OK) {
+				_record_error("HCSR rejected a missing Godot resource completion");
+				return false;
+			}
+		}
+		r_resources_completed = r_resources_completed || accepted != 0;
+	}
+
 	return true;
 }
 
@@ -2115,13 +2204,37 @@ bool HTMLSurfaceHCSRBackend::_render_gpu_frame() {
 	PreparedGPUFrameMetadata packet_metadata;
 	uint64_t packet_generation = 0;
 	for (int attempt = 0; attempt < 2; attempt++) {
-		packet = nullptr;
-		const uint64_t managed_export_call_start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
-		if (hcsr_renderer_prepare_gpu_frame(renderer, timeline_time_seconds, &packet) != HCSR_STATUS_OK) {
-			_record_error("HCSR could not prepare the Godot GPU frame");
+		bool prepared = false;
+		for (int resource_attempt = 0; resource_attempt < 8; resource_attempt++) {
+			packet = nullptr;
+			const uint64_t managed_export_call_start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
+			const hcsr_status_t prepare_status = hcsr_renderer_prepare_gpu_frame(
+					renderer, timeline_time_seconds, &packet);
+			_record_managed_export_boundary_overhead(managed_export_call_start_usec);
+			bool resources_completed = false;
+			if (!_service_resource_requests(resources_completed)) {
+				if (packet != nullptr) {
+					_abandon_gpu_frame_packet(packet);
+				}
+				return false;
+			}
+			if (resources_completed) {
+				if (packet != nullptr) {
+					_abandon_gpu_frame_packet(packet);
+				}
+				continue;
+			}
+			if (prepare_status != HCSR_STATUS_OK) {
+				_record_error("HCSR could not prepare the Godot GPU frame");
+				return false;
+			}
+			prepared = true;
+			break;
+		}
+		if (!prepared) {
+			_record_error("HCSR Godot resources did not converge while preparing a GPU frame");
 			return false;
 		}
-		_record_managed_export_boundary_overhead(managed_export_call_start_usec);
 		if (!_update_frame_schedule()) {
 			if (packet != nullptr) {
 				_abandon_gpu_frame_packet(packet);
@@ -2224,6 +2337,11 @@ void HTMLSurfaceHCSRBackend::_poll_semantic_worker_frame() {
 	integration_counters.semantic_worker_mailbox_delay_milliseconds = mailbox_delay_milliseconds;
 	_publish_integration_counters();
 	if (state == HCSR_SEMANTIC_WORKER_FAILED) {
+		bool resources_completed = false;
+		if (_service_resource_requests(resources_completed) && resources_completed) {
+			_request_semantic_worker_frame();
+			return;
+		}
 		_record_error("HCSR semantic worker preparation failed");
 		return;
 	}
@@ -2247,6 +2365,16 @@ void HTMLSurfaceHCSRBackend::_poll_semantic_worker_frame() {
 	}
 	if (state != HCSR_SEMANTIC_WORKER_PREPARED || packet == nullptr) {
 		_record_error("HCSR semantic worker returned an invalid completion");
+		return;
+	}
+	bool resources_completed = false;
+	if (!_service_resource_requests(resources_completed)) {
+		_abandon_gpu_frame_packet(packet);
+		return;
+	}
+	if (resources_completed) {
+		_abandon_gpu_frame_packet(packet);
+		_request_semantic_worker_frame();
 		return;
 	}
 
@@ -2317,14 +2445,38 @@ bool HTMLSurfaceHCSRBackend::_render_frame() {
 	_ensure_presentation_outputs_on_render_thread();
 	hcsr_frame_t output = {};
 	for (int attempt = 0; attempt < 2; attempt++) {
-		output = {};
-		output.struct_size = sizeof(output);
-		const uint64_t managed_export_call_start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
-		if (hcsr_renderer_render_frame(renderer, timeline_time_seconds, &output) != HCSR_STATUS_OK) {
-			_record_error("HCSR could not render the Godot frame");
+		bool rendered_with_current_resources = false;
+		for (int resource_attempt = 0; resource_attempt < 8; resource_attempt++) {
+			output = {};
+			output.struct_size = sizeof(output);
+			const uint64_t managed_export_call_start_usec = OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
+			const hcsr_status_t render_status = hcsr_renderer_render_frame(
+					renderer, timeline_time_seconds, &output);
+			_record_managed_export_boundary_overhead(managed_export_call_start_usec);
+			bool resources_completed = false;
+			if (!_service_resource_requests(resources_completed)) {
+				if (output.pixels != nullptr) {
+					hcsr_renderer_release_frame(renderer, &output);
+				}
+				return false;
+			}
+			if (resources_completed) {
+				if (output.pixels != nullptr) {
+					hcsr_renderer_release_frame(renderer, &output);
+				}
+				continue;
+			}
+			if (render_status != HCSR_STATUS_OK) {
+				_record_error("HCSR could not render the Godot frame");
+				return false;
+			}
+			rendered_with_current_resources = true;
+			break;
+		}
+		if (!rendered_with_current_resources) {
+			_record_error("HCSR Godot resources did not converge while rendering a frame");
 			return false;
 		}
-		_record_managed_export_boundary_overhead(managed_export_call_start_usec);
 		if (!_update_frame_schedule()) {
 			hcsr_renderer_release_frame(renderer, &output);
 			return false;
