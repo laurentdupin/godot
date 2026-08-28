@@ -23,14 +23,16 @@ func _initialize() -> void:
 	fresh.position = Vector2(WIDTH, 0)
 	root.add_child(mutated)
 	root.add_child(fresh)
-	await process_frame
-	await process_frame
+	if not await _wait_for_generation(mutated, 0, 120) or not await _wait_for_generation(fresh, 0, 120):
+		_fail("%s mutation smoke did not activate its initial comparison surfaces." % backend_name)
+		return
+	var mutation_base_generation: int = mutated.get_generation()
 	if mutated.set_element_attribute(&"options", &"class", "ui-select-options open") != OK:
 		_fail("%s mutation was rejected." % backend_name)
 		return
-	for _frame in range(5):
-		await process_frame
-	await RenderingServer.frame_post_draw
+	if not await _wait_for_generation(mutated, mutation_base_generation, 120):
+		_fail("%s mutation successor did not activate." % backend_name)
+		return
 
 	var viewport_image := root.get_texture().get_image()
 	if viewport_image == null or viewport_image.get_width() < WIDTH * 2 or viewport_image.get_height() < HEIGHT:
@@ -47,6 +49,15 @@ func _initialize() -> void:
 
 	print("HCSR Godot %s retained mutation smoke passed." % backend_name)
 	quit()
+
+func _wait_for_generation(view: HTMLView, prior_generation: int, maximum_frames: int) -> bool:
+	for _frame in range(maximum_frames):
+		await process_frame
+		RenderingServer.force_draw(true)
+		if view.get_generation() > prior_generation:
+			await RenderingServer.frame_post_draw
+			return true
+	return false
 
 func _make_view(options_class: String) -> HTMLView:
 	var document := HTMLDocument.new()

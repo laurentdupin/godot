@@ -55,10 +55,13 @@ func _initialize() -> void:
 	if not await _expect_pixel(Vector2i(150, 35), BASE, "view leave"):
 		return
 
+	var replacement_base_generation: int = view.get_generation()
 	if view.set_element_inner_html(&"app", _make_page(true)) != OK:
 		_fail("%s app subtree replacement was rejected." % backend_name)
 		return
-	await _settle(5)
+	if not await _wait_for_generation(view, replacement_base_generation, 120):
+		_fail("%s app subtree replacement did not activate." % backend_name)
+		return
 
 	_send_pointer(Vector2(40, 35))
 	await _settle(5)
@@ -118,6 +121,15 @@ func _settle(frame_count: int) -> void:
 		await process_frame
 		RenderingServer.force_draw(true)
 	await RenderingServer.frame_post_draw
+
+func _wait_for_generation(view: HTMLView, prior_generation: int, maximum_frames: int) -> bool:
+	for _frame in range(maximum_frames):
+		await process_frame
+		RenderingServer.force_draw(true)
+		if view.get_generation() > prior_generation:
+			await RenderingServer.frame_post_draw
+			return true
+	return false
 
 func _expect_pixel(position: Vector2i, expected: Color, phase: String) -> bool:
 	var image := root.get_texture().get_image()
