@@ -9,6 +9,7 @@
 
 #include "core/config/project_settings.h"
 #include "core/config/engine.h"
+#include "core/io/file_access_pack.h"
 #include "core/math/math_funcs.h"
 #include "core/object/callable_mp.h"
 #include "core/os/os.h"
@@ -49,86 +50,29 @@ static String hcsr_inject_document_style(const String &p_html, const Color &p_ba
 	return html_open_end >= 0 ? p_html.insert(html_open_end + 1, "<head>" + style + "</head>") : p_html;
 }
 
-static String hcsr_globalize_res_urls(const String &p_source) {
-	String project_root = ProjectSettings::get_singleton()->globalize_path("res://").replace("\\", "/");
+static String hcsr_globalize_res_urls(const String &p_source, String p_project_root) {
+	String project_root = p_project_root.replace("\\", "/");
 	if (!project_root.ends_with("/")) {
 		project_root += "/";
 	}
 	return p_source.replace("res://", project_root);
 }
 
-static String hcsr_get_tag_attribute(const String &p_tag, const String &p_attribute) {
-	const String lower_tag = p_tag.to_lower();
-	const String attribute = p_attribute.to_lower();
-	int cursor = 0;
-	while ((cursor = lower_tag.find(attribute, cursor)) >= 0) {
-		const bool starts_token = cursor == 0 || lower_tag[cursor - 1] <= 0x20;
-		int value_start = cursor + attribute.length();
-		while (value_start < lower_tag.length() && lower_tag[value_start] <= 0x20) {
-			value_start++;
-		}
-		if (!starts_token || value_start >= lower_tag.length() || lower_tag[value_start] != '=') {
-			cursor += attribute.length();
-			continue;
-		}
-		value_start++;
-		while (value_start < p_tag.length() && p_tag[value_start] <= 0x20) {
-			value_start++;
-		}
-		if (value_start >= p_tag.length()) {
-			return String();
-		}
-		const char32_t quote = p_tag[value_start];
-		if (quote == '\'' || quote == '"') {
-			const int value_end = p_tag.find_char(quote, value_start + 1);
-			return value_end >= 0 ? p_tag.substr(value_start + 1, value_end - value_start - 1) : String();
-		}
-		int value_end = value_start;
-		while (value_end < p_tag.length() && p_tag[value_end] > 0x20 && p_tag[value_end] != '>') {
-			value_end++;
-		}
-		return p_tag.substr(value_start, value_end - value_start);
-	}
-	return String();
+static String hcsr_get_packed_asset_root() {
+	// HCSR needs an absolute filesystem-shaped root to preserve the base URL of
+	// each linked stylesheet. The directory is intentionally virtual: missing
+	// resources are supplied by Godot through HCSR's resource request protocol.
+	return OS::get_singleton()->get_executable_path().get_base_dir()
+			.path_join(".godot_hcsr_packed_res").replace("\\", "/");
 }
 
-static void hcsr_inline_packed_stylesheets(const Ref<HTMLDocument> &p_document, String &r_html, String &r_css) {
-	int cursor = 0;
-	while (true) {
-		const String lower_html = r_html.to_lower();
-		const int link_start = lower_html.find("<link", cursor);
-		if (link_start < 0) {
-			return;
-		}
-		const int link_end = lower_html.find(">", link_start + 5);
-		if (link_end < 0) {
-			return;
-		}
-		const String link_tag = r_html.substr(link_start, link_end - link_start + 1);
-		const String rel = hcsr_get_tag_attribute(link_tag, "rel");
-		const String href = hcsr_get_tag_attribute(link_tag, "href");
-		bool is_stylesheet = false;
-		for (const String &token : rel.split(" ", false)) {
-			if (token.to_lower() == "stylesheet") {
-				is_stylesheet = true;
-				break;
-			}
-		}
-		if (!is_stylesheet || href.is_empty()) {
-			cursor = link_end + 1;
-			continue;
-		}
-		HTMLAssetResource asset;
-		String error;
-		if (HTMLGodotAssetProvider::load_asset(p_document, href, asset, &error) != OK) {
-			ERR_PRINT(error);
-			cursor = link_end + 1;
-			continue;
-		}
-		r_css += "\n" + String::utf8((const char *)asset.bytes.ptr(), asset.bytes.size()) + "\n";
-		r_html = r_html.erase(link_start, link_end - link_start + 1);
-		cursor = link_start;
-	}
+static String hcsr_globalize_res_urls(const String &p_source) {
+	PackedData *packed_data = PackedData::get_singleton();
+	const bool project_is_packed = packed_data != nullptr && !packed_data->is_disabled() &&
+			packed_data->has_directory("res://");
+	const String project_root = project_is_packed ? hcsr_get_packed_asset_root() :
+			ProjectSettings::get_singleton()->globalize_path("res://");
+	return hcsr_globalize_res_urls(p_source, project_root);
 }
 
 bool HTMLSurfaceHCSRBackend::_ensure_renderer() {
@@ -431,12 +375,16 @@ bool HTMLSurfaceHCSRBackend::_load_document_source(String &r_html, String &r_doc
 	if (resource_root.is_empty()) {
 		resource_root = "res://";
 	}
-	r_asset_root = ProjectSettings::get_singleton()->globalize_path(resource_root.begins_with("res://") ? String("res://") : resource_root);
+	PackedData *packed_data = PackedData::get_singleton();
+	const bool resource_root_is_packed = resource_root.begins_with("res://") &&
+			packed_data != nullptr && !packed_data->is_disabled() && packed_data->has_directory(resource_root);
+	String project_root = ProjectSettings::get_singleton()->globalize_path("res://");
+	if (resource_root_is_packed) {
+		project_root = hcsr_get_packed_asset_root();
+	}
+	r_asset_root = resource_root.begins_with("res://") ? project_root : ProjectSettings::get_singleton()->globalize_path(resource_root);
 
 	String css;
-	if (r_asset_root.is_empty()) {
-		hcsr_inline_packed_stylesheets(document, html, css);
-	}
 	for (const String &css_file : document->get_css_files()) {
 		HTMLAssetResource asset;
 		String error;
@@ -447,11 +395,15 @@ bool HTMLSurfaceHCSRBackend::_load_document_source(String &r_html, String &r_doc
 		css += "\n" + String::utf8((const char *)asset.bytes.ptr(), asset.bytes.size()) + "\n";
 	}
 	css += document->get_css();
-	r_html = hcsr_globalize_res_urls(hcsr_inject_document_style(html, document->get_background_color(), css));
+	r_html = hcsr_globalize_res_urls(hcsr_inject_document_style(html, document->get_background_color(), css), project_root);
 	if (document_path.is_empty()) {
 		document_path = resource_root.path_join("hcsr_document.html");
 	}
-	r_document_path = ProjectSettings::get_singleton()->globalize_path(document_path);
+	if (resource_root_is_packed && document_path.begins_with("res://")) {
+		r_document_path = project_root.path_join(document_path.trim_prefix("res://"));
+	} else {
+		r_document_path = ProjectSettings::get_singleton()->globalize_path(document_path);
+	}
 	if (r_document_path.is_empty()) {
 		r_document_path = "/hcsr/" + document_path.get_file();
 	}
@@ -561,8 +513,19 @@ bool HTMLSurfaceHCSRBackend::_service_resource_requests(bool &r_resources_comple
 
 		const String requested_url = String::utf8(requested_url_bytes.ptr());
 		const String resolved_url = String::utf8(resolved_url_bytes.ptr());
-		String godot_path = ProjectSettings::get_singleton()->localize_path(
-				resolved_url.replace("\\", "/"));
+		const String normalized_resolved_url = resolved_url.replace("\\", "/");
+		const String packed_asset_root = hcsr_get_packed_asset_root();
+		String godot_path;
+		// Convert HCSR's virtual packed path back to the canonical Godot path.
+		// Using the resolved URL (rather than the originally requested relative
+		// URL) retains stylesheet-relative paths for fonts, images, and imports.
+		if (normalized_resolved_url == packed_asset_root) {
+			godot_path = "res://";
+		} else if (normalized_resolved_url.begins_with(packed_asset_root + "/")) {
+			godot_path = "res://" + normalized_resolved_url.trim_prefix(packed_asset_root + "/");
+		} else {
+			godot_path = ProjectSettings::get_singleton()->localize_path(normalized_resolved_url);
+		}
 		if (!godot_path.begins_with("res://") && !godot_path.begins_with("user://")) {
 			godot_path = requested_url;
 		}
