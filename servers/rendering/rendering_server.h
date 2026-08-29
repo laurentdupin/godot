@@ -31,6 +31,8 @@
 #pragma once
 
 #include "core/io/image.h"
+#include "core/os/mutex.h"
+#include "core/templates/hash_set.h"
 #include "core/templates/rid.h"
 #include "core/variant/typed_array.h"
 #include "core/variant/variant.h"
@@ -68,6 +70,8 @@ class RenderingServer : public Object {
 
 	int mm_policy = 0;
 	bool render_loop_enabled = true;
+	mutable Mutex frame_presentation_hold_mutex;
+	HashSet<uint64_t> frame_presentation_holds;
 
 	Array _get_array_from_surface(uint64_t p_format, Vector<uint8_t> p_vertex_data, Vector<uint8_t> p_attrib_data, Vector<uint8_t> p_skin_data, int p_vertex_len, Vector<uint8_t> p_index_data, int p_index_len, const AABB &p_aabb, const Vector4 &p_uv_scale) const;
 
@@ -969,6 +973,9 @@ public:
 	/* EVENT QUEUING */
 
 	virtual void request_frame_drawn_callback(const Callable &p_callable) = 0;
+	void hold_frame_presentation(uint64_t p_owner);
+	void release_frame_presentation(uint64_t p_owner);
+	bool is_frame_presentation_held() const;
 
 	virtual void draw(bool p_swap_buffers = true, double frame_step = 0.0) = 0;
 	virtual void sync() = 0;

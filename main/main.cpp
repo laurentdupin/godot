@@ -4978,10 +4978,14 @@ bool Main::iteration() {
 	bool wants_present = (DisplayServer::get_singleton()->can_any_window_draw() ||
 								 DisplayServer::get_singleton()->has_additional_outputs()) &&
 			RenderingServer::get_singleton()->is_render_loop_enabled();
+	const bool frame_presentation_held = RenderingServer::get_singleton()->is_frame_presentation_held();
+	if (frame_presentation_held) {
+		wants_present = false;
+	}
 
-	if (wants_present || has_pending_resources_for_processing) {
-		wants_present |= force_redraw_requested;
-		if ((!force_redraw_requested) && OS::get_singleton()->is_in_low_processor_usage_mode()) {
+	if (wants_present || has_pending_resources_for_processing || frame_presentation_held) {
+		wants_present |= force_redraw_requested && !frame_presentation_held;
+		if ((!force_redraw_requested) && !frame_presentation_held && OS::get_singleton()->is_in_low_processor_usage_mode()) {
 			if (RenderingServer::get_singleton()->has_changed()) {
 				RenderingServer::get_singleton()->draw(wants_present, scaled_step); // flush visual commands
 				Engine::get_singleton()->increment_frames_drawn();
@@ -4989,7 +4993,9 @@ bool Main::iteration() {
 		} else {
 			RenderingServer::get_singleton()->draw(wants_present, scaled_step); // flush visual commands
 			Engine::get_singleton()->increment_frames_drawn();
-			force_redraw_requested = false;
+			if (!frame_presentation_held) {
+				force_redraw_requested = false;
+			}
 		}
 	}
 

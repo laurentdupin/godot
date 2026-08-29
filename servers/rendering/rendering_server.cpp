@@ -3648,6 +3648,25 @@ void RenderingServer::set_render_loop_enabled(bool p_enabled) {
 	render_loop_enabled = p_enabled;
 }
 
+void RenderingServer::hold_frame_presentation(uint64_t p_owner) {
+	ERR_FAIL_COND(p_owner == 0);
+	MutexLock lock(frame_presentation_hold_mutex);
+	frame_presentation_holds.insert(p_owner);
+}
+
+void RenderingServer::release_frame_presentation(uint64_t p_owner) {
+	if (p_owner == 0) {
+		return;
+	}
+	MutexLock lock(frame_presentation_hold_mutex);
+	frame_presentation_holds.erase(p_owner);
+}
+
+bool RenderingServer::is_frame_presentation_held() const {
+	MutexLock lock(frame_presentation_hold_mutex);
+	return !frame_presentation_holds.is_empty();
+}
+
 RenderingServer::RenderingServer() {
 	//ERR_FAIL_COND(singleton);
 
