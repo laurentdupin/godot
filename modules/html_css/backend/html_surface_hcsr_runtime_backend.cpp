@@ -3290,6 +3290,14 @@ static Error runtime_queue_pointer_request(
 		const hcsr_runtime_status_t receipt_status = hcsr_runtime_session_receive_host_input(
 				p_state->session, &receipt_request, &receipt_info);
 		if (receipt_status != HCSR_RUNTIME_OK) {
+			RenderingServer::get_singleton()->hold_frame_presentation((uint64_t)p_state);
+			p_state->host_frame_receipts_open = true;
+			p_state->terminal = true;
+			p_state->pending_work = false;
+			p_state->terminal_reason = vformat(
+					"HCSR rejected pointer input at host receipt (status %d); presentation remains held.",
+					(int)receipt_status);
+			ERR_PRINT(p_state->terminal_reason);
 			return ERR_INVALID_DATA;
 		}
 		RenderingServer::get_singleton()->hold_frame_presentation((uint64_t)p_state);
@@ -3452,6 +3460,14 @@ static Error runtime_queue_scroll_request(
 		const hcsr_runtime_status_t receipt_status = hcsr_runtime_session_receive_host_input(
 				p_state->session, &receipt_request, &receipt_info);
 		if (receipt_status != HCSR_RUNTIME_OK) {
+			RenderingServer::get_singleton()->hold_frame_presentation((uint64_t)p_state);
+			p_state->host_frame_receipts_open = true;
+			p_state->terminal = true;
+			p_state->pending_work = false;
+			p_state->terminal_reason = vformat(
+					"HCSR rejected scroll input at host receipt (status %d); presentation remains held.",
+					(int)receipt_status);
+			ERR_PRINT(p_state->terminal_reason);
 			return ERR_INVALID_DATA;
 		}
 		RenderingServer::get_singleton()->hold_frame_presentation((uint64_t)p_state);
