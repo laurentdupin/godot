@@ -28,10 +28,11 @@ static constexpr int RUNTIME_PRESENTER_STANDBY_STEP_UNITS = 262144;
 static constexpr int RUNTIME_SEMANTIC_STEP_SLICE_UNITS = 4096;
 static constexpr uint64_t RUNTIME_SEMANTIC_FRAME_BUDGET_MICROSECONDS = 8000;
 static constexpr uint64_t RUNTIME_INTERACTIVE_FRAME_BUDGET_MICROSECONDS = 16667;
-static constexpr uint32_t RUNTIME_REQUIRED_ABI_VERSION = 15;
+static constexpr int RUNTIME_ADMITTED_SCROLL_INPUT_CAPACITY = 256;
+static constexpr uint32_t RUNTIME_REQUIRED_ABI_VERSION = 17;
 
 static_assert(HCSR_RUNTIME_ABI_VERSION == RUNTIME_REQUIRED_ABI_VERSION,
-		"The Godot HCSR replacement backend must be compiled against runtime ABI v15.");
+		"The Godot HCSR replacement backend must be compiled against runtime ABI v17.");
 
 struct RuntimeMutation {
 	int kind = RUNTIME_MUTATION_TEXT;
@@ -68,6 +69,12 @@ struct RuntimeScrollRequest {
 	uint64_t source_runtime_generation = 0;
 	uint64_t source_configuration_id = 0;
 	uint64_t source_input_id = 0;
+};
+
+struct RuntimeAdmittedScrollInput {
+	uint64_t input_id = 0;
+	uint64_t frame_id = 0;
+	uint64_t host_receipt_id = 0;
 };
 
 struct RuntimeResourceToken {
@@ -337,6 +344,7 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	Vector<RuntimeMutation> mutations;
 	Vector<RuntimePointerRequest> pointer_requests;
 	Vector<RuntimeScrollRequest> scroll_requests;
+	Vector<RuntimeAdmittedScrollInput> admitted_scroll_inputs;
 	Vector<HTMLPointerEvent> pointer_events;
 	Vector<RuntimeOutputState *> outputs;
 	Vector<RuntimeOutputState *> retiring_outputs;
@@ -1747,6 +1755,65 @@ static bool runtime_step_retiring_output(
 	return true;
 }
 
+static bool runtime_resolve_completed_scroll_input(
+		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		int64_t p_input_id,
+		int64_t p_frame_id) {
+	if (p_input_id == 0 && p_frame_id == 0) {
+		return true;
+	}
+	if (p_input_id <= 0 || p_frame_id <= 0) {
+		runtime_set_terminal(p_state,
+				"HCSR replacement returned an incomplete no-publication scroll authority.");
+		return false;
+	}
+	const uint64_t input_id = (uint64_t)p_input_id;
+	const uint64_t frame_id = (uint64_t)p_frame_id;
+	RuntimeAdmittedScrollInput admitted;
+	bool found = false;
+	{
+		MutexLock lock(p_state->mutex);
+		for (int index = 0; index < p_state->admitted_scroll_inputs.size(); index++) {
+			if (p_state->admitted_scroll_inputs[index].input_id == input_id) {
+				admitted = p_state->admitted_scroll_inputs[index];
+				found = true;
+				break;
+			}
+		}
+	}
+	if (!found) {
+		runtime_set_terminal(p_state,
+				"HCSR replacement completed a no-publication scroll input that Godot never admitted.");
+		return false;
+	}
+	if (admitted.frame_id != frame_id) {
+		runtime_set_terminal(p_state,
+				"HCSR replacement returned a no-publication scroll frame outside its admitted authority.");
+		return false;
+	}
+	hcsr_runtime_host_input_binding_t binding;
+	initialize_abi(&binding, sizeof(binding));
+	binding.receipt_id = admitted.host_receipt_id;
+	binding.input_revision = admitted.input_id;
+	binding.publication_lane = HCSR_RUNTIME_HOST_INPUT_SCROLL;
+	binding.resolved_without_mutation = 1;
+	if (hcsr_runtime_session_resolve_host_input(p_state->session, &binding) != HCSR_RUNTIME_OK) {
+		runtime_set_terminal(p_state, runtime_copy_last_error(
+				p_state, "Godot could not resolve the exact no-publication HCSR scroll input."));
+		return false;
+	}
+	{
+		MutexLock lock(p_state->mutex);
+		for (int index = 0; index < p_state->admitted_scroll_inputs.size(); index++) {
+			if (p_state->admitted_scroll_inputs[index].input_id == input_id) {
+				p_state->admitted_scroll_inputs.remove_at(index);
+				break;
+			}
+		}
+	}
+	return true;
+}
+
 static bool runtime_step_active(
 		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
 	RenderingServer *rendering_server = RenderingServer::get_singleton();
@@ -1876,6 +1943,10 @@ static bool runtime_step_active(
 			initialize_abi(&step, sizeof(step));
 			status = hcsr_runtime_session_step(
 					p_state->session, RUNTIME_SEMANTIC_STEP_SLICE_UNITS, &step);
+			if (!runtime_resolve_completed_scroll_input(
+					p_state, step.completed_scroll_input_id, step.completed_scroll_frame_id)) {
+				return false;
+			}
 		} while (status == HCSR_RUNTIME_PENDING
 				&& hcsr_runtime_get_monotonic_timestamp_microseconds() < semantic_cutoff);
 			semantic_publication_ready = status == HCSR_RUNTIME_OK
@@ -2346,6 +2417,7 @@ static bool runtime_step_pointer_input(HTMLSurfaceHCSRRuntimeBackend::RuntimeSta
 
 static bool runtime_submit_one_scroll_input(HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
 	RuntimeScrollRequest request;
+	bool admitted_capacity_exhausted = false;
 	{
 		MutexLock lock(p_state->mutex);
 		if (p_state->active_pointer_submission_id != 0 || p_state->scroll_requests.is_empty()) {
@@ -2356,8 +2428,17 @@ static bool runtime_submit_one_scroll_input(HTMLSurfaceHCSRRuntimeBackend::Runti
 						< p_state->scroll_requests[0].receipt_sequence) {
 			return true;
 		}
-		request = p_state->scroll_requests[0];
-		p_state->scroll_requests.remove_at(0);
+		if (p_state->admitted_scroll_inputs.size() >= RUNTIME_ADMITTED_SCROLL_INPUT_CAPACITY) {
+			admitted_capacity_exhausted = true;
+		} else {
+			request = p_state->scroll_requests[0];
+			p_state->scroll_requests.remove_at(0);
+		}
+	}
+	if (admitted_capacity_exhausted) {
+		runtime_set_terminal(p_state,
+				"Godot exhausted its bounded admitted HCSR scroll authority capacity.");
+		return false;
 	}
 	hcsr_runtime_scroll_input_t input;
 	initialize_abi(&input, sizeof(input));
@@ -2388,6 +2469,14 @@ static bool runtime_submit_one_scroll_input(HTMLSurfaceHCSRRuntimeBackend::Runti
 	if (status != HCSR_RUNTIME_OK) {
 		runtime_set_terminal(p_state, vformat("HCSR replacement scroll submission failed (status %d).", (int)status));
 		return false;
+	}
+	RuntimeAdmittedScrollInput admitted;
+	admitted.input_id = input.input_id;
+	admitted.frame_id = input.frame_id;
+	admitted.host_receipt_id = input.host_receipt_id;
+	{
+		MutexLock lock(p_state->mutex);
+		p_state->admitted_scroll_inputs.push_back(admitted);
 	}
 	p_state->semantic_pending = true;
 	return true;
@@ -2994,6 +3083,11 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 			runtime->active_scroll_input_id = runtime->staged_lineage.scroll_input_id;
 			runtime->active_scroll_frame_id = runtime->staged_lineage.scroll_frame_id;
 			runtime->active_scroll_configuration_id = runtime->staged_lineage.scroll_configuration_id;
+			for (int index = runtime->admitted_scroll_inputs.size() - 1; index >= 0; index--) {
+				if (runtime->admitted_scroll_inputs[index].input_id <= runtime->active_scroll_input_id) {
+					runtime->admitted_scroll_inputs.remove_at(index);
+				}
+			}
 			runtime->active_animation_timeline_revision = runtime->staged_lineage.animation_timeline_revision;
 			runtime->active_topology_revision = runtime->staged_topology.revision;
 			runtime->next_host_input_id = MAX(runtime->next_host_input_id,
