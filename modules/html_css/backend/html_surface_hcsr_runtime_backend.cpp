@@ -30,10 +30,10 @@ static constexpr int RUNTIME_SEMANTIC_STEP_SLICE_UNITS = 4096;
 static constexpr uint64_t RUNTIME_SEMANTIC_FRAME_BUDGET_MICROSECONDS = 8000;
 static constexpr uint64_t RUNTIME_INTERACTIVE_FRAME_BUDGET_MICROSECONDS = 16667;
 static constexpr int RUNTIME_ADMITTED_SCROLL_INPUT_CAPACITY = 256;
-static constexpr uint32_t RUNTIME_REQUIRED_ABI_VERSION = 18;
+static constexpr uint32_t RUNTIME_REQUIRED_ABI_VERSION = 19;
 
 static_assert(HCSR_RUNTIME_ABI_VERSION == RUNTIME_REQUIRED_ABI_VERSION,
-		"The Godot HCSR replacement backend must be compiled against runtime ABI v18.");
+		"The Godot HCSR replacement backend must be compiled against runtime ABI v19.");
 
 struct RuntimeMutation {
 	int kind = RUNTIME_MUTATION_TEXT;
@@ -168,6 +168,7 @@ static void initialize_abi(void *p_value, size_t p_size);
 
 static bool runtime_load_document_source(
 		const Ref<HTMLDocument> &p_document,
+		hcsr_runtime_compilation_request_t *p_compilation_request,
 		String &r_html,
 		String &r_css,
 		Vector<RuntimeResolvedStylesheet> &r_stylesheets,
@@ -208,8 +209,18 @@ static bool runtime_load_document_source(
 	CharString css_utf8 = r_css.utf8();
 	hcsr_runtime_document_t *provisional_document = nullptr;
 	hcsr_runtime_compilation_report_t *report = nullptr;
-	const hcsr_runtime_status_t discovery_status = hcsr_runtime_document_compile_with_stylesheets(
-			html_utf8.get_data(), css_utf8.get_data(), nullptr, 0, &provisional_document, &report);
+	const hcsr_runtime_status_t discovery_status = hcsr_runtime_compilation_request_compile_with_stylesheets(
+			p_compilation_request, html_utf8.get_data(), css_utf8.get_data(), nullptr, 0,
+			&provisional_document, &report);
+	if (discovery_status == HCSR_RUNTIME_CANCELED) {
+		if (report != nullptr) {
+			hcsr_runtime_compilation_report_release(report);
+		}
+		if (provisional_document != nullptr) {
+			hcsr_runtime_document_release(provisional_document);
+		}
+		return false;
+	}
 	if (report == nullptr) {
 		r_error = vformat("HCSR replacement could not discover stylesheet resources (status %d).", (int)discovery_status);
 		return false;
@@ -358,6 +369,7 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	bool document_dirty = false;
 	uint64_t document_snapshot_generation = 0;
 	WorkerThreadPool::TaskID compilation_task_id = WorkerThreadPool::INVALID_TASK_ID;
+	hcsr_runtime_compilation_request_t *active_compilation_request = nullptr;
 	bool compilation_result_ready = false;
 	uint64_t compilation_result_generation = 0;
 	hcsr_runtime_document_t *compilation_result_document = nullptr;
@@ -459,6 +471,7 @@ struct RuntimeDocumentCompilationWork {
 	HTMLSurfaceHCSRRuntimeBackend::RuntimeState *state = nullptr;
 	Ref<HTMLDocument> document;
 	uint64_t generation = 0;
+	hcsr_runtime_compilation_request_t *request = nullptr;
 };
 
 static uint64_t runtime_backdrop_hash_bytes(uint64_t p_hash, const void *p_bytes, size_t p_size) {
@@ -1046,7 +1059,7 @@ static bool runtime_ensure_initialized(
 		return true;
 	}
 	if (hcsr_runtime_get_abi_version() != RUNTIME_REQUIRED_ABI_VERSION) {
-		runtime_set_terminal(p_state, "HCSR replacement ABI mismatch; Godot requires runtime ABI v18.");
+		runtime_set_terminal(p_state, "HCSR replacement ABI mismatch; Godot requires runtime ABI v19.");
 		return false;
 	}
 	CharString codec_directory = OS::get_singleton()->get_executable_path().get_base_dir().utf8();
@@ -1105,13 +1118,15 @@ static bool runtime_ensure_initialized(
 
 static bool runtime_compile_document(
 		const Ref<HTMLDocument> &p_document,
+		hcsr_runtime_compilation_request_t *p_compilation_request,
 		hcsr_runtime_document_t *&r_document,
 		String &r_error) {
 	r_document = nullptr;
 	String html;
 	String css;
 	Vector<RuntimeResolvedStylesheet> stylesheets;
-	if (!runtime_load_document_source(p_document, html, css, stylesheets, r_error)) {
+	if (!runtime_load_document_source(
+			p_document, p_compilation_request, html, css, stylesheets, r_error)) {
 		return false;
 	}
 	CharString html_utf8 = html.utf8();
@@ -1149,8 +1164,9 @@ static bool runtime_compile_document(
 		font_inputs.write[index].face_index = platform_fonts[index].face_index;
 	}
 	hcsr_runtime_compilation_report_t *report = nullptr;
-	const hcsr_runtime_status_t compile_status = hcsr_runtime_document_compile_with_stylesheets_and_fonts(
-			html_utf8.get_data(), css_utf8.get_data(), stylesheet_inputs.ptr(), stylesheet_inputs.size(),
+	const hcsr_runtime_status_t compile_status = hcsr_runtime_compilation_request_compile_with_stylesheets_and_fonts(
+			p_compilation_request, html_utf8.get_data(), css_utf8.get_data(),
+			stylesheet_inputs.ptr(), stylesheet_inputs.size(),
 			font_inputs.ptr(), font_inputs.size(), &r_document, &report);
 	if (report == nullptr) {
 		if (r_document != nullptr) {
@@ -1182,10 +1198,13 @@ static void runtime_compile_document_worker(void *p_argument) {
 	RuntimeDocumentCompilationWork *work = static_cast<RuntimeDocumentCompilationWork *>(p_argument);
 	hcsr_runtime_document_t *document = nullptr;
 	String error;
-	const bool success = runtime_compile_document(work->document, document, error);
+	const bool success = runtime_compile_document(work->document, work->request, document, error);
 	HTMLSurfaceHCSRRuntimeBackend::RuntimeState *state = work->state;
 	{
 		MutexLock lock(state->mutex);
+		if (state->active_compilation_request == work->request) {
+			state->active_compilation_request = nullptr;
+		}
 		if (state->closing || work->generation != state->document_snapshot_generation) {
 			if (document != nullptr) {
 				hcsr_runtime_document_release(document);
@@ -1200,6 +1219,10 @@ static void runtime_compile_document_worker(void *p_argument) {
 			document = nullptr;
 			state->pending_work = true;
 		}
+	}
+	const hcsr_runtime_status_t request_release = hcsr_runtime_compilation_request_release(work->request);
+	if (request_release != HCSR_RUNTIME_OK) {
+		ERR_PRINT(vformat("HCSR compilation request release failed with status %d.", (int)request_release));
 	}
 	memdelete(work);
 	runtime_schedule_state(state);
@@ -2914,13 +2937,31 @@ static bool runtime_start_document_compilation(
 		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
 		const Ref<HTMLDocument> &p_document,
 		uint64_t p_generation) {
+	hcsr_runtime_compilation_request_t *request = nullptr;
+	if (hcsr_runtime_compilation_request_create(&request) != HCSR_RUNTIME_OK
+			|| request == nullptr) {
+		runtime_set_terminal(p_state, "Godot could not create a cancellable HCSR compilation request.");
+		return false;
+	}
 	RuntimeDocumentCompilationWork *work = memnew(RuntimeDocumentCompilationWork);
 	work->state = p_state;
 	work->document = p_document;
 	work->generation = p_generation;
+	work->request = request;
+	{
+		MutexLock lock(p_state->mutex);
+		p_state->active_compilation_request = request;
+	}
 	const WorkerThreadPool::TaskID task_id = WorkerThreadPool::get_singleton()->add_native_task(
 			&runtime_compile_document_worker, work, true, SNAME("HCSR document compilation"));
 	if (task_id == WorkerThreadPool::INVALID_TASK_ID) {
+		{
+			MutexLock lock(p_state->mutex);
+			if (p_state->active_compilation_request == request) {
+				p_state->active_compilation_request = nullptr;
+			}
+		}
+		hcsr_runtime_compilation_request_release(request);
 		memdelete(work);
 		runtime_set_terminal(p_state, "Godot could not schedule HCSR document compilation on its worker pool.");
 		return false;
@@ -3481,6 +3522,9 @@ void HTMLSurfaceHCSRRuntimeBackend::_queue_document_snapshot() {
 	}
 	{
 		MutexLock lock(state->mutex);
+		if (state->active_compilation_request != nullptr) {
+			hcsr_runtime_compilation_request_cancel(state->active_compilation_request);
+		}
 		state->requested_document = document;
 		state->document_dirty = true;
 		state->document_snapshot_generation++;
@@ -4323,6 +4367,9 @@ HTMLSurfaceHCSRRuntimeBackend::~HTMLSurfaceHCSRRuntimeBackend() {
 	{
 		MutexLock lock(retiring->mutex);
 		retiring->closing = true;
+		if (retiring->active_compilation_request != nullptr) {
+			hcsr_runtime_compilation_request_cancel(retiring->active_compilation_request);
+		}
 		retiring->pending_work = true;
 		// Resource admission cannot run after closing begins. Release the Godot
 		// object authority on the main thread instead of retaining it until the
