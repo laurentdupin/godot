@@ -3327,6 +3327,22 @@ static Error runtime_queue_pointer_request(
 					&& p_state->pointer_requests[p_state->pointer_requests.size() - 1].source_runtime_generation == request.source_runtime_generation
 					&& p_state->pointer_requests[p_state->pointer_requests.size() - 1].source_configuration_id == request.source_configuration_id
 					&& p_state->pointer_requests[p_state->pointer_requests.size() - 1].source_input_id == request.source_input_id) {
+				const uint64_t predecessor_receipt_id =
+						p_state->pointer_requests[p_state->pointer_requests.size() - 1].host_receipt_id;
+				const hcsr_runtime_status_t supersede_status = hcsr_runtime_session_supersede_host_input(
+						p_state->session,
+						predecessor_receipt_id,
+						request.host_receipt_id,
+						HCSR_RUNTIME_HOST_INPUT_POINTER);
+				if (supersede_status != HCSR_RUNTIME_OK) {
+					p_state->terminal = true;
+					p_state->pending_work = false;
+					p_state->terminal_reason = vformat(
+							"HCSR rejected exact Godot pointer receipt supersession (status %d).",
+							(int)supersede_status);
+					ERR_PRINT(p_state->terminal_reason);
+					return ERR_BUG;
+				}
 				request.receipt_timestamp_microseconds = MIN(
 						request.receipt_timestamp_microseconds,
 						p_state->pointer_requests[p_state->pointer_requests.size() - 1].receipt_timestamp_microseconds);
