@@ -3364,7 +3364,9 @@ static Error runtime_queue_pointer_request(
 		receipt_request.observed_interaction_state_revision = p_state->active_interaction_state_revision_id;
 		receipt_request.observed_input_revision = p_state->active_interaction_input_id;
 		receipt_request.observed_frame_revision = p_state->active_interaction_frame_id;
-		receipt_request.observed_configuration_revision = p_state->active_interaction_configuration_id;
+		receipt_request.observed_configuration_revision = p_state->active_has_interaction_state
+				? p_state->active_interaction_configuration_id
+				: p_state->active_scroll_configuration_id;
 		receipt_request.observed_output_group_revision = p_state->active_topology_revision;
 		receipt_request.observed_coordinate_transform_revision = p_state->active_topology_revision;
 		receipt_request.output_count = 1 + p_state->outputs.size();
@@ -3380,9 +3382,9 @@ static Error runtime_queue_pointer_request(
 			p_state->host_frame_receipts_open = true;
 			p_state->terminal = true;
 			p_state->pending_work = false;
-			p_state->terminal_reason = vformat(
+			p_state->terminal_reason = runtime_copy_last_error(p_state, vformat(
 					"HCSR rejected pointer input at host receipt (status %d); presentation remains held.",
-					(int)receipt_status);
+					(int)receipt_status));
 			ERR_PRINT(p_state->terminal_reason);
 			return ERR_INVALID_DATA;
 		}
