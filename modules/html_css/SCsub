@@ -234,6 +234,34 @@ def _html_css_ensure_hcsr_static_library():
             with open(marker_path, "r", encoding="utf-8") as marker_file:
                 packaged_commit = marker_file.read().strip()
         package_is_current = source_commit.returncode == 0 and packaged_commit == source_commit.stdout.strip()
+    if package_is_current and not env["module_html_css_hcsr_lib_path"]:
+        # A commit marker cannot detect edited-but-uncommitted renderer sources.
+        # Compare product inputs with the archive as well so an ordinary Godot
+        # rebuild cannot silently link a stale HCSR implementation.
+        hcsr_input_extensions = (".c", ".cpp", ".cs", ".csproj", ".h", ".props", ".ps1", ".targets")
+        hcsr_input_directories = [
+            os.path.join(hcsr_root, "native", "codecs"),
+            os.path.join(hcsr_root, "native", "include"),
+            os.path.join(hcsr_root, "src"),
+            os.path.join(hcsr_root, "tools"),
+        ]
+        newest_hcsr_input_time = 0.0
+        for source_directory in hcsr_input_directories:
+            if not os.path.isdir(source_directory):
+                continue
+            for directory, subdirectories, filenames in os.walk(source_directory):
+                subdirectories[:] = [name for name in subdirectories if name not in ("bin", "build", "obj")]
+                for filename in filenames:
+                    if filename.lower().endswith(hcsr_input_extensions):
+                        newest_hcsr_input_time = max(
+                            newest_hcsr_input_time,
+                            os.path.getmtime(os.path.join(directory, filename)),
+                        )
+        for filename in ("Directory.Build.props", "Directory.Build.targets", "global.json"):
+            input_path = os.path.join(hcsr_root, filename)
+            if os.path.isfile(input_path):
+                newest_hcsr_input_time = max(newest_hcsr_input_time, os.path.getmtime(input_path))
+        package_is_current = newest_hcsr_input_time <= os.path.getmtime(library_path)
     if package_is_current:
         return
     if not env["module_html_css_hcsr_auto_build"] or env["module_html_css_hcsr_lib_path"]:
