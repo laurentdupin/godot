@@ -2393,17 +2393,44 @@ static bool runtime_seal_host_frame_requirements(
 	return true;
 }
 
+static bool runtime_transition_sealed_host_frame_configuration(
+		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		uint64_t p_configuration_revision,
+		uint64_t p_output_group_revision) {
+	if (!p_state->host_frame_requirement_sealed
+			|| (p_state->sealed_host_frame_requirement.configuration_revision == p_configuration_revision
+					&& p_state->sealed_host_frame_requirement.output_group_revision == p_output_group_revision)) {
+		return true;
+	}
+	hcsr_runtime_host_frame_requirement_info_t transitioned;
+	initialize_abi(&transitioned, sizeof(transitioned));
+	if (hcsr_runtime_session_transition_host_frame_configuration(
+				p_state->session,
+				p_configuration_revision,
+				p_output_group_revision,
+				&transitioned) != HCSR_RUNTIME_OK) {
+		return false;
+	}
+	p_state->sealed_host_frame_requirement = transitioned;
+	return true;
+}
+
 static bool runtime_try_acknowledge_resolved_host_frame(
 		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
 	if (!p_state->host_frame_requirement_sealed || p_state->active_publication == nullptr) {
 		return true;
 	}
+	const uint64_t active_configuration_revision = p_state->active_has_interaction_state
+			? p_state->active_interaction_configuration_id : p_state->active_scroll_configuration_id;
+	if (!runtime_transition_sealed_host_frame_configuration(
+			p_state, active_configuration_revision, p_state->active_topology_revision)) {
+		return false;
+	}
 	hcsr_runtime_host_frame_permit_request_t request;
 	initialize_abi(&request, sizeof(request));
 	request.expected_runtime_generation = p_state->active_generation;
 	request.frame_stream_epoch = p_state->frame_stream_epoch;
-	request.configuration_revision = p_state->active_has_interaction_state
-			? p_state->active_interaction_configuration_id : p_state->active_scroll_configuration_id;
+	request.configuration_revision = active_configuration_revision;
 	request.output_group_revision = p_state->sealed_host_frame_requirement.output_group_revision;
 	request.coordinate_transform_revision = p_state->sealed_host_frame_requirement.output_group_revision;
 	hcsr_runtime_host_frame_permit_t *permit = nullptr;
@@ -2799,15 +2826,21 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 			runtime_set_terminal(runtime, "Godot could not seal the exact receipt-bound HCSR frame requirement.");
 			return;
 		}
+		const uint64_t staged_configuration_revision = runtime->staged_lineage.has_interaction_state
+				? runtime->staged_lineage.interaction_configuration_id
+				: runtime->staged_lineage.scroll_configuration_id;
+		if (!runtime_transition_sealed_host_frame_configuration(
+				runtime, staged_configuration_revision, runtime->staged_topology.revision)) {
+			runtime_set_terminal(runtime, "Godot could not preserve its sealed HCSR input authority through output reconfiguration.");
+			return;
+		}
 		hcsr_runtime_host_frame_permit_t *host_frame_permit = nullptr;
 		if (runtime->host_frame_requirement_sealed) {
 			hcsr_runtime_host_frame_permit_request_t permit_request;
 			initialize_abi(&permit_request, sizeof(permit_request));
 			permit_request.expected_runtime_generation = runtime->staged_lineage.runtime_generation;
 			permit_request.frame_stream_epoch = runtime->frame_stream_epoch;
-			permit_request.configuration_revision = runtime->staged_lineage.has_interaction_state
-					? runtime->staged_lineage.interaction_configuration_id
-					: runtime->staged_lineage.scroll_configuration_id;
+			permit_request.configuration_revision = staged_configuration_revision;
 			permit_request.output_group_revision = runtime->sealed_host_frame_requirement.output_group_revision;
 			permit_request.coordinate_transform_revision = runtime->sealed_host_frame_requirement.output_group_revision;
 			hcsr_runtime_host_frame_permit_info_t permit_info;
