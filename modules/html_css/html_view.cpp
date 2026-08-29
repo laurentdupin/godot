@@ -2038,6 +2038,7 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 			const bool generation_bound_input = surface->uses_generation_bound_input();
 			const bool has_press_hit = _hit_test(html_position, pointer_press_hit);
 			const Error down_err = surface->mouse_down(html_position, html_button, _modifiers_from_event(mb, button_index, true), mb->is_double_click() ? 2 : 1);
+			surface->begin_host_input_transaction();
 			const bool used_surface_dispatch = _drain_surface_pointer_events(nullptr, !generation_bound_input, has_press_hit ? &pointer_press_hit : nullptr);
 			if ((!used_surface_dispatch || generation_bound_input) && has_press_hit && !pointer_press_hit.disabled) {
 				// Retain the target from the presentation generation visible at press
@@ -2048,6 +2049,7 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 					_emit_pointer_phase(SNAME("down"), pointer_press_hit, html_position, button_index);
 				}
 			}
+			surface->end_host_input_transaction();
 			html_view_input_trace(vformat("seq=%d mouse_down accepted local=%s html=%s button=%d err=%d press_hit=%s element_id=%s elapsed_ms=%.3f",
 					(int64_t)trace_sequence,
 					mb->get_position(),
@@ -2080,6 +2082,7 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 		HTMLElementHit release_hit;
 		const bool has_release_hit = _hit_test(html_position, release_hit);
 		const Error up_err = surface->mouse_up(html_position, html_button, _modifiers_from_event(mb, button_index, false), mb->is_double_click() ? 2 : 1);
+		surface->begin_host_input_transaction();
 		bool native_activation_emitted = false;
 		const bool used_surface_dispatch = _drain_surface_pointer_events(&native_activation_emitted, !generation_bound_input, pointer_press_active ? &pointer_press_hit : nullptr, has_release_hit ? &release_hit : nullptr);
 		if (!used_surface_dispatch && pointer_press_active && pointer_press_button == button_index) {
@@ -2093,6 +2096,7 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 			_emit_activation(release_hit, html_position, button_index);
 			activation_emitted = true;
 		}
+		surface->end_host_input_transaction();
 		html_view_input_trace(vformat("seq=%d mouse_up accepted local=%s html=%s button=%d err=%d release_hit=%s element_id=%s activation_emitted=%s elapsed_ms=%.3f",
 				(int64_t)trace_sequence,
 				mb->get_position(),

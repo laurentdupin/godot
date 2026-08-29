@@ -28,16 +28,18 @@ static constexpr int RUNTIME_PRESENTER_STANDBY_STEP_UNITS = 262144;
 static constexpr int RUNTIME_SEMANTIC_STEP_SLICE_UNITS = 4096;
 static constexpr uint64_t RUNTIME_SEMANTIC_FRAME_BUDGET_MICROSECONDS = 8000;
 static constexpr uint64_t RUNTIME_INTERACTIVE_FRAME_BUDGET_MICROSECONDS = 16667;
-static constexpr uint32_t RUNTIME_REQUIRED_ABI_VERSION = 13;
+static constexpr uint32_t RUNTIME_REQUIRED_ABI_VERSION = 14;
 
 static_assert(HCSR_RUNTIME_ABI_VERSION == RUNTIME_REQUIRED_ABI_VERSION,
-		"The Godot HCSR replacement backend must be compiled against runtime ABI v13.");
+		"The Godot HCSR replacement backend must be compiled against runtime ABI v14.");
 
 struct RuntimeMutation {
 	int kind = RUNTIME_MUTATION_TEXT;
 	String id;
 	String name;
 	String value;
+	uint64_t causal_host_receipt_id = 0;
+	uint64_t causal_receipt_timestamp_microseconds = 0;
 };
 
 struct RuntimePointerRequest {
@@ -379,6 +381,11 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	hcsr_runtime_host_frame_requirement_info_t sealed_host_frame_requirement = {};
 	uint64_t next_host_input_id = 1;
 	uint64_t next_host_receipt_sequence = 0;
+	uint64_t last_pointer_host_receipt_id = 0;
+	uint64_t last_pointer_receipt_timestamp_microseconds = 0;
+	uint64_t causal_host_receipt_id = 0;
+	uint64_t causal_receipt_timestamp_microseconds = 0;
+	int causal_input_transaction_depth = 0;
 	Vector<RuntimeResourceToken> completed_resource_tokens;
 	uint64_t next_host_frame_id = 1;
 	uint64_t active_pointer_submission_id = 0;
@@ -1197,6 +1204,8 @@ static bool runtime_submit_mutations(
 		return false;
 	}
 	const bool structural_journal = p_mutations[0].kind == RUNTIME_MUTATION_INNER_HTML;
+	uint64_t causal_cutoff_timestamp = 0;
+	Vector<uint64_t> causal_receipts;
 	for (const RuntimeMutation &mutation : p_mutations) {
 		if (r_consumed_count > 0
 				&& (structural_journal || mutation.kind == RUNTIME_MUTATION_INNER_HTML)) {
@@ -1242,27 +1251,48 @@ static bool runtime_submit_mutations(
 			return false;
 		}
 		r_consumed_count++;
+		if (mutation.causal_host_receipt_id != 0) {
+			const uint64_t mutation_cutoff = mutation.causal_receipt_timestamp_microseconds
+					+ RUNTIME_INTERACTIVE_FRAME_BUDGET_MICROSECONDS;
+			causal_cutoff_timestamp = causal_cutoff_timestamp == 0
+					? mutation_cutoff : MIN(causal_cutoff_timestamp, mutation_cutoff);
+			if (!causal_receipts.has(mutation.causal_host_receipt_id)) {
+				causal_receipts.push_back(mutation.causal_host_receipt_id);
+			}
+		}
 	}
 	hcsr_runtime_submission_info_t submission;
 	initialize_abi(&submission, sizeof(submission));
 	const uint64_t now = hcsr_runtime_get_monotonic_timestamp_microseconds();
-	const uint64_t cutoff_timestamp = p_interactive ? now + 16667 : 0;
+	const bool interactive = p_interactive || !causal_receipts.is_empty();
+	const uint64_t cutoff_timestamp = interactive
+			? (causal_cutoff_timestamp != 0 ? causal_cutoff_timestamp
+					: now + RUNTIME_INTERACTIVE_FRAME_BUDGET_MICROSECONDS)
+			: 0;
 	const hcsr_runtime_status_t status = hcsr_runtime_session_submit_mutation_with_priority(
 			p_state->session,
 			journal,
-			p_interactive ? HCSR_RUNTIME_MUTATION_PRIORITY_INTERACTIVE : HCSR_RUNTIME_MUTATION_PRIORITY_NORMAL,
-			p_interactive ? MAX((uint64_t)1, p_request_process_frame) : 0,
+			interactive ? HCSR_RUNTIME_MUTATION_PRIORITY_INTERACTIVE : HCSR_RUNTIME_MUTATION_PRIORITY_NORMAL,
+			interactive ? MAX((uint64_t)1, p_request_process_frame) : 0,
 			cutoff_timestamp,
 			&submission);
 	if (status != HCSR_RUNTIME_OK) {
 		runtime_set_terminal(p_state, "HCSR replacement rejected the Godot mutation journal submission.");
 		return false;
 	}
+	for (uint64_t receipt_id : causal_receipts) {
+		if (hcsr_runtime_session_attach_host_input_mutation(
+				p_state->session, receipt_id, submission.target_author_revision) != HCSR_RUNTIME_OK) {
+			runtime_set_terminal(p_state,
+					"HCSR replacement could not attach a synchronous Godot mutation to its host-input receipt.");
+			return false;
+		}
+	}
 	p_state->semantic_pending = true;
 	p_state->pending_work = true;
 	p_state->submitted_request_serial = p_request_serial;
 	p_state->submitted_request_is_configuration_only = false;
-	if (p_interactive) {
+	if (interactive) {
 		p_state->interactive_pending = true;
 		p_state->newest_requested_submission_id = submission.submission_id;
 		p_state->newest_requested_author_revision = submission.target_author_revision;
@@ -2982,6 +3012,10 @@ Error HTMLSurfaceHCSRRuntimeBackend::_queue_mutation(
 	{
 		MutexLock lock(state->mutex);
 		ERR_FAIL_COND_V(state->terminal || state->closing, ERR_UNAVAILABLE);
+		if (state->causal_input_transaction_depth > 0) {
+			mutation.causal_host_receipt_id = state->causal_host_receipt_id;
+			mutation.causal_receipt_timestamp_microseconds = state->causal_receipt_timestamp_microseconds;
+		}
 		state->mutations.push_back(mutation);
 		state->mutation_request_process_frame = Engine::get_singleton()->get_process_frames();
 		state->request_serial++;
@@ -2989,6 +3023,25 @@ Error HTMLSurfaceHCSRRuntimeBackend::_queue_mutation(
 	}
 	_schedule_work();
 	return OK;
+}
+
+void HTMLSurfaceHCSRRuntimeBackend::begin_host_input_transaction() {
+	ERR_FAIL_NULL(state);
+	MutexLock lock(state->mutex);
+	if (state->causal_input_transaction_depth++ == 0) {
+		state->causal_host_receipt_id = state->last_pointer_host_receipt_id;
+		state->causal_receipt_timestamp_microseconds = state->last_pointer_receipt_timestamp_microseconds;
+	}
+}
+
+void HTMLSurfaceHCSRRuntimeBackend::end_host_input_transaction() {
+	ERR_FAIL_NULL(state);
+	MutexLock lock(state->mutex);
+	ERR_FAIL_COND(state->causal_input_transaction_depth <= 0);
+	if (--state->causal_input_transaction_depth == 0) {
+		state->causal_host_receipt_id = 0;
+		state->causal_receipt_timestamp_microseconds = 0;
+	}
 }
 
 void HTMLSurfaceHCSRRuntimeBackend::mark_document_dirty() {
@@ -3220,6 +3273,8 @@ static Error runtime_queue_pointer_request(
 		request.source_runtime_generation = p_state->active_generation;
 		request.source_configuration_id = p_state->active_interaction_configuration_id;
 		request.source_input_id = p_state->active_interaction_input_id;
+		p_state->last_pointer_host_receipt_id = receipt_info.receipt_id;
+		p_state->last_pointer_receipt_timestamp_microseconds = receipt_timestamp_microseconds;
 		if (!p_state->active_has_interaction_state) {
 			hcsr_runtime_host_input_binding_t binding;
 			initialize_abi(&binding, sizeof(binding));
@@ -3508,6 +3563,12 @@ Error HTMLSurfaceHCSRRuntimeBackend::apply_element_mutations(const Array &p_muta
 	{
 		MutexLock lock(state->mutex);
 		ERR_FAIL_COND_V(state->terminal || state->closing, ERR_UNAVAILABLE);
+		if (state->causal_input_transaction_depth > 0) {
+			for (RuntimeMutation &mutation : parsed) {
+				mutation.causal_host_receipt_id = state->causal_host_receipt_id;
+				mutation.causal_receipt_timestamp_microseconds = state->causal_receipt_timestamp_microseconds;
+			}
+		}
 		state->mutations.append_array(parsed);
 		state->mutation_request_process_frame = Engine::get_singleton()->get_process_frames();
 		state->request_serial++;

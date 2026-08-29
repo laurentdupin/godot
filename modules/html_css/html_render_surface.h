@@ -124,6 +124,8 @@ public:
 	Error mouse_move(const Point2 &p_position, int p_modifiers, bool &r_visual_state_changed);
 	Error mouse_down(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count);
 	Error mouse_up(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count);
+	void begin_host_input_transaction();
+	void end_host_input_transaction();
 	Error pointer_cancel(const Point2 &p_position, int p_pointer_id = 1);
 	Error notify_pointer_leave(const Point2 &p_position, bool p_cancel_pressed_interaction = true, int p_pointer_id = 1);
 	Error begin_scrollbar_interaction(const Point2 &p_position, double p_event_time_seconds, bool &r_consumed);

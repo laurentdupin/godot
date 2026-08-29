@@ -600,6 +600,16 @@ Error HTMLRenderSurface::mouse_up(const Point2 &p_position, HTMLSurfaceMouseButt
 	return backend->mouse_up(p_position, p_button, p_modifiers, p_click_count);
 }
 
+void HTMLRenderSurface::begin_host_input_transaction() {
+	_ensure_backend();
+	backend->begin_host_input_transaction();
+}
+
+void HTMLRenderSurface::end_host_input_transaction() {
+	_ensure_backend();
+	backend->end_host_input_transaction();
+}
+
 Error HTMLRenderSurface::pointer_cancel(const Point2 &p_position, int p_pointer_id) {
 	_ensure_backend();
 	return backend->pointer_cancel(p_position, p_pointer_id);
