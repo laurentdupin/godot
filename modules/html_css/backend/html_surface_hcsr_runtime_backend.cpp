@@ -29,10 +29,10 @@ static constexpr int RUNTIME_SEMANTIC_STEP_SLICE_UNITS = 4096;
 static constexpr uint64_t RUNTIME_SEMANTIC_FRAME_BUDGET_MICROSECONDS = 8000;
 static constexpr uint64_t RUNTIME_INTERACTIVE_FRAME_BUDGET_MICROSECONDS = 16667;
 static constexpr int RUNTIME_ADMITTED_SCROLL_INPUT_CAPACITY = 256;
-static constexpr uint32_t RUNTIME_REQUIRED_ABI_VERSION = 17;
+static constexpr uint32_t RUNTIME_REQUIRED_ABI_VERSION = 18;
 
 static_assert(HCSR_RUNTIME_ABI_VERSION == RUNTIME_REQUIRED_ABI_VERSION,
-		"The Godot HCSR replacement backend must be compiled against runtime ABI v17.");
+		"The Godot HCSR replacement backend must be compiled against runtime ABI v18.");
 
 struct RuntimeMutation {
 	int kind = RUNTIME_MUTATION_TEXT;
@@ -1940,9 +1940,17 @@ static bool runtime_step_active(
 		const uint64_t semantic_cutoff = hcsr_runtime_get_monotonic_timestamp_microseconds()
 				+ RUNTIME_SEMANTIC_FRAME_BUDGET_MICROSECONDS;
 		do {
+			const uint64_t semantic_now = hcsr_runtime_get_monotonic_timestamp_microseconds();
+			if (semantic_now >= semantic_cutoff) {
+				status = HCSR_RUNTIME_PENDING;
+				break;
+			}
 			initialize_abi(&step, sizeof(step));
-			status = hcsr_runtime_session_step(
-					p_state->session, RUNTIME_SEMANTIC_STEP_SLICE_UNITS, &step);
+			status = hcsr_runtime_session_step_with_budget(
+					p_state->session,
+					RUNTIME_SEMANTIC_STEP_SLICE_UNITS,
+					(int64_t)(semantic_cutoff - semantic_now),
+					&step);
 			if (!runtime_resolve_completed_scroll_input(
 					p_state, step.completed_scroll_input_id, step.completed_scroll_frame_id)) {
 				return false;
