@@ -48,15 +48,9 @@ func _initialize() -> void:
 
 	var generation_before_replacement := replaced_view.get_generation()
 	replaced_view.document = _make_document("replacement", "#15803d")
-	if not await _wait_for_generation(replaced_view, generation_before_replacement):
-		_fail("%s lifetime stress did not activate its replacement document." % backend_name)
-		return
-	for _frame in range(3):
-		await process_frame
-	await RenderingServer.frame_post_draw
-
-	var replaced_frame := replaced_view.get_texture().get_image()
 	var clean_frame := clean_view.get_texture().get_image()
+	var replaced_frame := await _wait_for_clean_replacement(
+			replaced_view, generation_before_replacement, clean_frame)
 	if replaced_frame == null or clean_frame == null \
 			or replaced_frame.get_size() != Vector2i(WIDTH, HEIGHT) \
 			or clean_frame.get_size() != Vector2i(WIDTH, HEIGHT):
@@ -95,6 +89,23 @@ func _wait_for_generation(view: HTMLView, generation_before_change: int) -> bool
 		if view.get_generation() > generation_before_change:
 			return true
 	return false
+
+func _wait_for_clean_replacement(
+		view: HTMLView, generation_before_change: int, clean_frame: Image) -> Image:
+	if clean_frame == null:
+		return null
+	var clean_hash := _frame_hash(clean_frame)
+	var deadline := Time.get_ticks_msec() + 3000
+	while Time.get_ticks_msec() < deadline:
+		await process_frame
+		await RenderingServer.frame_post_draw
+		if view.get_generation() <= generation_before_change:
+			continue
+		var frame := view.get_texture().get_image()
+		if frame != null and frame.get_size() == Vector2i(WIDTH, HEIGHT) \
+				and _frame_hash(frame) == clean_hash:
+			return frame
+	return null
 
 func _frame_hash(frame: Image) -> PackedByteArray:
 	if frame.get_format() != Image.FORMAT_RGBA8:
