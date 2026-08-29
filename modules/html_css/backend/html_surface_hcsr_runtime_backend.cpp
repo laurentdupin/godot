@@ -28,10 +28,10 @@ static constexpr int RUNTIME_PRESENTER_STANDBY_STEP_UNITS = 262144;
 static constexpr int RUNTIME_SEMANTIC_STEP_SLICE_UNITS = 4096;
 static constexpr uint64_t RUNTIME_SEMANTIC_FRAME_BUDGET_MICROSECONDS = 8000;
 static constexpr uint64_t RUNTIME_INTERACTIVE_FRAME_BUDGET_MICROSECONDS = 16667;
-static constexpr uint32_t RUNTIME_REQUIRED_ABI_VERSION = 14;
+static constexpr uint32_t RUNTIME_REQUIRED_ABI_VERSION = 15;
 
 static_assert(HCSR_RUNTIME_ABI_VERSION == RUNTIME_REQUIRED_ABI_VERSION,
-		"The Godot HCSR replacement backend must be compiled against runtime ABI v14.");
+		"The Godot HCSR replacement backend must be compiled against runtime ABI v15.");
 
 struct RuntimeMutation {
 	int kind = RUNTIME_MUTATION_TEXT;
@@ -143,6 +143,7 @@ struct RuntimePublicationLineage {
 	uint64_t target_author_revision = 0;
 	uint64_t interactive_submission_id = 0;
 	uint64_t interactive_frame_id = 0;
+	uint64_t animation_timeline_revision = 0;
 	uint64_t interaction_input_id = 0;
 	uint64_t interaction_frame_id = 0;
 	uint64_t interaction_configuration_id = 0;
@@ -373,6 +374,7 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	uint64_t active_scroll_input_id = 0;
 	uint64_t active_scroll_frame_id = 0;
 	uint64_t active_scroll_configuration_id = 0;
+	uint64_t active_animation_timeline_revision = 0;
 	uint64_t active_topology_revision = 0;
 	uint64_t frame_stream_epoch = 0;
 	uint64_t next_host_submission_token = 1;
@@ -388,6 +390,10 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	int causal_input_transaction_depth = 0;
 	Vector<RuntimeResourceToken> completed_resource_tokens;
 	uint64_t next_host_frame_id = 1;
+	uint64_t requested_animation_timeline_revision = 0;
+	int64_t requested_animation_time_microseconds = 0;
+	bool animation_timeline_dirty = false;
+	bool animation_needs_next_frame = false;
 	uint64_t active_pointer_submission_id = 0;
 	RuntimePointerRequest active_pointer_request;
 	bool active_pointer_request_valid = false;
@@ -879,6 +885,7 @@ static RuntimePublicationLineage runtime_lineage_from_publication(
 	lineage.target_author_revision = p_info.target_author_revision;
 	lineage.interactive_submission_id = p_info.interactive_submission_id;
 	lineage.interactive_frame_id = p_info.interactive_frame_id;
+	lineage.animation_timeline_revision = p_info.animation_timeline_revision;
 	lineage.interaction_input_id = p_interaction.input_id;
 	lineage.interaction_frame_id = p_interaction.frame_id;
 	lineage.interaction_configuration_id = p_interaction.configuration_id;
@@ -1975,8 +1982,7 @@ static bool runtime_step_active(
 							publication_info.generation,
 							0);
 			bool submitted_to_successor = false;
-			if (submit_status == HCSR_RUNTIME_RECONFIGURATION_REQUIRED
-					&& target_binding == p_state->active_binding) {
+			if (submit_status == HCSR_RUNTIME_RECONFIGURATION_REQUIRED) {
 				RenderingServer *rendering_server = RenderingServer::get_singleton();
 				RenderingDevice *rendering_device = rendering_server != nullptr
 						? rendering_server->get_rendering_device()
@@ -1987,6 +1993,15 @@ static bool runtime_step_active(
 				void *queue = rendering_device != nullptr
 						? (void *)rendering_device->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_COMMAND_QUEUE)
 						: nullptr;
+				if (target_binding == p_state->successor_binding) {
+					if (p_state->retiring_binding != nullptr) {
+						hcsr_runtime_publication_release(p_state->session, publication);
+						runtime_set_terminal(p_state, "HCSR exhausted bounded presenter replacement capacity during rapid resize.");
+						return false;
+					}
+					p_state->retiring_binding = p_state->successor_binding;
+					p_state->successor_binding = nullptr;
+				}
 				if (p_state->successor_binding != nullptr || device == nullptr || queue == nullptr) {
 					hcsr_runtime_publication_release(p_state->session, publication);
 					runtime_set_terminal(p_state, "HCSR replacement could not create its successor D3D12 presenter.");
@@ -2200,8 +2215,15 @@ static bool runtime_step_active(
 		p_state->activation_pending = true;
 		p_state->activation_callback_scheduled = runtime_schedule_frame_cutoff(p_state);
 	}
+	int32_t animation_needs_next_frame = 0;
+	if (hcsr_runtime_session_query_animation_schedule(
+			p_state->session, &animation_needs_next_frame) != HCSR_RUNTIME_OK) {
+		runtime_set_terminal(p_state, "Godot could not query the HCSR animation schedule.");
+		return false;
+	}
 	{
 		MutexLock lock(p_state->mutex);
+		p_state->animation_needs_next_frame = animation_needs_next_frame != 0;
 		p_state->semantic_pending = semantic_pending;
 		p_state->pending_work = p_state->active_binding->presenter_pending
 				|| (p_state->successor_binding != nullptr && p_state->successor_binding->presenter_pending)
@@ -2380,6 +2402,7 @@ static bool runtime_seal_host_frame_requirements(
 	hcsr_runtime_host_frame_seal_t seal;
 	initialize_abi(&seal, sizeof(seal));
 	seal.frame_stream_epoch = p_state->frame_stream_epoch;
+	seal.timeline_revision = p_state->requested_animation_timeline_revision;
 	seal.configuration_revision = p_state->active_has_interaction_state
 			? p_state->active_interaction_configuration_id : p_state->active_scroll_configuration_id;
 	seal.output_group_revision = p_state->active_topology_revision;
@@ -2390,6 +2413,38 @@ static bool runtime_seal_host_frame_requirements(
 	}
 	p_state->host_frame_requirement_sealed = true;
 	p_state->host_frame_receipts_open = false;
+	return true;
+}
+
+static bool runtime_submit_pending_animation_timeline(
+		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
+	uint64_t revision = 0;
+	int64_t time_microseconds = 0;
+	uint64_t document_request_id = 0;
+	{
+		MutexLock lock(p_state->mutex);
+		if (!p_state->animation_timeline_dirty || p_state->configuration_dirty
+				|| p_state->activation_pending || p_state->successor_binding != nullptr) {
+			return true;
+		}
+		revision = p_state->requested_animation_timeline_revision;
+		time_microseconds = p_state->requested_animation_time_microseconds;
+		document_request_id = p_state->document_request_id;
+	}
+	hcsr_runtime_animation_timeline_input_t timeline;
+	initialize_abi(&timeline, sizeof(timeline));
+	timeline.revision_id = revision;
+	timeline.time_microseconds = time_microseconds;
+	timeline.active_time_microseconds = time_microseconds;
+	const hcsr_runtime_status_t status = hcsr_runtime_session_submit_animation_timeline(
+			p_state->session, document_request_id, &timeline);
+	if (status != HCSR_RUNTIME_OK) {
+		return false;
+	}
+	MutexLock lock(p_state->mutex);
+	if (p_state->requested_animation_timeline_revision == revision) {
+		p_state->animation_timeline_dirty = false;
+	}
 	return true;
 }
 
@@ -2433,6 +2488,7 @@ static bool runtime_try_acknowledge_resolved_host_frame(
 	request.configuration_revision = active_configuration_revision;
 	request.output_group_revision = p_state->sealed_host_frame_requirement.output_group_revision;
 	request.coordinate_transform_revision = p_state->sealed_host_frame_requirement.output_group_revision;
+	request.timeline_revision = p_state->active_animation_timeline_revision;
 	hcsr_runtime_host_frame_permit_t *permit = nullptr;
 	hcsr_runtime_host_frame_permit_info_t info;
 	initialize_abi(&info, sizeof(info));
@@ -2670,6 +2726,11 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 		finish_scheduled_work();
 		return;
 	}
+	if (!runtime_submit_pending_animation_timeline(runtime)) {
+		runtime_set_terminal(runtime, "Godot could not submit the publication-bound HCSR animation timeline.");
+		finish_scheduled_work();
+		return;
+	}
 	if (configuration_dirty && !runtime_submit_configuration(runtime, request_serial)) {
 		finish_scheduled_work();
 		return;
@@ -2843,6 +2904,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 			permit_request.configuration_revision = staged_configuration_revision;
 			permit_request.output_group_revision = runtime->sealed_host_frame_requirement.output_group_revision;
 			permit_request.coordinate_transform_revision = runtime->sealed_host_frame_requirement.output_group_revision;
+			permit_request.timeline_revision = runtime->staged_lineage.animation_timeline_revision;
 			hcsr_runtime_host_frame_permit_info_t permit_info;
 			initialize_abi(&permit_info, sizeof(permit_info));
 			const hcsr_runtime_status_t permit_status = hcsr_runtime_session_acquire_host_frame_permit(
@@ -2932,6 +2994,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 			runtime->active_scroll_input_id = runtime->staged_lineage.scroll_input_id;
 			runtime->active_scroll_frame_id = runtime->staged_lineage.scroll_frame_id;
 			runtime->active_scroll_configuration_id = runtime->staged_lineage.scroll_configuration_id;
+			runtime->active_animation_timeline_revision = runtime->staged_lineage.animation_timeline_revision;
 			runtime->active_topology_revision = runtime->staged_topology.revision;
 			runtime->next_host_input_id = MAX(runtime->next_host_input_id,
 					MAX(runtime->staged_lineage.interaction_input_id,
@@ -3160,12 +3223,26 @@ Error HTMLSurfaceHCSRRuntimeBackend::update_compositor(
 		double p_timeline_time_seconds,
 		bool *r_needs_output,
 		bool *r_needs_begin_frame) {
-	(void)p_timeline_time_seconds;
+	if (state != nullptr) {
+		MutexLock lock(state->mutex);
+		if (state->animation_needs_next_frame && state->active_generation != 0
+				&& !state->configuration_dirty && !state->activation_pending
+				&& state->successor_binding == nullptr) {
+			const int64_t time_microseconds = MAX((int64_t)0,
+					(int64_t)(MAX(0.0, p_timeline_time_seconds) * 1000000.0));
+			if (time_microseconds > state->requested_animation_time_microseconds) {
+				state->requested_animation_time_microseconds = time_microseconds;
+				state->requested_animation_timeline_revision++;
+				state->animation_timeline_dirty = true;
+				state->pending_work = true;
+			}
+		}
+	}
 	if (r_needs_output != nullptr) {
 		*r_needs_output = has_pending_frame_request();
 	}
 	if (r_needs_begin_frame != nullptr) {
-		*r_needs_begin_frame = false;
+		*r_needs_begin_frame = is_begin_frame_requested();
 	}
 	return OK;
 }
@@ -3232,8 +3309,17 @@ bool HTMLSurfaceHCSRRuntimeBackend::has_pending_frame_request() const {
 				|| (output->active_binding != nullptr && output->active_binding->standby_pending);
 	}
 	return standby_pending || state->document_dirty || state->configuration_dirty
+			|| state->animation_timeline_dirty
 			|| !state->mutations.is_empty() || !state->pointer_requests.is_empty()
 			|| !state->scroll_requests.is_empty();
+}
+
+bool HTMLSurfaceHCSRRuntimeBackend::is_begin_frame_requested() const {
+	if (state == nullptr) {
+		return false;
+	}
+	MutexLock lock(state->mutex);
+	return state->animation_needs_next_frame;
 }
 
 uint64_t HTMLSurfaceHCSRRuntimeBackend::get_last_queued_frame_generation() const {

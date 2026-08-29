@@ -44,6 +44,7 @@ public:
 	virtual void schedule_retirement_service() override;
 	virtual bool has_pending_output() const override;
 	virtual bool has_pending_frame_request() const override;
+	virtual bool is_begin_frame_requested() const override;
 	virtual uint64_t get_last_queued_frame_generation() const override;
 	virtual uint64_t get_active_frame_generation() const override;
 	virtual bool uses_generation_bound_input() const override;
