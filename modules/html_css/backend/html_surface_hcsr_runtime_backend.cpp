@@ -45,6 +45,8 @@ struct RuntimePointerRequest {
 	Point2 position;
 	uint32_t buttons = 0;
 	bool focus_on_primary_down = false;
+	uint64_t first_receipt_sequence = 0;
+	uint64_t last_receipt_sequence = 0;
 	uint64_t receipt_timestamp_microseconds = 0;
 	uint64_t host_receipt_id = 0;
 	uint64_t source_runtime_generation = 0;
@@ -58,6 +60,7 @@ struct RuntimeScrollRequest {
 	Vector2 delta;
 	int32_t source = HCSR_RUNTIME_SCROLL_SOURCE_MOUSE_WHEEL;
 	int32_t orientation = HCSR_RUNTIME_SCROLL_VERTICAL;
+	uint64_t receipt_sequence = 0;
 	uint64_t receipt_timestamp_microseconds = 0;
 	uint64_t host_receipt_id = 0;
 	uint64_t source_runtime_generation = 0;
@@ -375,6 +378,7 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	bool host_frame_requirement_sealed = false;
 	hcsr_runtime_host_frame_requirement_info_t sealed_host_frame_requirement = {};
 	uint64_t next_host_input_id = 1;
+	uint64_t next_host_receipt_sequence = 0;
 	Vector<RuntimeResourceToken> completed_resource_tokens;
 	uint64_t next_host_frame_id = 1;
 	uint64_t active_pointer_submission_id = 0;
@@ -2199,6 +2203,11 @@ static bool runtime_step_pointer_input(HTMLSurfaceHCSRRuntimeBackend::RuntimeSta
 			if (p_state->pointer_requests.is_empty()) {
 				return true;
 			}
+			if (!p_state->scroll_requests.is_empty()
+					&& p_state->scroll_requests[0].receipt_sequence
+							< p_state->pointer_requests[0].first_receipt_sequence) {
+				return true;
+			}
 			request = p_state->pointer_requests[0];
 			p_state->pointer_requests.remove_at(0);
 		}
@@ -2287,7 +2296,12 @@ static bool runtime_submit_one_scroll_input(HTMLSurfaceHCSRRuntimeBackend::Runti
 	RuntimeScrollRequest request;
 	{
 		MutexLock lock(p_state->mutex);
-		if (p_state->scroll_requests.is_empty()) {
+		if (p_state->active_pointer_submission_id != 0 || p_state->scroll_requests.is_empty()) {
+			return true;
+		}
+		if (!p_state->pointer_requests.is_empty()
+				&& p_state->pointer_requests[0].first_receipt_sequence
+						< p_state->scroll_requests[0].receipt_sequence) {
 			return true;
 		}
 		request = p_state->scroll_requests[0];
@@ -3199,6 +3213,8 @@ static Error runtime_queue_pointer_request(
 		request.position = p_position;
 		request.buttons = p_buttons;
 		request.focus_on_primary_down = p_focus_on_primary_down;
+		request.first_receipt_sequence = ++p_state->next_host_receipt_sequence;
+		request.last_receipt_sequence = request.first_receipt_sequence;
 		request.receipt_timestamp_microseconds = receipt_timestamp_microseconds;
 		request.host_receipt_id = receipt_info.receipt_id;
 		request.source_runtime_generation = p_state->active_generation;
@@ -3217,6 +3233,8 @@ static Error runtime_queue_pointer_request(
 		} else {
 			if (p_kind == HCSR_RUNTIME_POINTER_MOVE && !p_state->pointer_requests.is_empty()
 					&& p_state->pointer_requests[p_state->pointer_requests.size() - 1].kind == HCSR_RUNTIME_POINTER_MOVE
+					&& p_state->pointer_requests[p_state->pointer_requests.size() - 1].last_receipt_sequence + 1
+							== request.first_receipt_sequence
 					&& p_state->pointer_requests[p_state->pointer_requests.size() - 1].buttons == request.buttons
 					&& p_state->pointer_requests[p_state->pointer_requests.size() - 1].source_runtime_generation == request.source_runtime_generation
 					&& p_state->pointer_requests[p_state->pointer_requests.size() - 1].source_configuration_id == request.source_configuration_id
@@ -3224,6 +3242,8 @@ static Error runtime_queue_pointer_request(
 				request.receipt_timestamp_microseconds = MIN(
 						request.receipt_timestamp_microseconds,
 						p_state->pointer_requests[p_state->pointer_requests.size() - 1].receipt_timestamp_microseconds);
+				request.first_receipt_sequence =
+						p_state->pointer_requests[p_state->pointer_requests.size() - 1].first_receipt_sequence;
 				p_state->pointer_requests.write[p_state->pointer_requests.size() - 1] = request;
 			} else {
 				p_state->pointer_requests.push_back(request);
@@ -3338,6 +3358,7 @@ static Error runtime_queue_scroll_request(
 		request.delta = p_delta;
 		request.source = p_source;
 		request.orientation = p_orientation;
+		request.receipt_sequence = ++p_state->next_host_receipt_sequence;
 		request.receipt_timestamp_microseconds = receipt_timestamp_microseconds;
 		request.host_receipt_id = receipt_info.receipt_id;
 		request.source_runtime_generation = p_state->active_generation;
