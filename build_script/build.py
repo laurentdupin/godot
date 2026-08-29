@@ -316,6 +316,7 @@ def build_command(
     godot_platform: str,
     clean: bool,
     extra_arguments: Sequence[str],
+    generate_bundle: bool | None = None,
 ) -> list[str]:
     SCONS_CACHE_DIRECTORY.mkdir(parents=True, exist_ok=True)
     command = [
@@ -336,13 +337,17 @@ def build_command(
         command.append(f"extra_suffix={settings.suffix}")
     if clean:
         command.append("--clean")
-    if godot_platform == "macos" and settings.target == "editor":
-        command.append("generate_bundle=yes")
     if godot_platform == "windows":
         command.extend((f"angle={'yes' if settings.angle else 'no'}", "d3d12=yes", "vulkan=yes"))
         if settings.html_css_renderer == "hcsr_runtime":
             command.append(f"module_html_css_hcsr_runtime_root={GODOT_ROOT.parent / 'HCSR'}")
     command.extend(extra_arguments)
+    if godot_platform == "macos" and settings.target == "editor":
+        if generate_bundle is None:
+            if not any(argument.startswith("generate_bundle=") for argument in extra_arguments):
+                command.append("generate_bundle=yes")
+        else:
+            command.append(f"generate_bundle={'yes' if generate_bundle else 'no'}")
     return command
 
 
@@ -417,9 +422,9 @@ def build_managed_editor_assemblies(settings: BuildSettings, godot_platform: str
             + "_mono.app"
         )
         editor_candidates = (
+            GODOT_ROOT / "bin" / f"godot.macos.editor.{settings.architecture}{editor_suffix}",
             GODOT_ROOT / "bin" / bundle_name / "Contents" / "MacOS" / "Godot",
             GODOT_ROOT / "bin" / "Godot.app" / "Contents" / "MacOS" / "Godot",
-            GODOT_ROOT / "bin" / f"godot.macos.editor.{settings.architecture}{editor_suffix}",
         )
     else:
         editor_candidates = (
@@ -539,7 +544,21 @@ def run() -> int:
 
     validate_settings(settings, godot_platform)
     save_settings(settings)
-    command = build_command(settings, godot_platform, arguments.clean, extra_arguments)
+    # A macOS Mono bundle copies bin/GodotSharp, which can only be built after
+    # the native editor exists and has generated the managed API glue.
+    staged_macos_mono_bundle = (
+        godot_platform == "macos"
+        and settings.target == "editor"
+        and settings.mono
+        and not arguments.clean
+    )
+    command = build_command(
+        settings,
+        godot_platform,
+        arguments.clean,
+        extra_arguments,
+        generate_bundle=False if staged_macos_mono_bundle else None,
+    )
     print(f"\nGodot root: {GODOT_ROOT}")
     print(f"Build command: {format_command(command)}\n")
     if arguments.print_command:
@@ -552,6 +571,18 @@ def run() -> int:
         return completed.returncode
 
     build_managed_editor_assemblies(settings, godot_platform)
+    if staged_macos_mono_bundle:
+        bundle_command = build_command(
+            settings,
+            godot_platform,
+            False,
+            extra_arguments,
+            generate_bundle=True,
+        )
+        print(f"\nBundle command: {format_command(bundle_command)}\n", flush=True)
+        completed = subprocess.run(bundle_command, cwd=GODOT_ROOT, check=False)
+        if completed.returncode != 0:
+            return completed.returncode
     return 0
 
 
