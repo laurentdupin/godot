@@ -56,6 +56,7 @@ struct RuntimePointerRequest {
 	uint64_t source_runtime_generation = 0;
 	uint64_t source_configuration_id = 0;
 	uint64_t source_input_id = 0;
+	uint64_t host_process_frame = 0;
 };
 
 struct RuntimeScrollRequest {
@@ -70,6 +71,7 @@ struct RuntimeScrollRequest {
 	uint64_t source_runtime_generation = 0;
 	uint64_t source_configuration_id = 0;
 	uint64_t source_input_id = 0;
+	uint64_t host_process_frame = 0;
 };
 
 struct RuntimeAdmittedScrollInput {
@@ -432,6 +434,9 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	Point2 pointer_position;
 	bool scrollbar_interaction_active = false;
 	uint64_t mutation_request_process_frame = 0;
+	uint64_t document_request_process_frame = 0;
+	uint64_t configuration_request_process_frame = 0;
+	uint64_t submitted_request_process_frame = 0;
 	uint64_t request_serial = 0;
 	uint64_t submitted_request_serial = 0;
 	uint64_t newest_requested_submission_id = 0;
@@ -1232,7 +1237,8 @@ static bool runtime_submit_compiled_document(
 		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
 		hcsr_runtime_document_t *p_document,
 		const Ref<HTMLDocument> &p_source,
-		uint64_t p_request_serial) {
+		uint64_t p_request_serial,
+		uint64_t p_request_process_frame) {
 	ERR_FAIL_NULL_V(p_document, false);
 	if (hcsr_runtime_session_submit_document(
 			p_state->session, ++p_state->document_request_id, p_document) != HCSR_RUNTIME_OK) {
@@ -1247,6 +1253,7 @@ static bool runtime_submit_compiled_document(
 	p_state->compiled_document = p_document;
 	p_state->document = p_source;
 	p_state->submitted_request_serial = p_request_serial;
+	p_state->submitted_request_process_frame = p_request_process_frame;
 	p_state->submitted_request_is_configuration_only = false;
 	p_state->semantic_pending = true;
 	p_state->pending_work = true;
@@ -1255,7 +1262,8 @@ static bool runtime_submit_compiled_document(
 
 static bool runtime_submit_configuration(
 		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
-		uint64_t p_request_serial) {
+		uint64_t p_request_serial,
+		uint64_t p_request_process_frame) {
 	runtime_release_output_topology(p_state->candidate_topology);
 	p_state->candidate_topology = runtime_capture_output_topology(p_state);
 	if (p_state->logical_size == p_state->submitted_logical_size
@@ -1286,6 +1294,7 @@ static bool runtime_submit_configuration(
 	p_state->submitted_physical_size = p_state->physical_size;
 	p_state->submitted_request_is_configuration_only = true;
 	p_state->submitted_request_serial = p_request_serial;
+	p_state->submitted_request_process_frame = p_request_process_frame;
 	p_state->semantic_pending = true;
 	p_state->pending_work = true;
 	return true;
@@ -1396,6 +1405,7 @@ static bool runtime_submit_mutations(
 	p_state->semantic_pending = true;
 	p_state->pending_work = true;
 	p_state->submitted_request_serial = p_request_serial;
+	p_state->submitted_request_process_frame = p_request_process_frame;
 	p_state->submitted_request_is_configuration_only = false;
 	if (interactive) {
 		p_state->interactive_pending = true;
@@ -2587,6 +2597,7 @@ static bool runtime_step_pointer_input(HTMLSurfaceHCSRRuntimeBackend::RuntimeSta
 	p_state->newest_requested_cutoff_timestamp_microseconds = p_state->active_pointer_cutoff_timestamp_microseconds;
 	p_state->active_pointer_cutoff_timestamp_microseconds = 0;
 	p_state->submitted_request_serial = p_state->request_serial;
+	p_state->submitted_request_process_frame = p_state->active_pointer_request.host_process_frame;
 	p_state->submitted_request_is_configuration_only = false;
 	p_state->interactive_pending = true;
 	p_state->semantic_pending = true;
@@ -2657,6 +2668,7 @@ static bool runtime_submit_one_scroll_input(HTMLSurfaceHCSRRuntimeBackend::Runti
 		p_state->admitted_scroll_inputs.push_back(admitted);
 	}
 	p_state->semantic_pending = true;
+	p_state->submitted_request_process_frame = request.host_process_frame;
 	return true;
 }
 
@@ -2976,6 +2988,8 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 	RuntimeState *runtime = (RuntimeState *)p_state_ptr;
 	Vector<RuntimeMutation> mutations;
 	uint64_t mutation_request_process_frame = 0;
+	uint64_t document_request_process_frame = 0;
+	uint64_t configuration_request_process_frame = 0;
 	uint64_t request_serial = 0;
 	Ref<HTMLDocument> compilation_document_source;
 	Ref<HTMLDocument> compiled_document_source;
@@ -3025,6 +3039,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 					compiled_document_source = runtime->compilation_result_source;
 					compilation_error = runtime->compilation_result_error;
 					compiled_document_ready = true;
+					document_request_process_frame = runtime->document_request_process_frame;
 				} else if (runtime->compilation_result_document != nullptr) {
 					hcsr_runtime_document_release(runtime->compilation_result_document);
 				}
@@ -3047,6 +3062,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 					&& !runtime->interactive_pending
 					&& !runtime->activation_pending;
 			if (configuration_dirty) {
+				configuration_request_process_frame = runtime->configuration_request_process_frame;
 				runtime->configuration_dirty = false;
 			}
 			// Mutation journals are qualified to the exact durable author
@@ -3123,7 +3139,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 	}
 	if (compiled_document_ready
 			&& !runtime_submit_compiled_document(runtime, compiled_document,
-					compiled_document_source, request_serial)) {
+					compiled_document_source, request_serial, document_request_process_frame)) {
 		finish_scheduled_work();
 		return;
 	}
@@ -3132,7 +3148,8 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 		finish_scheduled_work();
 		return;
 	}
-	if (configuration_dirty && !runtime_submit_configuration(runtime, request_serial)) {
+	if (configuration_dirty && !runtime_submit_configuration(
+				runtime, request_serial, configuration_request_process_frame)) {
 		finish_scheduled_work();
 		return;
 	}
@@ -3364,7 +3381,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 				return;
 			}
 		}
-		runtime->active_request_process_frame = runtime->staged_lineage.interactive_frame_id;
+		runtime->active_request_process_frame = runtime->submitted_request_process_frame;
 		RuntimePresentationBinding *activated_binding = runtime->staged_binding;
 		if (!runtime_activate_surface(runtime, activated_binding, nullptr)) {
 			if (host_frame_permit != nullptr) {
@@ -3528,6 +3545,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_queue_document_snapshot() {
 		state->requested_document = document;
 		state->document_dirty = true;
 		state->document_snapshot_generation++;
+		state->document_request_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		state->request_serial++;
 		state->pending_work = true;
 	}
@@ -3553,7 +3571,7 @@ Error HTMLSurfaceHCSRRuntimeBackend::_queue_mutation(
 			mutation.causal_receipt_timestamp_microseconds = state->causal_receipt_timestamp_microseconds;
 		}
 		state->mutations.push_back(mutation);
-		state->mutation_request_process_frame = Engine::get_singleton()->get_process_frames();
+		state->mutation_request_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		state->request_serial++;
 		state->pending_work = true;
 	}
@@ -3597,6 +3615,7 @@ void HTMLSurfaceHCSRRuntimeBackend::set_size(const Size2i &p_size) {
 		// threads. A resize that races the first render callback must remain a
 		// pending configuration even while the session pointer is still null.
 		state->configuration_dirty = true;
+		state->configuration_request_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		state->request_serial++;
 		state->pending_work = true;
 	}
@@ -3617,6 +3636,7 @@ void HTMLSurfaceHCSRRuntimeBackend::set_physical_size(const Size2i &p_physical_s
 		}
 		state->physical_size = requested_size;
 		state->configuration_dirty = true;
+		state->configuration_request_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		state->request_serial++;
 		state->pending_work = true;
 	}
@@ -3846,6 +3866,7 @@ static Error runtime_queue_pointer_request(
 		request.source_runtime_generation = p_state->active_generation;
 		request.source_configuration_id = p_state->active_interaction_configuration_id;
 		request.source_input_id = p_state->active_interaction_input_id;
+		request.host_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		p_state->last_pointer_host_receipt_id = receipt_info.receipt_id;
 		p_state->last_pointer_receipt_timestamp_microseconds = receipt_timestamp_microseconds;
 		if (!p_state->active_has_interaction_state) {
@@ -4016,6 +4037,7 @@ static Error runtime_queue_scroll_request(
 		request.source_runtime_generation = p_state->active_generation;
 		request.source_configuration_id = p_state->active_scroll_configuration_id;
 		request.source_input_id = p_state->active_scroll_input_id;
+		request.host_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		p_state->scroll_requests.push_back(request);
 		p_state->pending_work = true;
 	}
@@ -4167,7 +4189,7 @@ Error HTMLSurfaceHCSRRuntimeBackend::apply_element_mutations(const Array &p_muta
 			}
 		}
 		state->mutations.append_array(parsed);
-		state->mutation_request_process_frame = Engine::get_singleton()->get_process_frames();
+		state->mutation_request_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		state->request_serial++;
 		state->pending_work = true;
 	}
@@ -4247,6 +4269,7 @@ uint64_t HTMLSurfaceHCSRRuntimeBackend::create_presentation_output(const Size2i 
 		state->outputs.push_back(output);
 		state->requested_topology_revision++;
 		state->configuration_dirty = true;
+		state->configuration_request_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		state->request_serial++;
 		state->pending_work = true;
 	}
@@ -4273,6 +4296,7 @@ Error HTMLSurfaceHCSRRuntimeBackend::resize_presentation_output(uint64_t p_outpu
 		output->requested_size = p_size;
 		state->requested_topology_revision++;
 		state->configuration_dirty = true;
+		state->configuration_request_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		state->request_serial++;
 		state->pending_work = true;
 	}
@@ -4299,6 +4323,7 @@ void HTMLSurfaceHCSRRuntimeBackend::destroy_presentation_output(uint64_t p_outpu
 		}
 		state->requested_topology_revision++;
 		state->configuration_dirty = true;
+		state->configuration_request_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		state->request_serial++;
 		state->pending_work = true;
 	}
