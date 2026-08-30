@@ -6,9 +6,11 @@
 
 #include "../bridge/html_asset_provider.h"
 #include "core/config/engine.h"
+#include "core/math/math_funcs.h"
 #include "core/object/callable_mp.h"
 #include "core/object/worker_thread_pool.h"
 #include "core/os/os.h"
+#include "core/templates/hash_set.h"
 #include "scene/resources/image_texture.h"
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/rendering_server.h"
@@ -353,6 +355,7 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	Ref<HTMLDocument> requested_document;
 	Size2i logical_size = Size2i(512, 512);
 	Size2i physical_size = Size2i(512, 512);
+	Color background_color = Color(0, 0, 0, 0);
 	Size2i submitted_logical_size;
 	Size2i submitted_physical_size;
 	Vector<RuntimeMutation> mutations;
@@ -456,6 +459,7 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	hcsr_runtime_session_t *session = nullptr;
 	hcsr_runtime_publication_t *active_publication = nullptr;
 	hcsr_runtime_publication_t *staged_publication = nullptr;
+	HashSet<hcsr_runtime_publication_t *> publication_handles;
 	RuntimePresentationBinding *active_binding = nullptr;
 	RuntimePresentationBinding *successor_binding = nullptr;
 	RuntimePresentationBinding *retiring_binding = nullptr;
@@ -726,6 +730,32 @@ static String runtime_copy_last_error(
 	}
 	const String native_error = String::utf8(message.ptr());
 	return native_error.is_empty() ? p_fallback : native_error;
+}
+
+static void runtime_track_publication(
+		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		hcsr_runtime_publication_t *p_publication) {
+	ERR_FAIL_NULL(p_state);
+	ERR_FAIL_NULL(p_publication);
+	ERR_FAIL_COND_MSG(p_state->publication_handles.has(p_publication),
+			"HCSR returned a publication handle that is already owned by this runtime session.");
+	p_state->publication_handles.insert(p_publication);
+}
+
+static hcsr_runtime_status_t runtime_release_publication(
+		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		hcsr_runtime_publication_t *p_publication) {
+	ERR_FAIL_NULL_V(p_state, HCSR_RUNTIME_INVALID_ARGUMENT);
+	ERR_FAIL_NULL_V(p_publication, HCSR_RUNTIME_INVALID_ARGUMENT);
+	if (!p_state->publication_handles.has(p_publication)) {
+		return HCSR_RUNTIME_INVALID_HANDLE;
+	}
+	const hcsr_runtime_status_t status = hcsr_runtime_publication_release(
+			p_state->session, p_publication);
+	if (status == HCSR_RUNTIME_OK) {
+		p_state->publication_handles.erase(p_publication);
+	}
+	return status;
 }
 
 static bool runtime_has_completed_resource_token(
@@ -1045,6 +1075,12 @@ static Vector<hcsr_runtime_output_configuration_t> runtime_create_output_configu
 	outputs.write[0].logical_width = p_state->logical_size.x;
 	outputs.write[0].logical_height = p_state->logical_size.y;
 	outputs.write[0].tile_size = 64;
+	const uint32_t clear_color_bgra =
+			(uint32_t)Math::round(CLAMP(p_state->background_color.b, 0.0f, 1.0f) * 255.0f)
+			| ((uint32_t)Math::round(CLAMP(p_state->background_color.g, 0.0f, 1.0f) * 255.0f) << 8)
+			| ((uint32_t)Math::round(CLAMP(p_state->background_color.r, 0.0f, 1.0f) * 255.0f) << 16)
+			| ((uint32_t)Math::round(CLAMP(p_state->background_color.a, 0.0f, 1.0f) * 255.0f) << 24);
+	outputs.write[0].clear_color_bgra = clear_color_bgra;
 	for (int index = 0; index < p_topology.outputs.size(); index++) {
 		const RuntimeOutputSnapshotEntry &output = p_topology.outputs[index];
 		initialize_abi(&outputs.write[index + 1], sizeof(hcsr_runtime_output_configuration_t));
@@ -1054,6 +1090,7 @@ static Vector<hcsr_runtime_output_configuration_t> runtime_create_output_configu
 		outputs.write[index + 1].logical_width = p_state->logical_size.x;
 		outputs.write[index + 1].logical_height = p_state->logical_size.y;
 		outputs.write[index + 1].tile_size = 64;
+		outputs.write[index + 1].clear_color_bgra = clear_color_bgra;
 	}
 	return outputs;
 }
@@ -2107,8 +2144,13 @@ static bool runtime_step_active(
 			if (acquire_status != HCSR_RUNTIME_OK || next_publication == nullptr) {
 				break;
 			}
+			runtime_track_publication(p_state, next_publication);
 			if (publication != nullptr) {
-				hcsr_runtime_publication_release(p_state->session, publication);
+				const hcsr_runtime_status_t superseded_release = runtime_release_publication(p_state, publication);
+				if (superseded_release != HCSR_RUNTIME_OK) {
+					runtime_set_terminal(p_state, "HCSR could not release a superseded native publication handle.");
+					return false;
+				}
 			}
 			publication = next_publication;
 			publication_info = next_info;
@@ -2118,7 +2160,7 @@ static bool runtime_step_active(
 		if (publication != nullptr) {
 			if (publication_info.document_request_id != p_state->document_request_id) {
 				const bool proven_obsolete = publication_info.document_request_id < p_state->document_request_id;
-				hcsr_runtime_publication_release(p_state->session, publication);
+				runtime_release_publication(p_state, publication);
 				publication = nullptr;
 				if (!proven_obsolete) {
 					runtime_set_terminal(p_state, "HCSR replacement produced a publication for an unknown future document request.");
@@ -2137,7 +2179,7 @@ static bool runtime_step_active(
 			if (!exact_interactive_authority) {
 				const bool proven_obsolete = publication_info.interactive_submission_id < p_state->newest_requested_submission_id
 						|| publication_info.target_author_revision < p_state->newest_requested_author_revision;
-				hcsr_runtime_publication_release(p_state->session, publication);
+				runtime_release_publication(p_state, publication);
 				if (!proven_obsolete) {
 					runtime_set_terminal(p_state, "HCSR replacement produced a publication outside the newest requested interactive lineage.");
 					return false;
@@ -2148,7 +2190,7 @@ static bool runtime_step_active(
 		}
 		if (publication != nullptr) {
 			if (publication_info.output_count != 1 + p_state->submitted_topology.outputs.size()) {
-				hcsr_runtime_publication_release(p_state->session, publication);
+				runtime_release_publication(p_state, publication);
 				runtime_set_terminal(p_state, "HCSR replacement publication output topology differs from the requested atomic configuration.");
 				return false;
 			}
@@ -2156,7 +2198,7 @@ static bool runtime_step_active(
 			initialize_abi(&interaction_info, sizeof(interaction_info));
 			if (hcsr_runtime_publication_get_interaction_info(
 					publication, publication_info.generation, &interaction_info) != HCSR_RUNTIME_OK) {
-				hcsr_runtime_publication_release(p_state->session, publication);
+				runtime_release_publication(p_state, publication);
 				runtime_set_terminal(p_state, "HCSR replacement publication lost its interaction input authority.");
 				return false;
 			}
@@ -2164,7 +2206,7 @@ static bool runtime_step_active(
 			initialize_abi(&scroll_info, sizeof(scroll_info));
 			if (hcsr_runtime_publication_get_scroll_info(
 					publication, publication_info.generation, &scroll_info) != HCSR_RUNTIME_OK) {
-				hcsr_runtime_publication_release(p_state->session, publication);
+				runtime_release_publication(p_state, publication);
 				runtime_set_terminal(p_state, "HCSR replacement publication lost its scroll input authority.");
 				return false;
 			}
@@ -2176,7 +2218,7 @@ static bool runtime_step_active(
 					0,
 					&output_info);
 			if (output_status != HCSR_RUNTIME_OK) {
-				hcsr_runtime_publication_release(p_state->session, publication);
+				runtime_release_publication(p_state, publication);
 				runtime_set_terminal(p_state, vformat("HCSR replacement publication validation failed for handle=%d generation=%d with status %d.", (uint64_t)publication, publication_info.generation, (int)output_status));
 				return false;
 			}
@@ -2184,14 +2226,14 @@ static bool runtime_step_active(
 					&& p_state->active_document_request_id != publication_info.document_request_id;
 			if (document_epoch_changed && p_state->successor_binding == nullptr) {
 				if (p_state->retiring_binding != nullptr) {
-					hcsr_runtime_publication_release(p_state->session, publication);
+					runtime_release_publication(p_state, publication);
 					runtime_set_terminal(p_state, "HCSR exhausted bounded presenter replacement capacity during document replacement.");
 					return false;
 				}
 				RenderingDevice *rendering_device = RenderingServer::get_singleton()->get_rendering_device();
 				p_state->successor_binding = runtime_create_presentation_binding_from_device(rendering_device);
 				if (p_state->successor_binding == nullptr) {
-					hcsr_runtime_publication_release(p_state->session, publication);
+					runtime_release_publication(p_state, publication);
 					runtime_set_terminal(p_state, "HCSR replacement could not create a document-epoch presentation binding.");
 					return false;
 				}
@@ -2206,13 +2248,13 @@ static bool runtime_step_active(
 						continue;
 					}
 					if (output->retiring_binding != nullptr) {
-						hcsr_runtime_publication_release(p_state->session, publication);
+						runtime_release_publication(p_state, publication);
 						runtime_set_terminal(p_state, "HCSR exhausted bounded secondary presenter capacity during document replacement.");
 						return false;
 					}
 					output->successor_binding = runtime_create_presentation_binding_from_device(rendering_device);
 					if (output->successor_binding == nullptr) {
-						hcsr_runtime_publication_release(p_state->session, publication);
+						runtime_release_publication(p_state, publication);
 						runtime_set_terminal(p_state, "HCSR replacement could not create a secondary document-epoch presentation binding.");
 						return false;
 					}
@@ -2248,7 +2290,7 @@ static bool runtime_step_active(
 						: nullptr;
 				if (target_binding == p_state->successor_binding) {
 					if (p_state->retiring_binding != nullptr) {
-						hcsr_runtime_publication_release(p_state->session, publication);
+						runtime_release_publication(p_state, publication);
 						runtime_set_terminal(p_state, "HCSR exhausted bounded presenter replacement capacity during rapid resize.");
 						return false;
 					}
@@ -2256,14 +2298,14 @@ static bool runtime_step_active(
 					p_state->successor_binding = nullptr;
 				}
 				if (p_state->successor_binding != nullptr || device == nullptr || queue == nullptr) {
-					hcsr_runtime_publication_release(p_state->session, publication);
+					runtime_release_publication(p_state, publication);
 					runtime_set_terminal(p_state, "HCSR replacement could not create its successor D3D12 presenter.");
 					return false;
 				}
 				p_state->successor_binding = runtime_create_presentation_binding(
 						device, queue, rendering_device);
 				if (p_state->successor_binding == nullptr) {
-					hcsr_runtime_publication_release(p_state->session, publication);
+					runtime_release_publication(p_state, publication);
 					runtime_set_terminal(p_state, "HCSR replacement could not create its successor presentation binding.");
 					return false;
 				}
@@ -2294,13 +2336,13 @@ static bool runtime_step_active(
 						|| publication_info.target_author_revision < p_state->newest_requested_author_revision
 						|| publication_info.generation < p_state->queued_generation;
 				if (!proven_superseded) {
-					hcsr_runtime_publication_release(p_state->session, publication);
+					runtime_release_publication(p_state, publication);
 					runtime_set_terminal(p_state, "HCSR replacement reported a stale presenter request without a proven newer authority.");
 					return false;
 				}
 				semantic_pending = true;
 			} else if (submit_status != HCSR_RUNTIME_OK) {
-				hcsr_runtime_publication_release(p_state->session, publication);
+				runtime_release_publication(p_state, publication);
 				runtime_set_terminal(p_state, vformat("HCSR replacement D3D12 presenter rejected runtime generation %d semantic generation %d with status %d.", publication_info.generation, publication_info.semantic_frame_generation, (int)submit_status));
 				return false;
 			} else {
@@ -2331,7 +2373,7 @@ static bool runtime_step_active(
 							|| secondary_info.output_id != (int32_t)entry.output_id
 							|| secondary_info.pixel_width != entry.size.x
 							|| secondary_info.pixel_height != entry.size.y) {
-						hcsr_runtime_publication_release(p_state->session, publication);
+						runtime_release_publication(p_state, publication);
 						runtime_set_terminal(p_state, "HCSR replacement secondary output metadata is not the requested projection.");
 						return false;
 					}
@@ -2376,7 +2418,7 @@ static bool runtime_step_active(
 								: HCSR_RUNTIME_INTERNAL_ERROR;
 					}
 					if (secondary_submit_status != HCSR_RUNTIME_OK) {
-						hcsr_runtime_publication_release(p_state->session, publication);
+						runtime_release_publication(p_state, publication);
 						runtime_set_terminal(p_state, vformat("HCSR replacement could not submit atomic secondary D3D12 output %d with status %d.", entry.output_id, (int)secondary_submit_status));
 						return false;
 					}
@@ -2388,13 +2430,17 @@ static bool runtime_step_active(
 				}
 				runtime_replace_output_topology(p_state->staged_topology, p_state->submitted_topology);
 				if (p_state->staged_publication != nullptr) {
-					hcsr_runtime_publication_release(p_state->session, p_state->staged_publication);
+					const hcsr_runtime_status_t staged_release = runtime_release_publication(p_state, p_state->staged_publication);
+					if (staged_release != HCSR_RUNTIME_OK) {
+						runtime_set_terminal(p_state, "HCSR could not release its superseded staged publication handle.");
+						return false;
+					}
 				}
 				p_state->staged_publication = publication;
 				publication = nullptr;
 			}
 			if (publication != nullptr) {
-				hcsr_runtime_publication_release(p_state->session, publication);
+				runtime_release_publication(p_state, publication);
 			}
 		}
 	}
@@ -2806,12 +2852,21 @@ static bool runtime_step_shutdown(
 		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
 	if (p_state->session != nullptr) {
 		if (p_state->staged_publication != nullptr) {
-			hcsr_runtime_publication_release(p_state->session, p_state->staged_publication);
+			runtime_release_publication(p_state, p_state->staged_publication);
 			p_state->staged_publication = nullptr;
 		}
 		if (p_state->active_publication != nullptr) {
-			hcsr_runtime_publication_release(p_state->session, p_state->active_publication);
+			runtime_release_publication(p_state, p_state->active_publication);
 			p_state->active_publication = nullptr;
+		}
+		Vector<hcsr_runtime_publication_t *> residual_publications;
+		for (hcsr_runtime_publication_t *publication : p_state->publication_handles) {
+			residual_publications.push_back(publication);
+		}
+		for (hcsr_runtime_publication_t *publication : residual_publications) {
+			if (runtime_release_publication(p_state, publication) != HCSR_RUNTIME_OK) {
+				return false;
+			}
 		}
 	}
 	runtime_release_output_topology(p_state->staged_topology);
@@ -2895,8 +2950,11 @@ static bool runtime_step_shutdown(
 	initialize_abi(&step, sizeof(step));
 	if (p_state->session != nullptr) {
 		if (!p_state->session_shutdown_started) {
-			hcsr_runtime_session_begin_shutdown(p_state->session);
-			p_state->session_shutdown_started = true;
+			p_state->session_shutdown_started = hcsr_runtime_session_begin_shutdown(p_state->session)
+					== HCSR_RUNTIME_OK;
+			if (!p_state->session_shutdown_started) {
+				return false;
+			}
 		}
 		initialize_abi(&step, sizeof(step));
 		const hcsr_runtime_status_t status = hcsr_runtime_session_step_retirement(
@@ -3100,6 +3158,22 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 							.bind((uint64_t)runtime));
 			return;
 		}
+		bool activation_callback_pending = false;
+		{
+			MutexLock lock(runtime->mutex);
+			activation_callback_pending = runtime->cutoff_scheduled
+					|| runtime->activation_callback_scheduled;
+		}
+		if (activation_callback_pending) {
+			// Frame-cutoff callbacks carry the same raw state pointer. They must
+			// observe closing and relinquish that pointer before bounded retirement
+			// is allowed to delete the state.
+			RenderingDevice *device = RenderingServer::get_singleton()->get_rendering_device();
+			device->external_resource_defer_release(
+					callable_mp_static(&HTMLSurfaceHCSRRuntimeBackend::_destroy_state_on_render_thread_callback)
+							.bind((uint64_t)runtime));
+			return;
+		}
 		RenderingServer::get_singleton()->release_frame_presentation((uint64_t)runtime);
 		if (runtime_step_shutdown(runtime)) {
 			memdelete(runtime);
@@ -3256,7 +3330,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 		// obsolete-sized surface, even for one frame; retire its host lease and let
 		// the already-queued configuration derive the first visible publication.
 		if (runtime->staged_publication != nullptr) {
-			hcsr_runtime_publication_release(runtime->session, runtime->staged_publication);
+			runtime_release_publication(runtime, runtime->staged_publication);
 			runtime->staged_publication = nullptr;
 		}
 		for (const RuntimeOutputSnapshotEntry &entry : runtime->staged_topology.outputs) {
@@ -3426,7 +3500,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 			return;
 		}
 		if (runtime->active_publication != nullptr) {
-			hcsr_runtime_publication_release(runtime->session, runtime->active_publication);
+			runtime_release_publication(runtime, runtime->active_publication);
 		}
 		runtime->active_publication = runtime->staged_publication;
 		runtime->staged_publication = nullptr;
@@ -3656,7 +3730,21 @@ void HTMLSurfaceHCSRRuntimeBackend::set_transparent_background(bool p_transparen
 }
 
 void HTMLSurfaceHCSRRuntimeBackend::set_background_color(const Color &p_background_color) {
-	(void)p_background_color;
+	if (state == nullptr) {
+		return;
+	}
+	{
+		MutexLock lock(state->mutex);
+		if (state->background_color == p_background_color) {
+			return;
+		}
+		state->background_color = p_background_color;
+		state->configuration_dirty = true;
+		state->configuration_request_process_frame = Engine::get_singleton()->get_process_frames() + 1;
+		state->request_serial++;
+		state->pending_work = true;
+	}
+	_schedule_work();
 }
 
 void HTMLSurfaceHCSRRuntimeBackend::set_placeholder_background(const Color &p_color) {

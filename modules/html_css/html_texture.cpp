@@ -162,7 +162,15 @@ Ref<Image> HTMLTexture2D::get_image() const {
 	if (external_texture_rid.is_valid()) {
 		RenderingServer *rendering_server = RenderingServer::get_singleton();
 		ERR_FAIL_NULL_V(rendering_server, Ref<Image>());
-		return rendering_server->texture_2d_get(external_texture_rid);
+		RID readback_texture = rendering_server->texture_drawable_create(
+				size.x, size.y,
+				RenderingServerEnums::TEXTURE_DRAWABLE_FORMAT_RGBA8_SRGB,
+				Color(0, 0, 0, 0), false);
+		ERR_FAIL_COND_V(!readback_texture.is_valid(), Ref<Image>());
+		rendering_server->texture_drawable_copy_level_zero(external_texture_rid, readback_texture);
+		Ref<Image> image = rendering_server->texture_2d_get(readback_texture);
+		rendering_server->free_rid(readback_texture);
+		return image;
 	}
 	return latest_image;
 }
