@@ -39,12 +39,24 @@ func _initialize() -> void:
 		_fail("%s mutation smoke could not read back the composed viewport (size=%s)." % [backend_name, viewport_image.get_size() if viewport_image != null else Vector2i.ZERO])
 		return
 	var changed := 0
+	var changed_min := Vector2i(WIDTH, HEIGHT)
+	var changed_max := Vector2i.ZERO
 	for y in range(HEIGHT):
 		for x in range(WIDTH):
 			if viewport_image.get_pixel(x, y) != viewport_image.get_pixel(x + WIDTH, y):
 				changed += 1
+				changed_min.x = mini(changed_min.x, x)
+				changed_min.y = mini(changed_min.y, y)
+				changed_max.x = maxi(changed_max.x, x)
+				changed_max.y = maxi(changed_max.y, y)
 	if changed != 0:
-		_fail("%s class mutation lost or misplaced retained content; %d pixels differ from a fresh final render." % [backend_name, changed])
+		var mutated_image := viewport_image.get_region(Rect2i(0, 0, WIDTH, HEIGHT))
+		var fresh_image := viewport_image.get_region(Rect2i(WIDTH, 0, WIDTH, HEIGHT))
+		var mutated_path := "user://hcsr_mutated_failure.png"
+		var fresh_path := "user://hcsr_fresh_failure.png"
+		mutated_image.save_png(mutated_path)
+		fresh_image.save_png(fresh_path)
+		_fail("%s class mutation lost or misplaced retained content; %d pixels differ in (%s)-(%s). Artifacts: %s, %s." % [backend_name, changed, changed_min, changed_max, ProjectSettings.globalize_path(mutated_path), ProjectSettings.globalize_path(fresh_path)])
 		return
 
 	print("HCSR Godot %s retained mutation smoke passed." % backend_name)
