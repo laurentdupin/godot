@@ -950,7 +950,8 @@ void HTMLSurfaceHCSRBackend::_defer_gpu_resource_release_on_render_thread(const 
 	const RID *cached = gpu_texture_import_cache.getptr((uint64_t)p_frame.native_texture);
 	const RID imported = cached != nullptr ? *cached : ((uint64_t)native_gpu_texture == (uint64_t)p_frame.native_texture ? gpu_texture_rid : RID());
 	const RID rd_texture = imported.is_valid() ? rendering_server->texture_get_rd_texture(imported, false) : RID();
-	if (render_backend == HCSR_RENDER_BACKEND_VULKAN && rd_texture.is_valid()) {
+	const bool requires_exact_texture_retirement = render_backend == HCSR_RENDER_BACKEND_VULKAN || render_backend == HCSR_RENDER_BACKEND_METAL;
+	if (requires_exact_texture_retirement && rd_texture.is_valid()) {
 		rendering_device->external_texture_defer_release(rd_texture, release_callback);
 	} else {
 		rendering_device->external_resource_defer_release(release_callback);
@@ -977,7 +978,8 @@ void HTMLSurfaceHCSRBackend::_defer_presentation_output_resource_release_on_rend
 			(uint64_t)p_frame.width,
 			(uint64_t)p_frame.height);
 	const RID rd_texture = p_imported_texture.is_valid() ? rendering_server->texture_get_rd_texture(p_imported_texture, false) : RID();
-	if (render_backend == HCSR_RENDER_BACKEND_VULKAN && rd_texture.is_valid()) {
+	const bool requires_exact_texture_retirement = render_backend == HCSR_RENDER_BACKEND_VULKAN || render_backend == HCSR_RENDER_BACKEND_METAL;
+	if (requires_exact_texture_retirement && rd_texture.is_valid()) {
 		rendering_device->external_texture_defer_release(rd_texture, release_callback);
 	} else {
 		rendering_device->external_resource_defer_release(release_callback);
