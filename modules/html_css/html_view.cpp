@@ -41,6 +41,7 @@
 #include "core/object/class_db.h"
 #include "core/os/os.h"
 #include "scene/gui/color_rect.h"
+#include "scene/gui/scroll_bar.h"
 #include "scene/main/viewport.h"
 #include "scene/resources/material.h"
 #include "servers/rendering/rendering_server.h"
@@ -1964,6 +1965,27 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 			}
 		}
 		accept_event();
+		return;
+	}
+
+	Ref<InputEventPanGesture> pan = p_event;
+	if (pan.is_valid()) {
+		const Vector2 html_position = _local_to_html_position(pan->get_position());
+		pointer_last_html_position = html_position;
+		const Size2i viewport_size = surface->get_size();
+		const Vector2 wheel_delta(
+				pan->get_delta().x * MAX(1, viewport_size.x) / ScrollBar::PAGE_DIVISOR,
+				pan->get_delta().y * MAX(1, viewport_size.y) / ScrollBar::PAGE_DIVISOR);
+		if (!wheel_delta.is_zero_approx()) {
+			if (surface->wheel(html_position, wheel_delta) == OK) {
+				_note_visual_input();
+				_queue_frame_render();
+				html_view_input_trace(vformat("pan accepted local=%s html=%s delta=%s wheel_delta=%s", pan->get_position(), html_position, pan->get_delta(), wheel_delta));
+			} else {
+				html_view_input_trace(vformat("pan rejected local=%s html=%s delta=%s wheel_delta=%s", pan->get_position(), html_position, pan->get_delta(), wheel_delta));
+			}
+			accept_event();
+		}
 		return;
 	}
 
