@@ -97,6 +97,7 @@ func _build_native_ui() -> void:
 	surfaces.add_child(primary_column)
 	html_view = HTMLView.new()
 	html_view.name = "InteractiveHTMLView"
+	html_view.input_enabled = true
 	html_view.custom_minimum_size = Vector2(LOGICAL_SIZE)
 	html_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	html_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -172,7 +173,7 @@ func _run_automated_slow_drag() -> void:
 	DisplayServer.window_move_to_foreground()
 	await get_tree().process_frame
 	var start_local := _html_to_local(Vector2(90.0, 166.0))
-	var end_local := _html_to_local(Vector2(380.0, 166.0))
+	var end_local := _html_to_local(Vector2(360.0, 166.0))
 	_send_automated_button(start_local, true)
 	await get_tree().process_frame
 
@@ -181,6 +182,9 @@ func _run_automated_slow_drag() -> void:
 	for step in range(86):
 		var local_position := start_local.lerp(end_local, float(step + 1) / 86.0)
 		_send_automated_motion(local_position)
+		# Process frames are uncapped in automation and can otherwise outrun the
+		# render-thread publication callbacks. Keep this a real slow drag.
+		await get_tree().create_timer(0.012).timeout
 		# Six frames per two logical pixels deliberately models the slow drag that
 		# reproduces the stale text while keeping repeated writes active.
 		for _settle_frame in range(6):
@@ -204,16 +208,16 @@ func _run_automated_slow_drag() -> void:
 		write_count,
 		write_failures,
 	])
+	await RenderingServer.frame_post_draw
+	var screenshot_path := OS.get_temp_dir().path_join("hcsr_slider_text_repaint_automated.png")
+	var screenshot_error := get_viewport().get_texture().get_image().save_png(screenshot_path)
+	print("HCSR_SLOW_DRAG_SCREENSHOT path=%s result=%d" % [screenshot_path, screenshot_error])
 	if observed_values.size() < 4:
 		_automation_failed("The automated pointer drag did not move the HCSR range through enough values.")
 		return
 	if secondary_output.generation != html_view.get_generation():
 		_automation_failed("The primary and secondary HCSR outputs ended on different generations.")
 		return
-	await RenderingServer.frame_post_draw
-	var screenshot_path := OS.get_temp_dir().path_join("hcsr_slider_text_repaint_automated.png")
-	var screenshot_error := get_viewport().get_texture().get_image().save_png(screenshot_path)
-	print("HCSR_SLOW_DRAG_SCREENSHOT path=%s result=%d" % [screenshot_path, screenshot_error])
 	get_tree().quit()
 
 
@@ -226,20 +230,20 @@ func _html_to_local(html_position: Vector2) -> Vector2:
 
 func _send_automated_motion(local_position: Vector2) -> void:
 	var event := InputEventMouseMotion.new()
-	event.position = html_view.get_global_transform_with_canvas() * local_position
-	event.global_position = event.position
+	event.position = local_position
+	event.global_position = html_view.get_global_transform_with_canvas() * local_position
 	event.button_mask = MOUSE_BUTTON_MASK_LEFT
-	Input.parse_input_event(event)
+	html_view.dispatch_input_event(event)
 
 
 func _send_automated_button(local_position: Vector2, pressed: bool) -> void:
 	var event := InputEventMouseButton.new()
-	event.position = html_view.get_global_transform_with_canvas() * local_position
-	event.global_position = event.position
+	event.position = local_position
+	event.global_position = html_view.get_global_transform_with_canvas() * local_position
 	event.button_index = MOUSE_BUTTON_LEFT
 	event.button_mask = MOUSE_BUTTON_MASK_LEFT if pressed else 0
 	event.pressed = pressed
-	Input.parse_input_event(event)
+	html_view.dispatch_input_event(event)
 
 
 func _on_element_pointer_event(_phase: StringName, element_id: StringName, _action: StringName, _button: int, _payload: Dictionary) -> void:

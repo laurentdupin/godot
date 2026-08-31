@@ -259,6 +259,7 @@ public:
 	void bind_action(const StringName &p_action, const Callable &p_callable);
 	void unbind_action(const StringName &p_action);
 	bool has_action(const StringName &p_action) const;
+	void dispatch_input_event(const Ref<InputEvent> &p_event);
 
 	void gui_input(const Ref<InputEvent> &p_event) override;
 	Size2 get_minimum_size() const override;

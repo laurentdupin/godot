@@ -732,7 +732,16 @@ func _finish_after_settle() -> void:
 	final_generation = html_view.get_generation()
 	_print_results()
 	if not converged:
-		_fail("Stress run did not drain to one stable primary/output generation.")
+		_fail(
+			"Stress run did not drain to one stable primary/output generation "
+			+ "(before=%d current=%d queued=%d activated=%d output=%d)." % [
+				generation_before_sentinel,
+				final_generation,
+				last_queued_generation,
+				last_activated_generation,
+				final_generation if secondary_output == null else secondary_output.generation,
+			]
+		)
 		return
 	var scheduler := html_view.get_frame_scheduler_diagnostics()
 	if mutation_failures != 0 or render_errors != 0 or final_generation <= initial_generation:

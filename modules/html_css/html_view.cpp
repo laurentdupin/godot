@@ -322,6 +322,7 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("clear_css_files"), &HTMLView::clear_css_files);
 	ClassDB::bind_method(D_METHOD("set_input_enabled", "input_enabled"), &HTMLView::set_input_enabled);
 	ClassDB::bind_method(D_METHOD("is_input_enabled"), &HTMLView::is_input_enabled);
+	ClassDB::bind_method(D_METHOD("dispatch_input_event", "event"), &HTMLView::dispatch_input_event);
 	ClassDB::bind_method(D_METHOD("set_focus_on_click", "focus_on_click"), &HTMLView::set_focus_on_click);
 	ClassDB::bind_method(D_METHOD("is_focus_on_click_enabled"), &HTMLView::is_focus_on_click_enabled);
 	ClassDB::bind_method(D_METHOD("set_accept_action", "action"), &HTMLView::set_accept_action);
@@ -1936,6 +1937,10 @@ void HTMLView::unbind_action(const StringName &p_action) {
 
 bool HTMLView::has_action(const StringName &p_action) const {
 	return action_bindings.has(p_action);
+}
+
+void HTMLView::dispatch_input_event(const Ref<InputEvent> &p_event) {
+	gui_input(p_event);
 }
 
 void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
