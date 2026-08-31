@@ -17,29 +17,19 @@ func _initialize() -> void:
 	target.document = document
 	target.render_now()
 	if use_gpu:
-		for _frame in range(20):
-			if target.get_texture() != null:
+		for _frame in range(100):
+			var candidate := target.get_texture()
+			if candidate != null and candidate.get_width() == 320 and candidate.get_height() == 180:
 				break
 			await process_frame
+		RenderingServer.force_draw(true)
+		await RenderingServer.frame_post_draw
 		var texture := target.get_texture()
 		if texture == null or texture.get_width() != 320 or texture.get_height() != 180:
 			push_error("Static HCSR did not return the expected host-device GPU texture.")
 			target.free()
 			quit(1)
 			return
-		var direct_image := texture.get_image()
-		if direct_image == null or direct_image.get_size() != Vector2i(320, 180):
-			push_error("Static HCSR external GPU texture did not support explicit get_image() readback.")
-			target.free()
-			quit(1)
-			return
-		var direct_sample := direct_image.get_pixel(300, 160)
-		if direct_sample.a < 0.9 or direct_sample.r < 0.03 or direct_sample.b < 0.20:
-			push_error("Static HCSR explicit external-texture readback did not contain the expected document color.")
-			target.free()
-			quit(1)
-			return
-
 		var texture_rect := TextureRect.new()
 		texture_rect.texture = texture
 		texture_rect.size = Vector2(320, 180)
@@ -55,10 +45,27 @@ func _initialize() -> void:
 			quit(1)
 			return
 
+		var direct_image := texture.get_image()
+		if direct_image == null or direct_image.get_size() != Vector2i(320, 180):
+			push_error("Static HCSR external GPU texture did not support explicit get_image() readback.")
+			texture_rect.queue_free()
+			target.free()
+			quit(1)
+			return
+		var direct_sample := direct_image.get_pixel(300, 160)
+		if direct_sample.a < 0.9 or direct_sample.r < 0.03 or direct_sample.b < 0.20:
+			push_error("Static HCSR explicit external-texture readback did not contain the expected document color: %s." % direct_sample)
+			texture_rect.queue_free()
+			target.free()
+			quit(1)
+			return
+
 		print("Static HCSR Godot %s smoke passed." % ("D3D12" if use_d3d12 else ("Vulkan" if use_vulkan else "Metal")))
 		texture_rect.queue_free()
 		target.free()
-		quit()
+		for _retirement_frame in range(30):
+			await process_frame
+		quit(0)
 		return
 
 	var image := target.get_image()
@@ -77,4 +84,4 @@ func _initialize() -> void:
 
 	print("Static HCSR Godot smoke passed.")
 	target.free()
-	quit()
+	quit(0)

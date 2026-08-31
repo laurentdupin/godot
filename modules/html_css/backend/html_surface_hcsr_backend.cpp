@@ -553,6 +553,9 @@ bool HTMLSurfaceHCSRBackend::_service_resource_requests(bool &r_resources_comple
 				return false;
 			}
 		} else {
+			WARN_PRINT(vformat("HCSR could not load requested resource '%s' "
+					"(resolved '%s', Godot path '%s'): %s",
+					requested_url, resolved_url, godot_path, asset_error));
 			const hcsr_status_t completion_status = hcsr_renderer_complete_resource_request(
 					renderer,
 					request.request_id,

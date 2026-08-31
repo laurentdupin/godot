@@ -6,8 +6,11 @@
 
 #include "../bridge/html_asset_provider.h"
 #include "core/config/engine.h"
+#include "core/math/math_funcs.h"
 #include "core/object/callable_mp.h"
+#include "core/object/worker_thread_pool.h"
 #include "core/os/os.h"
+#include "core/templates/hash_set.h"
 #include "scene/resources/image_texture.h"
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/rendering_server.h"
@@ -28,10 +31,11 @@ static constexpr int RUNTIME_PRESENTER_STANDBY_STEP_UNITS = 262144;
 static constexpr int RUNTIME_SEMANTIC_STEP_SLICE_UNITS = 4096;
 static constexpr uint64_t RUNTIME_SEMANTIC_FRAME_BUDGET_MICROSECONDS = 8000;
 static constexpr uint64_t RUNTIME_INTERACTIVE_FRAME_BUDGET_MICROSECONDS = 16667;
-static constexpr uint32_t RUNTIME_REQUIRED_ABI_VERSION = 15;
+static constexpr int RUNTIME_ADMITTED_SCROLL_INPUT_CAPACITY = 256;
+static constexpr uint32_t RUNTIME_REQUIRED_ABI_VERSION = 19;
 
 static_assert(HCSR_RUNTIME_ABI_VERSION == RUNTIME_REQUIRED_ABI_VERSION,
-		"The Godot HCSR replacement backend must be compiled against runtime ABI v15.");
+		"The Godot HCSR replacement backend must be compiled against runtime ABI v19.");
 
 struct RuntimeMutation {
 	int kind = RUNTIME_MUTATION_TEXT;
@@ -54,6 +58,7 @@ struct RuntimePointerRequest {
 	uint64_t source_runtime_generation = 0;
 	uint64_t source_configuration_id = 0;
 	uint64_t source_input_id = 0;
+	uint64_t host_process_frame = 0;
 };
 
 struct RuntimeScrollRequest {
@@ -68,6 +73,13 @@ struct RuntimeScrollRequest {
 	uint64_t source_runtime_generation = 0;
 	uint64_t source_configuration_id = 0;
 	uint64_t source_input_id = 0;
+	uint64_t host_process_frame = 0;
+};
+
+struct RuntimeAdmittedScrollInput {
+	uint64_t input_id = 0;
+	uint64_t frame_id = 0;
+	uint64_t host_receipt_id = 0;
 };
 
 struct RuntimeResourceToken {
@@ -139,6 +151,7 @@ struct RuntimePublicationLineage {
 	bool configuration_only = false;
 	uint64_t request_serial = 0;
 	uint64_t runtime_generation = 0;
+	uint64_t document_request_id = 0;
 	uint64_t semantic_frame_generation = 0;
 	uint64_t target_author_revision = 0;
 	uint64_t interactive_submission_id = 0;
@@ -159,6 +172,7 @@ static void initialize_abi(void *p_value, size_t p_size);
 
 static bool runtime_load_document_source(
 		const Ref<HTMLDocument> &p_document,
+		hcsr_runtime_compilation_request_t *p_compilation_request,
 		String &r_html,
 		String &r_css,
 		Vector<RuntimeResolvedStylesheet> &r_stylesheets,
@@ -199,8 +213,18 @@ static bool runtime_load_document_source(
 	CharString css_utf8 = r_css.utf8();
 	hcsr_runtime_document_t *provisional_document = nullptr;
 	hcsr_runtime_compilation_report_t *report = nullptr;
-	const hcsr_runtime_status_t discovery_status = hcsr_runtime_document_compile_with_stylesheets(
-			html_utf8.get_data(), css_utf8.get_data(), nullptr, 0, &provisional_document, &report);
+	const hcsr_runtime_status_t discovery_status = hcsr_runtime_compilation_request_compile_with_stylesheets(
+			p_compilation_request, html_utf8.get_data(), css_utf8.get_data(), nullptr, 0,
+			&provisional_document, &report);
+	if (discovery_status == HCSR_RUNTIME_CANCELED) {
+		if (report != nullptr) {
+			hcsr_runtime_compilation_report_release(report);
+		}
+		if (provisional_document != nullptr) {
+			hcsr_runtime_document_release(provisional_document);
+		}
+		return false;
+	}
 	if (report == nullptr) {
 		r_error = vformat("HCSR replacement could not discover stylesheet resources (status %d).", (int)discovery_status);
 		return false;
@@ -293,6 +317,7 @@ struct RuntimeOutputState {
 	int32_t active_pixel_width = 0;
 	int32_t active_pixel_height = 0;
 	uint64_t active_generation = 0;
+	uint64_t active_document_request_id = 0;
 	RuntimePresentationBinding *active_binding = nullptr;
 	RuntimePresentationBinding *successor_binding = nullptr;
 	RuntimePresentationBinding *retiring_binding = nullptr;
@@ -327,16 +352,16 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	Mutex mutex;
 	Ref<HTMLTexture2D> texture;
 	Ref<HTMLDocument> document;
-	String html;
-	String css;
-	Vector<RuntimeResolvedStylesheet> stylesheets;
+	Ref<HTMLDocument> requested_document;
 	Size2i logical_size = Size2i(512, 512);
 	Size2i physical_size = Size2i(512, 512);
+	Color background_color = Color(0, 0, 0, 0);
 	Size2i submitted_logical_size;
 	Size2i submitted_physical_size;
 	Vector<RuntimeMutation> mutations;
 	Vector<RuntimePointerRequest> pointer_requests;
 	Vector<RuntimeScrollRequest> scroll_requests;
+	Vector<RuntimeAdmittedScrollInput> admitted_scroll_inputs;
 	Vector<HTMLPointerEvent> pointer_events;
 	Vector<RuntimeOutputState *> outputs;
 	Vector<RuntimeOutputState *> retiring_outputs;
@@ -347,8 +372,17 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	RuntimeOutputTopologySnapshot staged_topology;
 	bool submitted_request_is_configuration_only = false;
 	bool document_dirty = false;
+	uint64_t document_snapshot_generation = 0;
+	WorkerThreadPool::TaskID compilation_task_id = WorkerThreadPool::INVALID_TASK_ID;
+	hcsr_runtime_compilation_request_t *active_compilation_request = nullptr;
+	bool compilation_result_ready = false;
+	uint64_t compilation_result_generation = 0;
+	hcsr_runtime_document_t *compilation_result_document = nullptr;
+	Ref<HTMLDocument> compilation_result_source;
+	String compilation_result_error;
 	bool configuration_dirty = false;
 	bool work_scheduled = false;
+	bool work_reschedule_requested = false;
 	bool pending_work = false;
 	bool semantic_pending = false;
 	bool interactive_pending = false;
@@ -403,6 +437,9 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	Point2 pointer_position;
 	bool scrollbar_interaction_active = false;
 	uint64_t mutation_request_process_frame = 0;
+	uint64_t document_request_process_frame = 0;
+	uint64_t configuration_request_process_frame = 0;
+	uint64_t submitted_request_process_frame = 0;
 	uint64_t request_serial = 0;
 	uint64_t submitted_request_serial = 0;
 	uint64_t newest_requested_submission_id = 0;
@@ -422,6 +459,7 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	hcsr_runtime_session_t *session = nullptr;
 	hcsr_runtime_publication_t *active_publication = nullptr;
 	hcsr_runtime_publication_t *staged_publication = nullptr;
+	HashSet<hcsr_runtime_publication_t *> publication_handles;
 	RuntimePresentationBinding *active_binding = nullptr;
 	RuntimePresentationBinding *successor_binding = nullptr;
 	RuntimePresentationBinding *retiring_binding = nullptr;
@@ -430,11 +468,19 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	Vector<RID> owned_canvas_textures;
 	RID active_imported_texture;
 	uint64_t active_semantic_frame_generation = 0;
+	uint64_t active_document_request_id = 0;
 	int64_t active_configuration_id = 0;
 	int32_t active_output_id = 0;
 	int32_t active_pixel_width = 0;
 	int32_t active_pixel_height = 0;
 	hcsr_runtime_d3d12_surface_format_t active_pixel_format = HCSR_RUNTIME_D3D12_SURFACE_FORMAT_RGBA8_UNORM;
+};
+
+struct RuntimeDocumentCompilationWork {
+	HTMLSurfaceHCSRRuntimeBackend::RuntimeState *state = nullptr;
+	Ref<HTMLDocument> document;
+	uint64_t generation = 0;
+	hcsr_runtime_compilation_request_t *request = nullptr;
 };
 
 static uint64_t runtime_backdrop_hash_bytes(uint64_t p_hash, const void *p_bytes, size_t p_size) {
@@ -686,6 +732,32 @@ static String runtime_copy_last_error(
 	return native_error.is_empty() ? p_fallback : native_error;
 }
 
+static void runtime_track_publication(
+		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		hcsr_runtime_publication_t *p_publication) {
+	ERR_FAIL_NULL(p_state);
+	ERR_FAIL_NULL(p_publication);
+	ERR_FAIL_COND_MSG(p_state->publication_handles.has(p_publication),
+			"HCSR returned a publication handle that is already owned by this runtime session.");
+	p_state->publication_handles.insert(p_publication);
+}
+
+static hcsr_runtime_status_t runtime_release_publication(
+		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		hcsr_runtime_publication_t *p_publication) {
+	ERR_FAIL_NULL_V(p_state, HCSR_RUNTIME_INVALID_ARGUMENT);
+	ERR_FAIL_NULL_V(p_publication, HCSR_RUNTIME_INVALID_ARGUMENT);
+	if (!p_state->publication_handles.has(p_publication)) {
+		return HCSR_RUNTIME_INVALID_HANDLE;
+	}
+	const hcsr_runtime_status_t status = hcsr_runtime_publication_release(
+			p_state->session, p_publication);
+	if (status == HCSR_RUNTIME_OK) {
+		p_state->publication_handles.erase(p_publication);
+	}
+	return status;
+}
+
 static bool runtime_has_completed_resource_token(
 		const HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
 		const hcsr_runtime_pending_resource_info_t &p_pending) {
@@ -831,9 +903,11 @@ static bool runtime_schedule_state(
 	{
 		MutexLock lock(p_state->mutex);
 		if (p_state->work_scheduled) {
+			p_state->work_reschedule_requested = true;
 			return true;
 		}
 		p_state->work_scheduled = true;
+		p_state->work_reschedule_requested = false;
 	}
 	rendering_server->call_on_render_thread(
 			callable_mp_static(&HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback)
@@ -881,6 +955,7 @@ static RuntimePublicationLineage runtime_lineage_from_publication(
 	lineage.configuration_only = p_configuration_only;
 	lineage.request_serial = p_request_serial;
 	lineage.runtime_generation = p_info.generation;
+	lineage.document_request_id = p_info.document_request_id;
 	lineage.semantic_frame_generation = p_info.semantic_frame_generation;
 	lineage.target_author_revision = p_info.target_author_revision;
 	lineage.interactive_submission_id = p_info.interactive_submission_id;
@@ -1000,6 +1075,12 @@ static Vector<hcsr_runtime_output_configuration_t> runtime_create_output_configu
 	outputs.write[0].logical_width = p_state->logical_size.x;
 	outputs.write[0].logical_height = p_state->logical_size.y;
 	outputs.write[0].tile_size = 64;
+	const uint32_t clear_color_bgra =
+			(uint32_t)Math::round(CLAMP(p_state->background_color.b, 0.0f, 1.0f) * 255.0f)
+			| ((uint32_t)Math::round(CLAMP(p_state->background_color.g, 0.0f, 1.0f) * 255.0f) << 8)
+			| ((uint32_t)Math::round(CLAMP(p_state->background_color.r, 0.0f, 1.0f) * 255.0f) << 16)
+			| ((uint32_t)Math::round(CLAMP(p_state->background_color.a, 0.0f, 1.0f) * 255.0f) << 24);
+	outputs.write[0].clear_color_bgra = clear_color_bgra;
 	for (int index = 0; index < p_topology.outputs.size(); index++) {
 		const RuntimeOutputSnapshotEntry &output = p_topology.outputs[index];
 		initialize_abi(&outputs.write[index + 1], sizeof(hcsr_runtime_output_configuration_t));
@@ -1009,6 +1090,7 @@ static Vector<hcsr_runtime_output_configuration_t> runtime_create_output_configu
 		outputs.write[index + 1].logical_width = p_state->logical_size.x;
 		outputs.write[index + 1].logical_height = p_state->logical_size.y;
 		outputs.write[index + 1].tile_size = 64;
+		outputs.write[index + 1].clear_color_bgra = clear_color_bgra;
 	}
 	return outputs;
 }
@@ -1019,7 +1101,7 @@ static bool runtime_ensure_initialized(
 		return true;
 	}
 	if (hcsr_runtime_get_abi_version() != RUNTIME_REQUIRED_ABI_VERSION) {
-		runtime_set_terminal(p_state, "HCSR replacement ABI mismatch; Godot requires runtime ABI v11.");
+		runtime_set_terminal(p_state, "HCSR replacement ABI mismatch; Godot requires runtime ABI v19.");
 		return false;
 	}
 	CharString codec_directory = OS::get_singleton()->get_executable_path().get_base_dir().utf8();
@@ -1076,24 +1158,32 @@ static bool runtime_ensure_initialized(
 	return true;
 }
 
-static bool runtime_submit_document(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
-		const String &p_html,
-		const String &p_css,
-		const Vector<RuntimeResolvedStylesheet> &p_stylesheets) {
-	CharString html_utf8 = p_html.utf8();
-	CharString css_utf8 = p_css.utf8();
+static bool runtime_compile_document(
+		const Ref<HTMLDocument> &p_document,
+		hcsr_runtime_compilation_request_t *p_compilation_request,
+		hcsr_runtime_document_t *&r_document,
+		String &r_error) {
+	r_document = nullptr;
+	String html;
+	String css;
+	Vector<RuntimeResolvedStylesheet> stylesheets;
+	if (!runtime_load_document_source(
+			p_document, p_compilation_request, html, css, stylesheets, r_error)) {
+		return false;
+	}
+	CharString html_utf8 = html.utf8();
+	CharString css_utf8 = css.utf8();
 	Vector<CharString> stylesheet_references;
 	Vector<CharString> stylesheet_contents;
-	stylesheet_references.resize(p_stylesheets.size());
-	stylesheet_contents.resize(p_stylesheets.size());
-	for (int index = 0; index < p_stylesheets.size(); index++) {
-		stylesheet_references.write[index] = p_stylesheets[index].reference.utf8();
-		stylesheet_contents.write[index] = p_stylesheets[index].content.utf8();
+	stylesheet_references.resize(stylesheets.size());
+	stylesheet_contents.resize(stylesheets.size());
+	for (int index = 0; index < stylesheets.size(); index++) {
+		stylesheet_references.write[index] = stylesheets[index].reference.utf8();
+		stylesheet_contents.write[index] = stylesheets[index].content.utf8();
 	}
 	Vector<hcsr_runtime_resolved_stylesheet_t> stylesheet_inputs;
-	stylesheet_inputs.resize(p_stylesheets.size());
-	for (int index = 0; index < p_stylesheets.size(); index++) {
+	stylesheet_inputs.resize(stylesheets.size());
+	for (int index = 0; index < stylesheets.size(); index++) {
 		initialize_abi(&stylesheet_inputs.write[index], sizeof(hcsr_runtime_resolved_stylesheet_t));
 		stylesheet_inputs.write[index].reference_utf8 = stylesheet_references[index].get_data();
 		stylesheet_inputs.write[index].content_utf8 = stylesheet_contents[index].get_data();
@@ -1115,33 +1205,81 @@ static bool runtime_submit_document(
 		font_inputs.write[index].italic = platform_fonts[index].italic ? 1 : 0;
 		font_inputs.write[index].face_index = platform_fonts[index].face_index;
 	}
-	hcsr_runtime_document_t *document = nullptr;
 	hcsr_runtime_compilation_report_t *report = nullptr;
-	const hcsr_runtime_status_t compile_status = hcsr_runtime_document_compile_with_stylesheets_and_fonts(
-			html_utf8.get_data(), css_utf8.get_data(), stylesheet_inputs.ptr(), stylesheet_inputs.size(),
-			font_inputs.ptr(), font_inputs.size(), &document, &report);
+	const hcsr_runtime_status_t compile_status = hcsr_runtime_compilation_request_compile_with_stylesheets_and_fonts(
+			p_compilation_request, html_utf8.get_data(), css_utf8.get_data(),
+			stylesheet_inputs.ptr(), stylesheet_inputs.size(),
+			font_inputs.ptr(), font_inputs.size(), &r_document, &report);
 	if (report == nullptr) {
-		runtime_set_terminal(p_state, "HCSR replacement did not return a compilation report.");
+		if (r_document != nullptr) {
+			hcsr_runtime_document_release(r_document);
+			r_document = nullptr;
+		}
+		r_error = "HCSR replacement did not return a compilation report.";
 		return false;
 	}
 	hcsr_runtime_compilation_report_info_t info;
 	initialize_abi(&info, sizeof(info));
 	const bool report_valid = hcsr_runtime_compilation_report_get_info(report, &info) == HCSR_RUNTIME_OK;
-	if (!report_valid || compile_status != HCSR_RUNTIME_OK || info.success == 0 || document == nullptr) {
-		const String failure = report_valid
+	if (!report_valid || compile_status != HCSR_RUNTIME_OK || info.success == 0 || r_document == nullptr) {
+		r_error = report_valid
 				? runtime_compilation_failure(report, info)
 				: String("HCSR replacement compilation report was invalid.");
 		hcsr_runtime_compilation_report_release(report);
-		if (document != nullptr) {
-			hcsr_runtime_document_release(document);
+		if (r_document != nullptr) {
+			hcsr_runtime_document_release(r_document);
+			r_document = nullptr;
 		}
-		runtime_set_terminal(p_state, failure);
 		return false;
 	}
 	hcsr_runtime_compilation_report_release(report);
+	return true;
+}
+
+static void runtime_compile_document_worker(void *p_argument) {
+	RuntimeDocumentCompilationWork *work = static_cast<RuntimeDocumentCompilationWork *>(p_argument);
+	hcsr_runtime_document_t *document = nullptr;
+	String error;
+	const bool success = runtime_compile_document(work->document, work->request, document, error);
+	HTMLSurfaceHCSRRuntimeBackend::RuntimeState *state = work->state;
+	{
+		MutexLock lock(state->mutex);
+		if (state->active_compilation_request == work->request) {
+			state->active_compilation_request = nullptr;
+		}
+		if (state->closing || work->generation != state->document_snapshot_generation) {
+			if (document != nullptr) {
+				hcsr_runtime_document_release(document);
+				document = nullptr;
+			}
+		} else {
+			state->compilation_result_ready = true;
+			state->compilation_result_generation = work->generation;
+			state->compilation_result_document = document;
+			state->compilation_result_source = work->document;
+			state->compilation_result_error = success ? String() : error;
+			document = nullptr;
+			state->pending_work = true;
+		}
+	}
+	const hcsr_runtime_status_t request_release = hcsr_runtime_compilation_request_release(work->request);
+	if (request_release != HCSR_RUNTIME_OK) {
+		ERR_PRINT(vformat("HCSR compilation request release failed with status %d.", (int)request_release));
+	}
+	memdelete(work);
+	runtime_schedule_state(state);
+}
+
+static bool runtime_submit_compiled_document(
+		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		hcsr_runtime_document_t *p_document,
+		const Ref<HTMLDocument> &p_source,
+		uint64_t p_request_serial,
+		uint64_t p_request_process_frame) {
+	ERR_FAIL_NULL_V(p_document, false);
 	if (hcsr_runtime_session_submit_document(
-			p_state->session, ++p_state->document_request_id, document) != HCSR_RUNTIME_OK) {
-		hcsr_runtime_document_release(document);
+			p_state->session, ++p_state->document_request_id, p_document) != HCSR_RUNTIME_OK) {
+		hcsr_runtime_document_release(p_document);
 		runtime_set_terminal(p_state, "HCSR replacement rejected the compiled document publication.");
 		return false;
 	}
@@ -1149,7 +1287,11 @@ static bool runtime_submit_document(
 	if (p_state->compiled_document != nullptr) {
 		hcsr_runtime_document_release(p_state->compiled_document);
 	}
-	p_state->compiled_document = document;
+	p_state->compiled_document = p_document;
+	p_state->document = p_source;
+	p_state->submitted_request_serial = p_request_serial;
+	p_state->submitted_request_process_frame = p_request_process_frame;
+	p_state->submitted_request_is_configuration_only = false;
 	p_state->semantic_pending = true;
 	p_state->pending_work = true;
 	return true;
@@ -1157,7 +1299,8 @@ static bool runtime_submit_document(
 
 static bool runtime_submit_configuration(
 		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
-		uint64_t p_request_serial) {
+		uint64_t p_request_serial,
+		uint64_t p_request_process_frame) {
 	runtime_release_output_topology(p_state->candidate_topology);
 	p_state->candidate_topology = runtime_capture_output_topology(p_state);
 	if (p_state->logical_size == p_state->submitted_logical_size
@@ -1188,6 +1331,7 @@ static bool runtime_submit_configuration(
 	p_state->submitted_physical_size = p_state->physical_size;
 	p_state->submitted_request_is_configuration_only = true;
 	p_state->submitted_request_serial = p_request_serial;
+	p_state->submitted_request_process_frame = p_request_process_frame;
 	p_state->semantic_pending = true;
 	p_state->pending_work = true;
 	return true;
@@ -1298,6 +1442,7 @@ static bool runtime_submit_mutations(
 	p_state->semantic_pending = true;
 	p_state->pending_work = true;
 	p_state->submitted_request_serial = p_request_serial;
+	p_state->submitted_request_process_frame = p_request_process_frame;
 	p_state->submitted_request_is_configuration_only = false;
 	if (interactive) {
 		p_state->interactive_pending = true;
@@ -1539,6 +1684,12 @@ static bool runtime_activate_surface(
 	const uint64_t active_semantic_frame_generation = p_output != nullptr
 			? p_output->active_semantic_frame_generation
 			: p_state->active_semantic_frame_generation;
+	const uint64_t active_document_request_id = p_output != nullptr
+			? p_output->active_document_request_id
+			: p_state->active_document_request_id;
+	const uint64_t staged_document_request_id = p_output != nullptr
+			? p_output->staged_lineage.document_request_id
+			: p_state->staged_lineage.document_request_id;
 	const int64_t active_configuration_id = p_output != nullptr
 			? p_output->active_configuration_id
 			: p_state->active_configuration_id;
@@ -1549,6 +1700,7 @@ static bool runtime_activate_surface(
 			&& ((p_output == nullptr && p_state->active_binding == p_binding)
 					|| (p_output != nullptr && p_output->active_binding == p_binding))
 			&& p_binding->active_slot == slot->godot_slot
+			&& active_document_request_id == staged_document_request_id
 			&& active_semantic_frame_generation == acquired.semantic_frame_generation
 			&& active_configuration_id == acquired.configuration_id
 			&& active_output_id == acquired.output_id;
@@ -1558,6 +1710,7 @@ static bool runtime_activate_surface(
 		slot->runtime_generation = acquired.runtime_generation;
 		if (p_output != nullptr) {
 			p_output->active_generation = acquired.runtime_generation;
+			p_output->active_document_request_id = staged_document_request_id;
 			p_output->active_semantic_frame_generation = acquired.semantic_frame_generation;
 			p_output->active_configuration_id = acquired.configuration_id;
 			p_output->active_output_id = acquired.output_id;
@@ -1631,6 +1784,7 @@ static bool runtime_activate_surface(
 			p_output->texture->set_external_texture(published_texture,
 					Size2i(acquired.pixel_width, acquired.pixel_height), true);
 			p_output->active_generation = acquired.runtime_generation;
+			p_output->active_document_request_id = staged_document_request_id;
 			p_output->active_semantic_frame_generation = acquired.semantic_frame_generation;
 			p_output->active_configuration_id = acquired.configuration_id;
 			p_output->active_output_id = acquired.output_id;
@@ -1642,6 +1796,7 @@ static bool runtime_activate_surface(
 	{
 		MutexLock lock(p_state->mutex);
 		if (p_output == nullptr) {
+		p_state->active_document_request_id = staged_document_request_id;
 		p_state->active_semantic_frame_generation = acquired.semantic_frame_generation;
 		p_state->active_configuration_id = acquired.configuration_id;
 		p_state->active_output_id = acquired.output_id;
@@ -1747,6 +1902,65 @@ static bool runtime_step_retiring_output(
 	return true;
 }
 
+static bool runtime_resolve_completed_scroll_input(
+		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		int64_t p_input_id,
+		int64_t p_frame_id) {
+	if (p_input_id == 0 && p_frame_id == 0) {
+		return true;
+	}
+	if (p_input_id <= 0 || p_frame_id <= 0) {
+		runtime_set_terminal(p_state,
+				"HCSR replacement returned an incomplete no-publication scroll authority.");
+		return false;
+	}
+	const uint64_t input_id = (uint64_t)p_input_id;
+	const uint64_t frame_id = (uint64_t)p_frame_id;
+	RuntimeAdmittedScrollInput admitted;
+	bool found = false;
+	{
+		MutexLock lock(p_state->mutex);
+		for (int index = 0; index < p_state->admitted_scroll_inputs.size(); index++) {
+			if (p_state->admitted_scroll_inputs[index].input_id == input_id) {
+				admitted = p_state->admitted_scroll_inputs[index];
+				found = true;
+				break;
+			}
+		}
+	}
+	if (!found) {
+		runtime_set_terminal(p_state,
+				"HCSR replacement completed a no-publication scroll input that Godot never admitted.");
+		return false;
+	}
+	if (admitted.frame_id != frame_id) {
+		runtime_set_terminal(p_state,
+				"HCSR replacement returned a no-publication scroll frame outside its admitted authority.");
+		return false;
+	}
+	hcsr_runtime_host_input_binding_t binding;
+	initialize_abi(&binding, sizeof(binding));
+	binding.receipt_id = admitted.host_receipt_id;
+	binding.input_revision = admitted.input_id;
+	binding.publication_lane = HCSR_RUNTIME_HOST_INPUT_SCROLL;
+	binding.resolved_without_mutation = 1;
+	if (hcsr_runtime_session_resolve_host_input(p_state->session, &binding) != HCSR_RUNTIME_OK) {
+		runtime_set_terminal(p_state, runtime_copy_last_error(
+				p_state, "Godot could not resolve the exact no-publication HCSR scroll input."));
+		return false;
+	}
+	{
+		MutexLock lock(p_state->mutex);
+		for (int index = 0; index < p_state->admitted_scroll_inputs.size(); index++) {
+			if (p_state->admitted_scroll_inputs[index].input_id == input_id) {
+				p_state->admitted_scroll_inputs.remove_at(index);
+				break;
+			}
+		}
+	}
+	return true;
+}
+
 static bool runtime_step_active(
 		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
 	RenderingServer *rendering_server = RenderingServer::get_singleton();
@@ -1793,7 +2007,17 @@ static bool runtime_step_active(
 	if (p_state->terminal) {
 		return false;
 	}
-	if (!p_state->semantic_pending && !p_state->interactive_pending && !p_state->activation_pending) {
+	bool publication_presentation_pending = (p_state->active_binding != nullptr
+			&& p_state->active_binding->presenter_pending)
+			|| (p_state->successor_binding != nullptr
+					&& p_state->successor_binding->presenter_pending);
+	for (RuntimeOutputState *output : p_state->outputs) {
+		publication_presentation_pending = publication_presentation_pending
+				|| (output->active_binding != nullptr && output->active_binding->presenter_pending)
+				|| (output->successor_binding != nullptr && output->successor_binding->presenter_pending);
+	}
+	if (!p_state->semantic_pending && !p_state->interactive_pending
+			&& !p_state->activation_pending && !publication_presentation_pending) {
 		if (!runtime_service_presenter_standby(p_state->active_binding)) {
 			runtime_set_terminal(p_state, "HCSR replacement could not prepare its primary D3D12 standby surface.");
 			return false;
@@ -1811,7 +2035,8 @@ static bool runtime_step_active(
 	}
 	if (!p_state->semantic_pending
 			&& !p_state->interactive_pending
-			&& !p_state->activation_pending) {
+			&& !p_state->activation_pending
+			&& !publication_presentation_pending) {
 		// Standby preparation and retirement are presentation work. Calling the
 		// semantic session with no admitted request can report Pending and invent
 		// semantic work that indefinitely blocks a queued configuration.
@@ -1821,7 +2046,10 @@ static bool runtime_step_active(
 				|| (p_state->successor_binding != nullptr
 						&& p_state->successor_binding->standby_pending)
 				|| p_state->retiring_binding != nullptr
-				|| !p_state->retiring_outputs.is_empty();
+				|| !p_state->retiring_outputs.is_empty()
+				|| p_state->document_dirty
+				|| p_state->compilation_task_id != WorkerThreadPool::INVALID_TASK_ID
+				|| p_state->compilation_result_ready;
 		for (RuntimeOutputState *output : p_state->outputs) {
 			p_state->pending_work = p_state->pending_work
 					|| (output->active_binding != nullptr
@@ -1869,13 +2097,25 @@ static bool runtime_step_active(
 							|| interactive.outcome == HCSR_RUNTIME_INTERACTIVE_DEFERRED_STRUCTURAL
 							|| !semantic_publication_ready);
 		}
-	} else {
+	} else if (p_state->semantic_pending) {
 		const uint64_t semantic_cutoff = hcsr_runtime_get_monotonic_timestamp_microseconds()
 				+ RUNTIME_SEMANTIC_FRAME_BUDGET_MICROSECONDS;
 		do {
+			const uint64_t semantic_now = hcsr_runtime_get_monotonic_timestamp_microseconds();
+			if (semantic_now >= semantic_cutoff) {
+				status = HCSR_RUNTIME_PENDING;
+				break;
+			}
 			initialize_abi(&step, sizeof(step));
-			status = hcsr_runtime_session_step(
-					p_state->session, RUNTIME_SEMANTIC_STEP_SLICE_UNITS, &step);
+			status = hcsr_runtime_session_step_with_budget(
+					p_state->session,
+					RUNTIME_SEMANTIC_STEP_SLICE_UNITS,
+					(int64_t)(semantic_cutoff - semantic_now),
+					&step);
+			if (!runtime_resolve_completed_scroll_input(
+					p_state, step.completed_scroll_input_id, step.completed_scroll_frame_id)) {
+				return false;
+			}
 		} while (status == HCSR_RUNTIME_PENDING
 				&& hcsr_runtime_get_monotonic_timestamp_microseconds() < semantic_cutoff);
 			semantic_publication_ready = status == HCSR_RUNTIME_OK
@@ -1904,14 +2144,31 @@ static bool runtime_step_active(
 			if (acquire_status != HCSR_RUNTIME_OK || next_publication == nullptr) {
 				break;
 			}
+			runtime_track_publication(p_state, next_publication);
 			if (publication != nullptr) {
-				hcsr_runtime_publication_release(p_state->session, publication);
+				const hcsr_runtime_status_t superseded_release = runtime_release_publication(p_state, publication);
+				if (superseded_release != HCSR_RUNTIME_OK) {
+					runtime_set_terminal(p_state, "HCSR could not release a superseded native publication handle.");
+					return false;
+				}
 			}
 			publication = next_publication;
 			publication_info = next_info;
 			acquire_after_generation = next_info.generation;
 		}
 		p_state->consumed_runtime_generation = acquire_after_generation;
+		if (publication != nullptr) {
+			if (publication_info.document_request_id != p_state->document_request_id) {
+				const bool proven_obsolete = publication_info.document_request_id < p_state->document_request_id;
+				runtime_release_publication(p_state, publication);
+				publication = nullptr;
+				if (!proven_obsolete) {
+					runtime_set_terminal(p_state, "HCSR replacement produced a publication for an unknown future document request.");
+					return false;
+				}
+				semantic_pending = true;
+			}
+		}
 		if (publication != nullptr) {
 			const bool has_interactive_authority = p_state->newest_requested_submission_id != 0;
 			const bool exact_interactive_authority = p_state->submitted_request_is_configuration_only
@@ -1922,7 +2179,7 @@ static bool runtime_step_active(
 			if (!exact_interactive_authority) {
 				const bool proven_obsolete = publication_info.interactive_submission_id < p_state->newest_requested_submission_id
 						|| publication_info.target_author_revision < p_state->newest_requested_author_revision;
-				hcsr_runtime_publication_release(p_state->session, publication);
+				runtime_release_publication(p_state, publication);
 				if (!proven_obsolete) {
 					runtime_set_terminal(p_state, "HCSR replacement produced a publication outside the newest requested interactive lineage.");
 					return false;
@@ -1933,7 +2190,7 @@ static bool runtime_step_active(
 		}
 		if (publication != nullptr) {
 			if (publication_info.output_count != 1 + p_state->submitted_topology.outputs.size()) {
-				hcsr_runtime_publication_release(p_state->session, publication);
+				runtime_release_publication(p_state, publication);
 				runtime_set_terminal(p_state, "HCSR replacement publication output topology differs from the requested atomic configuration.");
 				return false;
 			}
@@ -1941,7 +2198,7 @@ static bool runtime_step_active(
 			initialize_abi(&interaction_info, sizeof(interaction_info));
 			if (hcsr_runtime_publication_get_interaction_info(
 					publication, publication_info.generation, &interaction_info) != HCSR_RUNTIME_OK) {
-				hcsr_runtime_publication_release(p_state->session, publication);
+				runtime_release_publication(p_state, publication);
 				runtime_set_terminal(p_state, "HCSR replacement publication lost its interaction input authority.");
 				return false;
 			}
@@ -1949,7 +2206,7 @@ static bool runtime_step_active(
 			initialize_abi(&scroll_info, sizeof(scroll_info));
 			if (hcsr_runtime_publication_get_scroll_info(
 					publication, publication_info.generation, &scroll_info) != HCSR_RUNTIME_OK) {
-				hcsr_runtime_publication_release(p_state->session, publication);
+				runtime_release_publication(p_state, publication);
 				runtime_set_terminal(p_state, "HCSR replacement publication lost its scroll input authority.");
 				return false;
 			}
@@ -1961,9 +2218,47 @@ static bool runtime_step_active(
 					0,
 					&output_info);
 			if (output_status != HCSR_RUNTIME_OK) {
-				hcsr_runtime_publication_release(p_state->session, publication);
+				runtime_release_publication(p_state, publication);
 				runtime_set_terminal(p_state, vformat("HCSR replacement publication validation failed for handle=%d generation=%d with status %d.", (uint64_t)publication, publication_info.generation, (int)output_status));
 				return false;
+			}
+			const bool document_epoch_changed = p_state->active_generation != 0
+					&& p_state->active_document_request_id != publication_info.document_request_id;
+			if (document_epoch_changed && p_state->successor_binding == nullptr) {
+				if (p_state->retiring_binding != nullptr) {
+					runtime_release_publication(p_state, publication);
+					runtime_set_terminal(p_state, "HCSR exhausted bounded presenter replacement capacity during document replacement.");
+					return false;
+				}
+				RenderingDevice *rendering_device = RenderingServer::get_singleton()->get_rendering_device();
+				p_state->successor_binding = runtime_create_presentation_binding_from_device(rendering_device);
+				if (p_state->successor_binding == nullptr) {
+					runtime_release_publication(p_state, publication);
+					runtime_set_terminal(p_state, "HCSR replacement could not create a document-epoch presentation binding.");
+					return false;
+				}
+			}
+			if (document_epoch_changed) {
+				RenderingDevice *rendering_device = RenderingServer::get_singleton()->get_rendering_device();
+				for (const RuntimeOutputSnapshotEntry &entry : p_state->submitted_topology.outputs) {
+					RuntimeOutputState *output = entry.state;
+					if (output->active_generation == 0
+							|| output->active_document_request_id == publication_info.document_request_id
+							|| output->successor_binding != nullptr) {
+						continue;
+					}
+					if (output->retiring_binding != nullptr) {
+						runtime_release_publication(p_state, publication);
+						runtime_set_terminal(p_state, "HCSR exhausted bounded secondary presenter capacity during document replacement.");
+						return false;
+					}
+					output->successor_binding = runtime_create_presentation_binding_from_device(rendering_device);
+					if (output->successor_binding == nullptr) {
+						runtime_release_publication(p_state, publication);
+						runtime_set_terminal(p_state, "HCSR replacement could not create a secondary document-epoch presentation binding.");
+						return false;
+					}
+				}
 			}
 			RuntimePresentationBinding *target_binding = p_state->successor_binding != nullptr
 					? p_state->successor_binding
@@ -1995,7 +2290,7 @@ static bool runtime_step_active(
 						: nullptr;
 				if (target_binding == p_state->successor_binding) {
 					if (p_state->retiring_binding != nullptr) {
-						hcsr_runtime_publication_release(p_state->session, publication);
+						runtime_release_publication(p_state, publication);
 						runtime_set_terminal(p_state, "HCSR exhausted bounded presenter replacement capacity during rapid resize.");
 						return false;
 					}
@@ -2003,14 +2298,14 @@ static bool runtime_step_active(
 					p_state->successor_binding = nullptr;
 				}
 				if (p_state->successor_binding != nullptr || device == nullptr || queue == nullptr) {
-					hcsr_runtime_publication_release(p_state->session, publication);
+					runtime_release_publication(p_state, publication);
 					runtime_set_terminal(p_state, "HCSR replacement could not create its successor D3D12 presenter.");
 					return false;
 				}
 				p_state->successor_binding = runtime_create_presentation_binding(
 						device, queue, rendering_device);
 				if (p_state->successor_binding == nullptr) {
-					hcsr_runtime_publication_release(p_state->session, publication);
+					runtime_release_publication(p_state, publication);
 					runtime_set_terminal(p_state, "HCSR replacement could not create its successor presentation binding.");
 					return false;
 				}
@@ -2041,13 +2336,13 @@ static bool runtime_step_active(
 						|| publication_info.target_author_revision < p_state->newest_requested_author_revision
 						|| publication_info.generation < p_state->queued_generation;
 				if (!proven_superseded) {
-					hcsr_runtime_publication_release(p_state->session, publication);
+					runtime_release_publication(p_state, publication);
 					runtime_set_terminal(p_state, "HCSR replacement reported a stale presenter request without a proven newer authority.");
 					return false;
 				}
 				semantic_pending = true;
 			} else if (submit_status != HCSR_RUNTIME_OK) {
-				hcsr_runtime_publication_release(p_state->session, publication);
+				runtime_release_publication(p_state, publication);
 				runtime_set_terminal(p_state, vformat("HCSR replacement D3D12 presenter rejected runtime generation %d semantic generation %d with status %d.", publication_info.generation, publication_info.semantic_frame_generation, (int)submit_status));
 				return false;
 			} else {
@@ -2078,7 +2373,7 @@ static bool runtime_step_active(
 							|| secondary_info.output_id != (int32_t)entry.output_id
 							|| secondary_info.pixel_width != entry.size.x
 							|| secondary_info.pixel_height != entry.size.y) {
-						hcsr_runtime_publication_release(p_state->session, publication);
+						runtime_release_publication(p_state, publication);
 						runtime_set_terminal(p_state, "HCSR replacement secondary output metadata is not the requested projection.");
 						return false;
 					}
@@ -2123,7 +2418,7 @@ static bool runtime_step_active(
 								: HCSR_RUNTIME_INTERNAL_ERROR;
 					}
 					if (secondary_submit_status != HCSR_RUNTIME_OK) {
-						hcsr_runtime_publication_release(p_state->session, publication);
+						runtime_release_publication(p_state, publication);
 						runtime_set_terminal(p_state, vformat("HCSR replacement could not submit atomic secondary D3D12 output %d with status %d.", entry.output_id, (int)secondary_submit_status));
 						return false;
 					}
@@ -2135,13 +2430,17 @@ static bool runtime_step_active(
 				}
 				runtime_replace_output_topology(p_state->staged_topology, p_state->submitted_topology);
 				if (p_state->staged_publication != nullptr) {
-					hcsr_runtime_publication_release(p_state->session, p_state->staged_publication);
+					const hcsr_runtime_status_t staged_release = runtime_release_publication(p_state, p_state->staged_publication);
+					if (staged_release != HCSR_RUNTIME_OK) {
+						runtime_set_terminal(p_state, "HCSR could not release its superseded staged publication handle.");
+						return false;
+					}
 				}
 				p_state->staged_publication = publication;
 				publication = nullptr;
 			}
 			if (publication != nullptr) {
-				hcsr_runtime_publication_release(p_state->session, publication);
+				runtime_release_publication(p_state, publication);
 			}
 		}
 	}
@@ -2214,6 +2513,9 @@ static bool runtime_step_active(
 	if (all_outputs_ready && !p_state->activation_pending) {
 		p_state->activation_pending = true;
 		p_state->activation_callback_scheduled = runtime_schedule_frame_cutoff(p_state);
+	} else if (all_outputs_ready && p_state->activation_pending
+			&& p_state->activation_deferred_to_next_process_frame) {
+		p_state->activation_callback_scheduled = runtime_schedule_frame_cutoff(p_state);
 	}
 	int32_t animation_needs_next_frame = 0;
 	if (hcsr_runtime_session_query_animation_schedule(
@@ -2230,7 +2532,10 @@ static bool runtime_step_active(
 				|| p_state->activation_pending
 				|| p_state->retiring_binding != nullptr
 				|| !p_state->retiring_outputs.is_empty()
-				|| p_state->semantic_pending;
+				|| p_state->semantic_pending
+				|| p_state->document_dirty
+				|| p_state->compilation_task_id != WorkerThreadPool::INVALID_TASK_ID
+				|| p_state->compilation_result_ready;
 		for (const RuntimeOutputSnapshotEntry &entry : p_state->staged_topology.outputs) {
 			RuntimeOutputState *output = entry.state;
 			p_state->pending_work = p_state->pending_work
@@ -2338,6 +2643,7 @@ static bool runtime_step_pointer_input(HTMLSurfaceHCSRRuntimeBackend::RuntimeSta
 	p_state->newest_requested_cutoff_timestamp_microseconds = p_state->active_pointer_cutoff_timestamp_microseconds;
 	p_state->active_pointer_cutoff_timestamp_microseconds = 0;
 	p_state->submitted_request_serial = p_state->request_serial;
+	p_state->submitted_request_process_frame = p_state->active_pointer_request.host_process_frame;
 	p_state->submitted_request_is_configuration_only = false;
 	p_state->interactive_pending = true;
 	p_state->semantic_pending = true;
@@ -2346,6 +2652,7 @@ static bool runtime_step_pointer_input(HTMLSurfaceHCSRRuntimeBackend::RuntimeSta
 
 static bool runtime_submit_one_scroll_input(HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
 	RuntimeScrollRequest request;
+	bool admitted_capacity_exhausted = false;
 	{
 		MutexLock lock(p_state->mutex);
 		if (p_state->active_pointer_submission_id != 0 || p_state->scroll_requests.is_empty()) {
@@ -2356,8 +2663,17 @@ static bool runtime_submit_one_scroll_input(HTMLSurfaceHCSRRuntimeBackend::Runti
 						< p_state->scroll_requests[0].receipt_sequence) {
 			return true;
 		}
-		request = p_state->scroll_requests[0];
-		p_state->scroll_requests.remove_at(0);
+		if (p_state->admitted_scroll_inputs.size() >= RUNTIME_ADMITTED_SCROLL_INPUT_CAPACITY) {
+			admitted_capacity_exhausted = true;
+		} else {
+			request = p_state->scroll_requests[0];
+			p_state->scroll_requests.remove_at(0);
+		}
+	}
+	if (admitted_capacity_exhausted) {
+		runtime_set_terminal(p_state,
+				"Godot exhausted its bounded admitted HCSR scroll authority capacity.");
+		return false;
 	}
 	hcsr_runtime_scroll_input_t input;
 	initialize_abi(&input, sizeof(input));
@@ -2389,7 +2705,16 @@ static bool runtime_submit_one_scroll_input(HTMLSurfaceHCSRRuntimeBackend::Runti
 		runtime_set_terminal(p_state, vformat("HCSR replacement scroll submission failed (status %d).", (int)status));
 		return false;
 	}
+	RuntimeAdmittedScrollInput admitted;
+	admitted.input_id = input.input_id;
+	admitted.frame_id = input.frame_id;
+	admitted.host_receipt_id = input.host_receipt_id;
+	{
+		MutexLock lock(p_state->mutex);
+		p_state->admitted_scroll_inputs.push_back(admitted);
+	}
 	p_state->semantic_pending = true;
+	p_state->submitted_request_process_frame = request.host_process_frame;
 	return true;
 }
 
@@ -2527,12 +2852,21 @@ static bool runtime_step_shutdown(
 		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
 	if (p_state->session != nullptr) {
 		if (p_state->staged_publication != nullptr) {
-			hcsr_runtime_publication_release(p_state->session, p_state->staged_publication);
+			runtime_release_publication(p_state, p_state->staged_publication);
 			p_state->staged_publication = nullptr;
 		}
 		if (p_state->active_publication != nullptr) {
-			hcsr_runtime_publication_release(p_state->session, p_state->active_publication);
+			runtime_release_publication(p_state, p_state->active_publication);
 			p_state->active_publication = nullptr;
+		}
+		Vector<hcsr_runtime_publication_t *> residual_publications;
+		for (hcsr_runtime_publication_t *publication : p_state->publication_handles) {
+			residual_publications.push_back(publication);
+		}
+		for (hcsr_runtime_publication_t *publication : residual_publications) {
+			if (runtime_release_publication(p_state, publication) != HCSR_RUNTIME_OK) {
+				return false;
+			}
 		}
 	}
 	runtime_release_output_topology(p_state->staged_topology);
@@ -2616,8 +2950,11 @@ static bool runtime_step_shutdown(
 	initialize_abi(&step, sizeof(step));
 	if (p_state->session != nullptr) {
 		if (!p_state->session_shutdown_started) {
-			hcsr_runtime_session_begin_shutdown(p_state->session);
-			p_state->session_shutdown_started = true;
+			p_state->session_shutdown_started = hcsr_runtime_session_begin_shutdown(p_state->session)
+					== HCSR_RUNTIME_OK;
+			if (!p_state->session_shutdown_started) {
+				return false;
+			}
 		}
 		initialize_abi(&step, sizeof(step));
 		const hcsr_runtime_status_t status = hcsr_runtime_session_step_retirement(
@@ -2636,42 +2973,156 @@ static bool runtime_step_shutdown(
 		hcsr_runtime_document_release(p_state->compiled_document);
 		p_state->compiled_document = nullptr;
 	}
+	if (p_state->compilation_result_document != nullptr) {
+		hcsr_runtime_document_release(p_state->compilation_result_document);
+		p_state->compilation_result_document = nullptr;
+	}
+	return true;
+}
+
+static bool runtime_join_completed_compilation(
+		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
+	WorkerThreadPool::TaskID task_id = WorkerThreadPool::INVALID_TASK_ID;
+	{
+		MutexLock lock(p_state->mutex);
+		task_id = p_state->compilation_task_id;
+	}
+	if (task_id == WorkerThreadPool::INVALID_TASK_ID) {
+		return true;
+	}
+	if (!WorkerThreadPool::get_singleton()->is_task_completed(task_id)) {
+		return false;
+	}
+	WorkerThreadPool::get_singleton()->wait_for_task_completion(task_id);
+	{
+		MutexLock lock(p_state->mutex);
+		if (p_state->compilation_task_id == task_id) {
+			p_state->compilation_task_id = WorkerThreadPool::INVALID_TASK_ID;
+		}
+	}
+	return true;
+}
+
+static bool runtime_start_document_compilation(
+		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		const Ref<HTMLDocument> &p_document,
+		uint64_t p_generation) {
+	hcsr_runtime_compilation_request_t *request = nullptr;
+	if (hcsr_runtime_compilation_request_create(&request) != HCSR_RUNTIME_OK
+			|| request == nullptr) {
+		runtime_set_terminal(p_state, "Godot could not create a cancellable HCSR compilation request.");
+		return false;
+	}
+	RuntimeDocumentCompilationWork *work = memnew(RuntimeDocumentCompilationWork);
+	work->state = p_state;
+	work->document = p_document;
+	work->generation = p_generation;
+	work->request = request;
+	{
+		MutexLock lock(p_state->mutex);
+		p_state->active_compilation_request = request;
+	}
+	const WorkerThreadPool::TaskID task_id = WorkerThreadPool::get_singleton()->add_native_task(
+			&runtime_compile_document_worker, work, true, SNAME("HCSR document compilation"));
+	if (task_id == WorkerThreadPool::INVALID_TASK_ID) {
+		{
+			MutexLock lock(p_state->mutex);
+			if (p_state->active_compilation_request == request) {
+				p_state->active_compilation_request = nullptr;
+			}
+		}
+		hcsr_runtime_compilation_request_release(request);
+		memdelete(work);
+		runtime_set_terminal(p_state, "Godot could not schedule HCSR document compilation on its worker pool.");
+		return false;
+	}
+	MutexLock lock(p_state->mutex);
+	p_state->compilation_task_id = task_id;
+	p_state->pending_work = true;
 	return true;
 }
 
 void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_state_ptr) {
 	RuntimeState *runtime = (RuntimeState *)p_state_ptr;
-	String html;
-	String css;
-	Vector<RuntimeResolvedStylesheet> stylesheets;
 	Vector<RuntimeMutation> mutations;
 	uint64_t mutation_request_process_frame = 0;
+	uint64_t document_request_process_frame = 0;
+	uint64_t configuration_request_process_frame = 0;
 	uint64_t request_serial = 0;
-	bool document_dirty = false;
+	Ref<HTMLDocument> compilation_document_source;
+	Ref<HTMLDocument> compiled_document_source;
+	uint64_t compilation_generation = 0;
+	hcsr_runtime_document_t *compiled_document = nullptr;
+	String compilation_error;
+	bool start_compilation = false;
+	bool compiled_document_ready = false;
 	bool configuration_dirty = false;
 	bool mutation_has_input_boundary = false;
 	bool closing = false;
 	const uint64_t current_process_frame = Engine::get_singleton()->get_process_frames();
 	auto finish_scheduled_work = [runtime]() {
+		bool defer_next_slice = false;
+		{
+			MutexLock lock(runtime->mutex);
+			defer_next_slice = runtime->work_reschedule_requested;
+			runtime->work_reschedule_requested = false;
+			if (!defer_next_slice) {
+				runtime->work_scheduled = false;
+			}
+		}
+		if (!defer_next_slice) {
+			return;
+		}
+		RenderingServer *rendering_server = RenderingServer::get_singleton();
+		RenderingDevice *device = rendering_server != nullptr
+				? rendering_server->get_rendering_device()
+				: nullptr;
+		if (device != nullptr) {
+			device->external_resource_defer_release(
+					callable_mp_static(&HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback)
+							.bind((uint64_t)runtime));
+			return;
+		}
 		MutexLock lock(runtime->mutex);
 		runtime->work_scheduled = false;
 	};
+	const bool compilation_joined = runtime_join_completed_compilation(runtime);
 	{
 		MutexLock lock(runtime->mutex);
 		closing = runtime->closing;
 		if (!closing && !runtime->terminal) {
-			document_dirty = runtime->document_dirty;
+			if (runtime->compilation_result_ready) {
+				if (runtime->compilation_result_generation == runtime->document_snapshot_generation) {
+					compiled_document = runtime->compilation_result_document;
+					compiled_document_source = runtime->compilation_result_source;
+					compilation_error = runtime->compilation_result_error;
+					compiled_document_ready = true;
+					document_request_process_frame = runtime->document_request_process_frame;
+				} else if (runtime->compilation_result_document != nullptr) {
+					hcsr_runtime_document_release(runtime->compilation_result_document);
+				}
+				runtime->compilation_result_ready = false;
+				runtime->compilation_result_generation = 0;
+				runtime->compilation_result_document = nullptr;
+				runtime->compilation_result_source.unref();
+				runtime->compilation_result_error = String();
+			}
+			if (compilation_joined
+					&& runtime->compilation_task_id == WorkerThreadPool::INVALID_TASK_ID
+					&& runtime->document_dirty) {
+				compilation_document_source = runtime->requested_document;
+				compilation_generation = runtime->document_snapshot_generation;
+				runtime->document_dirty = false;
+				start_compilation = true;
+			}
 			configuration_dirty = runtime->configuration_dirty
 					&& !runtime->semantic_pending
 					&& !runtime->interactive_pending
 					&& !runtime->activation_pending;
-			runtime->document_dirty = false;
 			if (configuration_dirty) {
+				configuration_request_process_frame = runtime->configuration_request_process_frame;
 				runtime->configuration_dirty = false;
 			}
-			html = runtime->html;
-			css = runtime->css;
-			stylesheets = runtime->stylesheets;
 			// Mutation journals are qualified to the exact durable author
 			// revision at MutationBegin. Keep host descriptions queued while a
 			// semantic/resource successor is deriving; otherwise the journal is
@@ -2689,7 +3140,40 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 			request_serial = runtime->request_serial;
 		}
 	}
+	if (start_compilation) {
+		if (!runtime_start_document_compilation(runtime, compilation_document_source,
+					compilation_generation)) {
+			finish_scheduled_work();
+			return;
+		}
+	}
 	if (closing) {
+		if (!compilation_joined) {
+			// Keep the scheduling token owned by the deferred retirement callback.
+			// The worker also observes that token, so completion cannot enqueue a
+			// second callback which outlives the first callback's state deletion.
+			RenderingDevice *device = RenderingServer::get_singleton()->get_rendering_device();
+			device->external_resource_defer_release(
+					callable_mp_static(&HTMLSurfaceHCSRRuntimeBackend::_destroy_state_on_render_thread_callback)
+							.bind((uint64_t)runtime));
+			return;
+		}
+		bool activation_callback_pending = false;
+		{
+			MutexLock lock(runtime->mutex);
+			activation_callback_pending = runtime->cutoff_scheduled
+					|| runtime->activation_callback_scheduled;
+		}
+		if (activation_callback_pending) {
+			// Frame-cutoff callbacks carry the same raw state pointer. They must
+			// observe closing and relinquish that pointer before bounded retirement
+			// is allowed to delete the state.
+			RenderingDevice *device = RenderingServer::get_singleton()->get_rendering_device();
+			device->external_resource_defer_release(
+					callable_mp_static(&HTMLSurfaceHCSRRuntimeBackend::_destroy_state_on_render_thread_callback)
+							.bind((uint64_t)runtime));
+			return;
+		}
 		RenderingServer::get_singleton()->release_frame_presentation((uint64_t)runtime);
 		if (runtime_step_shutdown(runtime)) {
 			memdelete(runtime);
@@ -2701,7 +3185,12 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 						.bind((uint64_t)runtime));
 		return;
 	}
-	if (runtime->session == nullptr && !document_dirty) {
+	if (compiled_document_ready && !compilation_error.is_empty()) {
+		runtime_set_terminal(runtime, compilation_error);
+		finish_scheduled_work();
+		return;
+	}
+	if (runtime->session == nullptr && !compiled_document_ready) {
 		// Do not freeze the constructor's placeholder dimensions into a session.
 		// The first real document snapshot and the final control size establish
 		// the initial atomic configuration together.
@@ -2722,7 +3211,9 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 		finish_scheduled_work();
 		return;
 	}
-	if (document_dirty && !runtime_submit_document(runtime, html, css, stylesheets)) {
+	if (compiled_document_ready
+			&& !runtime_submit_compiled_document(runtime, compiled_document,
+					compiled_document_source, request_serial, document_request_process_frame)) {
 		finish_scheduled_work();
 		return;
 	}
@@ -2731,7 +3222,8 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 		finish_scheduled_work();
 		return;
 	}
-	if (configuration_dirty && !runtime_submit_configuration(runtime, request_serial)) {
+	if (configuration_dirty && !runtime_submit_configuration(
+				runtime, request_serial, configuration_request_process_frame)) {
 		finish_scheduled_work();
 		return;
 	}
@@ -2773,7 +3265,10 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 				|| runtime->active_pointer_submission_id != 0
 				|| !runtime->mutations.is_empty()
 				|| !runtime->pointer_requests.is_empty()
-				|| !runtime->scroll_requests.is_empty();
+				|| !runtime->scroll_requests.is_empty()
+				|| runtime->document_dirty
+				|| runtime->compilation_task_id != WorkerThreadPool::INVALID_TASK_ID
+				|| runtime->compilation_result_ready;
 		runtime->pending_work = has_pending_work;
 		has_standby_work = runtime->active_binding != nullptr
 				&& runtime->active_binding->standby_pending;
@@ -2790,13 +3285,21 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 		finish_scheduled_work();
 		return;
 	}
-	finish_scheduled_work();
 	{
 		MutexLock lock(runtime->mutex);
 		has_pending_work = !runtime->closing && !runtime->terminal
-				&& (runtime->pending_work || !runtime->mutations.is_empty());
+				&& (runtime->pending_work || !runtime->mutations.is_empty()
+						|| runtime->document_dirty
+						|| runtime->compilation_task_id != WorkerThreadPool::INVALID_TASK_ID
+						|| runtime->compilation_result_ready);
 		runtime->pending_work = has_pending_work;
+		if (has_pending_work) {
+			const bool waiting_for_next_process_frame = runtime->activation_deferred_to_next_process_frame
+					&& Engine::get_singleton()->get_process_frames() == runtime->last_activation_process_frame;
+			runtime->work_reschedule_requested = !waiting_for_next_process_frame;
+		}
 	}
+	finish_scheduled_work();
 }
 
 void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_callback(uint64_t p_state_ptr) {
@@ -2827,7 +3330,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 		// obsolete-sized surface, even for one frame; retire its host lease and let
 		// the already-queued configuration derive the first visible publication.
 		if (runtime->staged_publication != nullptr) {
-			hcsr_runtime_publication_release(runtime->session, runtime->staged_publication);
+			runtime_release_publication(runtime, runtime->staged_publication);
 			runtime->staged_publication = nullptr;
 		}
 		for (const RuntimeOutputSnapshotEntry &entry : runtime->staged_topology.outputs) {
@@ -2846,10 +3349,33 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 		}
 		return;
 	}
-	const bool exact_request_serial = runtime->staged_lineage.configuration_only
-			|| runtime->staged_lineage.request_serial == cutoff_request_serial;
+	// Configuration-only work is still derived from one exact host request.
+	// Allowing it to bypass the serial check can advance the visible generation
+	// with an old document after a newer document replacement was received.
+	const bool exact_request_serial = runtime->staged_lineage.request_serial == cutoff_request_serial;
+	if (runtime->activation_pending && !exact_request_serial) {
+		// A newer request can replace staged_publication while the presenter still
+		// finishes the preceding lineage. Drop only that obsolete readiness. The
+		// latest publication lease remains staged and will schedule a fresh cutoff
+		// after its exact presenter lineage becomes ready.
+		runtime->activation_pending = false;
+		runtime->activation_deferred_to_next_process_frame = false;
+		runtime->staged_binding = nullptr;
+		runtime->staged_lineage = RuntimePublicationLineage();
+		for (const RuntimeOutputSnapshotEntry &entry : runtime->staged_topology.outputs) {
+			entry.state->activation_ready = false;
+			entry.state->staged_binding = nullptr;
+			entry.state->staged_lineage = RuntimePublicationLineage();
+		}
+		{
+			MutexLock lock(runtime->mutex);
+			runtime->pending_work = true;
+		}
+		return;
+	}
 	const bool exact_requested_authority = runtime->staged_lineage.valid
 			&& exact_request_serial
+			&& runtime->staged_lineage.document_request_id == runtime->document_request_id
 			&& (runtime->staged_lineage.configuration_only
 					|| runtime->newest_requested_submission_id == 0
 					|| (runtime->staged_lineage.interactive_submission_id == runtime->newest_requested_submission_id
@@ -2929,7 +3455,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 				return;
 			}
 		}
-		runtime->active_request_process_frame = runtime->staged_lineage.interactive_frame_id;
+		runtime->active_request_process_frame = runtime->submitted_request_process_frame;
 		RuntimePresentationBinding *activated_binding = runtime->staged_binding;
 		if (!runtime_activate_surface(runtime, activated_binding, nullptr)) {
 			if (host_frame_permit != nullptr) {
@@ -2974,7 +3500,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 			return;
 		}
 		if (runtime->active_publication != nullptr) {
-			hcsr_runtime_publication_release(runtime->session, runtime->active_publication);
+			runtime_release_publication(runtime, runtime->active_publication);
 		}
 		runtime->active_publication = runtime->staged_publication;
 		runtime->staged_publication = nullptr;
@@ -2994,6 +3520,11 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 			runtime->active_scroll_input_id = runtime->staged_lineage.scroll_input_id;
 			runtime->active_scroll_frame_id = runtime->staged_lineage.scroll_frame_id;
 			runtime->active_scroll_configuration_id = runtime->staged_lineage.scroll_configuration_id;
+			for (int index = runtime->admitted_scroll_inputs.size() - 1; index >= 0; index--) {
+				if (runtime->admitted_scroll_inputs[index].input_id <= runtime->active_scroll_input_id) {
+					runtime->admitted_scroll_inputs.remove_at(index);
+				}
+			}
 			runtime->active_animation_timeline_revision = runtime->staged_lineage.animation_timeline_revision;
 			runtime->active_topology_revision = runtime->staged_topology.revision;
 			runtime->next_host_input_id = MAX(runtime->next_host_input_id,
@@ -3047,7 +3578,10 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 				|| (runtime->successor_binding != nullptr && runtime->successor_binding->presenter_pending)
 				|| runtime->activation_pending
 				|| runtime->retiring_binding != nullptr
-				|| runtime->semantic_pending;
+				|| runtime->semantic_pending
+				|| runtime->document_dirty
+				|| runtime->compilation_task_id != WorkerThreadPool::INVALID_TASK_ID
+				|| runtime->compilation_result_ready;
 		for (const RuntimeOutputSnapshotEntry &entry : runtime->staged_topology.outputs) {
 			RuntimeOutputState *output = entry.state;
 			runtime->pending_work = runtime->pending_work
@@ -3071,23 +3605,21 @@ void HTMLSurfaceHCSRRuntimeBackend::_queue_document_snapshot() {
 	if (state == nullptr) {
 		return;
 	}
-	String html;
-	String css;
-	Vector<RuntimeResolvedStylesheet> stylesheets;
-	String error;
-	if (!runtime_load_document_source(document, html, css, stylesheets, error)) {
-		if (document.is_valid() && (!document->get_html().is_empty() || !document->get_html_file().is_empty())) {
-			runtime_set_terminal(state, error);
+	if (document.is_null() || !document->is_source_valid()) {
+		if (document.is_valid()) {
+			runtime_set_terminal(state, "HCSR replacement received an invalid HTMLDocument source.");
 		}
 		return;
 	}
 	{
 		MutexLock lock(state->mutex);
-		state->html = html;
-		state->css = css;
-		state->stylesheets = stylesheets;
-		state->document = document;
+		if (state->active_compilation_request != nullptr) {
+			hcsr_runtime_compilation_request_cancel(state->active_compilation_request);
+		}
+		state->requested_document = document;
 		state->document_dirty = true;
+		state->document_snapshot_generation++;
+		state->document_request_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		state->request_serial++;
 		state->pending_work = true;
 	}
@@ -3113,7 +3645,7 @@ Error HTMLSurfaceHCSRRuntimeBackend::_queue_mutation(
 			mutation.causal_receipt_timestamp_microseconds = state->causal_receipt_timestamp_microseconds;
 		}
 		state->mutations.push_back(mutation);
-		state->mutation_request_process_frame = Engine::get_singleton()->get_process_frames();
+		state->mutation_request_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		state->request_serial++;
 		state->pending_work = true;
 	}
@@ -3157,6 +3689,7 @@ void HTMLSurfaceHCSRRuntimeBackend::set_size(const Size2i &p_size) {
 		// threads. A resize that races the first render callback must remain a
 		// pending configuration even while the session pointer is still null.
 		state->configuration_dirty = true;
+		state->configuration_request_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		state->request_serial++;
 		state->pending_work = true;
 	}
@@ -3177,6 +3710,7 @@ void HTMLSurfaceHCSRRuntimeBackend::set_physical_size(const Size2i &p_physical_s
 		}
 		state->physical_size = requested_size;
 		state->configuration_dirty = true;
+		state->configuration_request_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		state->request_serial++;
 		state->pending_work = true;
 	}
@@ -3196,7 +3730,21 @@ void HTMLSurfaceHCSRRuntimeBackend::set_transparent_background(bool p_transparen
 }
 
 void HTMLSurfaceHCSRRuntimeBackend::set_background_color(const Color &p_background_color) {
-	(void)p_background_color;
+	if (state == nullptr) {
+		return;
+	}
+	{
+		MutexLock lock(state->mutex);
+		if (state->background_color == p_background_color) {
+			return;
+		}
+		state->background_color = p_background_color;
+		state->configuration_dirty = true;
+		state->configuration_request_process_frame = Engine::get_singleton()->get_process_frames() + 1;
+		state->request_serial++;
+		state->pending_work = true;
+	}
+	_schedule_work();
 }
 
 void HTMLSurfaceHCSRRuntimeBackend::set_placeholder_background(const Color &p_color) {
@@ -3295,7 +3843,9 @@ bool HTMLSurfaceHCSRRuntimeBackend::has_pending_output() const {
 		return false;
 	}
 	MutexLock lock(state->mutex);
-	return state->pending_work || state->work_scheduled;
+	return state->pending_work || state->work_scheduled || state->document_dirty
+			|| state->compilation_task_id != WorkerThreadPool::INVALID_TASK_ID
+			|| state->compilation_result_ready;
 }
 
 bool HTMLSurfaceHCSRRuntimeBackend::has_pending_frame_request() const {
@@ -3308,7 +3858,9 @@ bool HTMLSurfaceHCSRRuntimeBackend::has_pending_frame_request() const {
 		standby_pending = standby_pending
 				|| (output->active_binding != nullptr && output->active_binding->standby_pending);
 	}
-	return standby_pending || state->document_dirty || state->configuration_dirty
+	return standby_pending || state->document_dirty
+			|| state->compilation_task_id != WorkerThreadPool::INVALID_TASK_ID
+			|| state->compilation_result_ready || state->configuration_dirty
 			|| state->animation_timeline_dirty
 			|| !state->mutations.is_empty() || !state->pointer_requests.is_empty()
 			|| !state->scroll_requests.is_empty();
@@ -3402,6 +3954,7 @@ static Error runtime_queue_pointer_request(
 		request.source_runtime_generation = p_state->active_generation;
 		request.source_configuration_id = p_state->active_interaction_configuration_id;
 		request.source_input_id = p_state->active_interaction_input_id;
+		request.host_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		p_state->last_pointer_host_receipt_id = receipt_info.receipt_id;
 		p_state->last_pointer_receipt_timestamp_microseconds = receipt_timestamp_microseconds;
 		if (!p_state->active_has_interaction_state) {
@@ -3572,6 +4125,7 @@ static Error runtime_queue_scroll_request(
 		request.source_runtime_generation = p_state->active_generation;
 		request.source_configuration_id = p_state->active_scroll_configuration_id;
 		request.source_input_id = p_state->active_scroll_input_id;
+		request.host_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		p_state->scroll_requests.push_back(request);
 		p_state->pending_work = true;
 	}
@@ -3723,7 +4277,7 @@ Error HTMLSurfaceHCSRRuntimeBackend::apply_element_mutations(const Array &p_muta
 			}
 		}
 		state->mutations.append_array(parsed);
-		state->mutation_request_process_frame = Engine::get_singleton()->get_process_frames();
+		state->mutation_request_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		state->request_serial++;
 		state->pending_work = true;
 	}
@@ -3803,6 +4357,7 @@ uint64_t HTMLSurfaceHCSRRuntimeBackend::create_presentation_output(const Size2i 
 		state->outputs.push_back(output);
 		state->requested_topology_revision++;
 		state->configuration_dirty = true;
+		state->configuration_request_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		state->request_serial++;
 		state->pending_work = true;
 	}
@@ -3829,6 +4384,7 @@ Error HTMLSurfaceHCSRRuntimeBackend::resize_presentation_output(uint64_t p_outpu
 		output->requested_size = p_size;
 		state->requested_topology_revision++;
 		state->configuration_dirty = true;
+		state->configuration_request_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		state->request_serial++;
 		state->pending_work = true;
 	}
@@ -3855,6 +4411,7 @@ void HTMLSurfaceHCSRRuntimeBackend::destroy_presentation_output(uint64_t p_outpu
 		}
 		state->requested_topology_revision++;
 		state->configuration_dirty = true;
+		state->configuration_request_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		state->request_serial++;
 		state->pending_work = true;
 	}
@@ -3923,11 +4480,16 @@ HTMLSurfaceHCSRRuntimeBackend::~HTMLSurfaceHCSRRuntimeBackend() {
 	{
 		MutexLock lock(retiring->mutex);
 		retiring->closing = true;
+		if (retiring->active_compilation_request != nullptr) {
+			hcsr_runtime_compilation_request_cancel(retiring->active_compilation_request);
+		}
 		retiring->pending_work = true;
 		// Resource admission cannot run after closing begins. Release the Godot
 		// object authority on the main thread instead of retaining it until the
 		// asynchronous render-thread retirement completes during engine teardown.
 		retiring->document.unref();
+		retiring->requested_document.unref();
+		retiring->compilation_result_source.unref();
 		retiring_texture = retiring->texture;
 		retiring->texture.unref();
 		retiring->gpu_backdrop_frame.clear();

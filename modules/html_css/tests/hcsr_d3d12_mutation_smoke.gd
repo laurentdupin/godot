@@ -38,17 +38,38 @@ func _initialize() -> void:
 	if viewport_image == null or viewport_image.get_width() < WIDTH * 2 or viewport_image.get_height() < HEIGHT:
 		_fail("%s mutation smoke could not read back the composed viewport (size=%s)." % [backend_name, viewport_image.get_size() if viewport_image != null else Vector2i.ZERO])
 		return
+	var mutated_background := viewport_image.get_pixel(4, 4)
+	var fresh_background := viewport_image.get_pixel(WIDTH + 4, 4)
+	if mutated_background.a < 0.9 or mutated_background.r > 0.12 or mutated_background.b < 0.10 or fresh_background != mutated_background:
+		_fail("%s mutation smoke did not present either real HCSR surface (left=%s, right=%s)." % [backend_name, mutated_background, fresh_background])
+		return
 	var changed := 0
+	var changed_min := Vector2i(WIDTH, HEIGHT)
+	var changed_max := Vector2i.ZERO
 	for y in range(HEIGHT):
 		for x in range(WIDTH):
 			if viewport_image.get_pixel(x, y) != viewport_image.get_pixel(x + WIDTH, y):
 				changed += 1
+				changed_min.x = mini(changed_min.x, x)
+				changed_min.y = mini(changed_min.y, y)
+				changed_max.x = maxi(changed_max.x, x)
+				changed_max.y = maxi(changed_max.y, y)
 	if changed != 0:
-		_fail("%s class mutation lost or misplaced retained content; %d pixels differ from a fresh final render." % [backend_name, changed])
+		var mutated_image := viewport_image.get_region(Rect2i(0, 0, WIDTH, HEIGHT))
+		var fresh_image := viewport_image.get_region(Rect2i(WIDTH, 0, WIDTH, HEIGHT))
+		var mutated_path := "user://hcsr_mutated_failure.png"
+		var fresh_path := "user://hcsr_fresh_failure.png"
+		mutated_image.save_png(mutated_path)
+		fresh_image.save_png(fresh_path)
+		_fail("%s class mutation lost or misplaced retained content; %d pixels differ in (%s)-(%s). Artifacts: %s, %s." % [backend_name, changed, changed_min, changed_max, ProjectSettings.globalize_path(mutated_path), ProjectSettings.globalize_path(fresh_path)])
 		return
 
 	print("HCSR Godot %s retained mutation smoke passed." % backend_name)
-	quit()
+	mutated.queue_free()
+	fresh.queue_free()
+	for _retirement_frame in range(30):
+		await process_frame
+	quit(0)
 
 func _wait_for_generation(view: HTMLView, prior_generation: int, maximum_frames: int) -> bool:
 	for _frame in range(maximum_frames):
@@ -62,6 +83,7 @@ func _wait_for_generation(view: HTMLView, prior_generation: int, maximum_frames:
 func _make_view(options_class: String) -> HTMLView:
 	var document := HTMLDocument.new()
 	document.html = "<!DOCTYPE html><html><head><style>%s</style></head><body>%s%s%s</body></html>" % [STYLE, BODY_PREFIX, OPTIONS % options_class, BODY_SUFFIX]
+	document.background_color = Color("111827")
 	var view := HTMLView.new()
 	view.backend_preference = backend_preference
 	view.size = Vector2(WIDTH, HEIGHT)
