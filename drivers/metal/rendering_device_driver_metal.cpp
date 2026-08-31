@@ -561,7 +561,12 @@ uint64_t RenderingDeviceDriverMetal::external_timeline_retain(uint64_t p_native_
 	ERR_FAIL_COND_V(p_native_timeline == 0, 0);
 	if (__builtin_available(macOS 10.14, iOS 12.0, tvOS 12.0, visionOS 1.0, *)) {
 		MTL::SharedEvent *event = reinterpret_cast<MTL::SharedEvent *>(uintptr_t(p_native_timeline));
-		ERR_FAIL_COND_V_MSG(event->device() != device, 0, "The external Metal shared event belongs to a different MTLDevice.");
+		// Apple may return nil for MTLSharedEvent::device even when the event was
+		// created by this exact device. Keep rejecting a reported mismatch, but
+		// do not turn an unavailable owner property into a false mismatch. The
+		// paired local texture import still validates exact MTLDevice identity.
+		MTL::Device *event_device = event->device();
+		ERR_FAIL_COND_V_MSG(event_device != nullptr && event_device != device, 0, "The external Metal shared event belongs to a different MTLDevice.");
 		event->retain();
 		return p_native_timeline;
 	}
