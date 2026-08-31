@@ -34,6 +34,7 @@ static constexpr uint64_t RUNTIME_SEMANTIC_FRAME_BUDGET_MICROSECONDS = 8000;
 static constexpr uint64_t RUNTIME_INTERACTIVE_FRAME_BUDGET_MICROSECONDS = 16667;
 static constexpr int RUNTIME_ADMITTED_SCROLL_INPUT_CAPACITY = 256;
 static constexpr int RUNTIME_PENDING_MUTATION_CAPACITY = 4096;
+static constexpr int RUNTIME_POINTER_EVENT_CAPACITY = 256;
 static constexpr uint32_t RUNTIME_REQUIRED_ABI_VERSION = 20;
 
 static_assert(HCSR_RUNTIME_ABI_VERSION == RUNTIME_REQUIRED_ABI_VERSION,
@@ -440,7 +441,11 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 	Vector<RuntimeResourceToken> completed_resource_tokens;
 	uint64_t next_host_frame_id = 1;
 	uint64_t requested_animation_timeline_revision = 0;
+	uint64_t submitted_animation_timeline_revision = 0;
+	uint64_t accepted_animation_timeline_revision = 0;
 	int64_t requested_animation_time_microseconds = 0;
+	int64_t animation_clock_origin_microseconds = -1;
+	uint64_t animation_timeline_document_request_id = 0;
 	bool animation_timeline_dirty = false;
 	bool animation_needs_next_frame = false;
 	uint64_t active_pointer_submission_id = 0;
@@ -2556,15 +2561,21 @@ static bool runtime_step_active(
 			&& p_state->activation_deferred_to_next_process_frame) {
 		p_state->activation_callback_scheduled = runtime_schedule_frame_cutoff(p_state);
 	}
-	int32_t animation_needs_next_frame = 0;
-	if (hcsr_runtime_session_query_animation_schedule(
-			p_state->session, &animation_needs_next_frame) != HCSR_RUNTIME_OK) {
+	hcsr_runtime_animation_schedule_info_t animation_schedule;
+	initialize_abi(&animation_schedule, sizeof(animation_schedule));
+	if (hcsr_runtime_session_get_animation_schedule(
+			p_state->session, &animation_schedule) != HCSR_RUNTIME_OK) {
 		runtime_set_terminal(p_state, "Godot could not query the HCSR animation schedule.");
 		return false;
 	}
 	{
 		MutexLock lock(p_state->mutex);
-		p_state->animation_needs_next_frame = animation_needs_next_frame != 0;
+		p_state->animation_needs_next_frame = animation_schedule.needs_next_frame != 0;
+		if (animation_schedule.document_request_id == p_state->animation_timeline_document_request_id) {
+			p_state->accepted_animation_timeline_revision = MAX(
+					p_state->accepted_animation_timeline_revision,
+					animation_schedule.revision_id);
+		}
 		p_state->semantic_pending = semantic_pending;
 		p_state->pending_work = p_state->active_binding->presenter_pending
 				|| (p_state->successor_binding != nullptr && p_state->successor_binding->presenter_pending)
@@ -2583,6 +2594,33 @@ static bool runtime_step_active(
 					|| (output->activation_ready && !p_state->activation_pending);
 		}
 	}
+	return true;
+}
+
+static bool runtime_create_pointer_event_target(
+		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		const Point2 &p_position,
+		HTMLElementHit &r_hit) {
+	hcsr_runtime_interaction_target_info_t target;
+	initialize_abi(&target, sizeof(target));
+	if (p_state->active_publication == nullptr || p_state->active_generation == 0
+			|| hcsr_runtime_publication_hit_test(p_state->active_publication, p_state->active_generation,
+					p_position.x, p_position.y, &target) != HCSR_RUNTIME_OK) {
+		return false;
+	}
+	char element_id[4096] = {};
+	if (hcsr_runtime_publication_copy_element_id(p_state->active_publication, p_state->active_generation,
+			target.owner_node_epoch, target.owner_node_id, element_id, sizeof(element_id)) != HCSR_RUNTIME_OK
+			|| element_id[0] == '\0') {
+		return false;
+	}
+	r_hit = HTMLElementHit();
+	r_hit.element_id = StringName(String::utf8(element_id));
+	const int left = Math::floor(target.logical_x);
+	const int top = Math::floor(target.logical_y);
+	const int right = Math::ceil(target.logical_x + target.logical_width);
+	const int bottom = Math::ceil(target.logical_y + target.logical_height);
+	r_hit.bounds = Rect2i(left, top, MAX(0, right - left), MAX(0, bottom - top));
 	return true;
 }
 
@@ -2705,6 +2743,30 @@ static bool runtime_step_pointer_input(HTMLSurfaceHCSRRuntimeBackend::RuntimeSta
 		runtime_set_terminal(p_state, "HCSR replacement pointer interpretation did not create a deadline-qualified runtime submission.");
 		return false;
 	}
+	const RuntimePointerRequest completed_request = p_state->active_pointer_request;
+	if (completed_request.kind == HCSR_RUNTIME_POINTER_PRIMARY_DOWN
+			|| completed_request.kind == HCSR_RUNTIME_POINTER_PRIMARY_UP) {
+		HTMLPointerEvent event;
+		event.sequence = ++p_state->pointer_event_sequence;
+		event.type = completed_request.kind == HCSR_RUNTIME_POINTER_PRIMARY_DOWN
+				? HTML_POINTER_EVENT_DOWN : HTML_POINTER_EVENT_UP;
+		event.document_position = completed_request.position;
+		event.button = HTML_SURFACE_MOUSE_BUTTON_LEFT;
+		event.buttons = completed_request.buttons;
+		event.state_changed = true;
+		runtime_create_pointer_event_target(p_state, completed_request.position, event.target);
+		MutexLock lock(p_state->mutex);
+		if (p_state->pointer_events.size() < RUNTIME_POINTER_EVENT_CAPACITY) {
+			p_state->pointer_events.push_back(event);
+		}
+		if (completed_request.kind == HCSR_RUNTIME_POINTER_PRIMARY_UP
+				&& step.activation_action_id != 0
+				&& p_state->pointer_events.size() < RUNTIME_POINTER_EVENT_CAPACITY) {
+			event.sequence = ++p_state->pointer_event_sequence;
+			event.type = HTML_POINTER_EVENT_CLICK;
+			p_state->pointer_events.push_back(event);
+		}
+	}
 	p_state->active_pointer_submission_id = 0;
 	p_state->active_pointer_request_valid = false;
 	p_state->newest_requested_submission_id = step.interactive_submission_id;
@@ -2800,10 +2862,14 @@ static bool runtime_seal_host_frame_requirements(
 	hcsr_runtime_host_frame_seal_t seal;
 	initialize_abi(&seal, sizeof(seal));
 	seal.frame_stream_epoch = p_state->frame_stream_epoch;
-	seal.timeline_revision = p_state->requested_animation_timeline_revision;
+	seal.timeline_revision = p_state->staged_lineage.animation_timeline_revision;
 	seal.configuration_revision = p_state->active_has_interaction_state
 			? p_state->active_interaction_configuration_id : p_state->active_scroll_configuration_id;
 	seal.output_group_revision = p_state->active_topology_revision;
+	seal.publication_pointer_input_revision = p_state->staged_lineage.interaction_input_id;
+	seal.publication_scroll_input_revision = p_state->staged_lineage.scroll_input_id;
+	seal.publication_author_revision = p_state->staged_lineage.target_author_revision;
+	seal.seal_through_publication_authority = 1;
 	initialize_abi(&p_state->sealed_host_frame_requirement, sizeof(p_state->sealed_host_frame_requirement));
 	if (hcsr_runtime_session_seal_host_frame(p_state->session, &seal,
 				&p_state->sealed_host_frame_requirement) != HCSR_RUNTIME_OK) {
@@ -2822,6 +2888,7 @@ static bool runtime_submit_pending_animation_timeline(
 	{
 		MutexLock lock(p_state->mutex);
 		if (!p_state->animation_timeline_dirty || p_state->configuration_dirty
+				|| p_state->interactive_pending
 				|| p_state->activation_pending || p_state->successor_binding != nullptr) {
 			return true;
 		}
@@ -2841,6 +2908,7 @@ static bool runtime_submit_pending_animation_timeline(
 	}
 	MutexLock lock(p_state->mutex);
 	if (p_state->requested_animation_timeline_revision == revision) {
+		p_state->submitted_animation_timeline_revision = revision;
 		p_state->animation_timeline_dirty = false;
 	}
 	return true;
@@ -3283,11 +3351,6 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 		// Session creation consumed the latest logical and physical dimensions.
 		configuration_dirty = false;
 	}
-	if (!runtime_seal_host_frame_requirements(runtime)) {
-		runtime_set_terminal(runtime, "Godot could not seal the receipt-bound HCSR frame at the render cutoff.");
-		finish_scheduled_work();
-		return;
-	}
 	if (compiled_document_ready
 			&& !runtime_submit_compiled_document(runtime, compiled_document,
 					compiled_document_source, request_serial, document_request_process_frame)) {
@@ -3483,16 +3546,15 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 	const bool exact_interactive_frame = runtime->activation_pending
 			&& runtime->staged_lineage.interactive_submission_id != 0
 			&& runtime->staged_lineage.interactive_submission_id == runtime->newest_requested_submission_id;
-	// A missed scheduling deadline is a liveness failure, not permission to
-	// activate the old surface. The sealed host-frame requirement below remains
-	// armed until an exact publication can acquire a permit.
+	// Render-thread callbacks routinely cross a Godot process-frame boundary.
+	// Exact publication authority and the native host-frame permit remain the
+	// correctness gate; the process-frame identity only bounds activation rate.
 	const bool activation_turn_is_stale = runtime->activation_pending
 			&& exact_requested_authority
 			&& runtime->staged_binding != nullptr
 			&& !runtime->staged_binding->presenter_pending
 			&& !exact_interactive_frame
-			&& (current_process_frame != cutoff_process_frame
-					|| cutoff_process_frame == runtime->last_activation_process_frame);
+			&& current_process_frame == runtime->last_activation_process_frame;
 	if (activation_turn_is_stale) {
 		{
 			MutexLock lock(runtime->mutex);
@@ -3508,8 +3570,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 			&& !runtime->staged_binding->presenter_pending
 			&& (runtime->staged_binding != runtime->successor_binding
 					|| runtime->retiring_binding == nullptr)
-			&& current_process_frame == cutoff_process_frame
-			&& (cutoff_process_frame != runtime->last_activation_process_frame
+			&& (current_process_frame != runtime->last_activation_process_frame
 					|| exact_interactive_frame)) {
 		if (!runtime_seal_host_frame_requirements(runtime)) {
 			runtime_set_terminal(runtime, "Godot could not seal the exact receipt-bound HCSR frame requirement.");
@@ -3604,6 +3665,13 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 			runtime_set_terminal(runtime, "Godot could not pin the exact publication authority of the activated HCSR frame.");
 			return;
 		}
+		hcsr_runtime_animation_schedule_info_t activated_animation_schedule;
+		initialize_abi(&activated_animation_schedule, sizeof(activated_animation_schedule));
+		if (hcsr_runtime_session_get_animation_schedule(
+				runtime->session, &activated_animation_schedule) != HCSR_RUNTIME_OK) {
+			runtime_set_terminal(runtime, "Godot could not refresh the activated HCSR animation schedule.");
+			return;
+		}
 		{
 			MutexLock lock(runtime->mutex);
 			if (runtime->active_publication != nullptr) {
@@ -3612,6 +3680,16 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 			runtime->active_publication = runtime->staged_publication;
 			runtime->staged_publication = nullptr;
 			runtime->active_generation = runtime->staged_lineage.runtime_generation;
+			if (runtime->animation_timeline_document_request_id
+					!= runtime->staged_lineage.document_request_id) {
+				runtime->animation_timeline_document_request_id = runtime->staged_lineage.document_request_id;
+				runtime->requested_animation_timeline_revision++;
+				runtime->submitted_animation_timeline_revision = runtime->accepted_animation_timeline_revision;
+				runtime->requested_animation_time_microseconds = 0;
+				runtime->animation_clock_origin_microseconds = -1;
+				runtime->animation_timeline_dirty = true;
+				runtime->pending_work = true;
+			}
 			runtime->active_interaction_input_id = runtime->staged_lineage.interaction_input_id;
 			runtime->active_interaction_frame_id = runtime->staged_lineage.interaction_frame_id;
 			runtime->active_interaction_configuration_id = runtime->staged_lineage.interaction_configuration_id;
@@ -3627,6 +3705,16 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 				}
 			}
 			runtime->active_animation_timeline_revision = runtime->staged_lineage.animation_timeline_revision;
+			runtime->accepted_animation_timeline_revision = MAX(
+					runtime->accepted_animation_timeline_revision,
+					runtime->staged_lineage.animation_timeline_revision);
+			if (activated_animation_schedule.document_request_id
+					== runtime->staged_lineage.document_request_id) {
+				runtime->accepted_animation_timeline_revision = MAX(
+						runtime->accepted_animation_timeline_revision,
+						activated_animation_schedule.revision_id);
+				runtime->animation_needs_next_frame = activated_animation_schedule.needs_next_frame != 0;
+			}
 			runtime->active_topology_revision = runtime->staged_topology.revision;
 			runtime->next_host_input_id = MAX(runtime->next_host_input_id,
 					MAX(runtime->staged_lineage.interaction_input_id,
@@ -3676,7 +3764,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 		runtime->staged_lineage = RuntimePublicationLineage();
 		runtime_release_output_topology(runtime->staged_topology);
 		runtime_release_output_topology(runtime->candidate_topology);
-		runtime->last_activation_process_frame = cutoff_process_frame;
+		runtime->last_activation_process_frame = current_process_frame;
 	}
 	bool resume_pending_work = false;
 	{
@@ -3686,6 +3774,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 				|| runtime->activation_pending
 				|| runtime->retiring_binding != nullptr
 				|| runtime->semantic_pending
+				|| runtime->animation_timeline_dirty
 				|| runtime->active_pointer_submission_id != 0
 				|| !runtime->mutations.is_empty()
 				|| !runtime->pointer_requests.is_empty()
@@ -3770,7 +3859,6 @@ Error HTMLSurfaceHCSRRuntimeBackend::_queue_mutation(
 			state->mutation_request_process_frame = Engine::get_singleton()->get_process_frames() + 1;
 		}
 		state->mutations.push_back(mutation);
-		state->request_serial++;
 		state->pending_work = true;
 	}
 	_schedule_work();
@@ -3898,10 +3986,17 @@ Error HTMLSurfaceHCSRRuntimeBackend::update_compositor(
 	if (state != nullptr) {
 		MutexLock lock(state->mutex);
 		if (state->animation_needs_next_frame && state->active_generation != 0
-				&& !state->configuration_dirty && !state->activation_pending
-				&& state->successor_binding == nullptr) {
-			const int64_t time_microseconds = MAX((int64_t)0,
+				&& !state->configuration_dirty && !state->interactive_pending
+				&& !state->activation_pending
+				&& !state->animation_timeline_dirty && state->successor_binding == nullptr
+				&& state->submitted_animation_timeline_revision <= state->accepted_animation_timeline_revision) {
+			const int64_t host_time_microseconds = MAX((int64_t)0,
 					(int64_t)(MAX(0.0, p_timeline_time_seconds) * 1000000.0));
+			if (state->animation_clock_origin_microseconds < 0) {
+				state->animation_clock_origin_microseconds = host_time_microseconds;
+			}
+			const int64_t time_microseconds = MAX((int64_t)0,
+					host_time_microseconds - state->animation_clock_origin_microseconds);
 			if (time_microseconds > state->requested_animation_time_microseconds) {
 				state->requested_animation_time_microseconds = time_microseconds;
 				state->requested_animation_timeline_revision++;
@@ -3997,7 +4092,9 @@ bool HTMLSurfaceHCSRRuntimeBackend::is_begin_frame_requested() const {
 		return false;
 	}
 	MutexLock lock(state->mutex);
-	return state->animation_needs_next_frame;
+	return state->animation_needs_next_frame
+			|| state->animation_timeline_dirty
+			|| state->submitted_animation_timeline_revision > state->accepted_animation_timeline_revision;
 }
 
 uint64_t HTMLSurfaceHCSRRuntimeBackend::get_last_queued_frame_generation() const {
@@ -4501,6 +4598,11 @@ Error HTMLSurfaceHCSRRuntimeBackend::set_element_style(
 	return _queue_mutation(RUNTIME_MUTATION_STYLE, p_id, StringName(), p_css_text);
 }
 
+Error HTMLSurfaceHCSRRuntimeBackend::replace_stylesheet_text(
+		const StringName &p_style_id, const String &p_css_text) {
+	return _queue_mutation(RUNTIME_MUTATION_TEXT, p_style_id, StringName(), p_css_text);
+}
+
 Error HTMLSurfaceHCSRRuntimeBackend::set_element_inner_html(
 		const StringName &p_id, const String &p_html_fragment) {
 	return _queue_mutation(RUNTIME_MUTATION_INNER_HTML, p_id, StringName(), p_html_fragment);
@@ -4550,6 +4652,39 @@ bool HTMLSurfaceHCSRRuntimeBackend::get_form_control_state(
 	r_state.selection_offsets_present = source.selection_offsets_present != 0;
 	r_state.selection_start = source.selection_start;
 	r_state.selection_end = source.selection_end;
+	return true;
+}
+
+bool HTMLSurfaceHCSRRuntimeBackend::hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const {
+	if (state == nullptr || !Math::is_finite(p_position.x) || !Math::is_finite(p_position.y)) {
+		return false;
+	}
+	MutexLock lock(state->mutex);
+	if (state->active_publication == nullptr || state->active_generation == 0) {
+		return false;
+	}
+	hcsr_runtime_interaction_target_info_t target;
+	initialize_abi(&target, sizeof(target));
+	const hcsr_runtime_status_t hit_status = hcsr_runtime_publication_hit_test(
+			state->active_publication, state->active_generation, p_position.x, p_position.y, &target);
+	if (hit_status != HCSR_RUNTIME_OK) {
+		return false;
+	}
+	char element_id[4096] = {};
+	const hcsr_runtime_status_t id_status = hcsr_runtime_publication_copy_element_id(
+			state->active_publication, state->active_generation,
+			target.owner_node_epoch, target.owner_node_id, element_id, sizeof(element_id));
+	if (id_status != HCSR_RUNTIME_OK
+			|| element_id[0] == '\0') {
+		return false;
+	}
+	r_hit = HTMLElementHit();
+	r_hit.element_id = StringName(String::utf8(element_id));
+	const int left = Math::floor(target.logical_x);
+	const int top = Math::floor(target.logical_y);
+	const int right = Math::ceil(target.logical_x + target.logical_width);
+	const int bottom = Math::ceil(target.logical_y + target.logical_height);
+	r_hit.bounds = Rect2i(left, top, MAX(0, right - left), MAX(0, bottom - top));
 	return true;
 }
 
