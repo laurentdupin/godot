@@ -32,6 +32,7 @@ public:
 	virtual void set_size(const Size2i &p_size) override;
 	virtual void set_device_scale_factor(float p_device_scale_factor) override;
 	virtual void set_physical_size(const Size2i &p_physical_size) override;
+	virtual void set_viewport_configuration(const Size2i &p_size, float p_device_scale_factor, const Size2i &p_physical_size) override;
 	virtual void set_document(const Ref<HTMLDocument> &p_document) override;
 	virtual void set_transparent_background(bool p_transparent_background) override;
 	virtual void set_background_color(const Color &p_background_color) override;

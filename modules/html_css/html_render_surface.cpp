@@ -190,9 +190,7 @@ void HTMLRenderSurface::_ensure_backend() {
 void HTMLRenderSurface::_sync_backend_state() {
 	ERR_FAIL_NULL(backend);
 	Color background_color = document.is_valid() ? document->get_background_color() : Color(0, 0, 0, 0);
-	backend->set_size(size);
-	backend->set_device_scale_factor(device_scale_factor);
-	backend->set_physical_size(physical_size);
+	backend->set_viewport_configuration(size, device_scale_factor, physical_size);
 	backend->set_document(document);
 	backend->set_transparent_background(background_color.a < 1.0);
 	backend->set_background_color(background_color);

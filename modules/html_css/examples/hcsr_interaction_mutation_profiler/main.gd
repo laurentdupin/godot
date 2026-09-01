@@ -9,6 +9,7 @@ const PHASE_RAMP_USEC := 250_000
 const PHASE_QUIESCE_USEC := 250_000
 const PHASE_MEASURE_USEC := 2_000_000
 const MAX_FRAME_SAMPLES := 200_000
+const SIXTY_FPS_FRAME_MILLISECONDS := 1000.0 / 60.0
 const CARD_COUNT := 30
 const CARD_COLUMNS := 5
 const PHASE_NAMES := [
@@ -54,6 +55,8 @@ var backend_preference := HTMLView.BACKEND_GPU_AUTO
 var backend_name := "gpu_auto"
 var automated := false
 var use_secondary_output := false
+var export_html_path := ""
+var capture_directory := ""
 var secondary_resize_pending := false
 var secondary_logical_size := Vector2i.ZERO
 
@@ -102,8 +105,10 @@ var phase_stylesheet_batch_counts := PackedInt32Array()
 var subtree_variants: Array[String] = []
 var stylesheet_variants: Array[String] = []
 var form_value_variants: Array[String] = []
+var range_value_variants: Array[String] = []
 var status_text_variants: Array[String] = []
 var floating_style_variants: Array[String] = []
+var local_mutation_batches: Array[Array] = []
 var mutation_attempts := 0
 var mutation_successes := 0
 var mutation_failures := 0
@@ -125,11 +130,27 @@ var render_errors := 0
 var initial_generation := 0
 var final_generation := 0
 var finishing := false
+var startup_start_usec := 0
+var startup_milliseconds := 0.0
+var resize_elapsed_milliseconds := 0.0
+var resize_max_frame_milliseconds := 0.0
 
 
 func _ready() -> void:
+	startup_start_usec = Time.get_ticks_usec()
 	set_process(false)
 	_parse_arguments()
+	if not export_html_path.is_empty():
+		_build_mutation_variants()
+		var export_file := FileAccess.open(export_html_path, FileAccess.WRITE)
+		if export_file == null:
+			push_error("Could not export the Chromium fixture HTML to %s." % export_html_path)
+			get_tree().quit(1)
+			return
+		export_file.store_string(_build_document_html())
+		export_file.close()
+		get_tree().quit()
+		return
 	_prepare_input_events()
 	Engine.max_fps = 0
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
@@ -148,6 +169,10 @@ func _ready() -> void:
 		_fail("HTMLView did not publish its initial generation.")
 		return
 	initial_generation = html_view.get_generation()
+	startup_milliseconds = float(Time.get_ticks_usec() - startup_start_usec) / 1000.0
+	if not capture_directory.is_empty():
+		if not await _capture_startup_and_resize():
+			return
 	hud_label.text = "HCSR surface is live. Warming the interaction and mutation workload..."
 	frame_samples.resize(MAX_FRAME_SAMPLES)
 	frame_phase_ids.resize(MAX_FRAME_SAMPLES)
@@ -224,6 +249,12 @@ func _process(_delta: float) -> void:
 
 func _parse_arguments() -> void:
 	for argument in OS.get_cmdline_user_args():
+		if argument.begins_with("--capture-dir="):
+			capture_directory = argument.trim_prefix("--capture-dir=")
+			continue
+		if argument.begins_with("--export-html="):
+			export_html_path = argument.trim_prefix("--export-html=")
+			continue
 		match argument:
 			"--vulkan":
 				backend_preference = HTMLView.BACKEND_VULKAN
@@ -238,6 +269,99 @@ func _parse_arguments() -> void:
 				automated = true
 			"--secondary-output":
 				use_secondary_output = true
+
+
+func _capture_startup_and_resize() -> bool:
+	var directory_error := DirAccess.make_dir_recursive_absolute(capture_directory)
+	if directory_error != OK and directory_error != ERR_ALREADY_EXISTS:
+		_fail("Could not create capture directory %s." % capture_directory)
+		return false
+	if not await _capture_viewport("startup"):
+		return false
+
+	var original_size := DisplayServer.window_get_size()
+	var resized_size := Vector2i(max(960, original_size.x - 320), max(640, original_size.y - 180))
+	var generation_before_resize := html_view.get_generation()
+	var resize_start_usec := Time.get_ticks_usec()
+	var previous_frame_usec := resize_start_usec
+	DisplayServer.window_set_size(resized_size)
+	if not await _wait_for_generation_after_resize(generation_before_resize, resize_start_usec, previous_frame_usec):
+		_fail("HTMLView did not converge after the automated shrink resize.")
+		return false
+	if not await _capture_viewport("resized"):
+		return false
+
+	generation_before_resize = html_view.get_generation()
+	resize_start_usec = Time.get_ticks_usec()
+	previous_frame_usec = resize_start_usec
+	DisplayServer.window_set_size(original_size)
+	if not await _wait_for_generation_after_resize(generation_before_resize, resize_start_usec, previous_frame_usec):
+		_fail("HTMLView did not converge after the automated restore resize.")
+		return false
+	if not await _capture_viewport("restored"):
+		return false
+	var animation_generation_a := html_view.get_generation()
+	if not await _capture_viewport("animation_a"):
+		return false
+	var animation_capture_deadline_usec := Time.get_ticks_usec() + 300_000
+	while Time.get_ticks_usec() < animation_capture_deadline_usec:
+		await get_tree().process_frame
+	var animation_generation_b := html_view.get_generation()
+	if not await _capture_viewport("animation_b"):
+		return false
+	print("HCSR_STRESS_ANIMATION_CAPTURE generation_a=%d generation_b=%d" % [
+		animation_generation_a,
+		animation_generation_b,
+	])
+	print(
+		"HCSR_STRESS_STARTUP_RESIZE startup_ms=%.3f resize_total_ms=%.3f resize_frame_ms_max=%.3f" % [
+			startup_milliseconds,
+			resize_elapsed_milliseconds,
+			resize_max_frame_milliseconds,
+		]
+	)
+	return true
+
+
+func _wait_for_generation_after_resize(
+		generation_before_resize: int,
+		resize_start_usec: int,
+		previous_frame_usec: int
+) -> bool:
+	var deadline_usec := resize_start_usec + 10_000_000
+	var stable_frames := 0
+	while Time.get_ticks_usec() < deadline_usec:
+		await get_tree().process_frame
+		var now_usec := Time.get_ticks_usec()
+		resize_max_frame_milliseconds = max(
+			resize_max_frame_milliseconds,
+			float(now_usec - previous_frame_usec) / 1000.0
+		)
+		previous_frame_usec = now_usec
+		var current_generation := html_view.get_generation()
+		if current_generation > generation_before_resize \
+				and last_activated_generation > generation_before_resize:
+			stable_frames += 1
+			if stable_frames >= 4:
+				resize_elapsed_milliseconds += float(now_usec - resize_start_usec) / 1000.0
+				return true
+		else:
+			stable_frames = 0
+	return false
+
+
+func _capture_viewport(label: String) -> bool:
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	var image := get_viewport().get_texture().get_image()
+	var capture_path := capture_directory.path_join("hcsr_%s.png" % label)
+	var save_error := image.save_png(capture_path)
+	if save_error != OK:
+		_fail("Could not save Godot capture %s." % capture_path)
+		return false
+	print("HCSR_STRESS_CAPTURE label=%s path=%s size=%s" % [label, capture_path, image.get_size()])
+	return true
 
 
 func _prepare_input_events() -> void:
@@ -307,7 +431,6 @@ func _build_godot_ui() -> void:
 	html_view.backend_preference = backend_preference
 	html_view.frame_budget_milliseconds = 1000.0 / 240.0
 	html_view.z_index = 1
-	html_view.html = _build_document_html()
 	html_view.frame_queued.connect(_on_frame_queued)
 	html_view.frame_activated.connect(_on_frame_activated)
 	html_view.frame_budget_missed.connect(_on_frame_budget_missed)
@@ -315,6 +438,7 @@ func _build_godot_ui() -> void:
 	html_view.element_pointer_event.connect(_on_element_pointer_event)
 	html_view.render_error.connect(_on_render_error)
 	add_child(html_view)
+	html_view.html = _build_document_html()
 	resized.connect(_on_root_resized)
 
 	if use_secondary_output:
@@ -366,9 +490,18 @@ func _wait_for_initial_generation() -> bool:
 	var deadline_usec := Time.get_ticks_usec() + 15_000_000
 	while Time.get_ticks_usec() < deadline_usec:
 		await get_tree().process_frame
-		if html_view.get_generation() > 0:
+		var current_generation := html_view.get_generation()
+		if current_generation > 0 and last_activated_generation > 0:
 			if secondary_output == null or secondary_output.generation > 0:
 				return true
+	print(
+		"HCSR_STRESS_STARTUP_TIMEOUT active=%d queued=%d signaled_active=%d signaled_queued=%d" % [
+			html_view.get_generation(),
+			html_view.get_queued_generation(),
+			last_activated_generation,
+			last_queued_generation,
+		]
+	)
 	return false
 
 
@@ -585,13 +718,13 @@ func _send_wheel(local_position: Vector2, downward: bool) -> void:
 
 
 func _mutate_form_state() -> void:
-	var variant := form_mutation_index % 2
+	var variant := form_mutation_index % 3
 	var start_usec := Time.get_ticks_usec()
 	match variant:
 		0:
 			_track_mutation(html_view.set_form_control_value(
 				&"search",
-				form_value_variants[int(form_mutation_index / 2) % form_value_variants.size()]
+				form_value_variants[int(form_mutation_index / 3) % form_value_variants.size()]
 			), MutationOperation.FORM_VALUE)
 		1:
 			checkbox_state = not checkbox_state
@@ -599,6 +732,11 @@ func _mutate_form_state() -> void:
 				html_view.set_form_control_checked(&"enabled", checkbox_state),
 				MutationOperation.CHECKED
 			)
+		2:
+			_track_mutation(html_view.set_form_control_value(
+				&"load-range",
+				range_value_variants[int(form_mutation_index / 3) % range_value_variants.size()]
+			), MutationOperation.FORM_VALUE)
 	form_mutation_index += 1
 	_complete_mutation_batch(start_usec)
 	if phase_measurement_started:
@@ -606,21 +744,13 @@ func _mutate_form_state() -> void:
 
 
 func _mutate_local_state() -> void:
-	var variant := local_mutation_index % 2
 	var start_usec := Time.get_ticks_usec()
-	_track_mutation(html_view.set_element_attribute(
-		&"app",
-		&"class",
-		"app theme-a" if variant == 0 else "app theme-b"
-	), MutationOperation.ATTRIBUTE)
-	_track_mutation(html_view.set_element_text(
-		&"status",
-		status_text_variants[local_mutation_index % status_text_variants.size()]
-	), MutationOperation.TEXT)
-	_track_mutation(html_view.set_element_style(
-		&"floating-panel",
-		floating_style_variants[variant]
-	), MutationOperation.STYLE)
+	var result := html_view.apply_element_mutations(
+		local_mutation_batches[local_mutation_index % local_mutation_batches.size()]
+	)
+	_track_mutation(result, MutationOperation.ATTRIBUTE)
+	_track_mutation(result, MutationOperation.TEXT)
+	_track_mutation(result, MutationOperation.STYLE)
 	local_mutation_index += 1
 	_complete_mutation_batch(start_usec)
 	if phase_measurement_started:
@@ -743,6 +873,8 @@ func _finish_after_settle() -> void:
 			]
 		)
 		return
+	if not capture_directory.is_empty() and not await _capture_viewport("final"):
+		return
 	var scheduler := html_view.get_frame_scheduler_diagnostics()
 	if mutation_failures != 0 or render_errors != 0 or final_generation <= initial_generation:
 		_fail("Stress run completed with mutation/render/generation failures.")
@@ -752,6 +884,9 @@ func _finish_after_settle() -> void:
 		return
 	if not _has_complete_workload_coverage():
 		_fail("Stress run did not execute the complete fixed-rate interaction and mutation schedule.")
+		return
+	if not _meets_sixty_fps_requirement():
+		_fail("Stress run or automated resize dropped below the required 60 FPS floor.")
 		return
 	if secondary_output != null and secondary_output.generation != final_generation:
 		_fail("Secondary output did not converge to the final primary generation.")
@@ -973,6 +1108,16 @@ func _has_complete_workload_coverage() -> bool:
 	)
 
 
+func _meets_sixty_fps_requirement() -> bool:
+	if resize_max_frame_milliseconds > SIXTY_FPS_FRAME_MILLISECONDS:
+		return false
+	for current_phase in range(PHASE_NAMES.size()):
+		var values := _sorted_phase_samples(current_phase)
+		if values.is_empty() or values[values.size() - 1] > SIXTY_FPS_FRAME_MILLISECONDS:
+			return false
+	return true
+
+
 func _reset_for_interactive_loop() -> void:
 	if html_view.set_element_attribute(&"app", &"class", "app theme-a") != OK \
 			or html_view.set_element_text(&"status", "interactive loop restarted") != OK:
@@ -994,6 +1139,7 @@ func _reset_for_interactive_loop() -> void:
 func _build_mutation_variants() -> void:
 	for variant in range(256):
 		form_value_variants.append("query-%03d" % variant)
+		range_value_variants.append(str((variant * 17) % 101))
 		status_text_variants.append("localized update %03d" % variant)
 	floating_style_variants.append(
 		"position:absolute;right:23.5%;bottom:2.5%;width:18%;height:6.7%;"
@@ -1005,6 +1151,25 @@ func _build_mutation_variants() -> void:
 		+ "transform:translateX(-12px);background:#4b235f;border:2px solid #df85ff;"
 		+ "border-radius:10px;opacity:.94"
 	)
+	for variant in range(status_text_variants.size()):
+		local_mutation_batches.append([
+			{
+				"operation": "set_attribute",
+				"id": "app",
+				"name": "class",
+				"value": "app theme-a" if variant % 2 == 0 else "app theme-b",
+			},
+			{
+				"operation": "set_text",
+				"id": "status",
+				"value": status_text_variants[variant],
+			},
+			{
+				"operation": "set_style",
+				"id": "floating-panel",
+				"value": floating_style_variants[variant % 2],
+			},
+		])
 	for variant in range(3):
 		var rows := ""
 		var row_count := 72 + variant * 12
@@ -1067,11 +1232,11 @@ body{position:relative}.app{position:relative;width:100%%;height:100%%;backgroun
 .workspace{position:absolute;left:17%%;top:0;width:83%%;height:100%%}.toolbar{position:absolute;left:1.7%%;right:1.7%%;top:2%%;height:6.5%%;display:flex;align-items:center;gap:10px}.toolbar input{width:25%%;height:80%%;background:#0d1728;color:#e9f2ff;border:1px solid #36577e;border-radius:8px;padding:0 12px}.toolbar label{display:flex;align-items:center;gap:6px}.status{margin-left:auto;color:#91b7e8}
 .card-grid{position:absolute;left:1.7%%;top:10.3%%;width:69%%;height:66%%;display:flex;flex-wrap:wrap;align-content:flex-start;gap:1%%}.card{position:relative;width:18%%;height:14%%;padding:1%%;background:#13233a;color:#e8f2ff;border:2px solid #31517c;border-radius:10px;transform:translateY(0) scale(1);transition:background-color .12s,border-color .12s,transform .12s,box-shadow .12s;overflow:hidden}.card:hover{background:#264d7d;border-color:#75b7ff;transform:translateY(-4px) scale(1.02);box-shadow:0 7px 18px rgba(0,0,0,.35)}.card:active{background:#386ba8;transform:translateY(-1px) scale(.99)}.card-badge{position:absolute;right:7px;top:6px;color:#7fabe0;font-size:11px}.card-title{display:block;font-weight:700;font-size:13px}.card-copy{display:block;margin-top:5px;color:#9fb4d1;font-size:10px}
 .mutation-shell{position:absolute;right:1.7%%;top:10.3%%;width:25.5%%;height:66%%;background:#0c1627;border:1px solid #2a4364;border-radius:10px;overflow:hidden}.mutation-heading{height:9%%;padding:2.6%% 4%%;background:#13233a;font-weight:700}.mutation-zone{height:91%%;overflow:auto;padding:2.5%%}.mutation-row{height:40px;margin-bottom:6px;padding:7px;background:#111e32;border:1px solid #203b5c;border-radius:6px}.row-title{display:block;font-size:11px}.row-owner{display:inline-block;width:30%%;color:#829aba;font-size:9px}.row-meter{display:inline-block;width:64%%;height:6px;background:#26364e;border-radius:4px;overflow:hidden}.row-meter span{display:block;height:100%%;background:#4ea1ff}
-.form-strip{position:absolute;left:1.7%%;right:1.7%%;bottom:2.5%%;height:16%%;padding:1.2%%;background:#0d1728;border:1px solid #294568;border-radius:10px}.form-strip textarea{width:40%%;height:78%%;background:#111f34;color:#e5efff;border:1px solid #36577e;border-radius:7px;padding:8px}.form-strip select{width:15%%;height:42%%;margin-left:1%%;background:#111f34;color:#e5efff}.form-strip .form-label{margin-left:1.2%%}.floating-panel{position:absolute;right:23.5%%;bottom:2.5%%;width:18%%;height:6.7%%;transform:translateX(0);background:#17345f;border:2px solid #69a7ff;border-radius:10px;opacity:.94}
+.form-strip{position:absolute;left:1.7%%;right:1.7%%;bottom:2.5%%;height:16%%;padding:1.2%%;background:#0d1728;border:1px solid #294568;border-radius:10px}.form-strip textarea{width:36%%;height:78%%;background:#111f34;color:#e5efff;border:1px solid #36577e;border-radius:7px;padding:8px}.form-strip select{width:12%%;height:42%%;margin-left:1%%;background:#111f34;color:#e5efff}.range-label{display:inline;width:17%%;margin-left:1%%;color:#9fb4d1;font-size:10px}.range-label input{width:12%%;margin-left:6px}.form-strip .form-label{margin-left:1.2%%}.floating-panel{position:absolute;right:23.5%%;bottom:2.5%%;width:18%%;height:6.7%%;transform:translateX(0);background:#17345f;border:2px solid #69a7ff;border-radius:10px;opacity:.94}
 .theme-b{background:linear-gradient(145deg,#171024,#17243a)}
 </style><style id='dynamic-style'>.theme-a .card{border-color:#31517c}.theme-b .card{border-color:#774493}.mutation-row:nth-child(3n){background:#15253c}.row-meter span{background:#4ea1ff}</style></head>
 <body><div id='app' class='app theme-a'><aside class='sidebar'><div class='brand'>HCSR stress</div><div class='nav'><button id='nav-a' data-godot-action='nav'>Dashboard</button><button id='nav-b' data-godot-action='nav'>Inventory</button><button id='nav-c' data-godot-action='nav'>Activity</button><button id='nav-d' data-godot-action='nav'>Settings</button></div><div class='graph-title'>Live frame traffic</div><div class='live-graph'>%s<span class='graph-scan'></span></div><div class='graph-legend'><span class='activity-dot'></span><span class='activity-dot alt'></span> continuously animated</div></aside>
-<main class='workspace'><div class='toolbar'><input id='search' value='query-0'><label><input id='enabled' type='checkbox' checked> enabled</label><span id='status' class='status'>ready</span></div><div class='card-grid'>%s</div><section class='mutation-shell'><div class='mutation-heading'>Live topology</div><div id='mutation-zone' class='mutation-zone'>%s</div></section><div class='form-strip'><textarea id='notes'>Live form state and keyboard updates</textarea><select id='choice'><option value='a'>Alpha</option><option value='b'>Beta</option><option value='c'>Gamma</option></select><span class='form-label'>Pointer, wheel, form and DOM work run in separate lanes.</span></div><div id='floating-panel' class='floating-panel'></div></main></div></body></html>""" % [graph_bars, cards, initial_rows]
+<main class='workspace'><div class='toolbar'><input id='search' value='query-0'><label><input id='enabled' type='checkbox' checked> enabled</label><span id='status' class='status'>ready</span></div><div class='card-grid'>%s</div><section class='mutation-shell'><div class='mutation-heading'>Live topology</div><div id='mutation-zone' class='mutation-zone'>%s</div></section><div class='form-strip'><textarea id='notes'>Live form state and keyboard updates</textarea><select id='choice'><option value='a'>Alpha</option><option value='b'>Beta</option><option value='c'>Gamma</option></select><label class='range-label'>Load <input id='load-range' type='range' min='0' max='100' value='42'></label><span class='form-label'>Pointer, wheel, form and DOM work run in separate lanes.</span></div><div id='floating-panel' class='floating-panel'></div></main></div></body></html>""" % [graph_bars, cards, initial_rows]
 
 
 func _on_frame_queued(_generation: int) -> void:
