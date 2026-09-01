@@ -124,6 +124,8 @@ void ProjectManager::_notification(int p_what) {
 			empty_list_message->set_text(vformat("[center][b]%s[/b] %s[/center]", line1, line2));
 
 			_titlebar_resized();
+
+			EditorHelpBit::clear_cache();
 		} break;
 
 		case NOTIFICATION_VISIBILITY_CHANGED: {
@@ -185,6 +187,7 @@ void ProjectManager::_build_icon_type_cache(Ref<Theme> p_theme) {
 // Hides certain parts of the Project Manager when window width gets smaller than combined_minimum_size.
 void ProjectManager::_update_compact_mode(bool p_reset_threshold) {
 	if (p_reset_threshold) {
+		project_list_sidebar->show();
 		compact_mode_threshold = root_container->get_combined_minimum_size().width;
 	}
 
@@ -193,7 +196,10 @@ void ProjectManager::_update_compact_mode(bool p_reset_threshold) {
 }
 
 void ProjectManager::_update_size_limits() {
-	const Size2 minimum_size = Size2(480, 300) * EDSCALE;
+	const Size2 default_minimum_size = Size2(720, 450) * EDSCALE;
+	const Size2 display_size = DisplayServer::get_singleton()->screen_get_usable_rect(DisplayServerEnums::SCREEN_OF_MAIN_WINDOW).size;
+	const real_t smallest_display_dimension = display_size.width < display_size.height ? display_size.width : display_size.height;
+	const Size2 minimum_size = default_minimum_size.minf(smallest_display_dimension);
 
 	// Define a minimum window size to prevent UI elements from overlapping or being cut off.
 	Window *w = Object::cast_to<Window>(SceneTree::get_singleton()->get_root());
@@ -323,6 +329,11 @@ void ProjectManager::_update_theme(bool p_skip_creation) {
 			asset_library->add_theme_style_override(SceneStringName(panel), memnew(StyleBoxEmpty));
 		}
 	}
+
+#if defined(MODULE_GDSCRIPT_ENABLED) || defined(MODULE_MONO_ENABLED)
+	EditorHelpHighlighter::get_singleton()->clear_cache();
+#endif
+
 #ifdef ANDROID_ENABLED
 	DisplayServer::get_singleton()->window_set_color(theme->get_color("background", EditorStringName(Editor)));
 #endif
@@ -1654,6 +1665,7 @@ ProjectManager::ProjectManager() {
 			project_list->connect(ProjectList::SIGNAL_PROJECT_ASK_OPEN, callable_mp(this, &ProjectManager::_open_selected_projects_check_recovery_mode));
 			project_list->connect(ProjectList::SIGNAL_MENU_OPTION_SELECTED, callable_mp(this, &ProjectManager::_project_list_menu_option));
 			project_list->connect(ProjectList::SIGNAL_RECENT_SCENE_RUN_REQUESTED, callable_mp(this, &ProjectManager::_run_recent_scene));
+			project_list->connect(SceneStringName(minimum_size_changed), callable_mp(this, &ProjectManager::_update_compact_mode).bind(true));
 
 			// Empty project list placeholder.
 			{

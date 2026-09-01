@@ -34,6 +34,7 @@
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 #include "editor/editor_node.h"
+#include "editor/script/find_in_files.h"
 #include "editor/script/script_editor_navigation_marker.h"
 #include "editor/script/script_editor_plugin.h"
 #include "editor/script/syntax_highlighters.h"
@@ -49,7 +50,7 @@ void ScriptEditorBase::_bind_methods() {
 	ADD_SIGNAL(MethodInfo("name_changed"));
 
 	// First use in TextEditorBase.
-	ADD_SIGNAL(MethodInfo("edited_script_changed"));
+	ADD_SIGNAL(MethodInfo("_validation_updated"));
 	ADD_SIGNAL(MethodInfo("search_in_files_requested", PropertyInfo(Variant::STRING, "text")));
 	ClassDB::bind_method(D_METHOD("add_syntax_highlighter", "highlighter"), &ScriptEditorBase::add_syntax_highlighter);
 	ClassDB::bind_method(D_METHOD("get_base_editor"), &ScriptEditorBase::get_base_editor);
@@ -66,6 +67,7 @@ void ScriptEditorBase::_bind_methods() {
 #ifndef DISABLE_DEPRECATED
 	ADD_SIGNAL(MethodInfo("request_save_history"));
 	ADD_SIGNAL(MethodInfo("request_save_previous_state", PropertyInfo(Variant::DICTIONARY, "state")));
+	ADD_SIGNAL(MethodInfo("edited_script_changed"));
 #endif
 }
 
@@ -268,7 +270,7 @@ TextEditorBase::EditMenus::EditMenus(ScriptEditor *p_se) {
 	search_menu->get_popup()->add_shortcut(ED_GET_SHORTCUT("script_text_editor/replace"), SEARCH_REPLACE);
 	search_menu->get_popup()->add_separator();
 	search_menu->get_popup()->add_shortcut(ED_GET_SHORTCUT("editor/find_in_files"), SEARCH_IN_FILES);
-	search_menu->get_popup()->add_shortcut(ED_GET_SHORTCUT("script_text_editor/replace_in_files"), REPLACE_IN_FILES);
+	search_menu->get_popup()->add_shortcut(ED_GET_SHORTCUT("editor/replace_in_files"), REPLACE_IN_FILES);
 	search_menu->get_popup()->connect(SceneStringName(id_pressed), callable_mp(this, &EditMenus::_edit_option));
 
 	goto_menu = memnew(MenuButton);
@@ -512,13 +514,10 @@ bool TextEditorBase::_edit_option(int p_op) {
 		case SEARCH_REPLACE: {
 			code_editor->get_find_replace_bar()->popup_replace();
 		} break;
-		case SEARCH_IN_FILES: {
-			String selected_text = tx->get_selected_text();
-			ScriptEditor::get_singleton()->open_find_in_files_dialog(selected_text);
-		} break;
+		case SEARCH_IN_FILES:
 		case REPLACE_IN_FILES: {
 			String selected_text = tx->get_selected_text();
-			ScriptEditor::get_singleton()->open_find_in_files_dialog(selected_text, true);
+			FindInFiles::get_singleton()->open_dock(selected_text, p_op == REPLACE_IN_FILES);
 		} break;
 		case SEARCH_GOTO_LINE: {
 			goto_line_popup->popup_find_line(code_editor);
@@ -563,7 +562,7 @@ void TextEditorBase::_load_theme_settings() {
 }
 
 void TextEditorBase::_validate_script() {
-	emit_signal(SNAME("edited_script_changed"));
+	emit_signal(SNAME("_validation_updated"));
 }
 
 void TextEditorBase::_saved_update() {

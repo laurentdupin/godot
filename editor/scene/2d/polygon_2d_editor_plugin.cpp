@@ -613,6 +613,30 @@ void Polygon2DEditor::_canvas_input(const Ref<InputEvent> &p_input) {
 						previous_colors.remove_at(closest);
 					}
 
+					Array polygons = node->get_polygons().duplicate(); // Copy because it's a reference.
+					for (int i = polygons.size() - 1; i >= 0; --i) {
+						Vector<int> points = polygons[i];
+
+						bool uses_removed_vertex = false;
+						bool modified = false;
+						for (int j = 0; j < points.size(); ++j) {
+							if (points[j] == closest) {
+								uses_removed_vertex = true;
+								break;
+							}
+							if (points[j] > closest) {
+								points.set(j, points[j] - 1);
+								modified = true;
+							}
+						}
+
+						if (uses_removed_vertex) {
+							polygons.remove_at(i);
+						} else if (modified) {
+							polygons[i] = points;
+						}
+					}
+
 					undo_redo->create_action(TTR("Remove Internal Vertex"));
 					undo_redo->add_do_method(node, "set_uv", previous_uv);
 					undo_redo->add_undo_method(node, "set_uv", node->get_uv());
@@ -620,6 +644,8 @@ void Polygon2DEditor::_canvas_input(const Ref<InputEvent> &p_input) {
 					undo_redo->add_undo_method(node, "set_polygon", node->get_polygon());
 					undo_redo->add_do_method(node, "set_vertex_colors", previous_colors);
 					undo_redo->add_undo_method(node, "set_vertex_colors", node->get_vertex_colors());
+					undo_redo->add_do_method(node, "set_polygons", polygons);
+					undo_redo->add_undo_method(node, "set_polygons", node->get_polygons());
 					for (int i = 0; i < node->get_bone_count(); i++) {
 						Vector<float> bonew = node->get_bone_weights(i);
 						bonew.remove_at(closest);
@@ -1500,7 +1526,7 @@ Polygon2DEditor::Polygon2DEditor() {
 	sb_off_x->set_max(256);
 	sb_off_x->set_step(1);
 	sb_off_x->set_value(snap_offset.x);
-	sb_off_x->set_suffix("px");
+	sb_off_x->set_format("%s px");
 	sb_off_x->connect(SceneStringName(value_changed), callable_mp(this, &Polygon2DEditor::_set_snap_off_x));
 	sb_off_x->set_accessibility_name(TTRC("Grid Offset X:"));
 	grid_settings_vb->add_margin_child(TTR("Grid Offset X:"), sb_off_x);
@@ -1510,7 +1536,7 @@ Polygon2DEditor::Polygon2DEditor() {
 	sb_off_y->set_max(256);
 	sb_off_y->set_step(1);
 	sb_off_y->set_value(snap_offset.y);
-	sb_off_y->set_suffix("px");
+	sb_off_y->set_format("%s px");
 	sb_off_y->connect(SceneStringName(value_changed), callable_mp(this, &Polygon2DEditor::_set_snap_off_y));
 	sb_off_y->set_accessibility_name(TTRC("Grid Offset Y:"));
 	grid_settings_vb->add_margin_child(TTR("Grid Offset Y:"), sb_off_y);
@@ -1520,7 +1546,7 @@ Polygon2DEditor::Polygon2DEditor() {
 	sb_step_x->set_max(256);
 	sb_step_x->set_step(1);
 	sb_step_x->set_value(snap_step.x);
-	sb_step_x->set_suffix("px");
+	sb_step_x->set_format("%s px");
 	sb_step_x->connect(SceneStringName(value_changed), callable_mp(this, &Polygon2DEditor::_set_snap_step_x));
 	sb_step_x->set_accessibility_name(TTRC("Grid Step X:"));
 	grid_settings_vb->add_margin_child(TTR("Grid Step X:"), sb_step_x);
@@ -1530,7 +1556,7 @@ Polygon2DEditor::Polygon2DEditor() {
 	sb_step_y->set_max(256);
 	sb_step_y->set_step(1);
 	sb_step_y->set_value(snap_step.y);
-	sb_step_y->set_suffix("px");
+	sb_step_y->set_format("%s px");
 	sb_step_y->connect(SceneStringName(value_changed), callable_mp(this, &Polygon2DEditor::_set_snap_step_y));
 	sb_step_y->set_accessibility_name(TTRC("Grid Step Y:"));
 	grid_settings_vb->add_margin_child(TTR("Grid Step Y:"), sb_step_y);
@@ -1554,7 +1580,7 @@ Polygon2DEditor::Polygon2DEditor() {
 	bone_scroll_main_vb->set_custom_minimum_size(Size2(150 * EDSCALE, 0));
 	sync_bones = memnew(Button(TTR("Sync Bones to Polygon")));
 	bone_scroll_main_vb->add_child(sync_bones);
-	sync_bones->set_h_size_flags(0);
+	sync_bones->set_h_size_flags(SIZE_SHRINK_BEGIN);
 	sync_bones->connect(SceneStringName(pressed), callable_mp(this, &Polygon2DEditor::_sync_bones));
 	uv_main_hsc->add_child(bone_scroll_main_vb);
 	bone_scroll = memnew(ScrollContainer);

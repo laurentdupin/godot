@@ -38,6 +38,7 @@
 
 #include "core/config/engine.h"
 #include "core/config/project_settings.h"
+#include "core/core_bind.h"
 #include "core/debugger/engine_debugger.h"
 #include "core/debugger/script_debugger.h"
 #include "core/io/compression.h"
@@ -66,11 +67,11 @@ bool godotsharp_dotnet_module_is_initialized() {
 	return GDMono::get_singleton()->is_initialized();
 }
 
-MethodBind *godotsharp_method_bind_get_method(const StringName *p_classname, const StringName *p_methodname) {
+const MethodBind *godotsharp_method_bind_get_method(const StringName *p_classname, const StringName *p_methodname) {
 	return ClassDB::get_method(*p_classname, *p_methodname);
 }
 
-MethodBind *godotsharp_method_bind_get_method_with_compatibility(const StringName *p_classname, const StringName *p_methodname, uint64_t p_hash) {
+const MethodBind *godotsharp_method_bind_get_method_with_compatibility(const StringName *p_classname, const StringName *p_methodname, uint64_t p_hash) {
 	return ClassDB::get_method_with_compatibility(*p_classname, *p_methodname, p_hash);
 }
 
@@ -1430,7 +1431,7 @@ void godotsharp_weakref(Object *p_ptr, Ref<RefCounted> *r_weak_ref) {
 		return;
 	}
 
-	Ref<WeakRef> wref;
+	Ref<CoreBind::WeakRef> wref;
 	RefCounted *rc = Object::cast_to<RefCounted>(p_ptr);
 
 	if (rc) {

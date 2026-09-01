@@ -175,6 +175,7 @@ class RenderingDeviceDriverVulkan : public RenderingDeviceDriver {
 	bool timeline_semaphore_support = false;
 	bool global_priority_query_support = false;
 	VkDeviceQueueGlobalPriorityCreateInfoKHR interactive_queue_global_priority_create_info = {};
+	bool device_local_host_visible_host_coherent_memory_support = false;
 #if defined(SWAPPY_FRAME_PACING_ENABLED)
 	// Swappy frame pacer for Android.
 	bool swappy_frame_pacer_enable = false;

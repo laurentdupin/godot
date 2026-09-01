@@ -40,8 +40,8 @@
 #include "core/os/os.h"
 #include "core/profiling/profiling.h"
 #import "drivers/apple/os_log_logger.h"
-#import "drivers/apple_embedded/app_delegate_service.h"
 #import "drivers/apple_embedded/display_server_apple_embedded.h"
+#import "drivers/apple_embedded/godot_app_delegate_service_apple_embedded.h"
 #import "drivers/apple_embedded/godot_view_apple_embedded.h"
 #import "drivers/apple_embedded/godot_view_controller.h"
 #ifdef SDL_ENABLED
@@ -781,6 +781,14 @@ Error OS_AppleEmbedded::setup_remote_filesystem(const String &p_server_host, int
 		remote_fs_dir = r_project_path;
 	}
 	return err;
+}
+
+void OS_AppleEmbedded::audio_driver_start() {
+	audio_driver.start();
+}
+
+void OS_AppleEmbedded::audio_driver_stop() {
+	audio_driver.stop();
 }
 
 void OS_AppleEmbedded::on_focus_out() {

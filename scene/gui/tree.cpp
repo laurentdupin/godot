@@ -408,6 +408,11 @@ String TreeItem::get_text(int p_column) const {
 	return cells[p_column].text;
 }
 
+Ref<TextParagraph> TreeItem::_get_text_buf(int p_column) const {
+	ERR_FAIL_INDEX_V(p_column, cells.size(), nullptr);
+	return cells[p_column].text_buf;
+}
+
 void TreeItem::set_description(int p_column, String p_text) {
 	ERR_FAIL_INDEX(p_column, cells.size());
 
@@ -2236,28 +2241,12 @@ void Tree::update_item_cell(TreeItem *p_item, int p_col) const {
 
 	p_item->cells.write[p_col].text_buf->clear();
 	if (p_item->cells[p_col].mode == TreeItem::CELL_MODE_RANGE) {
+		if (!p_item->cells[p_col].text.is_empty() && !p_item->cells[p_col].editable) {
+			return;
+		}
+		valtext = _get_range_cell_text(p_item->cells[p_col]);
 		if (!p_item->cells[p_col].text.is_empty()) {
-			if (!p_item->cells[p_col].editable) {
-				return;
-			}
-
-			int option = (int)p_item->cells[p_col].val;
-
-			valtext = p_item->atr(p_col, ETR("(Other)"));
-			Vector<String> strings = p_item->cells[p_col].text.split(",");
-			for (int j = 0; j < strings.size(); j++) {
-				int value = j;
-				if (!strings[j].get_slicec(':', 1).is_empty()) {
-					value = strings[j].get_slicec(':', 1).to_int();
-				}
-				if (option == value) {
-					valtext = p_item->atr(p_col, strings[j].get_slicec(':', 0));
-					break;
-				}
-			}
-
-		} else {
-			valtext = String::num(p_item->cells[p_col].val, Math::range_step_decimals(p_item->cells[p_col].step));
+			valtext = p_item->atr(p_col, valtext);
 		}
 	} else {
 		// Don't auto translate if it's in string mode and editable, as the text can be changed to anything by the user.
@@ -3038,7 +3027,7 @@ void Tree::select_single_item(TreeItem *p_selected, TreeItem *p_current, int p_c
 		switched = true;
 	}
 
-	bool emitted_row = false;
+	bool emitted_row = true;
 
 	for (int i = 0; i < columns.size(); i++) {
 		TreeItem::Cell &c = p_current->cells.write[i];
@@ -3048,6 +3037,10 @@ void Tree::select_single_item(TreeItem *p_selected, TreeItem *p_current, int p_c
 		}
 
 		if (select_mode == SELECT_ROW) {
+			if (&selected_cell == &c) {
+				selected_col = i;
+				emitted_row = false;
+			}
 			if (p_selected == p_current && (!c.selected || allow_reselect)) {
 				c.selected = true;
 				selected_item = p_selected;
@@ -3060,9 +3053,6 @@ void Tree::select_single_item(TreeItem *p_selected, TreeItem *p_current, int p_c
 					// Deselect other rows.
 					c.selected = false;
 				}
-			}
-			if (&selected_cell == &c) {
-				selected_col = i;
 			}
 		} else if (select_mode == SELECT_SINGLE || select_mode == SELECT_MULTI) {
 			if (!r_in_range && &selected_cell == &c) {
@@ -3642,6 +3632,28 @@ void Tree::_update_value_editor(const TreeItem::Cell &p_cell) {
 	value_editor->set_value(p_cell.val);
 	value_editor->set_exp_ratio(p_cell.expr);
 	updating_value_editor = false;
+}
+
+String Tree::_get_range_cell_text(const TreeItem::Cell &p_cell) const {
+	if (p_cell.text.is_empty()) {
+		return String::num(p_cell.val, Math::range_step_decimals(p_cell.step));
+	}
+
+	int option = (int)p_cell.val;
+	String valtext = ETR("(Other)");
+	Vector<String> strings = p_cell.text.split(",");
+
+	for (int j = 0; j < strings.size(); j++) {
+		int value = j;
+		if (!strings[j].get_slicec(':', 1).is_empty()) {
+			value = strings[j].get_slicec(':', 1).to_int();
+		}
+		if (option == value) {
+			valtext = strings[j].get_slicec(':', 0);
+			break;
+		}
+	}
+	return valtext;
 }
 
 void Tree::popup_select(int p_option) {
@@ -7277,6 +7289,9 @@ String Tree::get_tooltip(const Point2 &p_pos) const {
 	if (it) {
 		const String item_tooltip = it->get_tooltip_text(col);
 		if (enable_auto_tooltip && item_tooltip.is_empty()) {
+			if (it->cells[col].mode == TreeItem::CELL_MODE_RANGE) {
+				return _get_range_cell_text(it->cells[col]);
+			}
 			return it->get_text(col);
 		}
 		return item_tooltip;

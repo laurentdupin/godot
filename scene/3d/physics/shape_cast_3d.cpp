@@ -103,6 +103,14 @@ void ShapeCast3D::_notification(int p_what) {
 				}
 			}
 		} break;
+
+		case NOTIFICATION_DEBUG_COLLISIONS_HINT_CHANGED: {
+			if (get_tree()->is_debugging_collisions_hint()) {
+				_update_debug_shape();
+			} else {
+				_clear_debug_shape();
+			}
+		} break;
 	}
 }
 
@@ -447,18 +455,18 @@ void ShapeCast3D::add_exception_rid(const RID &p_rid) {
 	exclude.insert(p_rid);
 }
 
-void ShapeCast3D::add_exception(RequiredParam<const CollisionObject3D> rp_node) {
-	EXTRACT_PARAM_OR_FAIL_MSG(p_node, rp_node, "The passed Node must be an instance of CollisionObject3D.");
-	add_exception_rid(p_node->get_rid());
+void ShapeCast3D::add_exception(RequiredParam<const CollisionObject3D> p_node) {
+	EXTRACT_PARAM_OR_FAIL_MSG(node, p_node, "The passed Node must be an instance of CollisionObject3D.");
+	add_exception_rid(node->get_rid());
 }
 
 void ShapeCast3D::remove_exception_rid(const RID &p_rid) {
 	exclude.erase(p_rid);
 }
 
-void ShapeCast3D::remove_exception(RequiredParam<const CollisionObject3D> rp_node) {
-	EXTRACT_PARAM_OR_FAIL_MSG(p_node, rp_node, "The passed Node must be an instance of CollisionObject3D.");
-	remove_exception_rid(p_node->get_rid());
+void ShapeCast3D::remove_exception(RequiredParam<const CollisionObject3D> p_node) {
+	EXTRACT_PARAM_OR_FAIL_MSG(node, p_node, "The passed Node must be an instance of CollisionObject3D.");
+	remove_exception_rid(node->get_rid());
 }
 
 void ShapeCast3D::clear_exceptions() {

@@ -36,6 +36,7 @@
 #include "core/os/main_loop.h"
 #include "core/os/os.h"
 #include "core/profiling/profiling.h"
+#include "core/string/regex.h"
 #include "main/main.h"
 #include "servers/display/display_server.h"
 #include "servers/rendering/rendering_server.h"
@@ -52,11 +53,6 @@
 #ifdef WAYLAND_ENABLED
 #include "wayland/detect_prime_egl.h"
 #include "wayland/display_server_wayland.h"
-#endif
-
-#include "modules/modules_enabled.gen.h" // For regex.
-#ifdef MODULE_REGEX_ENABLED
-#include "modules/regex/regex.h"
 #endif
 
 #if defined(RD_ENABLED)
@@ -90,6 +86,14 @@
 
 #if defined(__FreeBSD__)
 #include <sys/sysctl.h>
+#endif
+
+#ifdef __linux__
+namespace GameMode {
+#include <thirdparty/misc/gamemode_client.h>
+}
+
+#include "core/config/project_settings.h"
 #endif
 
 #ifdef FONTCONFIG_ENABLED
@@ -375,10 +379,8 @@ Vector<String> OS_LinuxBSD::get_video_adapter_driver_info() const {
 	Vector<String> class_display_device_candidates;
 	Vector<String> class_3d_device_candidates;
 
-#ifdef MODULE_REGEX_ENABLED
 	RegEx regex_id_format = RegEx();
 	regex_id_format.compile("^[a-f0-9]{4}:[a-f0-9]{4}$"); // e.g. `10de:13c2`; IDs are always in hexadecimal
-#endif
 
 	Vector<String> value_lines = vendor_device_id_mappings.split("\n", false); // example: `02:00.0 0300: 10de:13c2 (rev a1)`
 	for (const String &line : value_lines) {
@@ -389,11 +391,9 @@ Vector<String> OS_LinuxBSD::get_video_adapter_driver_info() const {
 		String device_class = columns[1].trim_suffix(":");
 		const String &vendor_device_id_mapping = columns[2];
 
-#ifdef MODULE_REGEX_ENABLED
 		if (regex_id_format.search(vendor_device_id_mapping).is_null()) {
 			continue;
 		}
-#endif
 
 		if (device_class == dc_vga) {
 			class_vga_device_candidates.push_back(vendor_device_id_mapping);
@@ -996,6 +996,24 @@ void OS_LinuxBSD::run() {
 	//int frames=0;
 	//uint64_t frame=0;
 
+#ifdef __linux__
+	Engine *e = Engine::get_singleton();
+	bool use_gamemode = GLOBAL_GET("application/run/use_game_mode");
+	int gamemode_status = -1;
+	if (!e->is_editor_hint() && !e->is_project_manager_hint()) {
+		if (use_gamemode) {
+			gamemode_status = GameMode::gamemode_request_start_for(OS::get_singleton()->get_process_id());
+			if (gamemode_status >= 0) {
+				print_verbose("GameMode: Enabled successfully.");
+			} else {
+				WARN_VERBOSE("GameMode: Failed to enable (check if the daemon is installed and running).");
+			}
+		} else {
+			print_verbose("GameMode: Not enabling, as the project has it disabled.");
+		}
+	}
+#endif
+
 	while (true) {
 		GodotProfileFrameMark;
 		GodotProfileZone("OS_LinuxBSD::run");
@@ -1011,6 +1029,11 @@ void OS_LinuxBSD::run() {
 	}
 
 	main_loop->finalize();
+#ifdef __linux__
+	if (gamemode_status == 0) {
+		GameMode::gamemode_request_end_for(OS::get_singleton()->get_process_id());
+	}
+#endif
 }
 
 void OS_LinuxBSD::disable_crash_handler() {
