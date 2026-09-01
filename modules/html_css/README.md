@@ -5,13 +5,13 @@
 The module has one mutually exclusive renderer selector:
 
 ```text
-module_html_css_renderer=hcsr_old|hcsr_old_dll|hcsr_runtime|none
+module_html_css_renderer=hcsr_old|hcsr_old_dll|hcsr_old_2|none
 ```
 
 `hcsr_old` is the default. It uses the frozen old architecture in
-`thirdparty/hcsr_old` and statically links its NativeAOT bridge. `hcsr_runtime`
-uses the current architecture and its runtime ABI from the checkout selected by
-`module_html_css_hcsr_runtime_root`. The choices are mutually exclusive; one
+`thirdparty/hcsr_old` and statically links its NativeAOT bridge. `hcsr_old_2`
+uses the sunset replacement architecture pinned in `thirdparty/hcsr_old_2` and
+links its `hcsr_runtime` ABI. The choices are mutually exclusive; one
 Godot executable contains at most one HCSR version and keeps the normal Godot
 executable name. `none` keeps the raw CPU-frame receiver without an HTML engine.
 On Windows x86_64, `hcsr_old_dll` uses the same frozen old backend and C ABI as
@@ -24,12 +24,11 @@ macOS, plus Android ARM64 and x86_64. A Windows editor can be built with:
 python -m SCons platform=windows target=editor module_html_css_renderer=hcsr_old
 ```
 
-The repository build script selects the sibling `HCSR` checkout automatically
-when `hcsr_runtime` is chosen. A direct SCons build must provide that checkout;
-the current runtime editor is currently limited to Windows x86_64 with D3D12:
+The sunset `hcsr_old_2` editor is limited to Windows x86_64 with D3D12 and is
+built only from its pinned submodule:
 
 ```text
-python -m SCons platform=windows target=editor module_html_css_renderer=hcsr_runtime module_html_css_hcsr_runtime_root=../HCSR
+python -m SCons platform=windows target=editor module_html_css_renderer=hcsr_old_2
 ```
 
 An old-HCSR-enabled Linux release template can select the provider explicitly:

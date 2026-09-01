@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("hcsr_old", "hcsr_runtime", "none")]
+    [ValidateSet("hcsr_old", "hcsr_old_2", "none")]
     [string]$Renderer = "hcsr_old",
 
     [ValidateRange(1, 64)]
@@ -43,9 +43,6 @@ $sconsArguments = @(
     "-j$Jobs"
 )
 
-if ($Renderer -eq "hcsr_runtime") {
-    $sconsArguments += "module_html_css_hcsr_runtime_root=$(Join-Path (Split-Path $godotRoot -Parent) 'HCSR')"
-}
 
 Push-Location $godotRoot
 try {

@@ -1,8 +1,8 @@
 /**************************************************************************/
-/*  html_surface_hcsr_runtime_backend.cpp                                 */
+/*  html_surface_hcsr_old_2_backend.cpp                                 */
 /**************************************************************************/
 
-#include "html_surface_hcsr_runtime_backend.h"
+#include "html_surface_hcsr_old_2_backend.h"
 
 #include "../bridge/html_asset_provider.h"
 #include "core/config/engine.h"
@@ -395,7 +395,7 @@ static void initialize_abi(void *p_value, size_t p_size) {
 }
 } // namespace
 
-struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
+struct HTMLSurfaceHCSROld2Backend::RuntimeState {
 	Mutex mutex;
 	Ref<HTMLTexture2D> texture;
 	Ref<HTMLDocument> document;
@@ -530,7 +530,7 @@ struct HTMLSurfaceHCSRRuntimeBackend::RuntimeState {
 };
 
 struct RuntimeDocumentCompilationWork {
-	HTMLSurfaceHCSRRuntimeBackend::RuntimeState *state = nullptr;
+	HTMLSurfaceHCSROld2Backend::RuntimeState *state = nullptr;
 	Ref<HTMLDocument> document;
 	uint64_t generation = 0;
 	hcsr_runtime_compilation_request_t *request = nullptr;
@@ -587,7 +587,7 @@ static bool runtime_backdrop_sample_inside(
 	return dx * dx + dy * dy <= radius * radius;
 }
 
-static bool runtime_update_backdrop_frame(HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
+static bool runtime_update_backdrop_frame(HTMLSurfaceHCSROld2Backend::RuntimeState *p_state) {
 	ERR_FAIL_NULL_V(p_state, false);
 	bool enabled = false;
 	{
@@ -730,7 +730,7 @@ static bool runtime_update_backdrop_frame(HTMLSurfaceHCSRRuntimeBackend::Runtime
 }
 
 static bool runtime_track_canvas_texture(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		const RID &p_texture) {
 	MutexLock lock(p_state->mutex);
 	if (p_state->closing) {
@@ -741,7 +741,7 @@ static bool runtime_track_canvas_texture(
 }
 
 static void runtime_release_canvas_texture(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		RenderingServer *p_rendering_server,
 		RuntimeExternalSurfaceSlot &p_slot) {
 	if (!p_slot.canvas_texture.is_valid()) {
@@ -763,7 +763,7 @@ static void runtime_release_canvas_texture(
 }
 
 static void runtime_set_terminal(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		const String &p_reason) {
 	MutexLock lock(p_state->mutex);
 	p_state->terminal = true;
@@ -773,7 +773,7 @@ static void runtime_set_terminal(
 }
 
 static String runtime_copy_last_error(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		const String &p_fallback) {
 	Vector<char> message;
 	message.resize(64 * 1024);
@@ -799,7 +799,7 @@ static String runtime_copy_presenter_error(
 }
 
 static void runtime_track_publication(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		hcsr_runtime_publication_t *p_publication) {
 	ERR_FAIL_NULL(p_state);
 	ERR_FAIL_NULL(p_publication);
@@ -809,7 +809,7 @@ static void runtime_track_publication(
 }
 
 static hcsr_runtime_status_t runtime_release_publication(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		hcsr_runtime_publication_t *p_publication) {
 	ERR_FAIL_NULL_V(p_state, HCSR_RUNTIME_INVALID_ARGUMENT);
 	ERR_FAIL_NULL_V(p_publication, HCSR_RUNTIME_INVALID_ARGUMENT);
@@ -825,7 +825,7 @@ static hcsr_runtime_status_t runtime_release_publication(
 }
 
 static bool runtime_has_completed_resource_token(
-		const HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		const HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		const hcsr_runtime_pending_resource_info_t &p_pending) {
 	for (const RuntimeResourceToken &token : p_state->completed_resource_tokens) {
 		if (token.matches(p_pending)) {
@@ -836,7 +836,7 @@ static bool runtime_has_completed_resource_token(
 }
 
 static bool runtime_complete_pending_resources(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		int &r_completed_count) {
 	r_completed_count = 0;
 	int64_t after_resource_id = 0;
@@ -960,7 +960,7 @@ static String runtime_compilation_failure(
 }
 
 static bool runtime_schedule_state(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state) {
 	RenderingServer *rendering_server = RenderingServer::get_singleton();
 	if (rendering_server == nullptr) {
 		runtime_set_terminal(p_state, "RenderingServer is unavailable for HCSR replacement work.");
@@ -976,13 +976,13 @@ static bool runtime_schedule_state(
 		p_state->work_reschedule_requested = false;
 	}
 	rendering_server->call_on_render_thread(
-			callable_mp_static(&HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback)
+			callable_mp_static(&HTMLSurfaceHCSROld2Backend::_step_on_render_thread_callback)
 					.bind((uint64_t)p_state));
 	return true;
 }
 
 static bool runtime_schedule_frame_cutoff(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state) {
 	RenderingServer *rendering_server = RenderingServer::get_singleton();
 	if (rendering_server == nullptr) {
 		runtime_set_terminal(p_state, "RenderingServer is unavailable for the HCSR frame cutoff.");
@@ -1005,7 +1005,7 @@ static bool runtime_schedule_frame_cutoff(
 		p_state->cutoff_process_frame = process_frame;
 	}
 	rendering_server->call_on_render_thread(
-			callable_mp_static(&HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_callback)
+			callable_mp_static(&HTMLSurfaceHCSROld2Backend::_activate_frame_cutoff_on_render_thread_callback)
 					.bind((uint64_t)p_state));
 	return true;
 }
@@ -1081,7 +1081,7 @@ static RuntimePresentationBinding *runtime_create_presentation_binding_from_devi
 }
 
 static RuntimeOutputTopologySnapshot runtime_capture_output_topology(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state) {
 	RuntimeOutputTopologySnapshot snapshot;
 	MutexLock lock(p_state->mutex);
 	snapshot.revision = p_state->requested_topology_revision;
@@ -1130,7 +1130,7 @@ static bool runtime_output_topologies_match(
 }
 
 static Vector<hcsr_runtime_output_configuration_t> runtime_create_output_configurations(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		const RuntimeOutputTopologySnapshot &p_topology) {
 	Vector<hcsr_runtime_output_configuration_t> outputs;
 	outputs.resize(1 + p_topology.outputs.size());
@@ -1162,7 +1162,7 @@ static Vector<hcsr_runtime_output_configuration_t> runtime_create_output_configu
 }
 
 static bool runtime_ensure_initialized(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state) {
 	if (p_state->session != nullptr) {
 		return true;
 	}
@@ -1307,7 +1307,7 @@ static void runtime_compile_document_worker(void *p_argument) {
 	hcsr_runtime_document_t *document = nullptr;
 	String error;
 	const bool success = runtime_compile_document(work->document, work->request, document, error);
-	HTMLSurfaceHCSRRuntimeBackend::RuntimeState *state = work->state;
+	HTMLSurfaceHCSROld2Backend::RuntimeState *state = work->state;
 	{
 		MutexLock lock(state->mutex);
 		if (state->active_compilation_request == work->request) {
@@ -1337,7 +1337,7 @@ static void runtime_compile_document_worker(void *p_argument) {
 }
 
 static bool runtime_submit_compiled_document(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		hcsr_runtime_document_t *p_document,
 		const Ref<HTMLDocument> &p_source,
 		uint64_t p_request_serial,
@@ -1364,7 +1364,7 @@ static bool runtime_submit_compiled_document(
 }
 
 static bool runtime_submit_configuration(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		uint64_t p_request_serial,
 		uint64_t p_request_process_frame) {
 	runtime_release_output_topology(p_state->candidate_topology);
@@ -1404,7 +1404,7 @@ static bool runtime_submit_configuration(
 }
 
 static bool runtime_submit_mutations(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		const Vector<RuntimeMutation> &p_mutations,
 		uint64_t p_request_process_frame,
 		uint64_t p_request_serial,
@@ -1621,7 +1621,7 @@ static bool runtime_release_completed_external_slots(
 }
 
 static RuntimeExternalSurfaceSlot *runtime_register_external_slot(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		RuntimePresentationBinding *p_binding,
 		RenderingServer *p_rendering_server,
 		RenderingDevice *p_device,
@@ -1690,7 +1690,7 @@ static RuntimeExternalSurfaceSlot *runtime_register_external_slot(
 }
 
 static bool runtime_activate_surface(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		RuntimePresentationBinding *p_binding,
 		RuntimeOutputState *p_output = nullptr) {
 	ERR_FAIL_NULL_V(p_binding, false);
@@ -1905,7 +1905,7 @@ static bool runtime_activate_surface(
 }
 
 static bool runtime_step_retiring_binding(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		RuntimePresentationBinding *p_binding,
 		RenderingServer *p_rendering_server,
 		RenderingDevice *p_rendering_device) {
@@ -1963,7 +1963,7 @@ static bool runtime_step_retiring_binding(
 }
 
 static bool runtime_step_retiring_output(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		RuntimeOutputState *p_output,
 		RenderingServer *p_rendering_server,
 		RenderingDevice *p_rendering_device) {
@@ -1992,7 +1992,7 @@ static bool runtime_step_retiring_output(
 }
 
 static bool runtime_resolve_completed_scroll_input(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		int64_t p_input_id,
 		int64_t p_frame_id) {
 	if (p_input_id == 0 && p_frame_id == 0) {
@@ -2051,7 +2051,7 @@ static bool runtime_resolve_completed_scroll_input(
 }
 
 static bool runtime_step_active(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state) {
 	RenderingServer *rendering_server = RenderingServer::get_singleton();
 	RenderingDevice *rendering_device = rendering_server != nullptr
 			? rendering_server->get_rendering_device()
@@ -2652,7 +2652,7 @@ static bool runtime_step_active(
 }
 
 static bool runtime_create_pointer_event_target(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		const Point2 &p_position,
 		HTMLElementHit &r_hit) {
 	hcsr_runtime_interaction_target_info_t target;
@@ -2678,7 +2678,7 @@ static bool runtime_create_pointer_event_target(
 	return true;
 }
 
-static bool runtime_step_pointer_input(HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
+static bool runtime_step_pointer_input(HTMLSurfaceHCSROld2Backend::RuntimeState *p_state) {
 	if (p_state->active_pointer_submission_id == 0) {
 		// Inputs may arrive while the first document generation is still deriving.
 		// They are not admitted until an exact interaction authority is active.
@@ -2835,7 +2835,7 @@ static bool runtime_step_pointer_input(HTMLSurfaceHCSRRuntimeBackend::RuntimeSta
 	return true;
 }
 
-static bool runtime_submit_one_scroll_input(HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
+static bool runtime_submit_one_scroll_input(HTMLSurfaceHCSROld2Backend::RuntimeState *p_state) {
 	RuntimeScrollRequest request;
 	bool admitted_capacity_exhausted = false;
 	{
@@ -2908,7 +2908,7 @@ static bool runtime_submit_one_scroll_input(HTMLSurfaceHCSRRuntimeBackend::Runti
 }
 
 static bool runtime_seal_host_frame_requirements(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state) {
 	MutexLock lock(p_state->mutex);
 	if (!p_state->host_frame_receipts_open || p_state->host_frame_requirement_sealed) {
 		return true;
@@ -2935,7 +2935,7 @@ static bool runtime_seal_host_frame_requirements(
 }
 
 static bool runtime_submit_pending_animation_timeline(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state) {
 	uint64_t revision = 0;
 	int64_t time_microseconds = 0;
 	uint64_t document_request_id = 0;
@@ -2967,7 +2967,7 @@ static bool runtime_submit_pending_animation_timeline(
 }
 
 static bool runtime_transition_sealed_host_frame_configuration(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		uint64_t p_configuration_revision,
 		uint64_t p_output_group_revision) {
 	if (!p_state->host_frame_requirement_sealed
@@ -2989,7 +2989,7 @@ static bool runtime_transition_sealed_host_frame_configuration(
 }
 
 static bool runtime_try_acknowledge_resolved_host_frame(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state) {
 	if (!p_state->host_frame_requirement_sealed || p_state->active_publication == nullptr) {
 		return true;
 	}
@@ -3039,7 +3039,7 @@ static bool runtime_try_acknowledge_resolved_host_frame(
 }
 
 static bool runtime_step_shutdown(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state) {
 	if (p_state->session != nullptr) {
 		if (p_state->staged_publication != nullptr) {
 			runtime_release_publication(p_state, p_state->staged_publication);
@@ -3171,7 +3171,7 @@ static bool runtime_step_shutdown(
 }
 
 static bool runtime_join_completed_compilation(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state) {
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state) {
 	WorkerThreadPool::TaskID task_id = WorkerThreadPool::INVALID_TASK_ID;
 	{
 		MutexLock lock(p_state->mutex);
@@ -3194,7 +3194,7 @@ static bool runtime_join_completed_compilation(
 }
 
 static bool runtime_start_document_compilation(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		const Ref<HTMLDocument> &p_document,
 		uint64_t p_generation) {
 	hcsr_runtime_compilation_request_t *request = nullptr;
@@ -3232,7 +3232,7 @@ static bool runtime_start_document_compilation(
 	return true;
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_state_ptr) {
+void HTMLSurfaceHCSROld2Backend::_step_on_render_thread_callback(uint64_t p_state_ptr) {
 	RuntimeState *runtime = (RuntimeState *)p_state_ptr;
 	{
 		MutexLock lock(runtime->mutex);
@@ -3278,7 +3278,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 				: nullptr;
 		if (device != nullptr) {
 			device->external_resource_defer_release(
-					callable_mp_static(&HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback)
+					callable_mp_static(&HTMLSurfaceHCSROld2Backend::_step_on_render_thread_callback)
 							.bind((uint64_t)runtime));
 			return;
 		}
@@ -3353,7 +3353,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 			// second callback which outlives the first callback's state deletion.
 			RenderingDevice *device = RenderingServer::get_singleton()->get_rendering_device();
 			device->external_resource_defer_release(
-					callable_mp_static(&HTMLSurfaceHCSRRuntimeBackend::_destroy_state_on_render_thread_callback)
+					callable_mp_static(&HTMLSurfaceHCSROld2Backend::_destroy_state_on_render_thread_callback)
 							.bind((uint64_t)runtime));
 			return;
 		}
@@ -3369,7 +3369,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 			// is allowed to delete the state.
 			RenderingDevice *device = RenderingServer::get_singleton()->get_rendering_device();
 			device->external_resource_defer_release(
-					callable_mp_static(&HTMLSurfaceHCSRRuntimeBackend::_destroy_state_on_render_thread_callback)
+					callable_mp_static(&HTMLSurfaceHCSROld2Backend::_destroy_state_on_render_thread_callback)
 							.bind((uint64_t)runtime));
 			return;
 		}
@@ -3379,7 +3379,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 		}
 		RenderingDevice *device = RenderingServer::get_singleton()->get_rendering_device();
 		device->external_resource_defer_release(
-				callable_mp_static(&HTMLSurfaceHCSRRuntimeBackend::_destroy_state_on_render_thread_callback)
+				callable_mp_static(&HTMLSurfaceHCSROld2Backend::_destroy_state_on_render_thread_callback)
 						.bind((uint64_t)runtime));
 		return;
 	}
@@ -3515,7 +3515,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback(uint64_t p_s
 	finish_scheduled_work();
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_callback(uint64_t p_state_ptr) {
+void HTMLSurfaceHCSROld2Backend::_activate_frame_cutoff_on_render_thread_callback(uint64_t p_state_ptr) {
 	RuntimeState *runtime = (RuntimeState *)p_state_ptr;
 	uint64_t cutoff_process_frame = 0;
 	uint64_t cutoff_request_serial = 0;
@@ -3841,17 +3841,17 @@ void HTMLSurfaceHCSRRuntimeBackend::_activate_frame_cutoff_on_render_thread_call
 	}
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::_destroy_state_on_render_thread_callback(uint64_t p_state_ptr) {
+void HTMLSurfaceHCSROld2Backend::_destroy_state_on_render_thread_callback(uint64_t p_state_ptr) {
 	_step_on_render_thread_callback(p_state_ptr);
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::_schedule_work() {
+void HTMLSurfaceHCSROld2Backend::_schedule_work() {
 	if (state != nullptr) {
 		runtime_schedule_state(state);
 	}
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::_queue_document_snapshot() {
+void HTMLSurfaceHCSROld2Backend::_queue_document_snapshot() {
 	if (state == nullptr) {
 		return;
 	}
@@ -3876,7 +3876,7 @@ void HTMLSurfaceHCSRRuntimeBackend::_queue_document_snapshot() {
 	_schedule_work();
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::_queue_mutation(
+Error HTMLSurfaceHCSROld2Backend::_queue_mutation(
 		int p_kind,
 		const StringName &p_id,
 		const StringName &p_name,
@@ -3909,7 +3909,7 @@ Error HTMLSurfaceHCSRRuntimeBackend::_queue_mutation(
 	return OK;
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::begin_host_input_transaction() {
+void HTMLSurfaceHCSROld2Backend::begin_host_input_transaction() {
 	ERR_FAIL_NULL(state);
 	MutexLock lock(state->mutex);
 	if (state->causal_input_transaction_depth++ == 0) {
@@ -3918,7 +3918,7 @@ void HTMLSurfaceHCSRRuntimeBackend::begin_host_input_transaction() {
 	}
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::end_host_input_transaction() {
+void HTMLSurfaceHCSROld2Backend::end_host_input_transaction() {
 	ERR_FAIL_NULL(state);
 	MutexLock lock(state->mutex);
 	ERR_FAIL_COND(state->causal_input_transaction_depth <= 0);
@@ -3928,11 +3928,11 @@ void HTMLSurfaceHCSRRuntimeBackend::end_host_input_transaction() {
 	}
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::mark_document_dirty() {
+void HTMLSurfaceHCSROld2Backend::mark_document_dirty() {
 	_queue_document_snapshot();
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::set_size(const Size2i &p_size) {
+void HTMLSurfaceHCSROld2Backend::set_size(const Size2i &p_size) {
 	ERR_FAIL_NULL(state);
 	{
 		MutexLock lock(state->mutex);
@@ -3952,11 +3952,11 @@ void HTMLSurfaceHCSRRuntimeBackend::set_size(const Size2i &p_size) {
 	_schedule_work();
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::set_device_scale_factor(float p_device_scale_factor) {
+void HTMLSurfaceHCSROld2Backend::set_device_scale_factor(float p_device_scale_factor) {
 	(void)p_device_scale_factor;
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::set_physical_size(const Size2i &p_physical_size) {
+void HTMLSurfaceHCSROld2Backend::set_physical_size(const Size2i &p_physical_size) {
 	ERR_FAIL_NULL(state);
 	{
 		MutexLock lock(state->mutex);
@@ -3973,7 +3973,7 @@ void HTMLSurfaceHCSRRuntimeBackend::set_physical_size(const Size2i &p_physical_s
 	_schedule_work();
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::set_viewport_configuration(
+void HTMLSurfaceHCSROld2Backend::set_viewport_configuration(
 		const Size2i &p_size,
 		float p_device_scale_factor,
 		const Size2i &p_physical_size) {
@@ -4001,7 +4001,7 @@ void HTMLSurfaceHCSRRuntimeBackend::set_viewport_configuration(
 	}
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::set_document(const Ref<HTMLDocument> &p_document) {
+void HTMLSurfaceHCSROld2Backend::set_document(const Ref<HTMLDocument> &p_document) {
 	if (document == p_document) {
 		return;
 	}
@@ -4009,11 +4009,11 @@ void HTMLSurfaceHCSRRuntimeBackend::set_document(const Ref<HTMLDocument> &p_docu
 	_queue_document_snapshot();
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::set_transparent_background(bool p_transparent_background) {
+void HTMLSurfaceHCSROld2Backend::set_transparent_background(bool p_transparent_background) {
 	(void)p_transparent_background;
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::set_background_color(const Color &p_background_color) {
+void HTMLSurfaceHCSROld2Backend::set_background_color(const Color &p_background_color) {
 	if (state == nullptr) {
 		return;
 	}
@@ -4031,11 +4031,11 @@ void HTMLSurfaceHCSRRuntimeBackend::set_background_color(const Color &p_backgrou
 	_schedule_work();
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::set_placeholder_background(const Color &p_color) {
+void HTMLSurfaceHCSROld2Backend::set_placeholder_background(const Color &p_color) {
 	(void)p_color;
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::set_backdrop_filter_enabled(bool p_enabled) {
+void HTMLSurfaceHCSROld2Backend::set_backdrop_filter_enabled(bool p_enabled) {
 	if (state == nullptr) {
 		return;
 	}
@@ -4051,7 +4051,7 @@ void HTMLSurfaceHCSRRuntimeBackend::set_backdrop_filter_enabled(bool p_enabled) 
 	_schedule_work();
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::update_compositor(
+Error HTMLSurfaceHCSROld2Backend::update_compositor(
 		double p_timeline_time_seconds,
 		bool *r_needs_output,
 		bool *r_needs_begin_frame) {
@@ -4082,7 +4082,7 @@ Error HTMLSurfaceHCSRRuntimeBackend::update_compositor(
 	return OK;
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::render_placeholder(const String &p_marker) {
+void HTMLSurfaceHCSROld2Backend::render_placeholder(const String &p_marker) {
 	(void)p_marker;
 	_schedule_work();
 	if (state != nullptr) {
@@ -4090,7 +4090,7 @@ void HTMLSurfaceHCSRRuntimeBackend::render_placeholder(const String &p_marker) {
 	}
 }
 
-bool HTMLSurfaceHCSRRuntimeBackend::poll_pending_output(bool *r_waiting_for_completion) {
+bool HTMLSurfaceHCSROld2Backend::poll_pending_output(bool *r_waiting_for_completion) {
 	if (state == nullptr) {
 		return false;
 	}
@@ -4108,7 +4108,7 @@ bool HTMLSurfaceHCSRRuntimeBackend::poll_pending_output(bool *r_waiting_for_comp
 	return changed;
 }
 
-HTMLPendingOutputState HTMLSurfaceHCSRRuntimeBackend::consume_pending_output_state() {
+HTMLPendingOutputState HTMLSurfaceHCSROld2Backend::consume_pending_output_state() {
 	HTMLPendingOutputState result;
 	bool pending = false;
 	result.presentation_changed = poll_pending_output(&pending);
@@ -4119,13 +4119,13 @@ HTMLPendingOutputState HTMLSurfaceHCSRRuntimeBackend::consume_pending_output_sta
 	return result;
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::schedule_retirement_service() {
+void HTMLSurfaceHCSROld2Backend::schedule_retirement_service() {
 	if (has_pending_output()) {
 		_schedule_work();
 	}
 }
 
-bool HTMLSurfaceHCSRRuntimeBackend::has_pending_output() const {
+bool HTMLSurfaceHCSROld2Backend::has_pending_output() const {
 	if (state == nullptr) {
 		return false;
 	}
@@ -4136,7 +4136,7 @@ bool HTMLSurfaceHCSRRuntimeBackend::has_pending_output() const {
 			|| state->compilation_result_ready;
 }
 
-bool HTMLSurfaceHCSRRuntimeBackend::has_pending_frame_request() const {
+bool HTMLSurfaceHCSROld2Backend::has_pending_frame_request() const {
 	if (state == nullptr) {
 		return false;
 	}
@@ -4155,7 +4155,7 @@ bool HTMLSurfaceHCSRRuntimeBackend::has_pending_frame_request() const {
 			|| !state->scroll_requests.is_empty();
 }
 
-bool HTMLSurfaceHCSRRuntimeBackend::is_begin_frame_requested() const {
+bool HTMLSurfaceHCSROld2Backend::is_begin_frame_requested() const {
 	if (state == nullptr) {
 		return false;
 	}
@@ -4165,7 +4165,7 @@ bool HTMLSurfaceHCSRRuntimeBackend::is_begin_frame_requested() const {
 			|| state->submitted_animation_timeline_revision > state->accepted_animation_timeline_revision;
 }
 
-uint64_t HTMLSurfaceHCSRRuntimeBackend::get_last_queued_frame_generation() const {
+uint64_t HTMLSurfaceHCSROld2Backend::get_last_queued_frame_generation() const {
 	if (state == nullptr) {
 		return 0;
 	}
@@ -4173,7 +4173,7 @@ uint64_t HTMLSurfaceHCSRRuntimeBackend::get_last_queued_frame_generation() const
 	return state->queued_generation;
 }
 
-uint64_t HTMLSurfaceHCSRRuntimeBackend::get_active_frame_generation() const {
+uint64_t HTMLSurfaceHCSROld2Backend::get_active_frame_generation() const {
 	if (state == nullptr) {
 		return 0;
 	}
@@ -4181,12 +4181,12 @@ uint64_t HTMLSurfaceHCSRRuntimeBackend::get_active_frame_generation() const {
 	return state->active_generation;
 }
 
-bool HTMLSurfaceHCSRRuntimeBackend::uses_generation_bound_input() const {
+bool HTMLSurfaceHCSROld2Backend::uses_generation_bound_input() const {
 	return true;
 }
 
 static Error runtime_queue_pointer_request(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		hcsr_runtime_pointer_event_kind_t p_kind,
 		const Point2 &p_position,
 		uint32_t p_buttons,
@@ -4329,13 +4329,13 @@ static Error runtime_queue_pointer_request(
 	runtime_schedule_state(p_state);
 	if (schedule_input_wakeup) {
 		RenderingServer::get_singleton()->call_on_render_thread(
-				callable_mp_static(&HTMLSurfaceHCSRRuntimeBackend::_step_on_render_thread_callback)
+				callable_mp_static(&HTMLSurfaceHCSROld2Backend::_step_on_render_thread_callback)
 						.bind((uint64_t)p_state));
 	}
 	return OK;
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::mouse_move(const Point2 &p_position, int p_modifiers, bool &r_visual_state_changed) {
+Error HTMLSurfaceHCSROld2Backend::mouse_move(const Point2 &p_position, int p_modifiers, bool &r_visual_state_changed) {
 	(void)p_modifiers;
 	r_visual_state_changed = true;
 	uint32_t buttons = 0;
@@ -4346,7 +4346,7 @@ Error HTMLSurfaceHCSRRuntimeBackend::mouse_move(const Point2 &p_position, int p_
 	return runtime_queue_pointer_request(state, HCSR_RUNTIME_POINTER_MOVE, p_position, buttons, false);
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::mouse_down(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) {
+Error HTMLSurfaceHCSROld2Backend::mouse_down(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) {
 	(void)p_modifiers;
 	(void)p_click_count;
 	if (p_button != HTML_SURFACE_MOUSE_BUTTON_LEFT || state == nullptr) {
@@ -4360,7 +4360,7 @@ Error HTMLSurfaceHCSRRuntimeBackend::mouse_down(const Point2 &p_position, HTMLSu
 			HCSR_RUNTIME_POINTER_BUTTON_PRIMARY, true);
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::mouse_up(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) {
+Error HTMLSurfaceHCSROld2Backend::mouse_up(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) {
 	(void)p_modifiers;
 	(void)p_click_count;
 	if (p_button != HTML_SURFACE_MOUSE_BUTTON_LEFT || state == nullptr) {
@@ -4373,7 +4373,7 @@ Error HTMLSurfaceHCSRRuntimeBackend::mouse_up(const Point2 &p_position, HTMLSurf
 	return runtime_queue_pointer_request(state, HCSR_RUNTIME_POINTER_PRIMARY_UP, p_position, 0, false);
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::pointer_cancel(const Point2 &p_position, int p_pointer_id) {
+Error HTMLSurfaceHCSROld2Backend::pointer_cancel(const Point2 &p_position, int p_pointer_id) {
 	(void)p_pointer_id;
 	if (state != nullptr) {
 		MutexLock lock(state->mutex);
@@ -4382,7 +4382,7 @@ Error HTMLSurfaceHCSRRuntimeBackend::pointer_cancel(const Point2 &p_position, in
 	return runtime_queue_pointer_request(state, HCSR_RUNTIME_POINTER_CANCEL, p_position, 0, false);
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::notify_pointer_leave(const Point2 &p_position, bool p_cancel_pressed_interaction, int p_pointer_id) {
+Error HTMLSurfaceHCSROld2Backend::notify_pointer_leave(const Point2 &p_position, bool p_cancel_pressed_interaction, int p_pointer_id) {
 	(void)p_pointer_id;
 	if (state != nullptr && p_cancel_pressed_interaction) {
 		MutexLock lock(state->mutex);
@@ -4394,7 +4394,7 @@ Error HTMLSurfaceHCSRRuntimeBackend::notify_pointer_leave(const Point2 &p_positi
 }
 
 static Error runtime_queue_scroll_request(
-		HTMLSurfaceHCSRRuntimeBackend::RuntimeState *p_state,
+		HTMLSurfaceHCSROld2Backend::RuntimeState *p_state,
 		int32_t p_kind,
 		const Point2 &p_position,
 		const Vector2 &p_delta,
@@ -4475,7 +4475,7 @@ static Error runtime_queue_scroll_request(
 	return OK;
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::begin_scrollbar_interaction(const Point2 &p_position, double p_event_time_seconds, bool &r_consumed) {
+Error HTMLSurfaceHCSROld2Backend::begin_scrollbar_interaction(const Point2 &p_position, double p_event_time_seconds, bool &r_consumed) {
 	(void)p_event_time_seconds;
 	r_consumed = false;
 	if (state == nullptr) {
@@ -4520,7 +4520,7 @@ Error HTMLSurfaceHCSRRuntimeBackend::begin_scrollbar_interaction(const Point2 &p
 	return result;
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::update_scrollbar_interaction(const Point2 &p_position, bool &r_consumed) {
+Error HTMLSurfaceHCSROld2Backend::update_scrollbar_interaction(const Point2 &p_position, bool &r_consumed) {
 	r_consumed = false;
 	if (state == nullptr) {
 		return ERR_UNAVAILABLE;
@@ -4539,7 +4539,7 @@ Error HTMLSurfaceHCSRRuntimeBackend::update_scrollbar_interaction(const Point2 &
 	return result;
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::end_scrollbar_interaction(bool &r_consumed) {
+Error HTMLSurfaceHCSROld2Backend::end_scrollbar_interaction(bool &r_consumed) {
 	r_consumed = false;
 	if (state == nullptr) {
 		return ERR_UNAVAILABLE;
@@ -4561,7 +4561,7 @@ Error HTMLSurfaceHCSRRuntimeBackend::end_scrollbar_interaction(bool &r_consumed)
 	return result;
 }
 
-bool HTMLSurfaceHCSRRuntimeBackend::poll_pointer_event(HTMLPointerEvent &r_event) {
+bool HTMLSurfaceHCSROld2Backend::poll_pointer_event(HTMLPointerEvent &r_event) {
 	if (state == nullptr) {
 		return false;
 	}
@@ -4574,7 +4574,7 @@ bool HTMLSurfaceHCSRRuntimeBackend::poll_pointer_event(HTMLPointerEvent &r_event
 	return true;
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::wheel(const Point2 &p_position, const Vector2 &p_delta) {
+Error HTMLSurfaceHCSROld2Backend::wheel(const Point2 &p_position, const Vector2 &p_delta) {
 	if (p_delta.is_zero_approx()) {
 		return OK;
 	}
@@ -4583,7 +4583,7 @@ Error HTMLSurfaceHCSRRuntimeBackend::wheel(const Point2 &p_position, const Vecto
 			Math::abs(p_delta.x) > Math::abs(p_delta.y) ? HCSR_RUNTIME_SCROLL_HORIZONTAL : HCSR_RUNTIME_SCROLL_VERTICAL);
 }
 
-bool HTMLSurfaceHCSRRuntimeBackend::has_terminal_render_failure() const {
+bool HTMLSurfaceHCSROld2Backend::has_terminal_render_failure() const {
 	if (state == nullptr) {
 		return true;
 	}
@@ -4591,7 +4591,7 @@ bool HTMLSurfaceHCSRRuntimeBackend::has_terminal_render_failure() const {
 	return state->terminal;
 }
 
-String HTMLSurfaceHCSRRuntimeBackend::get_terminal_render_failure_reason() const {
+String HTMLSurfaceHCSROld2Backend::get_terminal_render_failure_reason() const {
 	if (state == nullptr) {
 		return "HCSR replacement runtime state is unavailable.";
 	}
@@ -4599,12 +4599,12 @@ String HTMLSurfaceHCSRRuntimeBackend::get_terminal_render_failure_reason() const
 	return state->terminal_reason;
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::submit_cpu_frame(const HTMLCPUFrame &p_frame) {
+Error HTMLSurfaceHCSROld2Backend::submit_cpu_frame(const HTMLCPUFrame &p_frame) {
 	(void)p_frame;
 	return ERR_UNAVAILABLE;
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::apply_element_mutations(const Array &p_mutations) {
+Error HTMLSurfaceHCSROld2Backend::apply_element_mutations(const Array &p_mutations) {
 	ERR_FAIL_NULL_V(state, ERR_UNAVAILABLE);
 	if (p_mutations.is_empty()) {
 		return OK;
@@ -4663,43 +4663,43 @@ Error HTMLSurfaceHCSRRuntimeBackend::apply_element_mutations(const Array &p_muta
 	return OK;
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::set_element_text(
+Error HTMLSurfaceHCSROld2Backend::set_element_text(
 		const StringName &p_id, const String &p_text) {
 	return _queue_mutation(RUNTIME_MUTATION_TEXT, p_id, StringName(), p_text);
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::set_element_attribute(
+Error HTMLSurfaceHCSROld2Backend::set_element_attribute(
 		const StringName &p_id, const StringName &p_name, const String &p_value) {
 	return _queue_mutation(RUNTIME_MUTATION_ATTRIBUTE, p_id, p_name, p_value);
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::set_element_style(
+Error HTMLSurfaceHCSROld2Backend::set_element_style(
 		const StringName &p_id, const String &p_css_text) {
 	return _queue_mutation(RUNTIME_MUTATION_STYLE, p_id, StringName(), p_css_text);
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::replace_stylesheet_text(
+Error HTMLSurfaceHCSROld2Backend::replace_stylesheet_text(
 		const StringName &p_style_id, const String &p_css_text) {
 	return _queue_mutation(RUNTIME_MUTATION_TEXT, p_style_id, StringName(), p_css_text);
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::set_element_inner_html(
+Error HTMLSurfaceHCSROld2Backend::set_element_inner_html(
 		const StringName &p_id, const String &p_html_fragment) {
 	return _queue_mutation(RUNTIME_MUTATION_INNER_HTML, p_id, StringName(), p_html_fragment);
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::set_form_control_checked(
+Error HTMLSurfaceHCSROld2Backend::set_form_control_checked(
 		const StringName &p_id, bool p_checked) {
 	return _queue_mutation(
 			RUNTIME_MUTATION_CHECKED, p_id, StringName(), p_checked ? "1" : "0");
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::set_form_control_value(
+Error HTMLSurfaceHCSROld2Backend::set_form_control_value(
 		const StringName &p_id, const String &p_value) {
 	return _queue_mutation(RUNTIME_MUTATION_VALUE, p_id, StringName(), p_value);
 }
 
-bool HTMLSurfaceHCSRRuntimeBackend::get_form_control_state(
+bool HTMLSurfaceHCSROld2Backend::get_form_control_state(
 		const StringName &p_id, HTMLFormControlState &r_state) {
 	if (state == nullptr) {
 		return false;
@@ -4735,7 +4735,7 @@ bool HTMLSurfaceHCSRRuntimeBackend::get_form_control_state(
 	return true;
 }
 
-bool HTMLSurfaceHCSRRuntimeBackend::hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const {
+bool HTMLSurfaceHCSROld2Backend::hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const {
 	if (state == nullptr || !Math::is_finite(p_position.x) || !Math::is_finite(p_position.y)) {
 		return false;
 	}
@@ -4768,7 +4768,7 @@ bool HTMLSurfaceHCSRRuntimeBackend::hit_test(const Point2 &p_position, HTMLEleme
 	return true;
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::get_frame_metadata(HTMLFrameMetadata &r_metadata) const {
+void HTMLSurfaceHCSROld2Backend::get_frame_metadata(HTMLFrameMetadata &r_metadata) const {
 	if (state == nullptr) {
 		r_metadata = HTMLFrameMetadata();
 		return;
@@ -4777,7 +4777,7 @@ void HTMLSurfaceHCSRRuntimeBackend::get_frame_metadata(HTMLFrameMetadata &r_meta
 	r_metadata = state->frame_metadata;
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::get_gpu_backdrop_frame(HTMLGPUBackdropFrame &r_frame) const {
+void HTMLSurfaceHCSROld2Backend::get_gpu_backdrop_frame(HTMLGPUBackdropFrame &r_frame) const {
 	if (state == nullptr) {
 		r_frame.clear();
 		return;
@@ -4786,15 +4786,15 @@ void HTMLSurfaceHCSRRuntimeBackend::get_gpu_backdrop_frame(HTMLGPUBackdropFrame 
 	r_frame = state->gpu_backdrop_frame;
 }
 
-Ref<Texture2D> HTMLSurfaceHCSRRuntimeBackend::get_texture() const {
+Ref<Texture2D> HTMLSurfaceHCSROld2Backend::get_texture() const {
 	return texture;
 }
 
-Ref<HTMLTexture2D> HTMLSurfaceHCSRRuntimeBackend::get_html_texture() const {
+Ref<HTMLTexture2D> HTMLSurfaceHCSROld2Backend::get_html_texture() const {
 	return texture;
 }
 
-uint64_t HTMLSurfaceHCSRRuntimeBackend::create_presentation_output(const Size2i &p_size, bool p_mipmaps) {
+uint64_t HTMLSurfaceHCSROld2Backend::create_presentation_output(const Size2i &p_size, bool p_mipmaps) {
 	if (state == nullptr || p_size.x <= 0 || p_size.y <= 0) {
 		return 0;
 	}
@@ -4822,7 +4822,7 @@ uint64_t HTMLSurfaceHCSRRuntimeBackend::create_presentation_output(const Size2i 
 	return output_id;
 }
 
-Error HTMLSurfaceHCSRRuntimeBackend::resize_presentation_output(uint64_t p_output_id, const Size2i &p_size) {
+Error HTMLSurfaceHCSROld2Backend::resize_presentation_output(uint64_t p_output_id, const Size2i &p_size) {
 	ERR_FAIL_COND_V(p_size.x <= 0 || p_size.y <= 0, ERR_INVALID_PARAMETER);
 	ERR_FAIL_NULL_V(state, ERR_UNAVAILABLE);
 	{
@@ -4849,7 +4849,7 @@ Error HTMLSurfaceHCSRRuntimeBackend::resize_presentation_output(uint64_t p_outpu
 	return OK;
 }
 
-void HTMLSurfaceHCSRRuntimeBackend::destroy_presentation_output(uint64_t p_output_id) {
+void HTMLSurfaceHCSROld2Backend::destroy_presentation_output(uint64_t p_output_id) {
 	if (state == nullptr) {
 		return;
 	}
@@ -4884,7 +4884,7 @@ void HTMLSurfaceHCSRRuntimeBackend::destroy_presentation_output(uint64_t p_outpu
 	_schedule_work();
 }
 
-Ref<Texture2D> HTMLSurfaceHCSRRuntimeBackend::get_presentation_output_texture(uint64_t p_output_id) const {
+Ref<Texture2D> HTMLSurfaceHCSROld2Backend::get_presentation_output_texture(uint64_t p_output_id) const {
 	if (state == nullptr) {
 		return Ref<Texture2D>();
 	}
@@ -4897,7 +4897,7 @@ Ref<Texture2D> HTMLSurfaceHCSRRuntimeBackend::get_presentation_output_texture(ui
 	return Ref<Texture2D>();
 }
 
-uint64_t HTMLSurfaceHCSRRuntimeBackend::get_presentation_output_generation(uint64_t p_output_id) const {
+uint64_t HTMLSurfaceHCSROld2Backend::get_presentation_output_generation(uint64_t p_output_id) const {
 	if (state == nullptr) {
 		return 0;
 	}
@@ -4910,7 +4910,7 @@ uint64_t HTMLSurfaceHCSRRuntimeBackend::get_presentation_output_generation(uint6
 	return 0;
 }
 
-HTMLSurfaceHCSRRuntimeBackend::HTMLSurfaceHCSRRuntimeBackend() {
+HTMLSurfaceHCSROld2Backend::HTMLSurfaceHCSROld2Backend() {
 	texture.instantiate();
 	state = memnew(RuntimeState);
 	state->texture = texture;
@@ -4924,7 +4924,7 @@ HTMLSurfaceHCSRRuntimeBackend::HTMLSurfaceHCSRRuntimeBackend() {
 	}
 }
 
-HTMLSurfaceHCSRRuntimeBackend::~HTMLSurfaceHCSRRuntimeBackend() {
+HTMLSurfaceHCSROld2Backend::~HTMLSurfaceHCSROld2Backend() {
 	RuntimeState *retiring = state;
 	state = nullptr;
 	document.unref();

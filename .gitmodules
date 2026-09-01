@@ -1,6 +1,8 @@
-[submodule "thirdparty/hcsr"]
-	path = thirdparty/hcsr
+[submodule "thirdparty/hcsr_old_2"]
+	path = thirdparty/hcsr_old_2
 	url = https://github.com/laurentdupin/HTMLCSSSimpleRenderer.git
+	branch = hcsr_old_2
 [submodule "thirdparty/hcsr_old"]
 	path = thirdparty/hcsr_old
 	url = https://github.com/laurentdupin/HTMLCSSSimpleRenderer.git
+	branch = hcsr_old

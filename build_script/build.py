@@ -27,7 +27,7 @@ SCONS_VERSION = "4.10.1"
 SETTINGS_VERSION = 2
 TARGETS = ("editor", "template_debug", "template_release")
 ARCHITECTURES = ("x86_64", "arm64", "x86_32")
-HTML_CSS_RENDERERS = ("hcsr_old", "hcsr_old_dll", "hcsr_runtime", "none")
+HTML_CSS_RENDERERS = ("hcsr_old", "hcsr_old_dll", "hcsr_old_2", "none")
 
 
 @dataclass
@@ -293,11 +293,11 @@ def configure_interactively(settings: BuildSettings, godot_platform: str) -> Bui
 def validate_settings(settings: BuildSettings, godot_platform: str) -> None:
     if not is_valid_suffix(settings.suffix):
         raise RuntimeError("The output suffix may contain only ASCII letters, digits, underscores, and hyphens.")
-    if settings.html_css_renderer == "hcsr_runtime" and (
+    if settings.html_css_renderer == "hcsr_old_2" and (
         godot_platform != "windows" or settings.architecture != "x86_64"
     ):
         raise RuntimeError(
-            "The replacement HCSR runtime currently supports Windows x86_64 only. "
+            "The sunset hcsr_old_2 renderer supports Windows x86_64 only. "
             "Select hcsr_old or none to build Godot on another host or architecture."
         )
     if settings.html_css_renderer == "hcsr_old_dll" and (
@@ -339,8 +339,6 @@ def build_command(
         command.append("--clean")
     if godot_platform == "windows":
         command.extend((f"angle={'yes' if settings.angle else 'no'}", "d3d12=yes", "vulkan=yes"))
-        if settings.html_css_renderer == "hcsr_runtime":
-            command.append(f"module_html_css_hcsr_runtime_root={GODOT_ROOT.parent / 'HCSR'}")
     command.extend(extra_arguments)
     if godot_platform == "macos" and settings.target == "editor":
         if generate_bundle is None:

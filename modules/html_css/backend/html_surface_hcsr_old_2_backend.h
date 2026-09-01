@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  html_surface_hcsr_runtime_backend.h                                   */
+/*  html_surface_hcsr_old_2_backend.h                                   */
 /**************************************************************************/
 
 #pragma once
@@ -10,7 +10,7 @@
 
 #include "hcsr_runtime.h"
 
-class HTMLSurfaceHCSRRuntimeBackend : public HTMLSurfaceBackend {
+class HTMLSurfaceHCSROld2Backend : public HTMLSurfaceBackend {
 	// Render-thread helpers are public only so the static callback/free-function
 	// implementation can use the opaque state without granting it to callers.
 public:
@@ -84,6 +84,6 @@ public:
 	virtual Ref<Texture2D> get_presentation_output_texture(uint64_t p_output_id) const override;
 	virtual uint64_t get_presentation_output_generation(uint64_t p_output_id) const override;
 
-	HTMLSurfaceHCSRRuntimeBackend();
-	~HTMLSurfaceHCSRRuntimeBackend();
+	HTMLSurfaceHCSROld2Backend();
+	~HTMLSurfaceHCSROld2Backend();
 };

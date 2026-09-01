@@ -260,14 +260,6 @@ static HTMLSurfaceBackendPreference html_view_to_surface_backend_preference(HTML
 	}
 }
 
-static bool html_view_backend_preference_can_use_gpu(HTMLView::BackendPreference p_backend_preference) {
-	return p_backend_preference == HTMLView::BACKEND_AUTO ||
-			p_backend_preference == HTMLView::BACKEND_GPU_AUTO ||
-			p_backend_preference == HTMLView::BACKEND_VULKAN ||
-			p_backend_preference == HTMLView::BACKEND_D3D12 ||
-			p_backend_preference == HTMLView::BACKEND_METAL;
-}
-
 static Dictionary html_form_control_state_to_dictionary(const HTMLFormControlState &p_state) {
 	Dictionary state;
 	state[SNAME("element_id")] = p_state.element_id;
@@ -623,13 +615,9 @@ bool HTMLView::_has_current_viewport_size() const {
 }
 
 bool HTMLView::_should_defer_backend_activation() const {
-#ifdef HTML_CSS_USE_HCSR_RUNTIME
-	// The replacement build has no CPU compatibility backend. Its GPU backend
-	// accepts the final viewport configuration once the control enters the tree.
-	return false;
-#else
-	return html_view_backend_preference_can_use_gpu(backend_preference) && !_has_current_viewport_size();
-#endif
+	return html_surface_backend_should_defer_activation(
+			html_view_to_surface_backend_preference(backend_preference),
+			_has_current_viewport_size());
 }
 
 void HTMLView::_apply_surface_backend_preference() {
@@ -2174,11 +2162,7 @@ HTMLView::HTMLView() {
 	surface->set_changed_callback(callable_mp(this, &HTMLView::_surface_changed));
 	surface->set_frame_queued_callback(callable_mp(this, &HTMLView::_surface_frame_queued));
 	surface->set_frame_activated_callback(callable_mp(this, &HTMLView::_surface_frame_activated));
-#ifdef HTML_CSS_USE_HCSR_RUNTIME
-	surface->set_backend_preference(HTML_SURFACE_BACKEND_GPU_AUTO);
-#else
-	surface->set_backend_preference(HTML_SURFACE_BACKEND_CPU);
-#endif
+	surface->set_backend_preference(html_surface_backend_default_preference());
 	surface->set_placeholder_background(Color(0.08, 0.09, 0.1, 1.0));
 	_ensure_backdrop_filter_canvas();
 	set_focus_mode(FOCUS_CLICK);

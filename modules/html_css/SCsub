@@ -26,26 +26,20 @@ if _html_css_renderer in ("hcsr_old", "hcsr_old_dll"):
     if env["tests"]:
         env_html_css.Append(CPPDEFINES=["HTML_CSS_HCSR_TESTS_ENABLED"])
     env_html_css.Prepend(CPPPATH=["#thirdparty/hcsr_old/native/include"])
-elif _html_css_renderer == "hcsr_runtime":
+elif _html_css_renderer == "hcsr_old_2":
     if env["platform"] != "windows" or env["arch"] != "x86_64":
-        print("HTML/CSS hcsr_runtime validation currently requires Windows x86_64 and Godot's D3D12 driver.")
+        print("HTML/CSS hcsr_old_2 requires Windows x86_64 and Godot's D3D12 driver.")
         Exit(1)
-    runtime_root_option = env["module_html_css_hcsr_runtime_root"]
-    if not runtime_root_option:
-        print("module_html_css_hcsr_runtime_root must identify the current HCSR checkout.")
-        Exit(1)
-    hcsr_runtime_root = os.path.normpath(runtime_root_option)
-    if not os.path.isabs(hcsr_runtime_root):
-        hcsr_runtime_root = env.Dir("#" + hcsr_runtime_root).abspath
-    runtime_header = os.path.join(hcsr_runtime_root, "native", "include", "hcsr_runtime.h")
+    hcsr_old_2_root = env.Dir("#thirdparty/hcsr_old_2").abspath
+    runtime_header = os.path.join(hcsr_old_2_root, "native", "include", "hcsr_runtime.h")
     runtime_project = os.path.join(
-        hcsr_runtime_root,
+        hcsr_old_2_root,
         "src",
         "Renderer.PresentationNativeBridge",
         "Renderer.PresentationNativeBridge.Shared.csproj",
     )
     runtime_output = os.path.join(
-        hcsr_runtime_root,
+        hcsr_old_2_root,
         "src",
         "Renderer.PresentationNativeBridge",
         "bin",
@@ -58,13 +52,13 @@ elif _html_css_renderer == "hcsr_runtime":
     runtime_library = os.path.join(runtime_publish_directory, "hcsr_runtime.dll")
     runtime_codecs = os.path.join(runtime_publish_directory, "hcsr_native_codecs.dll")
     # The header, import library, and runtime DLL are one ABI product. Rebuild
-    # that product when any replacement-runtime source is newer, then let SCons
+    # that product when any hcsr_old_2 source is newer, then let SCons
     # copy the resulting DLLs by timestamp. This keeps incremental builds cached
     # without allowing an older runtime DLL beside a newer Godot module.
     runtime_source_directories = [
-        os.path.join(hcsr_runtime_root, "native", "codecs"),
-        os.path.join(hcsr_runtime_root, "native", "include"),
-        os.path.join(hcsr_runtime_root, "src"),
+        os.path.join(hcsr_old_2_root, "native", "codecs"),
+        os.path.join(hcsr_old_2_root, "native", "include"),
+        os.path.join(hcsr_old_2_root, "src"),
     ]
     runtime_input_extensions = (".c", ".cpp", ".cs", ".csproj", ".def", ".h", ".props", ".targets")
     runtime_input_files = []
@@ -77,9 +71,9 @@ elif _html_css_renderer == "hcsr_runtime":
                 if filename.lower().endswith(runtime_input_extensions)
             ]
     runtime_input_files += [
-        os.path.join(hcsr_runtime_root, filename)
+        os.path.join(hcsr_old_2_root, filename)
         for filename in ("Directory.Build.props", "Directory.Build.targets", "global.json")
-        if os.path.isfile(os.path.join(hcsr_runtime_root, filename))
+        if os.path.isfile(os.path.join(hcsr_old_2_root, filename))
     ]
     runtime_products = (runtime_import_library, runtime_library, runtime_codecs)
     runtime_publish_stamp = os.path.join(runtime_publish_directory, ".godot_hcsr_runtime_publish.stamp")
@@ -101,18 +95,18 @@ elif _html_css_renderer == "hcsr_runtime":
                 "--self-contained",
                 "--nologo",
             ],
-            cwd=hcsr_runtime_root,
+            cwd=hcsr_old_2_root,
         )
         if completed.returncode != 0:
-            print("HTML/CSS hcsr_runtime NativeAOT publish failed.")
+            print("HTML/CSS hcsr_old_2 NativeAOT publish failed.")
             Exit(1)
         with open(runtime_publish_stamp, "w", encoding="utf-8") as stamp_file:
             stamp_file.write("Godot HCSR runtime ABI product is current.\n")
     if not all(os.path.isfile(path) for path in (runtime_header, runtime_import_library, runtime_library, runtime_codecs)):
-        print("HTML/CSS hcsr_runtime publish did not produce its header, import library, runtime DLL, and codec DLL.")
+        print("HTML/CSS hcsr_old_2 publish did not produce its header, import library, runtime DLL, and codec DLL.")
         Exit(1)
-    env_html_css.Append(CPPDEFINES=["HTML_CSS_USE_HCSR_RUNTIME"])
-    env_html_css.Prepend(CPPPATH=[os.path.join(hcsr_runtime_root, "native", "include")])
+    env_html_css.Append(CPPDEFINES=["HTML_CSS_USE_HCSR_OLD_2"])
+    env_html_css.Prepend(CPPPATH=[os.path.join(hcsr_old_2_root, "native", "include")])
 
 def _html_css_resolve_repo_path(p_path):
     if not p_path:
@@ -443,6 +437,7 @@ if _html_css_renderer == "hcsr_old":
     hcsr_module_sources = []
     env_html_css.add_source_files(hcsr_module_sources, "backend/hcsr_performance_monitor.cpp")
     env_html_css.add_source_files(hcsr_module_sources, "backend/html_surface_hcsr_backend.cpp")
+    env_html_css.add_source_files(hcsr_module_sources, "backend/html_surface_hcsr_old_factory.cpp")
     env.Depends(hcsr_module_sources, hcsr_library_path)
     env.modules_sources += hcsr_module_sources
     if env.editor_build:
@@ -538,17 +533,21 @@ elif _html_css_renderer == "hcsr_old_dll":
     hcsr_module_sources = []
     env_html_css.add_source_files(hcsr_module_sources, "backend/hcsr_performance_monitor.cpp")
     env_html_css.add_source_files(hcsr_module_sources, "backend/html_surface_hcsr_backend.cpp")
+    env_html_css.add_source_files(hcsr_module_sources, "backend/html_surface_hcsr_old_factory.cpp")
     env.Depends(hcsr_module_sources, [hcsr_import_library, hcsr_runtime_library])
     env.modules_sources += hcsr_module_sources
     if env.editor_build:
         env_html_css.add_source_files(env.modules_sources, "editor/html_package_export_plugin.cpp")
     env.Append(LINKFLAGS=[hcsr_import_library])
     env.CommandNoCache("#bin/hcsr_renderer.dll", hcsr_runtime_library, Copy("$TARGET", "$SOURCE"))
-elif _html_css_renderer == "hcsr_runtime":
-    env_html_css.add_source_files(env.modules_sources, "backend/html_surface_hcsr_runtime_backend.cpp")
+elif _html_css_renderer == "hcsr_old_2":
+    env_html_css.add_source_files(env.modules_sources, "backend/html_surface_hcsr_old_2_backend.cpp")
+    env_html_css.add_source_files(env.modules_sources, "backend/html_surface_hcsr_old_2_factory.cpp")
     env.Append(LINKFLAGS=[runtime_import_library])
     env.CommandNoCache("#bin/hcsr_runtime.dll", runtime_library, Copy("$TARGET", "$SOURCE"))
     env.CommandNoCache("#bin/hcsr_native_codecs.dll", runtime_codecs, Copy("$TARGET", "$SOURCE"))
+else:
+    env_html_css.add_source_files(env.modules_sources, "backend/html_surface_no_renderer_factory.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_document.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_render_target.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_render_surface.cpp")

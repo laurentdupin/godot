@@ -31,20 +31,12 @@
 #pragma once
 
 #include "backend/html_surface_backend.h"
+#include "backend/html_surface_backend_factory.h"
 #include "bridge/html_asset_provider.h"
 #include "html_document.h"
 
 #include "core/object/ref_counted.h"
 #include "core/variant/callable.h"
-
-enum HTMLSurfaceBackendPreference {
-	HTML_SURFACE_BACKEND_AUTO,
-	HTML_SURFACE_BACKEND_CPU,
-	HTML_SURFACE_BACKEND_GPU_AUTO,
-	HTML_SURFACE_BACKEND_VULKAN,
-	HTML_SURFACE_BACKEND_D3D12,
-	HTML_SURFACE_BACKEND_METAL,
-};
 
 class HTMLRenderSurface : public RefCounted {
 	Ref<HTMLDocument> document;

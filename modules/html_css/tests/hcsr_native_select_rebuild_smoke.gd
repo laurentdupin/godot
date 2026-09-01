@@ -18,8 +18,8 @@ func _initialize() -> void:
 		backend_preference = HTMLView.BACKEND_CPU
 		backend_name = "CPU"
 
-	var fixture_root := "res://../../../thirdparty/hcsr/Examples/DeepDesktopOptions"
-	var css := FileAccess.get_file_as_string("res://../../../thirdparty/hcsr/Examples/DeepDesktopModels/DeepDesktop.css")
+	var fixture_root := "res://../../../thirdparty/hcsr_old/Examples/DeepDesktopOptions"
+	var css := FileAccess.get_file_as_string("res://../../../thirdparty/hcsr_old/Examples/DeepDesktopModels/DeepDesktop.css")
 	var initial_fragment := FileAccess.get_file_as_string(fixture_root + "/OptionsLocalized.fragment.html")
 	var localized_fragment := FileAccess.get_file_as_string(fixture_root + "/OptionsInitial.fragment.html")
 	if css.is_empty() or initial_fragment.is_empty() or localized_fragment.is_empty():
@@ -80,7 +80,7 @@ func _initialize() -> void:
 func _make_view(css: String, fragment: String, language: String) -> HTMLView:
 	var document := HTMLDocument.new()
 	document.html = "<!DOCTYPE html><html><head><style>%s</style><style>.option-button:hover{opacity:1}</style></head><body id='document-body' class='runtime' lang='%s'><div id='app'>%s</div></body></html>" % [css, language, fragment]
-	document.resource_root = "res://../../../thirdparty/hcsr/Examples/DeepDesktopModels"
+	document.resource_root = "res://../../../thirdparty/hcsr_old/Examples/DeepDesktopModels"
 	var view := HTMLView.new()
 	view.backend_preference = backend_preference
 	view.viewport_size_mode = HTMLView.VIEWPORT_SIZE_FIXED
