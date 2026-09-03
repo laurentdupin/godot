@@ -10,11 +10,13 @@ func _run() -> void:
 	document.html = """<!doctype html><html><head><style>
 		html,body{margin:0;width:100%;height:100%}
 		#action{position:absolute;left:10px;top:10px;width:120px;height:40px}
+		#action-label{display:block;width:100%;height:100%}
+		#action:active #action-label{transform:translateX(100px)}
 		#choice{position:absolute;left:10px;top:70px;width:120px;height:30px}
 		#host{position:absolute;left:10px;top:110px;width:120px;height:35px}
 		#next{width:120px;height:35px}
 	</style></head><body>
-		<button id='action' data-godot-action='activate:action'><span>Activate</span></button>
+		<button id='action' data-godot-action='activate:action'><span id='action-label' data-godot-action='activate:action'>Activate</span></button>
 		<select id='choice' data-godot-action='form:choice'><option value='a'>Alpha</option><option value='b'>Beta</option></select>
 		<div id='host'></div>
 	</body></html>"""
@@ -28,10 +30,22 @@ func _run() -> void:
 	for _frame in range(8):
 		await process_frame
 
-	_send_click(Vector2(70, 30))
+	_send_button(Vector2(70, 30), true)
+	for _frame in range(3):
+		await process_frame
+	_send_button(Vector2(70, 30), false)
 	await process_frame
 	if actions != [&"activate:action"]:
 		_fail("Nested button content did not resolve to its host action: %s" % [actions])
+		return
+	for click in range(9):
+		_send_button(Vector2(70, 30), true)
+		for _frame in range(1 + click % 3):
+			await process_frame
+		_send_button(Vector2(70, 30), false)
+		await process_frame
+	if actions.count(&"activate:action") != 10:
+		_fail("Repeated press/release cycles lost button actions: %s" % [actions])
 		return
 
 	var before: Dictionary = view.get_form_control_state(&"choice")
@@ -52,25 +66,23 @@ func _run() -> void:
 		await process_frame
 	_send_click(Vector2(70, 127))
 	await process_frame
-	if actions != [&"activate:action", &"form:choice", &"navigate:next"]:
+	if actions.count(&"activate:action") != 10 or actions.count(&"form:choice") != 1 or actions.back() != &"navigate:next":
 		_fail("An action inserted by a DeepDesktop-style page rebuild was not interactive: %s" % [actions])
 		return
 	print("HCSR newest interaction and dropdown smoke passed.")
 	quit(0)
 
 func _send_click(position: Vector2) -> void:
+	_send_button(position, true)
+	_send_button(position, false)
+
+func _send_button(position: Vector2, pressed: bool) -> void:
 	var down := InputEventMouseButton.new()
 	down.button_index = MOUSE_BUTTON_LEFT
 	down.position = position
 	down.global_position = position
-	down.pressed = true
+	down.pressed = pressed
 	root.push_input(down, true)
-	var up := InputEventMouseButton.new()
-	up.button_index = MOUSE_BUTTON_LEFT
-	up.position = position
-	up.global_position = position
-	up.pressed = false
-	root.push_input(up, true)
 
 func _fail(message: String) -> void:
 	push_error(message)
