@@ -626,6 +626,12 @@ Error RenderingDeviceDriverVulkan::_initialize_device_extensions() {
 	_register_requested_device_extension(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME, false);
 	_register_requested_device_extension(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME, false);
 	_register_requested_device_extension(VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME, false);
+#ifdef HTML_CSS_USE_HCSR_NEWEST
+	// Godot currently creates a Vulkan 1.2 instance. The newest HCSR embedded
+	// renderer therefore needs the KHR extension even when the physical device
+	// also exposes dynamic rendering as a Vulkan 1.3 core feature.
+	_register_requested_device_extension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME, true);
+#endif
 #ifdef ANDROID_ENABLED
 	_register_requested_device_extension(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME, false);
 	_register_requested_device_extension(VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME, false);
@@ -1651,6 +1657,29 @@ Error RenderingDeviceDriverVulkan::_initialize_device(const LocalVector<VkDevice
 			create_info_next = &multiview_features;
 		}
 	}
+
+#ifdef HTML_CSS_USE_HCSR_NEWEST
+	// HCSR's embedded Vulkan presenter uses dynamic rendering so it can target
+	// an engine-owned image view without creating or owning a render pass and
+	// framebuffer. Request the core Vulkan 1.3 feature only for newest-backend
+	// builds; the other HTML/CSS backends retain Godot's normal device chain.
+	VkPhysicalDeviceDynamicRenderingFeatures dynamic_rendering_query = {};
+	VkPhysicalDeviceFeatures2 dynamic_rendering_features_query = {};
+	VkPhysicalDeviceDynamicRenderingFeatures dynamic_rendering_features = {};
+	if (physical_device_properties.apiVersion >= VK_API_VERSION_1_3
+			|| enabled_device_extension_names.has(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)) {
+		dynamic_rendering_query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
+		dynamic_rendering_features_query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+		dynamic_rendering_features_query.pNext = &dynamic_rendering_query;
+		vkGetPhysicalDeviceFeatures2(physical_device, &dynamic_rendering_features_query);
+		if (dynamic_rendering_query.dynamicRendering) {
+			dynamic_rendering_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
+			dynamic_rendering_features.pNext = create_info_next;
+			dynamic_rendering_features.dynamicRendering = VK_TRUE;
+			create_info_next = &dynamic_rendering_features;
+		}
+	}
+#endif
 
 	VkDeviceCreateInfo create_info = {};
 	create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -7945,6 +7974,10 @@ uint64_t RenderingDeviceDriverVulkan::get_resource_native_handle(DriverResource 
 		case DRIVER_RESOURCE_COMMAND_QUEUE: {
 			const CommandQueue *queue_info = (const CommandQueue *)p_driver_id.id;
 			return (uint64_t)queue_families[queue_info->queue_family][queue_info->queue_index].queue;
+		}
+		case DRIVER_RESOURCE_COMMAND_BUFFER: {
+			const CommandBufferInfo *command_buffer = (const CommandBufferInfo *)p_driver_id.id;
+			return command_buffer != nullptr ? (uint64_t)command_buffer->vk_command_buffer : 0;
 		}
 		case DRIVER_RESOURCE_QUEUE_FAMILY: {
 			return uint32_t(p_driver_id.id) - 1;

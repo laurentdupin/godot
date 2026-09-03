@@ -6128,6 +6128,10 @@ uint64_t RenderingDeviceDriverD3D12::get_resource_native_handle(DriverResource p
 			const CommandQueueInfo *cmd_queue_info = (const CommandQueueInfo *)p_driver_id.id;
 			return (uint64_t)cmd_queue_info->d3d_queue.Get();
 		}
+		case DRIVER_RESOURCE_COMMAND_BUFFER: {
+			const CommandBufferInfo *cmd_buffer_info = (const CommandBufferInfo *)p_driver_id.id;
+			return cmd_buffer_info != nullptr ? (uint64_t)cmd_buffer_info->cmd_list.Get() : 0;
+		}
 		case DRIVER_RESOURCE_QUEUE_FAMILY: {
 			return 0;
 		}

@@ -27,7 +27,7 @@ SCONS_VERSION = "4.10.1"
 SETTINGS_VERSION = 2
 TARGETS = ("editor", "template_debug", "template_release")
 ARCHITECTURES = ("x86_64", "arm64", "x86_32")
-HTML_CSS_RENDERERS = ("hcsr_old", "hcsr_old_dll", "hcsr_old_2", "none")
+HTML_CSS_RENDERERS = ("hcsr_old", "hcsr_old_dll", "hcsr_old_2", "hcsr_newest", "hcsr_newest_dll", "none")
 
 
 @dataclass
@@ -307,6 +307,12 @@ def validate_settings(settings: BuildSettings, godot_platform: str) -> None:
             "The DLL-backed old HCSR runtime currently supports Windows x86_64 only. "
             "Select hcsr_old or none on another host or architecture."
         )
+    if settings.html_css_renderer in ("hcsr_newest", "hcsr_newest_dll") and (
+        godot_platform != "windows" or settings.architecture != "x86_64"
+    ):
+        raise RuntimeError(
+            "The initial hcsr_newest scene/renderer bundle supports Windows x86_64 only."
+        )
     if godot_platform == "macos" and settings.architecture == "x86_32":
         raise RuntimeError("Godot does not support x86_32 macOS builds.")
 
@@ -333,8 +339,11 @@ def build_command(
         f"cache_limit={settings.cache_limit_gib}",
         f"-j{settings.jobs}",
     ]
-    if settings.suffix:
-        command.append(f"extra_suffix={settings.suffix}")
+    output_suffix = settings.suffix
+    if not output_suffix and settings.html_css_renderer in ("hcsr_newest", "hcsr_newest_dll"):
+        output_suffix = settings.html_css_renderer
+    if output_suffix:
+        command.append(f"extra_suffix={output_suffix}")
     if clean:
         command.append("--clean")
     if godot_platform == "windows":

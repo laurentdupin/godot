@@ -347,6 +347,16 @@ func _wait_for_generation_after_resize(
 				return true
 		else:
 			stable_frames = 0
+	print("HCSR_STRESS_RESIZE_TIMEOUT before=%d active=%d queued=%d signaled_active=%d signaled_queued=%d logical_size=%s control_size=%s window_size=%s" % [
+		generation_before_resize,
+		html_view.get_generation(),
+		html_view.get_queued_generation(),
+		last_activated_generation,
+		last_queued_generation,
+		html_view.get_logical_size(),
+		html_view.size,
+		DisplayServer.window_get_size(),
+	])
 	return false
 
 

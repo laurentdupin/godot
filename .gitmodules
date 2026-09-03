@@ -6,3 +6,7 @@
 	path = thirdparty/hcsr_old
 	url = https://github.com/laurentdupin/HTMLCSSSimpleRenderer.git
 	branch = hcsr_old
+[submodule "thirdparty/hcsr_newest"]
+	path = thirdparty/hcsr_newest
+	url = https://github.com/laurentdupin/HTMLCSSSimpleRenderer.git
+	branch = main

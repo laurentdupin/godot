@@ -1303,6 +1303,32 @@ Error RenderingDevice::driver_callback_add(RDD::DriverCallback p_callback, void 
 	return OK;
 }
 
+Error RenderingDevice::driver_callback_add_next_frame(RDD::DriverCallback p_callback, void *p_userdata, VectorView<CallbackResource> p_resources) {
+	ERR_RENDER_THREAD_GUARD_V(ERR_UNAVAILABLE);
+	ERR_FAIL_NULL_V(p_callback, ERR_INVALID_PARAMETER);
+	NextFrameDriverCallback callback;
+	callback.callback = p_callback;
+	callback.userdata = p_userdata;
+	callback.resources.resize(p_resources.size());
+	for (uint32_t index = 0; index < p_resources.size(); index++) {
+		callback.resources.write[index] = p_resources[index];
+	}
+	next_frame_driver_callbacks.push_back(callback);
+	return OK;
+}
+
+bool RenderingDevice::driver_callback_cancel_next_frame(RDD::DriverCallback p_callback, void *p_userdata) {
+	ERR_RENDER_THREAD_GUARD_V(false);
+	for (uint32_t index = 0; index < next_frame_driver_callbacks.size(); index++) {
+		const NextFrameDriverCallback &callback = next_frame_driver_callbacks[index];
+		if (callback.callback == p_callback && callback.userdata == p_userdata) {
+			next_frame_driver_callbacks.remove_at(index);
+			return true;
+		}
+	}
+	return false;
+}
+
 String RenderingDevice::get_perf_report() const {
 	String perf_report_text;
 	perf_report_text += " gpu:" + String::num_int64(gpu_copy_count);
@@ -8814,6 +8840,14 @@ void RenderingDevice::_begin_frame(bool p_presented) {
 	// Reset the graph.
 	GodotProfileZoneGrouped(_profile_zone, "draw_graph.begin");
 	draw_graph.begin();
+	if (!next_frame_driver_callbacks.is_empty()) {
+		Vector<NextFrameDriverCallback> callbacks = next_frame_driver_callbacks;
+		next_frame_driver_callbacks.clear();
+		for (const NextFrameDriverCallback &callback : callbacks) {
+			const Error callback_error = driver_callback_add(callback.callback, callback.userdata, callback.resources);
+			ERR_CONTINUE_MSG(callback_error != OK, "Could not enqueue a next-frame rendering driver callback.");
+		}
+	}
 
 	// Erase pending resources.
 	GodotProfileZoneGrouped(_profile_zone, "_free_pending_resources");
@@ -9574,6 +9608,9 @@ uint64_t RenderingDevice::get_driver_resource(DriverResource p_resource, RID p_r
 		case DRIVER_RESOURCE_QUEUE_FAMILY:
 			driver_id = main_queue_family.id;
 			break;
+		case DRIVER_RESOURCE_COMMAND_BUFFER:
+			driver_id = frames[frame].command_buffer.id;
+			break;
 		case DRIVER_RESOURCE_TEXTURE:
 		case DRIVER_RESOURCE_TEXTURE_VIEW:
 		case DRIVER_RESOURCE_TEXTURE_DATA_FORMAT: {
@@ -10161,6 +10198,7 @@ void RenderingDevice::_bind_methods() {
 	BIND_ENUM_CONSTANT(DRIVER_RESOURCE_BUFFER);
 	BIND_ENUM_CONSTANT(DRIVER_RESOURCE_COMPUTE_PIPELINE);
 	BIND_ENUM_CONSTANT(DRIVER_RESOURCE_RENDER_PIPELINE);
+	BIND_ENUM_CONSTANT(DRIVER_RESOURCE_COMMAND_BUFFER);
 #ifndef DISABLE_DEPRECATED
 	BIND_ENUM_CONSTANT(DRIVER_RESOURCE_VULKAN_DEVICE);
 	BIND_ENUM_CONSTANT(DRIVER_RESOURCE_VULKAN_PHYSICAL_DEVICE);

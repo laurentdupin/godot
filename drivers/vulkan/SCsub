@@ -70,7 +70,12 @@ env.drivers_sources += thirdparty_obj
 
 driver_obj = []
 
-env.add_source_files(driver_obj, "*.cpp")
+env_driver = env.Clone()
+# HCSR's newest embedded presenter needs Vulkan dynamic rendering, but the
+# feature must not change device creation for the preserved old backends.
+if env["module_html_css_renderer"] in ("hcsr_newest", "hcsr_newest_dll"):
+    env_driver.AppendUnique(CPPDEFINES=["HTML_CSS_USE_HCSR_NEWEST"])
+env_driver.add_source_files(driver_obj, "*.cpp")
 env.drivers_sources += driver_obj
 
 # Needed to force rebuilding the driver files when the thirdparty code is updated.

@@ -336,6 +336,8 @@ public:
 	};
 
 	Error driver_callback_add(RDD::DriverCallback p_callback, void *p_userdata, VectorView<CallbackResource> p_resources);
+	Error driver_callback_add_next_frame(RDD::DriverCallback p_callback, void *p_userdata, VectorView<CallbackResource> p_resources);
+	bool driver_callback_cancel_next_frame(RDD::DriverCallback p_callback, void *p_userdata);
 
 	/*****************/
 	/**** TEXTURE ****/
@@ -1851,6 +1853,12 @@ private:
 	bool _dependencies_make_mutable(RID p_id, RDG::ResourceTracker *p_resource_tracker);
 
 	RenderingDeviceGraph draw_graph;
+	struct NextFrameDriverCallback {
+		RDD::DriverCallback callback = nullptr;
+		void *userdata = nullptr;
+		Vector<CallbackResource> resources;
+	};
+	Vector<NextFrameDriverCallback> next_frame_driver_callbacks;
 
 #ifdef DEBUG_ENABLED
 	bool draw_graph_reorder_commands = true;

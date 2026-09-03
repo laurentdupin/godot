@@ -955,6 +955,10 @@ public:
 		DRIVER_RESOURCE_BUFFER,
 		DRIVER_RESOURCE_COMPUTE_PIPELINE,
 		DRIVER_RESOURCE_RENDER_PIPELINE,
+		// The active primary graphics command buffer. This is exposed only on
+		// the render thread so native renderer plugins can append commands to
+		// Godot's submission without taking ownership of the queue or frame.
+		DRIVER_RESOURCE_COMMAND_BUFFER,
 #ifndef DISABLE_DEPRECATED
 		DRIVER_RESOURCE_VULKAN_DEVICE = DRIVER_RESOURCE_LOGICAL_DEVICE,
 		DRIVER_RESOURCE_VULKAN_PHYSICAL_DEVICE = DRIVER_RESOURCE_PHYSICAL_DEVICE,
