@@ -63,11 +63,13 @@ public:
 	virtual Error text_input(const String &p_text) override;
 	virtual Error apply_element_mutations(const Array &p_mutations) override;
 	virtual Error set_element_text(const StringName &p_id, const String &p_text) override;
+	virtual Error set_element_inner_html(const StringName &p_id, const String &p_html_fragment) override;
 	virtual Error set_element_attribute(const StringName &p_id, const StringName &p_name, const String &p_value) override;
 	virtual Error remove_element_attribute(const StringName &p_id, const StringName &p_name) override;
 	virtual Error set_element_style(const StringName &p_id, const String &p_css_text) override;
 	virtual Error set_form_control_value(const StringName &p_id, const String &p_value) override;
 	virtual Error set_form_control_checked(const StringName &p_id, bool p_checked) override;
+	virtual bool get_form_control_state(const StringName &p_id, HTMLFormControlState &r_state) override;
 	virtual bool hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const override;
 	virtual void get_frame_metadata(HTMLFrameMetadata &r_metadata) const override;
 	virtual Ref<Texture2D> get_texture() const override;

@@ -698,6 +698,17 @@ Error HTMLSurfaceHCSRNewestBackend::set_element_text(const StringName &p_id, con
 	return _apply_mutation(mutation);
 }
 
+Error HTMLSurfaceHCSRNewestBackend::set_element_inner_html(const StringName &p_id, const String &p_html_fragment) {
+	const CharString id = String(p_id).utf8();
+	const CharString value = p_html_fragment.utf8();
+	hcsr_mutation_t mutation;
+	initialize_abi(mutation);
+	mutation.kind = HCSR_MUTATION_SET_INNER_HTML;
+	mutation.element_id = utf8_view(id);
+	mutation.value = utf8_view(value);
+	return _apply_mutation(mutation);
+}
+
 Error HTMLSurfaceHCSRNewestBackend::set_element_attribute(const StringName &p_id, const StringName &p_name, const String &p_value) {
 	const CharString id = String(p_id).utf8(); const CharString name = String(p_name).utf8(); const CharString value = p_value.utf8();
 	hcsr_mutation_t mutation; initialize_abi(mutation); mutation.kind = HCSR_MUTATION_SET_ATTRIBUTE; mutation.element_id = utf8_view(id); mutation.name = utf8_view(name); mutation.value = utf8_view(value);
@@ -759,7 +770,8 @@ Error HTMLSurfaceHCSRNewestBackend::apply_element_mutations(const Array &p_mutat
 		else if (operation == "set_checked") {
 			mutation.kind = HCSR_MUTATION_SET_CHECKED;
 			mutation.integer_value = value.get("value", false) ? 1 : 0;
-		} else return ERR_UNAVAILABLE;
+		} else if (operation == "set_inner_html") mutation.kind = HCSR_MUTATION_SET_INNER_HTML;
+		else return ERR_UNAVAILABLE;
 	}
 	MutexLock lock(state->mutex);
 	if (state->scene == 0) return ERR_UNCONFIGURED;
@@ -777,7 +789,59 @@ bool HTMLSurfaceHCSRNewestBackend::hit_test(const Point2 &p_position, HTMLElemen
 	if (hcsr_scene_copy_element_id(state->scene, hit.object_id, id.ptrw(), id.size(), &required) != HCSR_OK) return false;
 	r_hit = HTMLElementHit();
 	r_hit.element_id = StringName(String::utf8(id.ptr()));
+	size_t tag_required = 0;
+	if (hcsr_scene_copy_element_tag_name(state->scene, hit.object_id, nullptr, 0, &tag_required) != HCSR_BUFFER_TOO_SMALL || tag_required == 0) return false;
+	Vector<char> tag;
+	tag.resize(tag_required);
+	if (hcsr_scene_copy_element_tag_name(state->scene, hit.object_id, tag.ptrw(), tag.size(), &tag_required) != HCSR_OK) return false;
+	r_hit.tag_name = StringName(String::utf8(tag.ptr()));
 	r_hit.bounds = Rect2i(Math::floor(hit.bounds.x), Math::floor(hit.bounds.y), Math::ceil(hit.bounds.width), Math::ceil(hit.bounds.height));
+	r_hit.disabled = (hit.flags & HCSR_HIT_DISABLED) != 0;
+	r_hit.editable = (hit.flags & HCSR_HIT_EDITABLE) != 0;
+	r_hit.checked = (hit.flags & HCSR_HIT_CHECKED) != 0;
+	r_hit.focused = (hit.flags & HCSR_HIT_FOCUSED) != 0;
+	const CharString action_name = String("data-godot-action").utf8();
+	size_t action_required = 0;
+	const hcsr_result_t action_query = hcsr_scene_copy_element_attribute(state->scene, hit.object_id,
+			utf8_view(action_name), nullptr, 0, &action_required);
+	if (action_query == HCSR_BUFFER_TOO_SMALL && action_required > 0) {
+		Vector<char> action;
+		action.resize(action_required);
+		if (hcsr_scene_copy_element_attribute(state->scene, hit.object_id, utf8_view(action_name),
+				action.ptrw(), action.size(), &action_required) == HCSR_OK) {
+			HTMLElementAttribute attribute;
+			attribute.name = SNAME("data-godot-action");
+			attribute.value = String::utf8(action.ptr());
+			r_hit.attributes.push_back(attribute);
+		}
+	}
+	return true;
+}
+
+bool HTMLSurfaceHCSRNewestBackend::get_form_control_state(const StringName &p_id, HTMLFormControlState &r_state) {
+	MutexLock lock(state->mutex);
+	if (state->scene == 0) return false;
+	const CharString id = String(p_id).utf8();
+	hcsr_form_control_state_t source;
+	initialize_abi(source);
+	if (hcsr_scene_get_form_control_state(state->scene, utf8_view(id), &source) != HCSR_OK || source.object_id == 0) return false;
+	Vector<char> value;
+	value.resize(MAX((size_t)1, source.value_bytes));
+	size_t required = 0;
+	if (hcsr_scene_copy_form_control_value(state->scene, source.object_id, value.ptrw(), value.size(), &required) != HCSR_OK) return false;
+	size_t tag_required = 0;
+	if (hcsr_scene_copy_element_tag_name(state->scene, source.object_id, nullptr, 0, &tag_required) != HCSR_BUFFER_TOO_SMALL || tag_required == 0) return false;
+	Vector<char> tag;
+	tag.resize(tag_required);
+	if (hcsr_scene_copy_element_tag_name(state->scene, source.object_id, tag.ptrw(), tag.size(), &tag_required) != HCSR_OK) return false;
+	r_state = HTMLFormControlState();
+	r_state.element_id = p_id;
+	r_state.tag_name = StringName(String::utf8(tag.ptr()));
+	r_state.value = String::utf8(value.ptr());
+	r_state.checked = (source.flags & HCSR_FORM_CONTROL_CHECKED) != 0;
+	r_state.selected = (source.flags & HCSR_FORM_CONTROL_SELECTED) != 0;
+	r_state.selected_index = source.selected_index;
+	r_state.focused = (source.flags & HCSR_FORM_CONTROL_FOCUSED) != 0;
 	return true;
 }
 
