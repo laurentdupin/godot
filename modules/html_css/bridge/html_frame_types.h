@@ -77,6 +77,10 @@ struct HTMLElementAttribute {
 };
 
 struct HTMLElementHit {
+	// Renderer-owned identity for the concrete element. This remains stable when
+	// layout or transforms change between pointer-down and pointer-up, including
+	// for actionable elements which do not have an HTML id attribute.
+	uint64_t stable_target_id = 0;
 	StringName element_id;
 	StringName tag_name;
 	Rect2i bounds;

@@ -788,6 +788,7 @@ bool HTMLSurfaceHCSRNewestBackend::hit_test(const Point2 &p_position, HTMLElemen
 	Vector<char> id; id.resize(MAX((size_t)1, hit.element_id_bytes)); size_t required = 0;
 	if (hcsr_scene_copy_element_id(state->scene, hit.object_id, id.ptrw(), id.size(), &required) != HCSR_OK) return false;
 	r_hit = HTMLElementHit();
+	r_hit.stable_target_id = hit.object_id;
 	r_hit.element_id = StringName(String::utf8(id.ptr()));
 	size_t tag_required = 0;
 	if (hcsr_scene_copy_element_tag_name(state->scene, hit.object_id, nullptr, 0, &tag_required) != HCSR_BUFFER_TOO_SMALL || tag_required == 0) return false;

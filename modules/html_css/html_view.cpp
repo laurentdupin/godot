@@ -1282,6 +1282,10 @@ bool HTMLView::_same_activation_target(const HTMLElementHit &p_pressed, const HT
 		return false;
 	}
 
+	if (p_pressed.stable_target_id != 0 && p_released.stable_target_id != 0) {
+		return p_pressed.stable_target_id == p_released.stable_target_id;
+	}
+
 	if (p_pressed.element_id != StringName() || p_released.element_id != StringName()) {
 		return p_pressed.element_id == p_released.element_id;
 	}
