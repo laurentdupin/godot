@@ -55,6 +55,9 @@ func _run() -> void:
 	_send_click(Vector2(70, 85))
 	for _frame in range(4):
 		await process_frame
+	_send_click(Vector2(70, 145))
+	for _frame in range(2):
+		await process_frame
 	var after: Dictionary = view.get_form_control_state(&"choice")
 	if after.get("value", "") != "b" or after.get("selected_index", -1) != 1:
 		_fail("Select activation did not update the host-visible state: %s" % after)
@@ -66,7 +69,9 @@ func _run() -> void:
 		await process_frame
 	_send_click(Vector2(70, 127))
 	await process_frame
-	if actions.count(&"activate:action") != 10 or actions.count(&"form:choice") != 1 or actions.back() != &"navigate:next":
+	# The authored select action is dispatched for the click that opens the popup
+	# and for the option click that commits the new value.
+	if actions.count(&"activate:action") != 10 or actions.count(&"form:choice") != 2 or actions.back() != &"navigate:next":
 		_fail("An action inserted by a DeepDesktop-style page rebuild was not interactive: %s" % [actions])
 		return
 	print("HCSR newest interaction and dropdown smoke passed.")

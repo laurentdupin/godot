@@ -128,6 +128,23 @@ static uint32_t input_modifiers(int p_modifiers) {
 	return result;
 }
 
+static uint32_t pointer_buttons(int p_modifiers) {
+	uint32_t result = 0;
+	if (p_modifiers & HTML_SURFACE_INPUT_MODIFIER_LEFT_BUTTON_DOWN) result |= HCSR_POINTER_BUTTONS_PRIMARY;
+	if (p_modifiers & HTML_SURFACE_INPUT_MODIFIER_RIGHT_BUTTON_DOWN) result |= HCSR_POINTER_BUTTONS_SECONDARY;
+	if (p_modifiers & HTML_SURFACE_INPUT_MODIFIER_MIDDLE_BUTTON_DOWN) result |= HCSR_POINTER_BUTTONS_AUXILIARY;
+	return result;
+}
+
+static uint32_t pointer_button(HTMLSurfaceMouseButton p_button) {
+	switch (p_button) {
+		case HTML_SURFACE_MOUSE_BUTTON_LEFT: return HCSR_POINTER_BUTTON_PRIMARY;
+		case HTML_SURFACE_MOUSE_BUTTON_MIDDLE: return HCSR_POINTER_BUTTON_AUXILIARY;
+		case HTML_SURFACE_MOUSE_BUTTON_RIGHT: return HCSR_POINTER_BUTTON_SECONDARY;
+		default: return HCSR_POINTER_BUTTON_NONE;
+	}
+}
+
 static uint32_t map_key(HTMLSurfaceInputKey p_key) {
 	switch (p_key) {
 		case HTML_SURFACE_INPUT_KEY_BACKSPACE: return HCSR_KEY_BACKSPACE;
@@ -620,23 +637,24 @@ Error HTMLSurfaceHCSRNewestBackend::mouse_move(const Point2 &p_position, int p_m
 	hcsr_input_event_t event;
 	initialize_abi(event);
 	event.kind = HCSR_INPUT_POINTER_MOVE; event.x = p_position.x; event.y = p_position.y; event.code = 1; event.modifiers = input_modifiers(p_modifiers);
+	event.pointer_type = HCSR_POINTER_MOUSE; event.button = HCSR_POINTER_BUTTON_NONE; event.buttons = pointer_buttons(p_modifiers);
 	r_visual_state_changed = true;
 	return _queue_input(event);
 }
 
 Error HTMLSurfaceHCSRNewestBackend::mouse_down(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) {
-	(void)p_button; (void)p_click_count;
 	hcsr_input_event_t event;
 	initialize_abi(event);
 	event.kind = HCSR_INPUT_POINTER_BUTTON; event.flags = HCSR_INPUT_PRESSED; event.x = p_position.x; event.y = p_position.y; event.code = 1; event.modifiers = input_modifiers(p_modifiers);
+	event.pointer_type = HCSR_POINTER_MOUSE; event.button = pointer_button(p_button); event.buttons = pointer_buttons(p_modifiers); event.click_count = MAX(1, p_click_count);
 	return _queue_input(event);
 }
 
 Error HTMLSurfaceHCSRNewestBackend::mouse_up(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) {
-	(void)p_button; (void)p_click_count;
 	hcsr_input_event_t event;
 	initialize_abi(event);
 	event.kind = HCSR_INPUT_POINTER_BUTTON; event.flags = HCSR_INPUT_RELEASED; event.x = p_position.x; event.y = p_position.y; event.code = 1; event.modifiers = input_modifiers(p_modifiers);
+	event.pointer_type = HCSR_POINTER_MOUSE; event.button = pointer_button(p_button); event.buttons = pointer_buttons(p_modifiers); event.click_count = MAX(1, p_click_count);
 	return _queue_input(event);
 }
 
@@ -644,6 +662,7 @@ Error HTMLSurfaceHCSRNewestBackend::pointer_cancel(const Point2 &p_position, int
 	hcsr_input_event_t event;
 	initialize_abi(event);
 	event.kind = HCSR_INPUT_POINTER_BUTTON; event.flags = HCSR_INPUT_CANCELED; event.x = p_position.x; event.y = p_position.y; event.code = p_pointer_id;
+	event.pointer_type = HCSR_POINTER_MOUSE; event.button = HCSR_POINTER_BUTTON_PRIMARY;
 	return _queue_input(event);
 }
 
