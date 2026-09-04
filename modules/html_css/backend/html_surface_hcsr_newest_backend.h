@@ -57,6 +57,7 @@ public:
 	virtual Error mouse_up(const Point2 &p_position, HTMLSurfaceMouseButton p_button, int p_modifiers, int p_click_count) override;
 	virtual Error pointer_cancel(const Point2 &p_position, int p_pointer_id) override;
 	virtual Error notify_pointer_leave(const Point2 &p_position, bool p_cancel_pressed_interaction, int p_pointer_id) override;
+	virtual bool is_pointer_cancel_deferred() const override { return true; }
 	virtual Error begin_scrollbar_interaction(const Point2 &p_position, double p_event_time_seconds, bool &r_consumed) override;
 	virtual Error update_scrollbar_interaction(const Point2 &p_position, bool &r_consumed) override;
 	virtual Error end_scrollbar_interaction(bool &r_consumed) override;

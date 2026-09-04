@@ -449,6 +449,10 @@ Error HTMLRenderSurface::notify_pointer_leave(const Point2 &p_position, bool p_c
 	return backend->notify_pointer_leave(p_position, p_cancel_pressed_interaction, p_pointer_id);
 }
 
+bool HTMLRenderSurface::is_pointer_cancel_deferred() const {
+	return backend != nullptr && backend->is_pointer_cancel_deferred();
+}
+
 Error HTMLRenderSurface::begin_scrollbar_interaction(const Point2 &p_position, double p_event_time_seconds, bool &r_consumed) {
 	_ensure_backend();
 	return backend->begin_scrollbar_interaction(p_position, p_event_time_seconds, r_consumed);

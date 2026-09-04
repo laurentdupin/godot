@@ -1430,8 +1430,8 @@ void HTMLView::_cancel_pointer_interaction(const StringName &p_phase) {
 	const Error native_cancel_error = p_phase == SNAME("leave")
 			? surface->notify_pointer_leave(pointer_last_html_position, true, 1)
 			: surface->pointer_cancel(pointer_last_html_position, 1);
-	if (native_cancel_error == OK) {
-		_drain_surface_pointer_events();
+	const bool drained_pointer_events = native_cancel_error == OK && _drain_surface_pointer_events();
+	if (native_cancel_error == OK && (drained_pointer_events || surface->is_pointer_cancel_deferred())) {
 		pointer_press_active = false;
 		pointer_press_button = MouseButton::NONE;
 		pointer_press_hit = HTMLElementHit();

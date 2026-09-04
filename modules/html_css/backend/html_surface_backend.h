@@ -123,6 +123,7 @@ public:
 	virtual void end_host_input_transaction() {}
 	virtual Error pointer_cancel(const Point2 &, int) { return ERR_UNAVAILABLE; }
 	virtual Error notify_pointer_leave(const Point2 &, bool, int) { return ERR_UNAVAILABLE; }
+	virtual bool is_pointer_cancel_deferred() const { return false; }
 	virtual Error begin_scrollbar_interaction(const Point2 &, double, bool &r_consumed) { r_consumed = false; return OK; }
 	virtual Error update_scrollbar_interaction(const Point2 &, bool &r_consumed) { r_consumed = false; return OK; }
 	virtual Error end_scrollbar_interaction(bool &r_consumed) { r_consumed = false; return OK; }
