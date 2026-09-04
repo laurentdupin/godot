@@ -44,6 +44,8 @@ public:
 	virtual void set_background_color(const Color &p_background_color) override;
 	virtual void set_placeholder_background(const Color &p_color) override;
 	virtual Error update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame) override;
+	virtual Error prepare_host_frame(uint64_t p_host_frame, double p_time_seconds) override;
+	virtual Dictionary get_frame_synchronization() const override;
 	virtual void render_placeholder(const String &p_marker) override;
 	virtual bool poll_pending_output(bool *r_waiting_for_completion = nullptr) override;
 	virtual bool has_pending_output() const override;

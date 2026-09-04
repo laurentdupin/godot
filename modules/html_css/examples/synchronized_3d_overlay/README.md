@@ -2,7 +2,10 @@
 
 This example projects a moving `MeshInstance3D` through the active `Camera3D` and updates four absolutely positioned HTML edges with the resulting viewport coordinates.
 
-With `hcsr_newest` and `hcsr_newest_dll`, HTMLView prepares the scene at
+See [the engine-frame contract](FRAME_CONTRACT.md) for frame identity,
+preparation diagnostics, and the menu replacement/multiple-scene resize test.
+
+With `hcsr_newest` and `hcsr_newest_dll`, HTMLRenderSurface prepares the scene at
 `frame_pre_draw`, after normal script processing and Godot's synchronization
 with the previous rendering frame. The renderer registers a callback in the
 current RenderingDevice graph before the viewport samples the HTML texture.

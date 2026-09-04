@@ -33,6 +33,8 @@
 #include "backend/html_surface_backend_factory.h"
 
 #include "core/math/math_funcs.h"
+#include "core/config/engine.h"
+#include "servers/rendering/rendering_server.h"
 #include "core/object/callable_mp.h"
 #include "core/os/os.h"
 
@@ -651,12 +653,39 @@ uint64_t HTMLRenderSurface::get_presentation_output_generation(uint64_t p_output
 			: 0;
 }
 
+Dictionary HTMLRenderSurface::get_frame_synchronization() const {
+	return backend != nullptr ? backend->get_frame_synchronization() : Dictionary();
+}
+
+uint64_t HTMLRenderSurface::get_active_host_frame_number() const {
+	HTMLFrameMetadata active;
+	if (backend != nullptr) backend->get_frame_metadata(active);
+	return active.host_frame_number;
+}
+
+void HTMLRenderSurface::_prepare_host_frame() {
+	if (backend == nullptr || document.is_null() || !document->is_source_valid()) return;
+	const uint64_t host_frame = Engine::get_singleton()->get_process_frames();
+	// Every surface samples the same engine-frame instant, even if an earlier
+	// surface took a long time to prepare.
+	const double time_seconds = (double)Engine::get_singleton()->get_frame_ticks() / 1000000.0;
+	const Error error = backend->prepare_host_frame(host_frame, time_seconds);
+	ERR_FAIL_COND_MSG(error != OK, vformat("HTML preparation failed for Godot frame %d: %s", host_frame, backend->get_terminal_render_failure_reason()));
+	_notify_frame_state_changes();
+}
+
 HTMLRenderSurface::HTMLRenderSurface() {
+#ifdef HTML_CSS_USE_HCSR_NEWEST
+	RenderingServer::get_singleton()->connect(SNAME("frame_pre_draw"), callable_mp(this, &HTMLRenderSurface::_prepare_host_frame));
+#endif
 	_ensure_backend();
 	render_now(marker);
 }
 
 HTMLRenderSurface::~HTMLRenderSurface() {
+#ifdef HTML_CSS_USE_HCSR_NEWEST
+	RenderingServer::get_singleton()->disconnect(SNAME("frame_pre_draw"), callable_mp(this, &HTMLRenderSurface::_prepare_host_frame));
+#endif
 	gpu_backdrop_frame.clear();
 	if (document.is_valid()) {
 		document->disconnect_changed(callable_mp(this, &HTMLRenderSurface::_document_changed));

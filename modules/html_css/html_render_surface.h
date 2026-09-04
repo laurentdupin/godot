@@ -72,6 +72,7 @@ class HTMLRenderSurface : public RefCounted {
 	void _notify_changed() const;
 	void _notify_frame_state_changes();
 	void _reset_frame_state_notifications();
+	void _prepare_host_frame();
 
 public:
 	void set_document(const Ref<HTMLDocument> &p_document);
@@ -97,6 +98,8 @@ public:
 	uint64_t get_last_queued_frame_generation() const;
 	uint64_t get_active_frame_generation() const;
 	bool uses_generation_bound_input() const;
+	Dictionary get_frame_synchronization() const;
+	uint64_t get_active_host_frame_number() const;
 	Error update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame = nullptr);
 	void render_now(const String &p_marker);
 	bool poll_pending_output(bool *r_waiting_for_completion = nullptr);

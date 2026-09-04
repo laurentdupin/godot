@@ -91,6 +91,7 @@ static Dictionary html_render_target_backdrop_filter_region_to_dictionary(const 
 }
 
 void HTMLRenderTarget::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("get_frame_synchronization"), &HTMLRenderTarget::get_frame_synchronization);
 	ClassDB::bind_method(D_METHOD("set_document", "document"), &HTMLRenderTarget::set_document);
 	ClassDB::bind_method(D_METHOD("get_document"), &HTMLRenderTarget::get_document);
 	ClassDB::bind_method(D_METHOD("set_size", "size"), &HTMLRenderTarget::set_size);
@@ -128,6 +129,10 @@ void HTMLRenderTarget::_bind_methods() {
 	ADD_SIGNAL(MethodInfo("texture_changed"));
 	ADD_SIGNAL(MethodInfo("frame_queued", PropertyInfo(Variant::INT, "generation")));
 	ADD_SIGNAL(MethodInfo("frame_activated", PropertyInfo(Variant::INT, "generation")));
+}
+
+Dictionary HTMLRenderTarget::get_frame_synchronization() const {
+	return surface->get_frame_synchronization();
 }
 
 void HTMLRenderTarget::_surface_changed() {

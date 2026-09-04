@@ -443,6 +443,19 @@ void HTMLView::_bind_methods() {
 
 void HTMLView::_frame_pre_draw() {
 	// Scripts (including nodes later in process order) have finished this frame.
+#ifdef HTML_CSS_USE_HCSR_NEWEST
+	// The shared surface has already prepared this host frame. Poll completion
+	// and maintain the Control's wakeup without treating the newly registered
+	// packet as a blocked producer from a previous frame.
+	const HTMLPendingOutputState pending_state = surface->consume_pending_output_state();
+	if (pending_state.presentation_changed) {
+		_update_backdrop_filter_canvas();
+		queue_redraw();
+	}
+	frame_render_serviced_generation = frame_render_request_generation;
+	frame_render_pending = surface->has_pending_frame_request() || surface->has_pending_output();
+	set_process_internal(frame_render_pending);
+#else
 	if (!frame_render_pending) {
 		set_process_internal(false);
 		return;
@@ -542,6 +555,7 @@ void HTMLView::_frame_pre_draw() {
 			|| surface->has_pending_frame_request()
 			|| surface->has_pending_output();
 	set_process_internal(frame_render_pending);
+#endif
 }
 
 void HTMLView::_notification(int p_what) {
@@ -1048,7 +1062,7 @@ uint64_t HTMLView::get_queued_generation() const {
 }
 
 uint64_t HTMLView::get_host_frame_number() const {
-	return surface->get_frame_metadata().host_frame_number;
+	return surface->get_active_host_frame_number();
 }
 
 double HTMLView::get_timeline_time_seconds() const {
@@ -1089,6 +1103,7 @@ Dictionary HTMLView::get_frame_scheduler_diagnostics() const {
 	result[SNAME("physical_pool_blocked")] = scheduler_physical_pool_blocked_count;
 	result[SNAME("preparation_failed")] = scheduler_preparation_failed_count;
 	result[SNAME("submission_failed")] = scheduler_submission_failed_count;
+	result[SNAME("frame_synchronization")] = surface->get_frame_synchronization();
 	return result;
 }
 

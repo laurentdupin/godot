@@ -57,6 +57,7 @@ protected:
 	static void _bind_methods();
 
 public:
+	Dictionary get_frame_synchronization() const;
 	void set_document(const Ref<HTMLDocument> &p_document);
 	Ref<HTMLDocument> get_document() const;
 

@@ -43,6 +43,17 @@ struct HTMLSurfaceHCSRNewestBackend::State {
 	bool gpu_texture_initialized = false;
 	uint64_t queued_generation = 0;
 	uint64_t active_generation = 0;
+	struct PreparedFrame {
+		uint64_t host_frame = 0;
+		double time_seconds = 0.0;
+		Size2i physical_size;
+		Color background;
+	} prepared;
+	uint64_t preparation_count = 0;
+	uint64_t recorded_count = 0;
+	uint64_t synchronization_failures = 0;
+	double preparation_milliseconds = 0.0;
+	double maximum_preparation_milliseconds = 0.0;
 	uint64_t input_queued_usec = 0;
 	bool terminal = false;
 	bool closing = false;
@@ -239,14 +250,14 @@ static void destroy_presenter(uint64_t p_presenter, int p_renderer) {
 
 static bool record_gpu(HTMLSurfaceHCSRNewestBackend::State *p_state, HTMLSurfaceHCSRNewestRenderer p_renderer,
 		const hcsr_draw_packet_view_t &p_packet, const Size2i &p_physical_size, const Color &p_background,
-		uint64_t p_command_buffer, uint64_t p_target, uint64_t p_target_view) {
+		uint64_t p_command_buffer, uint64_t p_target, uint64_t p_target_view, uint64_t p_host_frame) {
 	hcsr_frame_desc_t frame;
 	initialize_abi(frame);
 	// Upload memory follows Godot's retired frame slots. Scene generations can
 	// jump several times in one script frame and cannot identify a safe slot.
 	RenderingDevice *device = RenderingServer::get_singleton()->get_rendering_device();
 	frame.frame_slot = device->get_frames_drawn() % device->get_frame_delay();
-	frame.frame_id = p_packet.scene_generation;
+	frame.frame_id = p_host_frame;
 	frame.flags = HCSR_FRAME_CLEAR_TARGET;
 	frame.clear_r = p_background.r;
 	frame.clear_g = p_background.g;
@@ -305,6 +316,9 @@ struct HCSRNewestGpuSubmission {
 	Color background;
 	uint64_t target = 0;
 	uint64_t target_view = 0;
+	uint64_t device_frame = 0;
+	uint64_t host_frame = 0;
+	double time_seconds = 0.0;
 };
 
 static void complete_gpu_submission(RenderingDeviceDriver *p_driver, RenderingDeviceDriver::CommandBufferID p_command_buffer, void *p_userdata) {
@@ -319,6 +333,13 @@ static void complete_gpu_submission(RenderingDeviceDriver *p_driver, RenderingDe
 	hcsr_draw_packet_view_t packet;
 	initialize_abi(packet);
 	bool rendered = hcsr_draw_packet_get_view(submission->packet, &packet) == HCSR_OK;
+	RenderingDevice *device = RenderingServer::get_singleton()->get_rendering_device();
+	if (device->get_frames_drawn() != submission->device_frame) {
+		MutexLock lock(submission->state->mutex);
+		submission->state->synchronization_failures++;
+		set_terminal(submission->state, "HTML packet crossed its assigned Godot rendering frame.");
+		rendered = false;
+	}
 	const uint64_t generation = rendered ? packet.scene_generation : 0;
 	const Size2i logical_size = rendered
 			? Size2i(Math::ceil(packet.viewport_width), Math::ceil(packet.viewport_height))
@@ -328,7 +349,7 @@ static void complete_gpu_submission(RenderingDeviceDriver *p_driver, RenderingDe
 				RenderingDeviceDriver::DRIVER_RESOURCE_COMMAND_BUFFER, p_command_buffer);
 		rendered = native_command_buffer != 0 && record_gpu(submission->state, submission->renderer,
 				packet, submission->physical_size, submission->background, native_command_buffer,
-				submission->target, submission->target_view);
+				submission->target, submission->target_view, submission->host_frame);
 	}
 	hcsr_draw_packet_destroy(submission->packet);
 	const double record_seconds = (double)(OS::get_singleton()->get_ticks_usec() - record_start_usec) / 1000000.0;
@@ -341,6 +362,9 @@ static void complete_gpu_submission(RenderingDeviceDriver *p_driver, RenderingDe
 		if (rendered && !submission->state->closing) {
 			submission->state->presentation_changed = true;
 			submission->state->metadata.generation = generation;
+			submission->state->metadata.host_frame_number = submission->host_frame;
+			submission->state->metadata.timeline_time_seconds = submission->time_seconds;
+			submission->state->recorded_count++;
 			submission->state->metadata.logical_size = logical_size;
 			submission->state->metadata.physical_size = submission->physical_size;
 			submission->state->active_generation = generation;
@@ -363,6 +387,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 	HTMLSurfaceHCSRNewestRenderer renderer = HTML_SURFACE_HCSR_NEWEST_CPU;
 	Size2i physical_size;
 	Color background;
+	State::PreparedFrame prepared;
 	{
 		MutexLock lock(state->mutex);
 		if (state->pending_packet == 0) {
@@ -371,8 +396,9 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 		}
 		packet_handle = state->pending_packet;
 		renderer = state->renderer;
-		physical_size = state->physical_size;
-		background = state->background;
+		prepared = state->prepared;
+		physical_size = prepared.physical_size;
+		background = prepared.background;
 	}
 	hcsr_draw_packet_view_t packet;
 	initialize_abi(packet);
@@ -394,6 +420,9 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 			submission->renderer = renderer;
 			submission->physical_size = physical_size;
 			submission->background = background;
+			submission->host_frame = prepared.host_frame;
+			submission->time_seconds = prepared.time_seconds;
+			submission->device_frame = device->get_frames_drawn();
 			submission->target = device->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_TEXTURE, state->rd_texture);
 			submission->target_view = device->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_TEXTURE_VIEW, state->rd_texture);
 			RenderingDevice::CallbackResource resource;
@@ -423,6 +452,9 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 		if (rendered && !state->closing) {
 			state->presentation_changed = true;
 			state->metadata.generation = rendered_generation;
+			state->metadata.host_frame_number = prepared.host_frame;
+			state->metadata.timeline_time_seconds = prepared.time_seconds;
+			state->recorded_count++;
 			state->metadata.logical_size = rendered_logical_size;
 			state->metadata.physical_size = physical_size;
 			state->active_generation = rendered_generation;
@@ -581,11 +613,13 @@ void HTMLSurfaceHCSRNewestBackend::set_document(const Ref<HTMLDocument> &p_docum
 
 void HTMLSurfaceHCSRNewestBackend::set_transparent_background(bool p_transparent_background) {
 	MutexLock lock(state->mutex);
+	if (state->background.a != (p_transparent_background ? 0.0f : 1.0f)) state->needs_another_frame = true;
 	state->background.a = p_transparent_background ? 0.0f : 1.0f;
 }
 
 void HTMLSurfaceHCSRNewestBackend::set_background_color(const Color &p_background_color) {
 	MutexLock lock(state->mutex);
+	if (state->background != p_background_color) state->needs_another_frame = true;
 	state->background = p_background_color;
 }
 
@@ -598,8 +632,22 @@ Error HTMLSurfaceHCSRNewestBackend::update_compositor(double p_timeline_time_sec
 	MutexLock lock(state->mutex);
 	if (r_needs_output != nullptr) *r_needs_output = false;
 	if (r_needs_begin_frame != nullptr) *r_needs_begin_frame = state->needs_another_frame;
+	// Requests may arrive during script execution. Only the host's frame
+	// boundary may flush mutations and build the packet for rendering.
+	return state->terminal ? ERR_CANT_CREATE : OK;
+}
+
+Error HTMLSurfaceHCSRNewestBackend::prepare_host_frame(uint64_t p_host_frame, double p_timeline_time_seconds) {
+	MutexLock lock(state->mutex);
 	if (state->terminal) return ERR_CANT_CREATE;
-	if (state->render_pending) return OK;
+	if (state->closing) return OK;
+	if (state->render_pending) {
+		state->synchronization_failures++;
+		set_terminal(state, "Previous HTML frame was not recorded before the next host frame boundary.");
+		return ERR_BUSY;
+	}
+	if (!state->document_dirty && !state->needs_another_frame && state->preparation_count != 0) return OK;
+	const uint64_t preparation_start_usec = OS::get_singleton()->get_ticks_usec();
 	if (state->document_dirty) {
 		const Error rebuild = _rebuild_scene();
 		if (rebuild != OK) return rebuild;
@@ -626,13 +674,34 @@ Error HTMLSurfaceHCSRNewestBackend::update_compositor(double p_timeline_time_sec
 		HCSRNewestPerformanceMonitor::update_scene((uint64_t)state, profile);
 	}
 	state->needs_another_frame = (result.flags & HCSR_STEP_RESULT_NEEDS_ANOTHER_STEP) != 0;
-	state->metadata.timeline_time_seconds = p_timeline_time_seconds;
-	state->metadata.host_frame_number++;
+	state->prepared.host_frame = p_host_frame;
+	state->prepared.time_seconds = p_timeline_time_seconds;
+	state->prepared.physical_size = state->physical_size;
+	state->prepared.background = state->background;
+	state->preparation_count++;
+	state->preparation_milliseconds = (double)(OS::get_singleton()->get_ticks_usec() - preparation_start_usec) / 1000.0;
+	state->maximum_preparation_milliseconds = MAX(state->maximum_preparation_milliseconds, state->preparation_milliseconds);
 	state->queued_generation = result.scene_generation;
 	state->render_pending = true;
 	RenderingServer::get_singleton()->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRNewestBackend::_render_on_render_thread).bind((uint64_t)(uintptr_t)state));
-	if (r_needs_begin_frame != nullptr) *r_needs_begin_frame = state->needs_another_frame;
 	return OK;
+}
+
+Dictionary HTMLSurfaceHCSRNewestBackend::get_frame_synchronization() const {
+	MutexLock lock(state->mutex);
+	Dictionary result;
+	result["prepared_host_frame"] = state->prepared.host_frame;
+	result["prepared_time_seconds"] = state->prepared.time_seconds;
+	result["recorded_host_frame"] = state->metadata.host_frame_number;
+	result["prepared_generation"] = state->queued_generation;
+	result["recorded_generation"] = state->active_generation;
+	result["preparations"] = state->preparation_count;
+	result["recordings"] = state->recorded_count;
+	result["failures"] = state->synchronization_failures;
+	result["pending"] = state->render_pending;
+	result["preparation_ms"] = state->preparation_milliseconds;
+	result["maximum_preparation_ms"] = state->maximum_preparation_milliseconds;
+	return result;
 }
 
 void HTMLSurfaceHCSRNewestBackend::render_placeholder(const String &p_marker) {
