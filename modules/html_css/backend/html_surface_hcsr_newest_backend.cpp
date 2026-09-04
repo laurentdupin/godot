@@ -786,6 +786,17 @@ Error HTMLSurfaceHCSRNewestBackend::set_element_style(const StringName &p_id, co
 	return _apply_mutation(mutation);
 }
 
+Error HTMLSurfaceHCSRNewestBackend::replace_stylesheet_text(const StringName &p_style_id, const String &p_css_text) {
+	const CharString id = String(p_style_id).utf8();
+	const CharString value = p_css_text.utf8();
+	hcsr_mutation_t mutation;
+	initialize_abi(mutation);
+	mutation.kind = HCSR_MUTATION_REPLACE_STYLESHEET;
+	mutation.element_id = utf8_view(id);
+	mutation.value = utf8_view(value);
+	return _apply_mutation(mutation);
+}
+
 Error HTMLSurfaceHCSRNewestBackend::set_form_control_value(const StringName &p_id, const String &p_value) {
 	const CharString id = String(p_id).utf8(); const CharString value = p_value.utf8();
 	hcsr_mutation_t mutation; initialize_abi(mutation); mutation.kind = HCSR_MUTATION_SET_FORM_VALUE; mutation.element_id = utf8_view(id); mutation.value = utf8_view(value);
