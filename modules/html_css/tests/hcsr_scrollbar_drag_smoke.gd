@@ -11,6 +11,9 @@ button{display:block;width:180px;height:100px;margin:0;border:0}
 var actions: Array[StringName] = []
 
 func _initialize() -> void:
+	call_deferred("_run")
+
+func _run() -> void:
 	var use_d3d12 := OS.get_cmdline_user_args().has("--d3d12")
 	var use_vulkan := OS.get_cmdline_user_args().has("--vulkan")
 	var use_metal := OS.get_cmdline_user_args().has("--metal")
@@ -25,7 +28,7 @@ func _initialize() -> void:
 	view.action_requested.connect(func(action: StringName, _payload: Dictionary) -> void: actions.append(action))
 	root.size = Vector2i(WIDTH, HEIGHT)
 	root.add_child(view)
-	for _frame in range(6):
+	for _frame in range(8):
 		await process_frame
 
 	_send_drag(Vector2(194, 16), Vector2(194, 88))
@@ -36,6 +39,10 @@ func _initialize() -> void:
 	if actions != [&"third"]:
 		_fail("%s scrollbar thumb drag did not expose the final item; actions=%s" % [backend_name, actions])
 		return
+	# Let an embedded GPU submission retire before SceneTree teardown destroys
+	# the temporary HTMLView and its render target.
+	for _frame in range(4):
+		await process_frame
 
 	print("HCSR Godot %s scrollbar drag smoke passed." % backend_name)
 	quit()

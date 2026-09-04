@@ -629,8 +629,14 @@ elif _html_css_renderer == "hcsr_old_2":
     env.CommandNoCache("#bin/hcsr_runtime.dll", runtime_library, Copy("$TARGET", "$SOURCE"))
     env.CommandNoCache("#bin/hcsr_native_codecs.dll", runtime_codecs, Copy("$TARGET", "$SOURCE"))
 elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll"):
-    env_html_css.add_source_files(env.modules_sources, "backend/html_surface_hcsr_newest_backend.cpp")
-    env_html_css.add_source_files(env.modules_sources, "backend/html_surface_hcsr_newest_factory.cpp")
+    newest_backend_sources = []
+    env_html_css.add_source_files(newest_backend_sources, "backend/html_surface_hcsr_newest_backend.cpp")
+    env_html_css.add_source_files(newest_backend_sources, "backend/html_surface_hcsr_newest_factory.cpp")
+    if _html_css_renderer == "hcsr_newest":
+        # These archives are supplied as raw linker flags for NativeAOT, so
+        # SCons cannot infer that a changed pinned HCSR build requires relinking.
+        env.Depends(newest_backend_sources, [env.File(path) for path in newest_products])
+    env.modules_sources += newest_backend_sources
     env.Append(LINKFLAGS=[newest_scene_library, newest_d3d12_library, newest_vulkan_library] + newest_static_support)
     if _html_css_renderer == "hcsr_newest":
         env.Append(

@@ -651,6 +651,46 @@ Error HTMLSurfaceHCSRNewestBackend::notify_pointer_leave(const Point2 &p_positio
 	return p_cancel_pressed_interaction ? pointer_cancel(p_position, p_pointer_id) : OK;
 }
 
+Error HTMLSurfaceHCSRNewestBackend::begin_scrollbar_interaction(const Point2 &p_position, double p_event_time_seconds, bool &r_consumed) {
+	MutexLock lock(state->mutex);
+	if (state->scene == 0) { r_consumed = false; return ERR_UNCONFIGURED; }
+	uint8_t consumed = 0;
+	if (hcsr_scene_begin_scrollbar_interaction(state->scene, p_position.x, p_position.y,
+			p_event_time_seconds, &consumed) != HCSR_OK) {
+		r_consumed = false;
+		return ERR_INVALID_DATA;
+	}
+	r_consumed = consumed != 0;
+	if (r_consumed) state->needs_another_frame = true;
+	return OK;
+}
+
+Error HTMLSurfaceHCSRNewestBackend::update_scrollbar_interaction(const Point2 &p_position, bool &r_consumed) {
+	MutexLock lock(state->mutex);
+	if (state->scene == 0) { r_consumed = false; return ERR_UNCONFIGURED; }
+	uint8_t consumed = 0;
+	if (hcsr_scene_update_scrollbar_interaction(state->scene, p_position.x, p_position.y, &consumed) != HCSR_OK) {
+		r_consumed = false;
+		return ERR_INVALID_DATA;
+	}
+	r_consumed = consumed != 0;
+	if (r_consumed) state->needs_another_frame = true;
+	return OK;
+}
+
+Error HTMLSurfaceHCSRNewestBackend::end_scrollbar_interaction(bool &r_consumed) {
+	MutexLock lock(state->mutex);
+	if (state->scene == 0) { r_consumed = false; return ERR_UNCONFIGURED; }
+	uint8_t consumed = 0;
+	if (hcsr_scene_end_scrollbar_interaction(state->scene, &consumed) != HCSR_OK) {
+		r_consumed = false;
+		return ERR_INVALID_DATA;
+	}
+	r_consumed = consumed != 0;
+	if (r_consumed) state->needs_another_frame = true;
+	return OK;
+}
+
 Error HTMLSurfaceHCSRNewestBackend::wheel(const Point2 &p_position, const Vector2 &p_delta) {
 	hcsr_input_event_t event;
 	initialize_abi(event);
