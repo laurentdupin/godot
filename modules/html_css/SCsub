@@ -630,6 +630,7 @@ elif _html_css_renderer == "hcsr_old_2":
     env.CommandNoCache("#bin/hcsr_native_codecs.dll", runtime_codecs, Copy("$TARGET", "$SOURCE"))
 elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll"):
     newest_backend_sources = []
+    env_html_css.add_source_files(newest_backend_sources, "backend/hcsr_newest_performance_monitor.cpp")
     env_html_css.add_source_files(newest_backend_sources, "backend/html_surface_hcsr_newest_backend.cpp")
     env_html_css.add_source_files(newest_backend_sources, "backend/html_surface_hcsr_newest_factory.cpp")
     if _html_css_renderer == "hcsr_newest":

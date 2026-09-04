@@ -4,6 +4,8 @@
 
 #include "html_surface_hcsr_newest_backend.h"
 
+#include "hcsr_newest_performance_monitor.h"
+
 #include "../bridge/html_asset_provider.h"
 #include "core/io/file_access.h"
 #include "core/math/math_funcs.h"
@@ -41,6 +43,7 @@ struct HTMLSurfaceHCSRNewestBackend::State {
 	bool gpu_texture_initialized = false;
 	uint64_t queued_generation = 0;
 	uint64_t active_generation = 0;
+	uint64_t input_queued_usec = 0;
 	bool terminal = false;
 	bool closing = false;
 	String terminal_reason;
@@ -298,6 +301,7 @@ struct HCSRNewestGpuSubmission {
 
 static void complete_gpu_submission(RenderingDeviceDriver *p_driver, RenderingDeviceDriver::CommandBufferID p_command_buffer, void *p_userdata) {
 	HCSRNewestGpuSubmission *submission = (HCSRNewestGpuSubmission *)p_userdata;
+	const uint64_t record_start_usec = OS::get_singleton()->get_ticks_usec();
 	hcsr_draw_packet_view_t packet;
 	initialize_abi(packet);
 	bool rendered = hcsr_draw_packet_get_view(submission->packet, &packet) == HCSR_OK;
@@ -313,6 +317,8 @@ static void complete_gpu_submission(RenderingDeviceDriver *p_driver, RenderingDe
 				submission->target, submission->target_view);
 	}
 	hcsr_draw_packet_destroy(submission->packet);
+	const double record_seconds = (double)(OS::get_singleton()->get_ticks_usec() - record_start_usec) / 1000000.0;
+	double input_to_visible_seconds = 0.0;
 	{
 		MutexLock lock(submission->state->mutex);
 		if (submission->state->pending_gpu_submission == submission) submission->state->pending_gpu_submission = nullptr;
@@ -324,10 +330,15 @@ static void complete_gpu_submission(RenderingDeviceDriver *p_driver, RenderingDe
 			submission->state->metadata.logical_size = logical_size;
 			submission->state->metadata.physical_size = submission->physical_size;
 			submission->state->active_generation = generation;
+			if (submission->state->input_queued_usec != 0) {
+				input_to_visible_seconds = (double)(OS::get_singleton()->get_ticks_usec() - submission->state->input_queued_usec) / 1000000.0;
+				submission->state->input_queued_usec = 0;
+			}
 		} else if (!submission->state->closing) {
 			set_terminal(submission->state, "hcsr_newest could not record the scene packet into Godot's rendering graph.");
 		}
 	}
+	HCSRNewestPerformanceMonitor::update_presentation((uint64_t)submission->state, record_seconds, input_to_visible_seconds);
 	memdelete(submission);
 }
 } // namespace
@@ -356,6 +367,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 	const Size2i rendered_logical_size = rendered
 			? Size2i(Math::ceil(packet.viewport_width), Math::ceil(packet.viewport_height))
 			: Size2i();
+	const uint64_t record_start_usec = OS::get_singleton()->get_ticks_usec();
 	if (rendered && renderer != HTML_SURFACE_HCSR_NEWEST_CPU) {
 		RenderingServer *server = RenderingServer::get_singleton();
 		RenderingDevice *device = server != nullptr ? server->get_rendering_device() : nullptr;
@@ -386,6 +398,8 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 		render_cpu(state, packet, physical_size, background);
 	}
 	hcsr_draw_packet_destroy(packet_handle);
+	const double record_seconds = (double)(OS::get_singleton()->get_ticks_usec() - record_start_usec) / 1000000.0;
+	double input_to_visible_seconds = 0.0;
 	{
 		MutexLock lock(state->mutex);
 		if (state->pending_packet == packet_handle) {
@@ -398,10 +412,15 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 			state->metadata.logical_size = rendered_logical_size;
 			state->metadata.physical_size = physical_size;
 			state->active_generation = rendered_generation;
+			if (state->input_queued_usec != 0) {
+				input_to_visible_seconds = (double)(OS::get_singleton()->get_ticks_usec() - state->input_queued_usec) / 1000000.0;
+				state->input_queued_usec = 0;
+			}
 		} else if (!state->closing) {
 			set_terminal(state, "hcsr_newest could not record the scene packet into Godot's rendering device.");
 		}
 	}
+	HCSRNewestPerformanceMonitor::update_presentation((uint64_t)state, record_seconds, input_to_visible_seconds);
 }
 
 void HTMLSurfaceHCSRNewestBackend::_cancel_gpu_submission_on_render_thread(uint64_t p_state_pointer) {
@@ -589,6 +608,11 @@ Error HTMLSurfaceHCSRNewestBackend::update_compositor(double p_timeline_time_sec
 		set_terminal(state, scene_error(state, "hcsr_newest could not advance the scene."));
 		return ERR_INVALID_DATA;
 	}
+	hcsr_scene_profile_t profile;
+	initialize_abi(profile);
+	if (hcsr_scene_get_profile(state->scene, &profile) == HCSR_OK) {
+		HCSRNewestPerformanceMonitor::update_scene((uint64_t)state, profile);
+	}
 	state->needs_another_frame = (result.flags & HCSR_STEP_RESULT_NEEDS_ANOTHER_STEP) != 0;
 	state->metadata.timeline_time_seconds = p_timeline_time_seconds;
 	state->metadata.host_frame_number++;
@@ -644,7 +668,10 @@ Error HTMLSurfaceHCSRNewestBackend::_queue_input(const hcsr_input_event_t &p_eve
 	MutexLock lock(state->mutex);
 	if (state->scene == 0) return ERR_UNCONFIGURED;
 	const Error result = hcsr_scene_enqueue_input(state->scene, &p_event, 1, p_payload.get_data(), p_payload.length()) == HCSR_OK ? OK : ERR_INVALID_DATA;
-	if (result == OK) state->needs_another_frame = true;
+	if (result == OK) {
+		state->needs_another_frame = true;
+		if (state->input_queued_usec == 0) state->input_queued_usec = OS::get_singleton()->get_ticks_usec();
+	}
 	return result;
 }
 
@@ -772,7 +799,10 @@ Error HTMLSurfaceHCSRNewestBackend::_apply_mutation(const hcsr_mutation_t &p_mut
 	MutexLock lock(state->mutex);
 	if (state->scene == 0) return ERR_UNCONFIGURED;
 	const Error result = hcsr_scene_apply_mutations(state->scene, &p_mutation, 1) == HCSR_OK ? OK : ERR_INVALID_DATA;
-	if (result == OK) state->needs_another_frame = true;
+	if (result == OK) {
+		state->needs_another_frame = true;
+		if (state->input_queued_usec == 0) state->input_queued_usec = OS::get_singleton()->get_ticks_usec();
+	}
 	return result;
 }
 
@@ -871,7 +901,10 @@ Error HTMLSurfaceHCSRNewestBackend::apply_element_mutations(const Array &p_mutat
 	MutexLock lock(state->mutex);
 	if (state->scene == 0) return ERR_UNCONFIGURED;
 	const Error result = hcsr_scene_apply_mutations(state->scene, mutations.ptr(), mutations.size()) == HCSR_OK ? OK : ERR_INVALID_DATA;
-	if (result == OK) state->needs_another_frame = true;
+	if (result == OK) {
+		state->needs_another_frame = true;
+		if (state->input_queued_usec == 0) state->input_queued_usec = OS::get_singleton()->get_ticks_usec();
+	}
 	return result;
 }
 
@@ -963,6 +996,7 @@ HTMLSurfaceHCSRNewestBackend::HTMLSurfaceHCSRNewestBackend(HTMLSurfaceHCSRNewest
 
 HTMLSurfaceHCSRNewestBackend::~HTMLSurfaceHCSRNewestBackend() {
 	if (state == nullptr) return;
+	HCSRNewestPerformanceMonitor::remove((uint64_t)state);
 	{
 		MutexLock lock(state->mutex);
 		state->closing = true;
