@@ -667,7 +667,17 @@ Error HTMLSurfaceHCSRNewestBackend::pointer_cancel(const Point2 &p_position, int
 }
 
 Error HTMLSurfaceHCSRNewestBackend::notify_pointer_leave(const Point2 &p_position, bool p_cancel_pressed_interaction, int p_pointer_id) {
-	return p_cancel_pressed_interaction ? pointer_cancel(p_position, p_pointer_id) : OK;
+	hcsr_input_event_t event;
+	initialize_abi(event);
+	event.kind = HCSR_INPUT_POINTER_LEAVE;
+	event.x = p_position.x;
+	event.y = p_position.y;
+	event.code = p_pointer_id;
+	event.pointer_type = HCSR_POINTER_MOUSE;
+	event.button = HCSR_POINTER_BUTTON_NONE;
+	const Error leave_result = _queue_input(event);
+	if (leave_result != OK || !p_cancel_pressed_interaction) return leave_result;
+	return pointer_cancel(p_position, p_pointer_id);
 }
 
 Error HTMLSurfaceHCSRNewestBackend::begin_scrollbar_interaction(const Point2 &p_position, double p_event_time_seconds, bool &r_consumed) {
