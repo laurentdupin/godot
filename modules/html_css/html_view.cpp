@@ -441,9 +441,115 @@ void HTMLView::_bind_methods() {
 	BIND_CONSTANT(HTML_BACKDROP_FILTER_OPERATION_OPACITY);
 }
 
+void HTMLView::_frame_pre_draw() {
+	// Scripts (including nodes later in process order) have finished this frame.
+	if (!frame_render_pending) {
+		set_process_internal(false);
+		return;
+	}
+
+	const HTMLPendingOutputState pending_state = surface->consume_pending_output_state();
+	if (pending_state.presentation_changed) {
+		_update_backdrop_filter_canvas();
+		queue_redraw();
+	}
+	const bool has_explicit_render_request = frame_render_request_generation != frame_render_serviced_generation;
+	const bool has_backend_render_request = surface->has_pending_frame_request();
+	const bool has_due_render_request = has_explicit_render_request
+			|| has_backend_render_request
+			|| surface->is_begin_frame_requested();
+	if (has_due_render_request) {
+		_note_frame_budget_request();
+	}
+	if (pending_state.producer_blocked) {
+		if (has_due_render_request && frame_budget_request_usec != 0) {
+			frame_budget_physical_pool_blocked = true;
+		}
+		if (has_due_render_request && scheduler_last_blocked_request_generation != frame_render_request_generation) {
+			scheduler_last_blocked_request_generation = frame_render_request_generation;
+			scheduler_physical_pool_blocked_count++;
+		}
+		surface->schedule_retirement_service();
+		frame_render_pending = true;
+		set_process_internal(true);
+		return;
+	}
+	if (!has_explicit_render_request && !has_backend_render_request && !surface->is_begin_frame_requested()) {
+		surface->schedule_retirement_service();
+		frame_render_pending = surface->has_pending_output();
+		set_process_internal(frame_render_pending);
+		return;
+	}
+	const uint64_t servicing_request_generation = frame_render_request_generation;
+
+	bool needs_output = true;
+	bool needs_begin_frame = false;
+	const uint64_t trace_sequence = pending_input_trace_sequence;
+	if (trace_sequence != 0) {
+		pending_input_trace_sequence = 0;
+		html_view_input_trace(vformat("seq=%d internal_process begin", (int64_t)trace_sequence));
+	}
+	const double timeline_time_seconds = OS::get_singleton() != nullptr ? (double)OS::get_singleton()->get_ticks_usec() / 1000000.0 : 0.0;
+	const uint64_t update_start_usec = trace_sequence != 0 && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
+	const Error update_err = surface->update_compositor(timeline_time_seconds, &needs_output, &needs_begin_frame);
+	if (trace_sequence != 0) {
+		html_view_input_trace(vformat("seq=%d update_compositor exit err=%d needs_output=%s needs_begin_frame=%s elapsed_ms=%.3f",
+				(int64_t)trace_sequence,
+				(int)update_err,
+				needs_output ? "true" : "false",
+				needs_begin_frame ? "true" : "false",
+				html_view_elapsed_ms(update_start_usec)));
+	}
+	if (update_err != OK) {
+		scheduler_preparation_failed_count++;
+		needs_output = true;
+		needs_begin_frame = false;
+	}
+
+	const bool should_render = needs_output;
+	if (should_render) {
+		if (trace_sequence != 0) {
+			html_view_input_trace(vformat("seq=%d render_now begin reason=%s", (int64_t)trace_sequence, needs_output ? "needs_output" : "pending_output"));
+		}
+		const uint64_t render_start_usec = trace_sequence != 0 && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
+		surface->render_now("HTMLView");
+		if (surface->has_terminal_render_failure()) {
+			scheduler_submission_failed_count++;
+		}
+		if (trace_sequence != 0) {
+			html_view_input_trace(vformat("seq=%d render_now end pending_output=%s elapsed_ms=%.3f", (int64_t)trace_sequence, surface->has_pending_output() ? "true" : "false", html_view_elapsed_ms(render_start_usec)));
+		}
+	} else if (trace_sequence != 0) {
+		html_view_input_trace(vformat("seq=%d render_now skipped reason=no_output", (int64_t)trace_sequence));
+	}
+	surface->schedule_retirement_service();
+	if (frame_budget_request_usec != 0 && !surface->has_pending_output() && surface->get_active_frame_generation() <= frame_budget_request_after_generation) {
+		_finish_frame_budget_request(surface->get_active_frame_generation(), SNAME("no_visual_output"));
+	}
+
+	if (trace_sequence != 0 && needs_begin_frame) {
+		pending_input_trace_sequence = trace_sequence;
+	}
+	if (has_explicit_render_request) {
+		if (servicing_request_generation > frame_render_serviced_generation + 1) {
+			scheduler_superseded_count += servicing_request_generation - frame_render_serviced_generation - 1;
+		}
+		frame_render_serviced_generation = servicing_request_generation;
+	}
+	frame_render_pending = needs_begin_frame
+			|| surface->is_begin_frame_requested()
+			|| frame_render_request_generation != frame_render_serviced_generation
+			|| surface->has_pending_frame_request()
+			|| surface->has_pending_output();
+	set_process_internal(frame_render_pending);
+}
+
 void HTMLView::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_ENTER_TREE: {
+#ifdef HTML_CSS_USE_HCSR_NEWEST
+			RenderingServer::get_singleton()->connect(SNAME("frame_pre_draw"), callable_mp(this, &HTMLView::_frame_pre_draw));
+#endif
 			_connect_viewport_size_changed();
 			_update_surface_size(false);
 			_apply_surface_backend_preference();
@@ -454,6 +560,9 @@ void HTMLView::_notification(int p_what) {
 		} break;
 
 		case NOTIFICATION_EXIT_TREE: {
+#ifdef HTML_CSS_USE_HCSR_NEWEST
+			RenderingServer::get_singleton()->disconnect(SNAME("frame_pre_draw"), callable_mp(this, &HTMLView::_frame_pre_draw));
+#endif
 			_cancel_pointer_interaction(SNAME("capture_loss"));
 			_disconnect_viewport_size_changed();
 		} break;
@@ -485,105 +594,13 @@ void HTMLView::_notification(int p_what) {
 		} break;
 
 		case NOTIFICATION_INTERNAL_PROCESS: {
-			if (!frame_render_pending) {
-				set_process_internal(false);
-				break;
-			}
-
-			const HTMLPendingOutputState pending_state = surface->consume_pending_output_state();
-			if (pending_state.presentation_changed) {
-				_update_backdrop_filter_canvas();
-				queue_redraw();
-			}
-			const bool has_explicit_render_request = frame_render_request_generation != frame_render_serviced_generation;
-			const bool has_backend_render_request = surface->has_pending_frame_request();
-			const bool has_due_render_request = has_explicit_render_request
-					|| has_backend_render_request
-					|| surface->is_begin_frame_requested();
-			if (has_due_render_request) {
-				_note_frame_budget_request();
-			}
-			if (pending_state.producer_blocked) {
-				if (has_due_render_request && frame_budget_request_usec != 0) {
-					frame_budget_physical_pool_blocked = true;
-				}
-				if (has_due_render_request && scheduler_last_blocked_request_generation != frame_render_request_generation) {
-					scheduler_last_blocked_request_generation = frame_render_request_generation;
-					scheduler_physical_pool_blocked_count++;
-				}
-				surface->schedule_retirement_service();
-				frame_render_pending = true;
-				set_process_internal(true);
-				break;
-			}
-			if (!has_explicit_render_request && !has_backend_render_request && !surface->is_begin_frame_requested()) {
-				surface->schedule_retirement_service();
-				frame_render_pending = surface->has_pending_output();
-				set_process_internal(frame_render_pending);
-				break;
-			}
-			const uint64_t servicing_request_generation = frame_render_request_generation;
-
-			bool needs_output = true;
-			bool needs_begin_frame = false;
-			const uint64_t trace_sequence = pending_input_trace_sequence;
-			if (trace_sequence != 0) {
-				pending_input_trace_sequence = 0;
-				html_view_input_trace(vformat("seq=%d internal_process begin", (int64_t)trace_sequence));
-			}
-			const double timeline_time_seconds = OS::get_singleton() != nullptr ? (double)OS::get_singleton()->get_ticks_usec() / 1000000.0 : 0.0;
-			const uint64_t update_start_usec = trace_sequence != 0 && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
-			const Error update_err = surface->update_compositor(timeline_time_seconds, &needs_output, &needs_begin_frame);
-			if (trace_sequence != 0) {
-				html_view_input_trace(vformat("seq=%d update_compositor exit err=%d needs_output=%s needs_begin_frame=%s elapsed_ms=%.3f",
-						(int64_t)trace_sequence,
-						(int)update_err,
-						needs_output ? "true" : "false",
-						needs_begin_frame ? "true" : "false",
-						html_view_elapsed_ms(update_start_usec)));
-			}
-			if (update_err != OK) {
-				scheduler_preparation_failed_count++;
-				needs_output = true;
-				needs_begin_frame = false;
-			}
-
-			const bool should_render = needs_output;
-			if (should_render) {
-				if (trace_sequence != 0) {
-					html_view_input_trace(vformat("seq=%d render_now begin reason=%s", (int64_t)trace_sequence, needs_output ? "needs_output" : "pending_output"));
-				}
-				const uint64_t render_start_usec = trace_sequence != 0 && OS::get_singleton() != nullptr ? OS::get_singleton()->get_ticks_usec() : 0;
-				surface->render_now("HTMLView");
-				if (surface->has_terminal_render_failure()) {
-					scheduler_submission_failed_count++;
-				}
-				if (trace_sequence != 0) {
-					html_view_input_trace(vformat("seq=%d render_now end pending_output=%s elapsed_ms=%.3f", (int64_t)trace_sequence, surface->has_pending_output() ? "true" : "false", html_view_elapsed_ms(render_start_usec)));
-				}
-			} else if (trace_sequence != 0) {
-				html_view_input_trace(vformat("seq=%d render_now skipped reason=no_output", (int64_t)trace_sequence));
-			}
-			surface->schedule_retirement_service();
-			if (frame_budget_request_usec != 0 && !surface->has_pending_output() && surface->get_active_frame_generation() <= frame_budget_request_after_generation) {
-				_finish_frame_budget_request(surface->get_active_frame_generation(), SNAME("no_visual_output"));
-			}
-
-			if (trace_sequence != 0 && needs_begin_frame) {
-				pending_input_trace_sequence = trace_sequence;
-			}
-			if (has_explicit_render_request) {
-				if (servicing_request_generation > frame_render_serviced_generation + 1) {
-					scheduler_superseded_count += servicing_request_generation - frame_render_serviced_generation - 1;
-				}
-				frame_render_serviced_generation = servicing_request_generation;
-			}
-			frame_render_pending = needs_begin_frame
-					|| surface->is_begin_frame_requested()
-					|| frame_render_request_generation != frame_render_serviced_generation
-					|| surface->has_pending_frame_request()
-					|| surface->has_pending_output();
-			set_process_internal(frame_render_pending);
+#ifdef HTML_CSS_USE_HCSR_NEWEST
+			// Keep pre-draw reachable in the editor/low-processor-usage mode.
+			// Preparation itself waits until every script has finished.
+			if (frame_render_pending) queue_redraw();
+#else
+			_frame_pre_draw();
+#endif
 		} break;
 
 		case NOTIFICATION_RESIZED: {

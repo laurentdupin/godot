@@ -22,6 +22,7 @@ public:
 	struct State;
 	static void _render_on_render_thread(uint64_t p_state_pointer);
 	static void _cancel_gpu_submission_on_render_thread(uint64_t p_state_pointer);
+	static void _destroy_state_on_render_thread(uint64_t p_state_pointer);
 
 private:
 	State *state = nullptr;

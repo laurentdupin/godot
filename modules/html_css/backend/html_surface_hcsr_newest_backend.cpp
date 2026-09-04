@@ -204,7 +204,7 @@ static bool ensure_presenter(HTMLSurfaceHCSRNewestBackend::State *p_state, Rende
 	if (p_state->presenter != 0) return true;
 	hcsr_presenter_desc_t common;
 	initialize_abi(common);
-	common.maximum_frames_in_flight = 3;
+	common.maximum_frames_in_flight = p_device->get_frame_delay();
 	if (p_state->renderer == HTML_SURFACE_HCSR_NEWEST_D3D12) {
 		hcsr_d3d12_engine_desc_t backend;
 		initialize_abi(backend);
@@ -232,12 +232,20 @@ static bool ensure_presenter(HTMLSurfaceHCSRNewestBackend::State *p_state, Rende
 	return true;
 }
 
+static void destroy_presenter(uint64_t p_presenter, int p_renderer) {
+	if (p_renderer == HTML_SURFACE_HCSR_NEWEST_D3D12) hcsr_d3d12_destroy(p_presenter);
+	else if (p_renderer == HTML_SURFACE_HCSR_NEWEST_VULKAN) hcsr_vulkan_destroy(p_presenter);
+}
+
 static bool record_gpu(HTMLSurfaceHCSRNewestBackend::State *p_state, HTMLSurfaceHCSRNewestRenderer p_renderer,
 		const hcsr_draw_packet_view_t &p_packet, const Size2i &p_physical_size, const Color &p_background,
 		uint64_t p_command_buffer, uint64_t p_target, uint64_t p_target_view) {
 	hcsr_frame_desc_t frame;
 	initialize_abi(frame);
-	frame.frame_slot = p_packet.scene_generation % 3;
+	// Upload memory follows Godot's retired frame slots. Scene generations can
+	// jump several times in one script frame and cannot identify a safe slot.
+	RenderingDevice *device = RenderingServer::get_singleton()->get_rendering_device();
+	frame.frame_slot = device->get_frames_drawn() % device->get_frame_delay();
 	frame.frame_id = p_packet.scene_generation;
 	frame.flags = HCSR_FRAME_CLEAR_TARGET;
 	frame.clear_r = p_background.r;
@@ -301,6 +309,12 @@ struct HCSRNewestGpuSubmission {
 
 static void complete_gpu_submission(RenderingDeviceDriver *p_driver, RenderingDeviceDriver::CommandBufferID p_command_buffer, void *p_userdata) {
 	HCSRNewestGpuSubmission *submission = (HCSRNewestGpuSubmission *)p_userdata;
+	// A view can be destroyed after registering work but before graph execution.
+	// Cancellation releases its scene packet and leaves only this callback token.
+	if (submission->state == nullptr) {
+		memdelete(submission);
+		return;
+	}
 	const uint64_t record_start_usec = OS::get_singleton()->get_ticks_usec();
 	hcsr_draw_packet_view_t packet;
 	initialize_abi(packet);
@@ -385,7 +399,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 			RenderingDevice::CallbackResource resource;
 			resource.rid = state->rd_texture;
 			resource.usage = RenderingDevice::CALLBACK_RESOURCE_USAGE_ATTACHMENT_COLOR_READ_WRITE;
-			const Error callback_error = device->driver_callback_add_next_frame(complete_gpu_submission, submission, VectorView(&resource, 1));
+			const Error callback_error = device->driver_callback_add(complete_gpu_submission, submission, VectorView(&resource, 1));
 			if (callback_error == OK) {
 				MutexLock lock(state->mutex);
 				state->pending_gpu_submission = submission;
@@ -431,9 +445,6 @@ void HTMLSurfaceHCSRNewestBackend::_cancel_gpu_submission_on_render_thread(uint6
 		submission = (HCSRNewestGpuSubmission *)state->pending_gpu_submission;
 	}
 	if (submission == nullptr) return;
-	RenderingServer *server = RenderingServer::get_singleton();
-	RenderingDevice *device = server != nullptr ? server->get_rendering_device() : nullptr;
-	if (device == nullptr || !device->driver_callback_cancel_next_frame(complete_gpu_submission, submission)) return;
 	{
 		MutexLock lock(state->mutex);
 		if (state->pending_gpu_submission == submission) state->pending_gpu_submission = nullptr;
@@ -441,7 +452,8 @@ void HTMLSurfaceHCSRNewestBackend::_cancel_gpu_submission_on_render_thread(uint6
 		state->render_pending = false;
 	}
 	hcsr_draw_packet_destroy(submission->packet);
-	memdelete(submission);
+	submission->packet = 0;
+	submission->state = nullptr;
 }
 
 Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
@@ -994,6 +1006,29 @@ HTMLSurfaceHCSRNewestBackend::HTMLSurfaceHCSRNewestBackend(HTMLSurfaceHCSRNewest
 	}
 }
 
+void HTMLSurfaceHCSRNewestBackend::_destroy_state_on_render_thread(uint64_t p_state_pointer) {
+	State *state = (State *)(uintptr_t)p_state_pointer;
+	_cancel_gpu_submission_on_render_thread(p_state_pointer);
+	RenderingServer *server = RenderingServer::get_singleton();
+	RenderingDevice *device = server != nullptr ? server->get_rendering_device() : nullptr;
+	{
+		MutexLock lock(state->mutex);
+		if (state->pending_packet != 0) hcsr_draw_packet_destroy(state->pending_packet);
+		if (state->presenter != 0) {
+			// Recorded commands may still read upload buffers after the view dies.
+			const Callable release = callable_mp_static(&destroy_presenter).bind(state->presenter, (int)state->renderer);
+			if (device != nullptr) device->external_resource_defer_release(release);
+			else release.call();
+		}
+		release_gpu_target(state, server, device);
+		if (state->scene != 0) hcsr_scene_destroy(state->scene);
+		if (state->source != 0) hcsr_source_destroy(state->source);
+		if (state->runtime != 0) hcsr_runtime_destroy(state->runtime);
+		state->texture.unref();
+	}
+	memdelete(state);
+}
+
 HTMLSurfaceHCSRNewestBackend::~HTMLSurfaceHCSRNewestBackend() {
 	if (state == nullptr) return;
 	HCSRNewestPerformanceMonitor::remove((uint64_t)state);
@@ -1003,27 +1038,11 @@ HTMLSurfaceHCSRNewestBackend::~HTMLSurfaceHCSRNewestBackend() {
 	}
 	RenderingServer *server = RenderingServer::get_singleton();
 	if (server != nullptr) {
+		server->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRNewestBackend::_destroy_state_on_render_thread).bind((uint64_t)(uintptr_t)state));
 		if (!server->is_on_render_thread()) server->sync();
-		server->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRNewestBackend::_cancel_gpu_submission_on_render_thread).bind((uint64_t)(uintptr_t)state));
-		if (!server->is_on_render_thread()) {
-			server->sync();
-		}
+	} else {
+		_destroy_state_on_render_thread((uint64_t)(uintptr_t)state);
 	}
-	RenderingDevice *device = server != nullptr ? server->get_rendering_device() : nullptr;
-	{
-		MutexLock lock(state->mutex);
-		if (state->pending_packet != 0) hcsr_draw_packet_destroy(state->pending_packet);
-		if (state->presenter != 0) {
-			if (state->renderer == HTML_SURFACE_HCSR_NEWEST_D3D12) hcsr_d3d12_destroy(state->presenter);
-			else if (state->renderer == HTML_SURFACE_HCSR_NEWEST_VULKAN) hcsr_vulkan_destroy(state->presenter);
-		}
-		release_gpu_target(state, server, device);
-		if (state->scene != 0) hcsr_scene_destroy(state->scene);
-		if (state->source != 0) hcsr_source_destroy(state->source);
-		if (state->runtime != 0) hcsr_runtime_destroy(state->runtime);
-		state->texture.unref();
-	}
-	memdelete(state);
 	state = nullptr;
 	document.unref();
 	texture.unref();

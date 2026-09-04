@@ -156,6 +156,7 @@ private:
 	bool _send_key_event(const Ref<InputEventKey> &p_event);
 	void _call_bound_action(const StringName &p_action, const Dictionary &p_payload);
 	void _queue_frame_render();
+	void _frame_pre_draw();
 
 protected:
 	void _notification(int p_what);
