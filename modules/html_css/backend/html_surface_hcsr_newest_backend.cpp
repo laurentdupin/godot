@@ -10,6 +10,7 @@
 #include "core/object/callable_mp.h"
 #include "core/os/os.h"
 #include "core/string/regex.h"
+#include "core/templates/hash_set.h"
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/rendering_device_driver.h"
 #include "servers/rendering/rendering_server.h"
@@ -78,7 +79,7 @@ static String html_attribute(const String &p_attributes, const String &p_name) {
 }
 
 static Error append_document_stylesheets(const Ref<HTMLDocument> &p_document, const String &p_html,
-		Vector<CharString> &r_stylesheets, String &r_error) {
+		Vector<CharString> &r_stylesheets, HashSet<String> &r_linked_stylesheet_paths, String &r_error) {
 	Ref<RegEx> sources = RegEx::create_from_string(
 			"(?is)<style\\b[^>]*>(.*?)</style\\s*>|<link\\b([^>]*)>", false);
 	if (sources.is_null()) return ERR_BUG;
@@ -103,6 +104,7 @@ static Error append_document_stylesheets(const Ref<HTMLDocument> &p_document, co
 		HTMLAssetResource asset;
 		if (HTMLGodotAssetProvider::load_asset(p_document, href, asset, &r_error) != OK) return ERR_CANT_OPEN;
 		r_stylesheets.push_back(String::utf8((const char *)asset.bytes.ptr(), asset.bytes.size()).utf8());
+		r_linked_stylesheet_paths.insert(asset.path);
 	}
 	return OK;
 }
@@ -438,14 +440,27 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
 	}
 	if (html.strip_edges().is_empty()) return ERR_INVALID_DATA;
 	Vector<CharString> stylesheet_bytes;
+	HashSet<String> linked_stylesheet_paths;
 	String stylesheet_error;
-	if (append_document_stylesheets(document, html, stylesheet_bytes, stylesheet_error) != OK) {
+	if (append_document_stylesheets(document, html, stylesheet_bytes, linked_stylesheet_paths, stylesheet_error) != OK) {
 		set_terminal(state, stylesheet_error.is_empty() ? "hcsr_newest could not resolve a linked stylesheet." : stylesheet_error);
 		return ERR_CANT_OPEN;
 	}
 	for (const String &path : document->get_css_files()) {
-		HTMLAssetResource asset;
+		String resolved_path;
 		String error;
+		if (HTMLGodotAssetProvider::resolve_asset_path(document, path, resolved_path, &error) != OK) {
+			set_terminal(state, error);
+			return ERR_CANT_OPEN;
+		}
+		// Resolve before loading so cross-source duplicates incur neither I/O nor
+		// text decoding. Linked sheets and css_files are discovery paths for the
+		// same document resource, not separate cascade origins. Deliberate repeats
+		// within either source remain ordered as authored.
+		if (linked_stylesheet_paths.has(resolved_path)) {
+			continue;
+		}
+		HTMLAssetResource asset;
 		if (HTMLGodotAssetProvider::load_asset(document, path, asset, &error) != OK) {
 			set_terminal(state, error);
 			return ERR_CANT_OPEN;
