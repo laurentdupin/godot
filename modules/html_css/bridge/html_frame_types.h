@@ -88,6 +88,9 @@ struct HTMLElementHit {
 	bool editable = false;
 	bool checked = false;
 	bool focused = false;
+	// Native controls may consume a click to open internal scene UI without
+	// requesting an application-level action yet (for example a collapsed select).
+	bool suppresses_host_activation = false;
 	Vector<HTMLElementAttribute> attributes;
 
 	String get_attribute(const StringName &p_name) const {

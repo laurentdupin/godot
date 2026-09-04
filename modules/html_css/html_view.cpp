@@ -1300,7 +1300,7 @@ bool HTMLView::_same_activation_target(const HTMLElementHit &p_pressed, const HT
 }
 
 void HTMLView::_emit_activation(const HTMLElementHit &p_hit, const Vector2 &p_html_position, MouseButton p_button) {
-	if (p_hit.disabled) {
+	if (p_hit.disabled || p_hit.suppresses_host_activation) {
 		return;
 	}
 

@@ -860,11 +860,17 @@ bool HTMLSurfaceHCSRNewestBackend::hit_test(const Point2 &p_position, HTMLElemen
 	r_hit.editable = (hit.flags & HCSR_HIT_EDITABLE) != 0;
 	r_hit.checked = (hit.flags & HCSR_HIT_CHECKED) != 0;
 	r_hit.focused = (hit.flags & HCSR_HIT_FOCUSED) != 0;
+	const bool select_option_hit = (hit.flags & HCSR_HIT_SELECT_OPTION) != 0;
+	r_hit.suppresses_host_activation = r_hit.tag_name == SNAME("select") && !select_option_hit;
 	const CharString action_name = String("data-godot-action").utf8();
 	size_t action_required = 0;
 	const hcsr_result_t action_query = hcsr_scene_copy_element_attribute(state->scene, hit.object_id,
 			utf8_view(action_name), nullptr, 0, &action_required);
-	if (action_query == HCSR_BUFFER_TOO_SMALL && action_required > 0) {
+	// A click on the collapsed select only opens its scene-owned popup. Expose
+	// the authored form action when a popup option is committed, not when the
+	// user merely opens the control.
+	if (action_query == HCSR_BUFFER_TOO_SMALL && action_required > 0
+			&& (r_hit.tag_name != SNAME("select") || select_option_hit)) {
 		Vector<char> action;
 		action.resize(action_required);
 		if (hcsr_scene_copy_element_attribute(state->scene, hit.object_id, utf8_view(action_name),

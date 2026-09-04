@@ -22,7 +22,9 @@ func _run() -> void:
 	</body></html>"""
 	document.resource_root = "res://"
 	var view := HTMLView.new()
-	view.backend_preference = HTMLView.BACKEND_CPU
+	var arguments := OS.get_cmdline_user_args()
+	view.backend_preference = HTMLView.BACKEND_VULKAN if arguments.has("--vulkan") else \
+			(HTMLView.BACKEND_D3D12 if arguments.has("--d3d12") else HTMLView.BACKEND_CPU)
 	view.size = Vector2(180, 160)
 	view.document = document
 	view.action_requested.connect(func(action: StringName, _payload: Dictionary) -> void: actions.append(action))
@@ -69,11 +71,17 @@ func _run() -> void:
 		await process_frame
 	_send_click(Vector2(70, 127))
 	await process_frame
-	# The authored select action is dispatched for the click that opens the popup
-	# and for the option click that commits the new value.
-	if actions.count(&"activate:action") != 10 or actions.count(&"form:choice") != 2 or actions.back() != &"navigate:next":
+	# Opening the native popup is internal scene state. The host form action is
+	# emitted once, when an option commits a changed value.
+	if actions.count(&"activate:action") != 10 or actions.count(&"form:choice") != 1 or actions.back() != &"navigate:next":
 		_fail("An action inserted by a DeepDesktop-style page rebuild was not interactive: %s" % [actions])
 		return
+	# Let every renderer submission that observed the structural mutation retire
+	# before SceneTree teardown destroys the embedded GPU resources.
+	for _frame in range(8):
+		await process_frame
+	RenderingServer.force_draw(true)
+	await RenderingServer.frame_post_draw
 	print("HCSR newest interaction and dropdown smoke passed.")
 	quit(0)
 
