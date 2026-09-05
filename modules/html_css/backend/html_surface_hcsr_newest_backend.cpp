@@ -710,6 +710,7 @@ Dictionary HTMLSurfaceHCSRNewestBackend::get_frame_synchronization() const {
 	stages["generated_content_ms"] = state->profile.generated_content_seconds * 1000.0;
 	stages["animation_configuration_ms"] = state->profile.animation_configuration_seconds * 1000.0;
 	stages["full_cascade_count"] = state->profile.full_cascade_count;
+	stages["structural_cascade_count"] = state->profile.structural_cascade_count;
 	stages["layout_pass_count"] = state->profile.layout_pass_count;
 	result["scene_stages"] = stages;
 	return result;

@@ -54,11 +54,11 @@ exposes the same dictionary through `get_frame_synchronization()`.
 `HTMLView.get_host_frame_number()` reads the recorded host-frame number, not an
 incrementing local counter or metadata from an earlier main-thread poll.
 
-`frame_synchronization["scene_stages"]` exposes full-cascade stage durations in
+`frame_synchronization["scene_stages"]` exposes full and structural cascade stage durations in
 milliseconds (`rule_compilation_ms`, `cascade_ms`, `computed_tree_ms`,
 `generated_content_ms`, `animation_configuration_ms`) plus `full_cascade_count`
-and `layout_pass_count`. Stages are summed across the completed scene step and
-zero when no full cascade ran; an unchanged surface retains its last step's
+and `structural_cascade_count` and `layout_pass_count`. Stages are summed across the completed scene step and
+zero when neither full nor structural cascade ran; an unchanged surface retains its last step's
 diagnostics. Rule compilation includes resetting style-driven state. These
 stages do not include application markup generation, and are not all of the
 work represented by the broader Style Time performance monitor.
