@@ -25,6 +25,7 @@ struct HTMLSurfaceHCSRNewestBackend::State {
 	hcsr_scene_t scene = 0;
 	hcsr_draw_packet_t pending_packet = 0;
 	hcsr_presenter_t presenter = 0;
+	hcsr_scene_profile_t profile = {};
 	Ref<HTMLTexture2D> texture;
 	Ref<HTMLDocument> document;
 	Size2i logical_size = Size2i(512, 512);
@@ -671,6 +672,7 @@ Error HTMLSurfaceHCSRNewestBackend::prepare_host_frame(uint64_t p_host_frame, do
 	hcsr_scene_profile_t profile;
 	initialize_abi(profile);
 	if (hcsr_scene_get_profile(state->scene, &profile) == HCSR_OK) {
+		state->profile = profile;
 		HCSRNewestPerformanceMonitor::update_scene((uint64_t)state, profile);
 	}
 	state->needs_another_frame = (result.flags & HCSR_STEP_RESULT_NEEDS_ANOTHER_STEP) != 0;
@@ -701,6 +703,15 @@ Dictionary HTMLSurfaceHCSRNewestBackend::get_frame_synchronization() const {
 	result["pending"] = state->render_pending;
 	result["preparation_ms"] = state->preparation_milliseconds;
 	result["maximum_preparation_ms"] = state->maximum_preparation_milliseconds;
+	Dictionary stages;
+	stages["rule_compilation_ms"] = state->profile.rule_compilation_seconds * 1000.0;
+	stages["cascade_ms"] = state->profile.cascade_seconds * 1000.0;
+	stages["computed_tree_ms"] = state->profile.computed_tree_seconds * 1000.0;
+	stages["generated_content_ms"] = state->profile.generated_content_seconds * 1000.0;
+	stages["animation_configuration_ms"] = state->profile.animation_configuration_seconds * 1000.0;
+	stages["full_cascade_count"] = state->profile.full_cascade_count;
+	stages["layout_pass_count"] = state->profile.layout_pass_count;
+	result["scene_stages"] = stages;
 	return result;
 }
 
