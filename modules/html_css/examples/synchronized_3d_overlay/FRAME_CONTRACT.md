@@ -65,6 +65,11 @@ work represented by the broader Style Time performance monitor.
 
 ## Regression checks
 
+For local experiments, use only the `hcsr_newest` Godot binary suffix
+(`extra_suffix=hcsr_newest`, `module_html_css_renderer=hcsr_newest`). Reuse the
+current checkout and build output; do not create additional experimental suffixes
+such as `hcsr_newest_dll`. Historical measurements may reference those older builds.
+
 Run the suffixed editor with this project and `res://frame_contract.tscn` as the
 scene. The fixture uses two HTMLViews and one HTMLRenderTarget, all starting
 from the same document, at different sizes. A late-processing script issues
