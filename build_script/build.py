@@ -209,7 +209,7 @@ def is_valid_suffix(value: str) -> bool:
 
 
 def choose_suffix(current: str) -> str:
-    response = input(f"Output suffix [{current or 'none'}]: ").strip()
+    response = input(f"Output suffix [{current or 'none'}] (Enter keeps current; clear removes suffix): ").strip()
     if not response:
         return current
     if response.lower() in ("none", "clear"):
@@ -249,6 +249,7 @@ def configure_interactively(settings: BuildSettings, godot_platform: str) -> Bui
         print("  7. Change parallel jobs")
         print("  8. Change SCons cache limit")
         print("  9. Change output suffix")
+        print("  C. Clear output suffix")
         print("  R. Reset defaults")
         print("  B. Save and build")
         print("  Q. Quit")
@@ -280,6 +281,8 @@ def configure_interactively(settings: BuildSettings, godot_platform: str) -> Bui
             )
         elif response == "9":
             settings.suffix = choose_suffix(settings.suffix)
+        elif response == "c":
+            settings.suffix = ""
         elif response == "r":
             settings = default_settings()
         elif response == "b":
@@ -339,11 +342,7 @@ def build_command(
         f"cache_limit={settings.cache_limit_gib}",
         f"-j{settings.jobs}",
     ]
-    output_suffix = settings.suffix
-    if not output_suffix and settings.html_css_renderer in ("hcsr_newest", "hcsr_newest_dll"):
-        output_suffix = settings.html_css_renderer
-    if output_suffix:
-        command.append(f"extra_suffix={output_suffix}")
+    command.append(f"extra_suffix={settings.suffix}")
     if clean:
         command.append("--clean")
     if godot_platform == "windows":
