@@ -29,6 +29,7 @@
 /**************************************************************************/
 
 #include "gdscript.h"
+#include "gdc_frontend.h"
 #include "gdscript_analyzer.h"
 #include "gdscript_parser.h"
 #include "gdscript_tokenizer.h"
@@ -38,6 +39,7 @@
 #include "editor/gdscript_docgen.h"
 #include "editor/gdscript_editor_language.h"
 #include "editor/script_templates/templates.gen.h"
+#include "editor/script_templates/cgd_templates.gen.h"
 #endif
 
 #include "core/config/engine.h"
@@ -154,6 +156,21 @@ Vector<ScriptLanguage::ScriptTemplate> GDScriptLanguage::get_built_in_templates(
 	return templates;
 }
 
+Vector<ScriptLanguage::ScriptTemplate> GDScriptLanguage::get_built_in_templates_for_path(const String &p_path, const StringName &p_object) {
+	if (!GDCFrontend::is_source_path(p_path)) {
+		return get_built_in_templates(p_object);
+	}
+	Vector<ScriptTemplate> templates;
+#ifdef TOOLS_ENABLED
+	for (int i = 0; i < CGD_TEMPLATES_ARRAY_SIZE; i++) {
+		if (CGD_TEMPLATES[i].inherit == p_object) {
+			templates.append(CGD_TEMPLATES[i]);
+		}
+	}
+#endif
+	return templates;
+}
+
 #ifdef TOOLS_ENABLED
 
 static void get_function_names_recursively(const GDScriptParser::ClassNode *p_class, const String &p_prefix, HashMap<int, String> &r_funcs) {
@@ -255,6 +272,22 @@ bool GDScriptLanguage::supports_documentation() const {
 }
 
 #ifdef TOOLS_ENABLED
+int32_t GDScriptEditorLanguage::find_function_for_path(const String &p_path, const String &p_function, const String &p_code) const {
+	if (!GDCFrontend::is_source_path(p_path)) {
+		return find_function(p_function, p_code);
+	}
+	String generated;
+	String error;
+	GDC::SourceMap map;
+	int line = 1;
+	int column = 1;
+	if (GDCFrontend::transpile(p_code, generated, map, error, line, column, true) != OK) {
+		return -1;
+	}
+	int found = find_function(p_function, generated);
+	return found < 0 ? found : int(map.original(found, 1).line);
+}
+
 int32_t GDScriptEditorLanguage::find_function(const String &p_function, const String &p_code) const {
 	GDScriptTokenizerText tokenizer;
 	tokenizer.set_source_code(p_code);
@@ -552,6 +585,37 @@ void GDScriptLanguage::get_public_annotations(List<MethodInfo> *p_annotations) c
 	for (const MethodInfo &E : annotations) {
 		p_annotations->push_back(E);
 	}
+}
+
+Vector<String> GDScriptLanguage::get_comment_delimiters_for_path(const String &p_path) const {
+	if (GDCFrontend::is_source_path(p_path)) {
+		return { "//", "/* */" };
+	}
+	return get_comment_delimiters();
+}
+
+Vector<String> GDScriptLanguage::get_doc_comment_delimiters_for_path(const String &p_path) const {
+	return GDCFrontend::is_source_path(p_path) ? Vector<String>{ "///" } : get_doc_comment_delimiters();
+}
+
+Vector<String> GDScriptLanguage::get_string_delimiters_for_path(const String &p_path) const {
+	return GDCFrontend::is_source_path(p_path) ? Vector<String>{ "\" \"" } : get_string_delimiters();
+}
+
+String GDScriptLanguage::make_function_for_path(const String &p_path, const String &p_class, const String &p_name, const PackedStringArray &p_args) const {
+	if (!GDCFrontend::is_source_path(p_path)) {
+		return make_function(p_class, p_name, p_args);
+	}
+	String function = "void " + p_name + "(";
+	for (int i = 0; i < p_args.size(); i++) {
+		if (i > 0) {
+			function += ", ";
+		}
+		String name = p_args[i].get_slicec(':', 0).strip_edges();
+		String type = p_args[i].get_slicec(':', 1).strip_edges();
+		function += (type.is_empty() ? String("Variant") : type) + " " + name;
+	}
+	return function + ") {\n" + _get_indentation() + "// Replace with function body.\n}\n";
 }
 
 String GDScriptLanguage::make_function(const String &p_class, const String &p_name, const PackedStringArray &p_args) const {
@@ -1206,7 +1270,7 @@ static void _list_available_types(bool p_inherit_only, GDScriptParser::Completio
 	// Autoload singletons
 	for (const KeyValue<StringName, ProjectSettings::AutoloadInfo> &E : ProjectSettings::get_singleton()->get_autoload_list()) {
 		const ProjectSettings::AutoloadInfo &info = E.value;
-		if (!info.is_singleton || !info.path.has_extension("gd")) {
+		if (!info.is_singleton || !GDScriptLanguage::get_singleton()->handles_extension(info.path.get_extension().to_lower())) {
 			continue;
 		}
 		ScriptLanguage::CodeCompletionOption option(info.name, ScriptLanguage::CODE_COMPLETION_KIND_CLASS, ScriptLanguage::LOCATION_OTHER_USER_CODE);
@@ -1776,7 +1840,7 @@ static GDScriptCompletionIdentifier _type_from_variant(const Variant &p_value, G
 			ci.type.native_type = scr->get_instance_base_type();
 			ci.type.kind = GDScriptParser::DataType::SCRIPT;
 
-			if (scr->get_path().ends_with(".gd")) {
+			if (GDScriptLanguage::get_singleton()->handles_extension(scr->get_path().get_extension().to_lower())) {
 				Ref<GDScriptParserRef> parser = p_context.parser->get_depended_parser_for(scr->get_path());
 				if (parser.is_valid() && parser->raise_status(GDScriptParserRef::INTERFACE_SOLVED) == OK) {
 					ci.type.type_source = GDScriptParser::DataType::ANNOTATED_EXPLICIT;
@@ -2582,7 +2646,7 @@ static bool _guess_identifier_type(GDScriptParser::CompletionContext &p_context,
 	// Check global scripts.
 	if (ScriptServer::is_global_class(p_identifier->name)) {
 		String script = ScriptServer::get_global_class_path(p_identifier->name);
-		if (script.to_lower().ends_with(".gd")) {
+		if (GDScriptLanguage::get_singleton()->handles_extension(script.get_extension().to_lower())) {
 			Ref<GDScriptParserRef> parser = p_context.parser->get_depended_parser_for(script);
 			if (parser.is_valid() && parser->raise_status(GDScriptParserRef::INTERFACE_SOLVED) == OK) {
 				r_type.type.type_source = GDScriptParser::DataType::ANNOTATED_EXPLICIT;
@@ -3476,16 +3540,63 @@ static void _find_call_arguments(GDScriptParser::CompletionContext &p_context, c
 	r_forced = r_result.size() > 0;
 }
 
+// Builds only the method-name/parameter suffix: completion follows the return
+// type already entered by the user, just like the existing native override path.
+// Do not copy FunctionNode::signature: it is generated GDScript, not CGD source.
+static bool _make_cgd_override_hint(const MethodInfo &p_method, const StringName &p_class_name, String &r_hint) {
+	r_hint = String();
+	if (p_method.name.is_empty() || (p_method.flags & METHOD_FLAG_VARARG) || p_method.default_arguments.size() > p_method.arguments.size()) {
+		return false; // CGD has no rest-parameter declaration syntax yet.
+	}
+	String hint = p_method.name.get_slicec(':', 0) + "(";
+	const int first_default = p_method.arguments.size() - p_method.default_arguments.size();
+	for (int i = 0; i < p_method.arguments.size(); i++) {
+		if (i > 0) {
+			hint += ", ";
+		}
+		const PropertyInfo &argument = p_method.arguments[i];
+		hint += _get_visual_datatype(argument, true, p_class_name) + " " + String(argument.name).get_slicec(':', 0);
+		if (i >= first_default) {
+			const Variant &value = p_method.default_arguments[i - first_default];
+			String expression;
+			switch (value.get_type()) {
+				case Variant::NIL:
+				case Variant::BOOL:
+				case Variant::INT:
+				case Variant::FLOAT:
+					expression = value.get_construct_string();
+					break;
+				case Variant::STRING:
+					expression = String(value).c_escape().quote();
+					break;
+				default:
+					// Do not insert GDScript-only literals or silently discard defaults.
+					// Non-scalar defaults need a dedicated CGD constant emitter.
+					return false;
+			}
+			hint += " = " + expression;
+		}
+	}
+	r_hint = hint + ") {";
+	return true;
+}
+
 ::Error GDScriptEditorLanguage::complete_code(const String &p_code, const String &p_path, Object *p_owner, List<ScriptLanguage::CodeCompletionOption> *r_options, bool &r_forced, String &r_call_hint) {
-	const String quote_style = EDITOR_GET("text_editor/completion/use_single_quotes") ? "'" : "\"";
+	const bool cgd = GDCFrontend::is_source_path(p_path);
+	const String quote_style = !cgd && EDITOR_GET("text_editor/completion/use_single_quotes") ? "'" : "\"";
 
 	GDScriptParser parser;
 	GDScriptAnalyzer analyzer(&parser);
 
 	parser.parse(p_code, p_path, true);
+	r_forced = false;
+	if (parser.get_tree() == nullptr) {
+		// CGD can fail before the native parser creates a tree while the user types.
+		r_call_hint = String();
+		return ERR_PARSE_ERROR;
+	}
 	analyzer.analyze();
 
-	r_forced = false;
 	HashMap<String, ScriptLanguage::CodeCompletionOption> options;
 
 	GDScriptParser::CompletionContext completion_context = parser.get_completion_context();
@@ -3749,8 +3860,15 @@ static void _find_call_arguments(GDScriptParser::CompletionContext &p_context, c
 								continue;
 							}
 
-							String display_name = member.function->identifier->name;
-							display_name += member.function->signature + ":";
+							String display_name;
+							if (cgd) {
+								if (member.function->is_vararg() || member.function->info.arguments.size() != int(member.function->parameters.size()) || !_make_cgd_override_hint(member.function->info, StringName(), display_name)) {
+									continue;
+								}
+							} else {
+								display_name = member.function->identifier->name;
+								display_name += member.function->signature + ":";
+							}
 							ScriptLanguage::CodeCompletionOption option(display_name, ScriptLanguage::CODE_COMPLETION_KIND_FUNCTION);
 							options.insert(member.function->identifier->name, option); // Insert name instead of display to track duplicates.
 						}
@@ -3791,6 +3909,14 @@ static void _find_call_arguments(GDScriptParser::CompletionContext &p_context, c
 				if (completion_context.current_class->has_function(mi.name) && completion_context.current_class->get_member(mi.name).function != function_node) {
 					continue;
 				}
+				if (cgd) {
+					String cgd_hint;
+					if (_make_cgd_override_hint(mi, class_name, cgd_hint)) {
+						ScriptLanguage::CodeCompletionOption option(cgd_hint, ScriptLanguage::CODE_COMPLETION_KIND_FUNCTION);
+						options.insert(mi.name, option);
+					}
+					continue;
+				}
 				String method_hint = mi.name;
 				if (method_hint.contains_char(':')) {
 					method_hint = method_hint.get_slicec(':', 0);
@@ -3805,10 +3931,17 @@ static void _find_call_arguments(GDScriptParser::CompletionContext &p_context, c
 					if (arg.contains_char(':')) {
 						arg = arg.substr(0, arg.find_char(':'));
 					}
-					method_hint += arg;
-					if (type_hints) {
-						method_hint += ": " + _get_visual_datatype(mi.arguments[i], true, class_name);
+					if (cgd) {
+						method_hint += _get_visual_datatype(mi.arguments[i], true, class_name) + " " + arg;
+					} else {
+						method_hint += arg;
+						if (type_hints) {
+							method_hint += ": " + _get_visual_datatype(mi.arguments[i], true, class_name);
+						}
 					}
+				}
+				if (cgd && (mi.flags & METHOD_FLAG_VARARG)) {
+					continue; // Rest-parameter declarations have no GD-C syntax yet.
 				}
 				if (mi.flags & METHOD_FLAG_VARARG) {
 					if (!mi.arguments.is_empty()) {
@@ -3820,10 +3953,10 @@ static void _find_call_arguments(GDScriptParser::CompletionContext &p_context, c
 					}
 				}
 				method_hint += ")";
-				if (type_hints) {
+				if (!cgd && type_hints) {
 					method_hint += " -> " + _get_visual_datatype(mi.return_val, false, class_name);
 				}
-				method_hint += ":";
+				method_hint += cgd ? " {" : ":";
 
 				ScriptLanguage::CodeCompletionOption option(method_hint, ScriptLanguage::CODE_COMPLETION_KIND_FUNCTION);
 				options.insert(option.display, option);
@@ -3896,7 +4029,20 @@ static void _find_call_arguments(GDScriptParser::CompletionContext &p_context, c
 	}
 
 	for (const KeyValue<String, ScriptLanguage::CodeCompletionOption> &E : options) {
+		if (cgd && E.value.kind == ScriptLanguage::CODE_COMPLETION_KIND_KEYWORD) {
+			const String &word = E.value.display;
+			if (word == "func" || word == "var" || word == "pass" || word == "and" || word == "or" || word == "not" || word == "in" || word == "is" || word == "as" || word == "elif" || word == "match" || word == "when") {
+				continue;
+			}
+		}
 		r_options->push_back(E.value);
+	}
+	if (cgd && options.has("var")) {
+		for (const String &word : { "auto", "dynamic", "void", "switch", "cast", "type_is", "is_in" }) {
+			ScriptLanguage::CodeCompletionOption option(word, ScriptLanguage::CODE_COMPLETION_KIND_KEYWORD);
+			option.insert_text += (word == "cast" || word == "type_is") ? "<" : word == "is_in" ? "(" : " ";
+			r_options->push_back(option);
+		}
 	}
 
 	return OK;
@@ -3906,6 +4052,74 @@ static void _find_call_arguments(GDScriptParser::CompletionContext &p_context, c
 //////// END COMPLETION //////////
 
 #ifdef TOOLS_ENABLED
+
+void GDScriptEditorLanguage::format_code_for_path(const String &p_path, String &r_code, uint32_t p_from_line, uint32_t p_to_line) const {
+	if (!GDCFrontend::is_source_path(p_path)) {
+		format_code(r_code, p_from_line, p_to_line);
+		return;
+	}
+	Vector<String> lines = r_code.split("\n");
+	int depth = 0;
+	char32_t quote = 0;
+	bool triple = false;
+	bool block_comment = false;
+	const String indent = _get_indentation();
+	for (int i = 0; i < lines.size() && uint32_t(i) <= p_to_line; i++) {
+		const String original = lines[i];
+		const bool preserve = quote != 0 || block_comment;
+		String stripped = original.strip_edges(true, false);
+		int line_depth = depth;
+		bool leading = true;
+		for (int j = 0; j < original.length(); j++) {
+			char32_t c = original[j];
+			char32_t next = j + 1 < original.length() ? original[j + 1] : 0;
+			if (block_comment) {
+				if (c == '*' && next == '/') {
+					block_comment = false;
+					j++;
+				}
+				continue;
+			}
+			if (quote) {
+				if (c == '\\') {
+					j++;
+				} else if (c == quote && (!triple || (next == quote && j + 2 < original.length() && original[j + 2] == quote))) {
+					j += triple ? 2 : 0;
+					quote = 0;
+				}
+				continue;
+			}
+			if (c == '#' || (c == '/' && next == '/')) {
+				break;
+			}
+			if (c == '/' && next == '*') {
+				block_comment = true;
+				j++;
+				continue;
+			}
+			if (c == '\'' || c == '"') {
+				quote = c;
+				triple = next == c && j + 2 < original.length() && original[j + 2] == c;
+				j += triple ? 2 : 0;
+				leading = false;
+			} else if (c == '}' || c == ')' || c == ']') {
+				depth = MAX(0, depth - 1);
+				if (leading) {
+					line_depth = depth;
+				}
+			} else if (c == '{' || c == '(' || c == '[') {
+				depth++;
+				leading = false;
+			} else if (c != ' ' && c != '\t') {
+				leading = false;
+			}
+		}
+		if (!preserve && uint32_t(i) >= p_from_line && !stripped.is_empty()) {
+			lines.write[i] = indent.repeat(line_depth) + stripped;
+		}
+	}
+	r_code = String("\n").join(lines);
+}
 
 void GDScriptEditorLanguage::format_code(String &r_code, uint32_t p_from_line, uint32_t p_to_line) const {
 	String indent = _get_indentation();
@@ -4336,6 +4550,9 @@ static Error _lookup_symbol_from_base(const GDScriptParser::DataType &p_base, co
 
 	GDScriptParser parser;
 	parser.parse(p_code, p_path, true);
+	if (parser.get_tree() == nullptr) {
+		return ERR_PARSE_ERROR;
+	}
 
 	GDScriptParser::CompletionContext context = parser.get_completion_context();
 	context.base = p_owner;
@@ -4499,9 +4716,12 @@ static Error _lookup_symbol_from_base(const GDScriptParser::DataType &p_base, co
 					const ProjectSettings::AutoloadInfo &autoload = ProjectSettings::get_singleton()->get_autoload(p_symbol);
 					if (autoload.is_singleton) {
 						String scr_path = autoload.path;
-						if (!scr_path.ends_with(".gd")) {
+						if (!GDScriptLanguage::get_singleton()->handles_extension(scr_path.get_extension().to_lower())) {
 							// Not a script, try find the script anyway, may have some success.
 							scr_path = scr_path.get_basename() + ".gd";
+							if (!FileAccess::exists(scr_path) && FileAccess::exists(scr_path.get_basename() + ".cgd")) {
+								scr_path = scr_path.get_basename() + ".cgd";
+							}
 						}
 
 						if (FileAccess::exists(scr_path)) {

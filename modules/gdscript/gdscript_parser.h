@@ -51,6 +51,10 @@
 #include "core/string/string_builder.h"
 #endif
 
+namespace GDC {
+struct SourceMap;
+}
+
 class GDScriptParser {
 	struct AnnotationInfo;
 
@@ -1370,6 +1374,8 @@ public:
 private:
 	friend class GDScriptAnalyzer;
 	friend class GDScriptParserRef;
+
+	void _remap_gdc_positions(const GDC::SourceMap &p_map);
 
 	bool _is_tool = false;
 	String script_path;

@@ -2684,12 +2684,13 @@ void FileSystemDock::_file_option(int p_option, const Vector<String> &p_selected
 			make_scene_dialog->popup_centered();
 		} break;
 
-		case FILE_MENU_NEW_SCRIPT: {
+		case FILE_MENU_NEW_SCRIPT:
+		case FILE_MENU_NEW_CGD_SCRIPT: {
 			String fpath = current_path;
 			if (!fpath.ends_with("/")) {
 				fpath = fpath.get_base_dir();
 			}
-			make_script_dialog->config("Node", fpath.path_join("new_script.gd"), false, false);
+			make_script_dialog->config("Node", fpath.path_join(p_option == FILE_MENU_NEW_CGD_SCRIPT ? "new_script.cgd" : "new_script.gd"), false, false);
 			make_script_dialog->popup_centered();
 		} break;
 
@@ -3717,6 +3718,9 @@ void FileSystemDock::_add_create_options(PopupMenu *p_popup, const String &p_bas
 	p_popup->set_item_shortcut(-1, ED_GET_SHORTCUT("filesystem_dock/new_scene"));
 	p_popup->add_icon_item(get_editor_theme_icon(SNAME("Script")), prefix_new ? TTRC("New Script...") : TTRC("Script..."), FILE_MENU_NEW_SCRIPT);
 	p_popup->set_item_shortcut(-1, ED_GET_SHORTCUT("filesystem_dock/new_script"));
+	if (ScriptServer::get_language_for_extension("cgd")) {
+		p_popup->add_icon_item(get_editor_theme_icon(SNAME("Script")), prefix_new ? TTRC("New GD-C Script...") : TTRC("GD-C Script..."), FILE_MENU_NEW_CGD_SCRIPT);
+	}
 	p_popup->add_icon_item(get_editor_theme_icon(SNAME("Object")), prefix_new ? TTRC("New Resource...") : TTRC("Resource..."), FILE_MENU_NEW_RESOURCE);
 	p_popup->set_item_shortcut(-1, ED_GET_SHORTCUT("filesystem_dock/new_resource"));
 	p_popup->add_icon_item(get_editor_theme_icon(SNAME("TextFile")), prefix_new ? TTRC("New TextFile...") : TTRC("TextFile..."), FILE_MENU_NEW_TEXTFILE);

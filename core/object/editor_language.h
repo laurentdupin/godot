@@ -118,6 +118,7 @@ public:
 	 * @return The zero-based line number of the function or `-1` if not found.
 	 */
 	virtual int32_t find_function(const String &p_function, const String &p_code) const { return -1; }
+	virtual int32_t find_function_for_path(const String &p_path, const String &p_function, const String &p_code) const { return find_function(p_function, p_code); }
 
 	/**
 	 * Called by the editor to reformat a section of code.
@@ -129,6 +130,7 @@ public:
 	 * @param p_to_line Last line to be formatted (inclusive).
 	 */
 	virtual void format_code(String &r_code, uint32_t p_from_line, uint32_t p_to_line) const {}
+	virtual void format_code_for_path(const String &p_path, String &r_code, uint32_t p_from_line, uint32_t p_to_line) const { format_code(r_code, p_from_line, p_to_line); }
 
 	struct Warning {
 		/// One-based.

@@ -580,6 +580,12 @@ public:
 	virtual void init() override;
 	virtual String get_type() const override;
 	virtual String get_extension() const override;
+	virtual bool handles_extension(const String &p_extension) const override {
+		return p_extension.nocasecmp_to("gd") == 0 || p_extension.nocasecmp_to("cgd") == 0;
+	}
+	virtual Vector<String> get_comment_delimiters_for_path(const String &p_path) const override;
+	virtual Vector<String> get_doc_comment_delimiters_for_path(const String &p_path) const override;
+	virtual String make_function_for_path(const String &p_path, const String &p_class, const String &p_name, const PackedStringArray &p_args) const override;
 	virtual void finish() override;
 
 	/* EDITOR FUNCTIONS */
@@ -592,9 +598,11 @@ public:
 	virtual Vector<String> get_comment_delimiters() const override;
 	virtual Vector<String> get_doc_comment_delimiters() const override;
 	virtual Vector<String> get_string_delimiters() const override;
+	virtual Vector<String> get_string_delimiters_for_path(const String &p_path) const override;
 	virtual bool is_using_templates() override;
 	virtual Ref<Script> make_template(const String &p_template, const String &p_class_name, const String &p_base_class_name) const override;
 	virtual Vector<ScriptTemplate> get_built_in_templates(const StringName &p_object) override;
+	virtual Vector<ScriptTemplate> get_built_in_templates_for_path(const String &p_path, const StringName &p_object) override;
 	virtual bool supports_builtin_mode() const override;
 	virtual bool supports_documentation() const override;
 	virtual bool can_inherit_from_file() const override { return true; }

@@ -31,6 +31,7 @@
 #include "editor_main_screen.h"
 
 #include "core/object/callable_mp.h"
+#include "core/object/object.h"
 #include "editor/docks/editor_dock.h"
 #include "editor/docks/editor_dock_manager.h"
 #include "editor/editor_node.h"
@@ -127,22 +128,62 @@ Rect2 EditorMainScreen::get_drag_hint_rect() const {
 }
 
 void EditorMainScreen::edit(Object *p_object) {
-	EditorPlugin *handling_plugin = EditorNode::get_editor_data().get_handling_main_editor(p_object);
-	if (selected_plugin) {
-		if (handling_plugin == selected_plugin) {
-			selected_plugin->edit(p_object);
-		} else {
-			selected_plugin->edit(nullptr);
-			if (handling_plugin) {
-				selected_plugin->make_visible(false);
+	const ObjectID requested_object = p_object ? p_object->get_instance_id() : ObjectID();
+	if (edit_in_progress) {
+		// Coalesce nested requests, but finish the current deactivation first.
+		// Repeating the active request must not recursively edit the same object.
+		pending_edit_object = requested_object;
+		has_pending_edit = requested_object != editing_object;
+		return;
+	}
+
+	edit_in_progress = true;
+	ObjectID next_object = requested_object;
+	int transition_count = 0;
+	do {
+		has_pending_edit = false;
+		editing_object = next_object;
+		Object *object = next_object.is_valid() ? ObjectDB::get_instance(next_object) : nullptr;
+		if (next_object.is_valid() && object == nullptr) {
+			break; // A queued object was freed by a plugin callback.
+		}
+		EditorPlugin *handling_plugin = EditorNode::get_editor_data().get_handling_main_editor(object);
+		EditorPlugin *previous_plugin = selected_plugin;
+		const ObjectID handling_id = handling_plugin ? handling_plugin->get_instance_id() : ObjectID();
+		const ObjectID previous_id = previous_plugin ? previous_plugin->get_instance_id() : ObjectID();
+		selected_plugin = handling_plugin;
+		if (previous_plugin && previous_plugin != handling_plugin) {
+			previous_plugin->edit(nullptr);
+			previous_plugin = Object::cast_to<EditorPlugin>(ObjectDB::get_instance(previous_id));
+			if (previous_plugin && handling_id.is_valid()) {
+				previous_plugin->make_visible(false);
 			}
 		}
-	}
-	selected_plugin = handling_plugin;
-	if (selected_plugin) {
-		selected_plugin->edit(p_object);
-		selected_plugin->make_visible(true);
-	}
+		handling_plugin = Object::cast_to<EditorPlugin>(ObjectDB::get_instance(handling_id));
+		if (handling_plugin && selected_plugin == handling_plugin) {
+			// edit(nullptr) may also have freed the originally requested object.
+			object = next_object.is_valid() ? ObjectDB::get_instance(next_object) : nullptr;
+			handling_plugin->edit(object);
+			handling_plugin = Object::cast_to<EditorPlugin>(ObjectDB::get_instance(handling_id));
+			if (handling_plugin && selected_plugin == handling_plugin) {
+				handling_plugin->make_visible(true);
+			}
+		} else if (!handling_plugin && handling_id.is_valid()) {
+			selected_plugin = nullptr;
+		}
+		if (handling_id.is_valid() && ObjectDB::get_instance(handling_id) == nullptr) {
+			selected_plugin = nullptr; // A visibility/edit callback unloaded the plugin.
+		}
+		next_object = pending_edit_object;
+		transition_count++;
+	} while (has_pending_edit && transition_count < 64);
+
+	const bool transition_limit_reached = has_pending_edit;
+	has_pending_edit = false;
+	pending_edit_object = ObjectID();
+	editing_object = ObjectID();
+	edit_in_progress = false;
+	ERR_FAIL_COND_MSG(transition_limit_reached, "Main-screen plugins repeatedly requested conflicting editor selections.");
 }
 
 void EditorMainScreen::select_next() {

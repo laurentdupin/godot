@@ -46,11 +46,18 @@ def parse_template(inherits, source, delimiter):
 
 def make_templates(target, source, env):
     delimiter = "#"  # GDScript single line comment delimiter by default.
-    if source:
-        ext = os.path.splitext(str(source[0]))[1]
-        if ext == ".cs":
-            delimiter = "//"
+    if source and os.path.splitext(str(source[0]))[1] == ".cs":
+        delimiter = "//"
+    _make_templates(target, source, delimiter, "")
 
+
+def make_cgd_templates(target, source, env):
+    # Explicit even for an empty Glob: never accidentally emit TEMPLATES symbols
+    # into cgd_templates.gen.h or collide with the ordinary GDScript header.
+    _make_templates(target, source, "//", "CGD_")
+
+
+def _make_templates(target, source, delimiter, prefix):
     parsed_templates = []
 
     for filepath in source:
@@ -65,8 +72,8 @@ def make_templates(target, source, env):
 #include "core/object/script_language.h"
 #include "core/string/ustring.h"
 
-inline constexpr int TEMPLATES_ARRAY_SIZE = {len(parsed_templates)};
-static const struct ScriptLanguage::ScriptTemplate TEMPLATES[TEMPLATES_ARRAY_SIZE] = {{
+inline constexpr int {prefix}TEMPLATES_ARRAY_SIZE = {len(parsed_templates)};
+static const struct ScriptLanguage::ScriptTemplate {prefix}TEMPLATES[{max(1, len(parsed_templates))}] = {{
 	{parsed_template_string}
 }};
 """)

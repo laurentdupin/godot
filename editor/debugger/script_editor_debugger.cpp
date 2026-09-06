@@ -693,7 +693,7 @@ void ScriptEditorDebugger::_msg_error(uint64_t p_thread_id, const Array &p_data)
 	const String source_file_extension = oe.source_file.get_extension();
 	for (int i = 0; i < ScriptServer::get_language_count(); ++i) {
 		ScriptLanguage *script_language = ScriptServer::get_language(i);
-		if (source_file_extension == script_language->get_extension()) {
+		if (script_language->handles_extension(source_file_extension.to_lower())) {
 			source_language_name = script_language->get_name();
 			break;
 		}

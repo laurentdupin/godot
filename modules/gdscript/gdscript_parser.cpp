@@ -29,6 +29,7 @@
 /**************************************************************************/
 
 #include "gdscript_parser.h"
+#include "gdc_frontend.h"
 
 #include "gdscript.h"
 #include "gdscript_tokenizer_buffer.h"
@@ -445,9 +446,114 @@ void GDScriptParser::set_last_completion_call_arg(int p_argument) {
 	completion_call_stack.back()->get().argument = p_argument;
 }
 
+void GDScriptParser::_remap_gdc_positions(const GDC::SourceMap &p_map) {
+	if (p_map.empty()) {
+		return;
+	}
+	// Parsing must finish in generated coordinates: GDScript's parser compares lines
+	// while recognizing suites and lambdas. Remapping tokens before parsing is wrong
+	// for one-line C functions and for lowered loops.
+	auto remap_span = [&](int &p_start_line, int &p_start_column, int &p_end_line, int &p_end_column) {
+		if (p_start_line < 1 || p_start_column < 1 || p_end_line < 1 || p_end_column < 1) {
+			return; // Preserve recovery/sentinel positions.
+		}
+		GDC::Position start;
+		GDC::Position end;
+		p_map.original_range({ uint32_t(p_start_line), uint32_t(p_start_column) },
+				{ uint32_t(p_end_line), uint32_t(p_end_column) }, start, end);
+		p_start_line = start.line;
+		p_start_column = start.column;
+		p_end_line = end.line;
+		p_end_column = end.column;
+	};
+	for (Node *node = list; node != nullptr; node = node->next) {
+		// These locations are stored separately from Node's enclosing span and
+		// are consumed later by the analyzer, debugger and documentation helpers.
+		switch (node->type) {
+			case Node::CLASS: {
+				ClassNode *class_node = static_cast<ClassNode *>(node);
+				remap_span(class_node->extends_start_line, class_node->extends_start_column, class_node->extends_end_line, class_node->extends_end_column);
+				// Anonymous enum members contain Value copies, not references to EnumNode::values.
+				// Remap their scalar locations too. Identifiers are shared Nodes and are
+				// already remapped by the outer list walk; do not visit them a second time.
+				for (ClassNode::Member &member : class_node->members) {
+					if (member.type == ClassNode::Member::ENUM_VALUE) {
+						EnumNode::Value &value = member.enum_value;
+						int end_line = value.line;
+						remap_span(value.line, value.start_column, end_line, value.end_column);
+					}
+				}
+			} break;
+			case Node::FUNCTION: {
+				FunctionNode *function = static_cast<FunctionNode *>(node);
+				int start_line = function->start_line;
+				int start_column = function->start_column;
+				remap_span(start_line, start_column, function->header_end_line, function->header_end_column);
+#ifdef TOOLS_ENABLED
+				if (function->min_local_doc_line > 0) {
+					function->min_local_doc_line = p_map.original(function->min_local_doc_line, 1).line;
+				}
+#endif
+			} break;
+			case Node::SUITE: {
+				for (SuiteNode::Local &local : static_cast<SuiteNode *>(node)->locals) {
+					remap_span(local.start_line, local.start_column, local.end_line, local.end_column);
+				}
+			} break;
+			case Node::ENUM: {
+				for (EnumNode::Value &value : static_cast<EnumNode *>(node)->values) {
+					int end_line = value.line;
+					remap_span(value.line, value.start_column, end_line, value.end_column);
+				}
+			} break;
+			default:
+				break;
+		}
+		remap_span(node->start_line, node->start_column, node->end_line, node->end_column);
+	}
+	for (ParserError &error : errors) {
+		remap_span(error.start_line, error.start_column, error.end_line, error.end_column);
+	}
+	remap_span(current.start_line, current.start_column, current.end_line, current.end_column);
+	remap_span(previous.start_line, previous.start_column, previous.end_line, previous.end_column);
+	if (completion_context.current_line > 0) {
+		completion_context.current_line = p_map.original(completion_context.current_line, 1).line;
+	}
+#ifdef DEBUG_ENABLED
+	for (GDScriptWarning &warning : warnings) {
+		remap_span(warning.start_line, warning.start_column, warning.end_line, warning.end_column);
+	}
+	for (PendingWarning &warning : pending_warnings) {
+		remap_span(warning.start_line, warning.start_column, warning.end_line, warning.end_column);
+	}
+	auto remap_lines = [&](HashSet<int> &p_lines) {
+		HashSet<int> mapped;
+		for (int line : p_lines) {
+			mapped.insert(line > 0 ? int(p_map.original(line, 1).line) : line);
+		}
+		p_lines = mapped;
+	};
+	remap_lines(unsafe_lines);
+	for (int i = 0; i < GDScriptWarning::WARNING_MAX; ++i) {
+		remap_lines(warning_ignored_lines[i]);
+		if (warning_ignore_start_lines[i] > 0 && warning_ignore_start_lines[i] != INT_MAX) {
+			warning_ignore_start_lines[i] = p_map.original(warning_ignore_start_lines[i], 1).line;
+		}
+	}
+#endif // DEBUG_ENABLED
+#ifdef TOOLS_ENABLED
+	HashMap<int, GDScriptTokenizer::CommentData> mapped_comments;
+	for (const KeyValue<int, GDScriptTokenizer::CommentData> &entry : comment_data) {
+		mapped_comments.insert(p_map.original(entry.key, 1).line, entry.value);
+	}
+	comment_data = mapped_comments;
+#endif // TOOLS_ENABLED
+}
+
 Error GDScriptParser::parse(const String &p_source_code, const String &p_script_path, bool p_for_completion, bool p_parse_body) {
 	clear();
 
+	GDC::SourceMap gdc_map;
 	String source = p_source_code;
 	int cursor_line = -1;
 	int cursor_column = -1;
@@ -477,6 +583,33 @@ Error GDScriptParser::parse(const String &p_source_code, const String &p_script_
 		}
 
 		source = source.replace_first(String::chr(0xFFFF), String());
+	}
+
+	if (GDCFrontend::is_source_path(p_script_path)) {
+		String generated;
+		String error;
+		int line = 1;
+		int column = 1;
+		GDC::Position completion_cursor = { 0, 0 };
+		if (p_for_completion && cursor_line > 0 && cursor_column > 0) {
+			completion_cursor = { uint32_t(cursor_line), uint32_t(cursor_column) };
+		}
+		if (GDCFrontend::transpile(source, generated, gdc_map, error, line, column, p_for_completion || !p_parse_body, completion_cursor) != OK) {
+			script_path = p_script_path.simplify_path();
+			ParserError failure;
+			failure.message = "GD-C: " + error;
+			failure.start_line = failure.end_line = line;
+			failure.start_column = column;
+			failure.end_column = column + 1;
+			errors.push_back(failure);
+			return ERR_PARSE_ERROR;
+		}
+		source = generated;
+		if (cursor_line > 0 && cursor_column > 0) {
+			GDC::Position cursor = gdc_map.generated({ uint32_t(cursor_line), uint32_t(cursor_column) });
+			cursor_line = cursor.line;
+			cursor_column = cursor.column;
+		}
 	}
 
 	GDScriptTokenizerText *text_tokenizer = memnew(GDScriptTokenizerText);
@@ -523,6 +656,7 @@ Error GDScriptParser::parse(const String &p_source_code, const String &p_script_
 
 	memdelete(text_tokenizer);
 	tokenizer = nullptr;
+	_remap_gdc_positions(gdc_map);
 
 #ifdef DEBUG_ENABLED
 	if (multiline_stack.size() > 0) {
@@ -538,11 +672,25 @@ Error GDScriptParser::parse(const String &p_source_code, const String &p_script_
 }
 
 Error GDScriptParser::parse_binary(const Vector<uint8_t> &p_binary, const String &p_script_path) {
+	clear();
+	script_path = p_script_path.simplify_path();
+	GDC::SourceMap gdc_map;
+	Vector<uint8_t> native_tokens;
+	String decode_error;
+	Error err = GDCFrontend::unpack_binary(p_binary, native_tokens, gdc_map, decode_error);
 	GDScriptTokenizerBuffer *buffer_tokenizer = memnew(GDScriptTokenizerBuffer);
-	Error err = buffer_tokenizer->set_code_buffer(p_binary);
+	if (err == OK) {
+		err = buffer_tokenizer->set_code_buffer(native_tokens);
+	}
 
 	if (err) {
 		memdelete(buffer_tokenizer);
+		ParserError failure;
+		failure.message = decode_error.is_empty() ? "Invalid compiled GDScript token buffer." : decode_error;
+		failure.start_line = failure.end_line = 1;
+		failure.start_column = 1;
+		failure.end_column = 2;
+		errors.push_back(failure); // reload() requires a diagnostic on every parse failure.
 		return err;
 	}
 
@@ -570,6 +718,7 @@ Error GDScriptParser::parse_binary(const Vector<uint8_t> &p_binary, const String
 
 	memdelete(buffer_tokenizer);
 	tokenizer = nullptr;
+	_remap_gdc_positions(gdc_map);
 
 	if (errors.is_empty()) {
 		return OK;

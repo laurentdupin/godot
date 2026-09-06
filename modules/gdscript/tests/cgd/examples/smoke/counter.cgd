@@ -1,0 +1,64 @@
+extends "res://base.gd";
+class_name GDCCounter;
+
+signal changed(int value);
+enum Mode { READY = 7 };
+const auto LABELS = ["ready", "done"];
+
+static int static_value(auto value = 3) {
+    auto callback = [](int n) -> int { return n * 2; };
+    return callback.call(value);
+}
+
+int health = 10 {
+    get { return health; }
+    set(value) { health = max(value, 0); }
+}
+
+int sum_skipping_two() {
+    int result = 0;
+    for (int i = 0; i < 5; i++) {
+        if (i == 2) { continue; }
+        result += i;
+    }
+    return result;
+}
+
+int nested_loops() {
+    int result = 0;
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 4; j++) {
+            if (j == 1) { continue; }
+            if (j == 3) { break; }
+            result += i + j;
+        }
+    }
+    return result;
+}
+
+int choose(int n) {
+    return n > 0 ? 10 : n == 0 ? 20 : 30;
+}
+
+int match_value(int n) {
+    switch (n) {
+        case 1, 2: { return 100; }
+        default: { return 200; }
+    }
+}
+
+int closure_test() {
+    auto double_value = [](int n) { return n * 2; };
+    return double_value.call(21);
+}
+
+Array[int] foreach_test() {
+    Array[int] values = [];
+    for (int n : range(3)) { values.append(n); }
+    return values;
+}
+
+bool operator_test() {
+    // C unary ! binds more tightly than ==.
+    return !false == true && (false || true);
+}

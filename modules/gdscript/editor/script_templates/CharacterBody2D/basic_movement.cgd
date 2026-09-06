@@ -1,0 +1,22 @@
+// meta-description: Classic movement for gravity games (platformer, ...)
+extends _BASE_;
+
+const dynamic SPEED = 300.0;
+const dynamic JUMP_VELOCITY = -400.0;
+
+void _physics_process(float delta) {
+    if (!is_on_floor()) {
+        velocity += get_gravity() * delta;
+    }
+    if (Input.is_action_just_pressed("ui_accept") && is_on_floor()) {
+        velocity.y = JUMP_VELOCITY;
+    }
+    // Replace UI actions with custom gameplay actions for your game.
+    auto direction = Input.get_axis("ui_left", "ui_right");
+    if (direction) {
+        velocity.x = direction * SPEED;
+    } else {
+        velocity.x = move_toward(velocity.x, 0, SPEED);
+    }
+    move_and_slide();
+}

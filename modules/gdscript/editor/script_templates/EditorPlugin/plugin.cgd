@@ -1,0 +1,19 @@
+// meta-description: Basic plugin template
+@tool
+extends _BASE_;
+
+void _enable_plugin() {
+    // Add autoloads here.
+}
+
+void _disable_plugin() {
+    // Remove autoloads here.
+}
+
+void _enter_tree() {
+    // Initialize the plugin here.
+}
+
+void _exit_tree() {
+    // Clean up the plugin here.
+}

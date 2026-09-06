@@ -63,14 +63,13 @@ void GDScriptWorkspace::_bind_methods() {
 void GDScriptWorkspace::apply_new_signal(Object *obj, String function, PackedStringArray args) {
 	Ref<Script> scr = obj->get_script();
 
-	if (scr->get_language()->get_name() != "GDScript") {
+	if (scr.is_null() || scr->get_language()->get_name() != "GDScript") {
 		return;
 	}
 
-	String function_signature = "func " + function;
 	String source = scr->get_source_code();
 
-	if (source.contains(function_signature)) {
+	if (scr->get_language()->get_editor_language()->find_function_for_path(scr->get_path(), function, source) >= 0) {
 		return;
 	}
 
@@ -82,18 +81,7 @@ void GDScriptWorkspace::apply_new_signal(Object *obj, String function, PackedStr
 		start_line = source.split("\n").size();
 	}
 
-	String function_body = "\n\n" + function_signature + "(";
-	for (int i = 0; i < args.size(); ++i) {
-		function_body += args[i];
-		if (i < args.size() - 1) {
-			function_body += ", ";
-		}
-	}
-	function_body += ")";
-	if (EditorSettings::get_singleton()->get_setting("text_editor/completion/add_type_hints")) {
-		function_body += " -> void";
-	}
-	function_body += ":\n\tpass # Replace with function body.\n";
+	String function_body = "\n\n" + scr->get_language()->make_function_for_path(scr->get_path(), "", function, args);
 
 	LSP::TextEdit text_edit;
 
@@ -222,7 +210,7 @@ void GDScriptWorkspace::list_script_files(const String &p_root_dir, List<String>
 	while (file_name.length()) {
 		if (dir->current_is_dir() && file_name != "." && file_name != ".." && file_name != "./") {
 			list_script_files(p_root_dir.path_join(file_name), r_files);
-		} else if (file_name.ends_with(".gd")) {
+		} else if (GDScriptLanguage::get_singleton()->handles_extension(file_name.get_extension().to_lower())) {
 			String script_file = p_root_dir.path_join(file_name);
 			r_files.push_back(script_file);
 		}

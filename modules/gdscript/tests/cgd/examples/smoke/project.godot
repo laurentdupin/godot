@@ -1,0 +1,9 @@
+; GD-C integration smoke project. Requires an engine built with this bundle.
+config_version=5
+
+[application]
+config/name="GD-C integration smoke"
+run/main_scene="res://main.tscn"
+
+[rendering]
+renderer/rendering_method="gl_compatibility"

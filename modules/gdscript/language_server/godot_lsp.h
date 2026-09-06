@@ -689,7 +689,7 @@ struct TextDocumentItem {
 		// Rider < 2026.1: "gd"
 		// Kate: "godot"
 		String rawLanguageId = p_dict["languageId"];
-		if (rawLanguageId == "gdscript" || rawLanguageId == "gd" || rawLanguageId == "godot") {
+		if (rawLanguageId == "gdscript" || rawLanguageId == "gd" || rawLanguageId == "godot" || rawLanguageId == "cgd") {
 			languageId = LanguageId::GDSCRIPT;
 		} else {
 			languageId = LanguageId::OTHER;
@@ -1583,7 +1583,7 @@ struct FileOperationPattern {
 	/**
 	 * The glob pattern to match.
 	 */
-	String glob = "**/*.gd";
+	String glob = "**/*.{gd,cgd}";
 
 	/**
 	 * Whether to match `file`s or `folder`s with this pattern.

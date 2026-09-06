@@ -58,6 +58,10 @@ private:
 	Vector<EditorPlugin *> editor_table;
 #endif
 	EditorPlugin *selected_plugin = nullptr;
+	bool edit_in_progress = false;
+	bool has_pending_edit = false;
+	ObjectID editing_object;
+	ObjectID pending_edit_object;
 
 	void _on_tab_changed(int p_tab);
 

@@ -1,0 +1,7 @@
+// meta-description: Basic editor script template
+@tool
+extends _BASE_;
+
+// Called when using File > Run in the Script Editor.
+void _run() {
+}

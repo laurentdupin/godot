@@ -1,0 +1,38 @@
+// meta-description: Visual shader node plugin template
+@tool
+class_name VisualShaderNode_CLASS_;
+extends _BASE_;
+
+String _get_name() {
+    return "_CLASS_";
+}
+String _get_category() {
+    return "";
+}
+String _get_description() {
+    return "";
+}
+PortType _get_return_icon_type() {
+    return PORT_TYPE_SCALAR;
+}
+int _get_input_port_count() {
+    return 0;
+}
+String _get_input_port_name(int port) {
+    return "";
+}
+PortType _get_input_port_type(int port) {
+    return PORT_TYPE_SCALAR;
+}
+int _get_output_port_count() {
+    return 1;
+}
+String _get_output_port_name(int port) {
+    return "result";
+}
+PortType _get_output_port_type(int port) {
+    return PORT_TYPE_SCALAR;
+}
+String _get_code(Array[String] input_vars, Array[String] output_vars, Shader.Mode mode, VisualShader.Type type) {
+    return output_vars[0] + " = 0.0;";
+}

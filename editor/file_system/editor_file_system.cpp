@@ -371,7 +371,7 @@ void EditorFileSystem::_first_scan_process_scripts(const ScannedDirectory *p_sca
 		const String ext = scan_file.get_extension().to_lower();
 		bool is_script = false;
 		for (int i = 0; i < ScriptServer::get_language_count(); i++) {
-			if (ScriptServer::get_language(i)->get_extension() == ext) {
+			if (ScriptServer::get_language(i)->handles_extension(ext)) {
 				is_script = true;
 				break;
 			}

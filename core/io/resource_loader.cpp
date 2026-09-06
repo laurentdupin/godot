@@ -1745,6 +1745,8 @@ Vector<String> ResourceLoader::list_directory(const String &p_directory) {
 			if (d.ends_with(".gdc")) {
 				d = d.substr(0, d.rfind_char('.'));
 				d += ".gd";
+			} else if (d.ends_with(".cgd.gdbin")) {
+				d = d.get_basename();
 			}
 
 			const String full_path = p_directory.path_join(d);

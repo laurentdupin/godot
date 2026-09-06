@@ -29,6 +29,7 @@
 /**************************************************************************/
 
 #include "gdscript.h"
+#include "gdc_frontend.h"
 
 #include "gdscript_analyzer.h"
 #include "gdscript_cache.h"
@@ -449,10 +450,11 @@ String GDScript::get_source_code() const {
 }
 
 void GDScript::set_source_code(const String &p_code) {
-	if (source == p_code) {
+	if (source == p_code && binary_tokens.is_empty()) {
 		return;
 	}
 	source = p_code;
+	binary_tokens.clear();
 #ifdef TOOLS_ENABLED
 	source_changed_cache = true;
 #endif
@@ -1159,6 +1161,7 @@ Error GDScript::load_source_code(const String &p_path) {
 	}
 
 	source = s;
+	binary_tokens.clear(); // A text reload must not keep an older compiled payload.
 	path = p_path;
 	path_valid = true;
 #ifdef TOOLS_ENABLED
@@ -1178,8 +1181,13 @@ const Vector<uint8_t> &GDScript::get_binary_tokens_source() const {
 }
 
 Vector<uint8_t> GDScript::get_as_binary_tokens() const {
-	GDScriptTokenizerBuffer tokenizer;
-	return tokenizer.parse_code_string(source, GDScriptTokenizerBuffer::COMPRESS_NONE);
+	if (!binary_tokens.is_empty()) {
+		return binary_tokens;
+	}
+	String error;
+	Vector<uint8_t> result = GDCFrontend::compile_binary(source, path, GDScriptTokenizerBuffer::COMPRESS_NONE, error);
+	ERR_FAIL_COND_V_MSG(!error.is_empty(), Vector<uint8_t>(), error);
+	return result;
 }
 
 const HashMap<StringName, GDScriptFunction *> &GDScript::debug_get_member_functions() const {
@@ -1386,10 +1394,13 @@ String GDScript::debug_get_script_name(const Ref<Script> &p_script) {
 #endif
 
 String GDScript::canonicalize_path(const String &p_path) {
-	if (p_path.get_extension() == "gdc") {
-		return p_path.get_basename() + ".gd";
+	if (p_path.get_extension().to_lower() == "gdbin") {
+		return p_path.get_basename(); // foo.cgd.gdbin -> foo.cgd.
 	}
-	return p_path;
+	if (p_path.get_extension().to_lower() == "gdc") {
+		return p_path.get_basename() + ".gd"; // Preserve native compiled GDScript identity.
+	}
+	return p_path; // .cgd is a distinct source resource; never alias it to .gd.
 }
 
 GDScript::UpdatableFuncPtr::UpdatableFuncPtr(GDScriptFunction *p_function) {

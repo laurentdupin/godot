@@ -228,7 +228,7 @@ ScriptLanguage *ScriptServer::get_language_for_extension(const String &p_extensi
 	MutexLock lock(languages_mutex);
 
 	for (int i = 0; i < _language_count; i++) {
-		if (_languages[i] && _languages[i]->get_extension() == p_extension) {
+		if (_languages[i] && _languages[i]->handles_extension(p_extension.to_lower())) {
 			return _languages[i];
 		}
 	}

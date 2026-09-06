@@ -222,6 +222,8 @@ public:
 	virtual void init() = 0;
 	virtual String get_type() const = 0;
 	virtual String get_extension() const = 0;
+	// Match ResourceLoader: extension comparisons are case-insensitive.
+	virtual bool handles_extension(const String &p_extension) const { return get_extension().nocasecmp_to(p_extension) == 0; }
 	virtual void finish() = 0;
 
 	/* EDITOR FUNCTIONS */
@@ -260,16 +262,21 @@ public:
 	virtual Vector<String> get_reserved_words() const = 0;
 	virtual bool is_control_flow_keyword(const String &p_string) const = 0;
 	virtual Vector<String> get_comment_delimiters() const = 0;
+	virtual Vector<String> get_comment_delimiters_for_path(const String &p_path) const { return get_comment_delimiters(); }
 	virtual Vector<String> get_doc_comment_delimiters() const = 0;
+	virtual Vector<String> get_doc_comment_delimiters_for_path(const String &p_path) const { return get_doc_comment_delimiters(); }
 	virtual Vector<String> get_string_delimiters() const = 0;
+	virtual Vector<String> get_string_delimiters_for_path(const String &p_path) const { return get_string_delimiters(); }
 	virtual Ref<Script> make_template(const String &p_template, const String &p_class_name, const String &p_base_class_name) const { return Ref<Script>(); }
 	virtual Vector<ScriptTemplate> get_built_in_templates(const StringName &p_object) { return Vector<ScriptTemplate>(); }
+	virtual Vector<ScriptTemplate> get_built_in_templates_for_path(const String &p_path, const StringName &p_object) { return get_built_in_templates(p_object); }
 	virtual bool is_using_templates() { return false; }
 	virtual String validate_path(const String &p_path) const { return ""; }
 	virtual bool supports_builtin_mode() const = 0;
 	virtual bool supports_documentation() const { return false; }
 	virtual bool can_inherit_from_file() const { return false; }
 	virtual String make_function(const String &p_class, const String &p_name, const PackedStringArray &p_args) const = 0;
+	virtual String make_function_for_path(const String &p_path, const String &p_class, const String &p_name, const PackedStringArray &p_args) const { return make_function(p_class, p_name, p_args); }
 	virtual bool can_make_function() const { return true; }
 	virtual Error open_in_external_editor(const Ref<Script> &p_script, int p_line, int p_col) { return ERR_UNAVAILABLE; }
 	virtual bool overrides_external_editor() { return false; }

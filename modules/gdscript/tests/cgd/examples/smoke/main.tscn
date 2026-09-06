@@ -1,0 +1,7 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://main.cgd" id="1_main"]
+
+[node name="GDCSmoke" type="Node"]
+script = ExtResource("1_main")
+expected_sum = 8

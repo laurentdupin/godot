@@ -37,6 +37,8 @@ class Button;
 class ConfirmationDialog;
 class EditorFileDialog;
 class PopupMenu;
+class Script;
+class ScriptCreateDialog;
 class TextureRect;
 class Tree;
 class TreeItem;
@@ -175,6 +177,10 @@ class EditorScriptPicker : public EditorResourcePicker {
 	};
 
 	Node *script_owner = nullptr;
+	Ref<Resource> script_resource_owner;
+	ScriptCreateDialog *resource_script_dialog = nullptr;
+	void _open_resource_script_dialog(bool p_extend);
+	void _resource_script_created(const Ref<Script> &p_script);
 
 protected:
 	static void _bind_methods();
@@ -184,6 +190,7 @@ public:
 	virtual bool handle_menu_selected(int p_which) override;
 
 	void set_script_owner(Node *p_owner);
+	void set_script_resource_owner(const Ref<Resource> &p_owner);
 	Node *get_script_owner() const;
 };
 

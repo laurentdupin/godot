@@ -246,7 +246,8 @@ Dictionary GDScriptTextDocument::resolve(const Dictionary &p_params) {
 
 	if (item.kind == LSP::CompletionItemKind::Event) {
 		if (params.context.triggerKind == LSP::CompletionTriggerKind::TriggerCharacter && (params.context.triggerCharacter == "(")) {
-			const String quote_style = EDITOR_GET("text_editor/completion/use_single_quotes") ? "'" : "\"";
+			const String path = GDScriptLanguageProtocol::get_singleton()->get_workspace()->get_file_path(params.textDocument.uri);
+			const String quote_style = !path.has_extension("cgd") && EDITOR_GET("text_editor/completion/use_single_quotes") ? "'" : "\"";
 			item.insertText = item.label.quote(quote_style);
 		}
 	}

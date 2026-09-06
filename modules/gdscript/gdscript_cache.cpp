@@ -29,6 +29,7 @@
 /**************************************************************************/
 
 #include "gdscript_cache.h"
+#include "gdc_frontend.h"
 
 #include "gdscript.h"
 #include "gdscript_analyzer.h"
@@ -82,7 +83,7 @@ Error GDScriptParserRef::raise_status(Status p_new_status) {
 				get_parser()->clear();
 				status = PARSED;
 				String remapped_path = ResourceLoader::path_remap(path);
-				if (remapped_path.has_extension("gdc")) {
+				if (GDCFrontend::is_binary_path(remapped_path)) {
 					Vector<uint8_t> tokens = GDScriptCache::get_binary_tokens(remapped_path);
 					source_hash = hash_djb2_buffer(tokens.ptr(), tokens.size());
 					result = get_parser()->parse_binary(tokens, path);
@@ -315,7 +316,7 @@ Ref<GDScript> GDScriptCache::get_shallow_script(const String &p_path, Error &r_e
 	script.instantiate();
 
 	script->set_path_cache(p_path);
-	if (remapped_path.has_extension("gdc")) {
+	if (GDCFrontend::is_binary_path(remapped_path)) {
 		Vector<uint8_t> buffer = get_binary_tokens(remapped_path);
 		if (buffer.is_empty()) {
 			r_error = ERR_FILE_CANT_READ;
@@ -366,7 +367,7 @@ Ref<GDScript> GDScriptCache::get_full_script(const String &p_path, Error &r_erro
 	const String remapped_path = ResourceLoader::path_remap(p_path);
 
 	if (p_update_from_disk) {
-		if (remapped_path.has_extension("gdc")) {
+		if (GDCFrontend::is_binary_path(remapped_path)) {
 			Vector<uint8_t> buffer = get_binary_tokens(remapped_path);
 			if (buffer.is_empty()) {
 				r_error = ERR_FILE_CANT_READ;

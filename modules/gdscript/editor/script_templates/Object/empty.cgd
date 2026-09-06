@@ -1,0 +1,3 @@
+// meta-name: Empty
+// meta-description: Empty C-style script
+extends _BASE_;

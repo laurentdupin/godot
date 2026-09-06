@@ -78,6 +78,9 @@ class ScriptCreateDialog : public ConfirmationDialog {
 	bool built_in_enabled = true;
 	bool load_enabled = true;
 	int default_language;
+	int cgd_language = -1;
+	ScriptLanguage *_get_language(int p_index) const;
+	String _get_extension(int p_index) const;
 	bool re_check_path = false;
 
 	Control *path_controls[2];

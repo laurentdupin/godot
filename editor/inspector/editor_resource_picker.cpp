@@ -47,6 +47,7 @@
 #include "editor/inspector/editor_resource_preview.h"
 #include "editor/plugins/editor_resource_conversion_plugin.h"
 #include "editor/script/script_editor_plugin.h"
+#include "editor/script/script_create_dialog.h"
 #include "editor/settings/editor_settings.h"
 #include "editor/themes/editor_scale.h"
 #include "scene/gui/button.h"
@@ -1563,9 +1564,10 @@ void EditorScriptPicker::set_create_options(Object *p_menu_node) {
 		menu_node->add_icon_item(get_editor_theme_icon(SNAME("ScriptCreate")), TTR("New Script..."), OBJ_MENU_NEW_SCRIPT);
 	}
 
-	if (script_owner) {
-		Ref<Script> scr = script_owner->get_script();
-		if (scr.is_valid()) {
+	Object *owner = script_owner ? static_cast<Object *>(script_owner) : script_resource_owner.ptr();
+	if (owner) {
+		Ref<Script> scr = owner->get_script();
+		if (scr.is_valid() && (script_owner || !scr->is_built_in())) {
 			menu_node->add_icon_item(get_editor_theme_icon(SNAME("ScriptExtend")), TTR("Extend Script..."), OBJ_MENU_EXTEND_SCRIPT);
 		}
 	}
@@ -1577,6 +1579,8 @@ bool EditorScriptPicker::handle_menu_selected(int p_which) {
 		case OBJ_MENU_NEW_SCRIPT: {
 			if (script_owner) {
 				SceneTreeDock::get_singleton()->open_script_dialog(script_owner, false);
+			} else if (script_resource_owner.is_valid()) {
+				_open_resource_script_dialog(false);
 			}
 			return true;
 		}
@@ -1584,6 +1588,8 @@ bool EditorScriptPicker::handle_menu_selected(int p_which) {
 		case OBJ_MENU_EXTEND_SCRIPT: {
 			if (script_owner) {
 				SceneTreeDock::get_singleton()->open_script_dialog(script_owner, true);
+			} else if (script_resource_owner.is_valid()) {
+				_open_resource_script_dialog(true);
 			}
 			return true;
 		}
@@ -1594,6 +1600,39 @@ bool EditorScriptPicker::handle_menu_selected(int p_which) {
 
 void EditorScriptPicker::set_script_owner(Node *p_owner) {
 	script_owner = p_owner;
+}
+
+void EditorScriptPicker::set_script_resource_owner(const Ref<Resource> &p_owner) {
+	script_resource_owner = p_owner;
+}
+
+void EditorScriptPicker::_open_resource_script_dialog(bool p_extend) {
+	ERR_FAIL_COND(script_resource_owner.is_null());
+	if (!resource_script_dialog) {
+		resource_script_dialog = memnew(ScriptCreateDialog);
+		add_child(resource_script_dialog);
+		resource_script_dialog->connect("script_created", callable_mp(this, &EditorScriptPicker::_resource_script_created), CONNECT_DEFERRED);
+	}
+	String base = script_resource_owner->get_class();
+	String path = script_resource_owner->get_path().get_slice("::", 0);
+	path = path.is_empty() ? String("res://new_resource_script.gd") : path.get_basename() + ".gd";
+	if (p_extend) {
+		Ref<Script> current = script_resource_owner->get_script();
+		ERR_FAIL_COND(current.is_null() || current->is_built_in());
+		base = current->get_path().quote();
+		path = current->get_path().get_basename() + "_extended." + current->get_path().get_extension();
+	}
+	resource_script_dialog->set_inheritance_base_type(script_resource_owner->get_class());
+	resource_script_dialog->config(base, path, false, true);
+	resource_script_dialog->popup_centered();
+}
+
+void EditorScriptPicker::_resource_script_created(const Ref<Script> &p_script) {
+	if (script_resource_owner.is_null() || p_script.is_null()) {
+		return;
+	}
+	set_edited_resource(p_script);
+	emit_signal(SNAME("resource_changed"), p_script);
 }
 
 Node *EditorScriptPicker::get_script_owner() const {

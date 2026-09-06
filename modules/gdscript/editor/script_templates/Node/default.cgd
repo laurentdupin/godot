@@ -1,0 +1,10 @@
+// meta-description: Base template for a node
+extends _BASE_;
+
+
+void _ready() {
+}
+
+
+void _process(float delta) {
+}

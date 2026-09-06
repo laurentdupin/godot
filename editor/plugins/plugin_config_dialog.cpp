@@ -69,7 +69,7 @@ void PluginConfigDialog::_on_confirmed() {
 	cf->set_value("plugin", "author", author_edit->get_text());
 	cf->set_value("plugin", "version", version_edit->get_text());
 	// Language-specific settings.
-	int lang_index = script_option_edit->get_selected();
+	int lang_index = script_option_edit->get_selected_id();
 	_create_script_for_plugin(path, cf, lang_index);
 	// Save and inform the editor.
 	cf->save(path.path_join("plugin.cfg"));
@@ -82,8 +82,11 @@ void PluginConfigDialog::_create_script_for_plugin(const String &p_plugin_path, 
 	ScriptLanguage *language = ScriptServer::get_language(p_script_lang_index);
 	ERR_FAIL_COND(language == nullptr);
 	String ext = language->get_extension();
+	if (script_option_edit->get_item_metadata(script_option_edit->get_selected()) == Variant("cgd")) {
+		ext = "cgd";
+	}
 	String script_name = script_edit->get_text().is_empty() ? _get_subfolder() : script_edit->get_text();
-	if (script_name.get_extension() != ext) {
+	if (!language->handles_extension(script_name.get_extension().to_lower())) {
 		script_name += "." + ext;
 	}
 	String script_path = p_plugin_path.path_join(script_name);
@@ -92,7 +95,7 @@ void PluginConfigDialog::_create_script_for_plugin(const String &p_plugin_path, 
 	if (!_edit_mode && !FileAccess::exists(script_path)) {
 		String class_name = script_name.get_basename();
 		String template_content = "";
-		Vector<ScriptLanguage::ScriptTemplate> templates = language->get_built_in_templates("EditorPlugin");
+		Vector<ScriptLanguage::ScriptTemplate> templates = language->get_built_in_templates_for_path(script_path, "EditorPlugin");
 		if (!templates.is_empty()) {
 			template_content = templates[0].content;
 		}
@@ -124,13 +127,13 @@ void PluginConfigDialog::_on_required_text_changed() {
 		validation_panel->set_message(MSG_ID_SUBFOLDER, "", EditorValidationPanel::MSG_OK);
 	}
 	// Language and script validation.
-	int lang_idx = script_option_edit->get_selected();
+	int lang_idx = script_option_edit->get_selected_id();
 	ScriptLanguage *language = ScriptServer::get_language(lang_idx);
 	if (language == nullptr) {
 		return;
 	}
 	String ext = language->get_extension();
-	if ((!script_edit->get_text().get_extension().is_empty() && script_edit->get_text().get_extension() != ext) || script_edit->get_text().ends_with(".")) {
+	if ((!script_edit->get_text().get_extension().is_empty() && !language->handles_extension(script_edit->get_text().get_extension().to_lower())) || script_edit->get_text().ends_with(".")) {
 		validation_panel->set_message(MSG_ID_SCRIPT, vformat(TTR("Script extension must match chosen language extension (.%s)."), ext), EditorValidationPanel::MSG_ERROR);
 	}
 	if (language->get_name() == "GDScript") {
@@ -291,10 +294,14 @@ PluginConfigDialog::PluginConfigDialog() {
 	int default_lang = 0;
 	for (int i = 0; i < ScriptServer::get_language_count(); i++) {
 		ScriptLanguage *lang = ScriptServer::get_language(i);
-		script_option_edit->add_item(lang->get_name());
+		script_option_edit->add_item(lang->get_name(), i);
 		if (lang->get_name() == "GDScript") {
-			default_lang = i;
+			default_lang = script_option_edit->get_item_count() - 1;
 		}
+	}
+	if (ScriptServer::get_language_for_extension("cgd") != nullptr) {
+		script_option_edit->add_item("GD-C (.cgd)", script_option_edit->get_item_id(default_lang));
+		script_option_edit->set_item_metadata(-1, "cgd");
 	}
 	script_option_edit->select(default_lang);
 	grid->add_child(script_option_edit);

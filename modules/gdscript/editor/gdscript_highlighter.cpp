@@ -809,6 +809,8 @@ void GDScriptSyntaxHighlighter::_update_cache() {
 	class_names[SNAME("Variant")] = basetype_color;
 	class_names[SNAME("void")] = basetype_color;
 
+	Ref<Script> highlight_script = _get_edited_resource();
+	const bool cgd = highlight_script.is_valid() && highlight_script->get_path().get_extension().to_lower() == "cgd";
 	/* Reserved words. */
 	const Color keyword_color = EDITOR_GET("text_editor/theme/highlighting/keyword_color");
 	const Color control_flow_keyword_color = EDITOR_GET("text_editor/theme/highlighting/control_flow_keyword_color");
@@ -818,6 +820,16 @@ void GDScriptSyntaxHighlighter::_update_cache() {
 		} else {
 			reserved_keywords[StringName(keyword)] = keyword_color;
 		}
+	}
+
+	if (cgd) {
+		for (const String &word : { "func", "var", "pass", "elif", "and", "or", "not", "in", "is", "as", "match" }) {
+			reserved_keywords.erase(StringName(word));
+		}
+		reserved_keywords[SNAME("auto")] = keyword_color;
+		reserved_keywords[SNAME("switch")] = control_flow_keyword_color;
+		reserved_keywords[SNAME("case")] = control_flow_keyword_color;
+		reserved_keywords[SNAME("default")] = control_flow_keyword_color;
 	}
 
 	// Highlight `set` and `get` as "keywords" with the function color to avoid conflicts with method calls.
@@ -837,7 +849,7 @@ void GDScriptSyntaxHighlighter::_update_cache() {
 
 	/* Comments. */
 	const Color comment_color = EDITOR_GET("text_editor/theme/highlighting/comment_color");
-	for (const String &comment : gdscript->get_comment_delimiters()) {
+	for (const String &comment : gdscript->get_comment_delimiters_for_path(highlight_script.is_valid() ? highlight_script->get_path() : String())) {
 		String beg = comment.get_slicec(' ', 0);
 		String end = comment.get_slice_count(" ") > 1 ? comment.get_slicec(' ', 1) : String();
 		add_color_region(ColorRegion::TYPE_COMMENT, beg, end, comment_color, end.is_empty());
@@ -845,7 +857,7 @@ void GDScriptSyntaxHighlighter::_update_cache() {
 
 	/* Doc comments */
 	const Color doc_comment_color = EDITOR_GET("text_editor/theme/highlighting/doc_comment_color");
-	for (const String &doc_comment : gdscript->get_doc_comment_delimiters()) {
+	for (const String &doc_comment : gdscript->get_doc_comment_delimiters_for_path(highlight_script.is_valid() ? highlight_script->get_path() : String())) {
 		String beg = doc_comment.get_slicec(' ', 0);
 		String end = doc_comment.get_slice_count(" ") > 1 ? doc_comment.get_slicec(' ', 1) : String();
 		add_color_region(ColorRegion::TYPE_COMMENT, beg, end, doc_comment_color, end.is_empty());
@@ -853,20 +865,22 @@ void GDScriptSyntaxHighlighter::_update_cache() {
 
 	/* Code regions */
 	const Color code_region_color = Color(EDITOR_GET("text_editor/theme/highlighting/folded_code_region_color").operator Color(), 1.0);
-	add_color_region(ColorRegion::TYPE_CODE_REGION, "#region", "", code_region_color, true);
-	add_color_region(ColorRegion::TYPE_CODE_REGION, "#endregion", "", code_region_color, true);
+	add_color_region(ColorRegion::TYPE_CODE_REGION, cgd ? "//region" : "#region", "", code_region_color, true);
+	add_color_region(ColorRegion::TYPE_CODE_REGION, cgd ? "//endregion" : "#endregion", "", code_region_color, true);
 
 	/* Strings */
 	string_color = EDITOR_GET("text_editor/theme/highlighting/string_color");
 	placeholder_color = EDITOR_GET("text_editor/theme/highlighting/string_placeholder_color");
 	add_color_region(ColorRegion::TYPE_STRING, "\"", "\"", string_color);
-	add_color_region(ColorRegion::TYPE_STRING, "'", "'", string_color);
-	add_color_region(ColorRegion::TYPE_MULTILINE_STRING, "\"\"\"", "\"\"\"", string_color);
-	add_color_region(ColorRegion::TYPE_MULTILINE_STRING, "'''", "'''", string_color);
-	add_color_region(ColorRegion::TYPE_STRING, "\"", "\"", string_color, false, true);
-	add_color_region(ColorRegion::TYPE_STRING, "'", "'", string_color, false, true);
-	add_color_region(ColorRegion::TYPE_MULTILINE_STRING, "\"\"\"", "\"\"\"", string_color, false, true);
-	add_color_region(ColorRegion::TYPE_MULTILINE_STRING, "'''", "'''", string_color, false, true);
+	if (!cgd) {
+		add_color_region(ColorRegion::TYPE_STRING, "'", "'", string_color);
+		add_color_region(ColorRegion::TYPE_MULTILINE_STRING, "\"\"\"", "\"\"\"", string_color);
+		add_color_region(ColorRegion::TYPE_MULTILINE_STRING, "'''", "'''", string_color);
+		add_color_region(ColorRegion::TYPE_STRING, "\"", "\"", string_color, false, true);
+		add_color_region(ColorRegion::TYPE_STRING, "'", "'", string_color, false, true);
+		add_color_region(ColorRegion::TYPE_MULTILINE_STRING, "\"\"\"", "\"\"\"", string_color, false, true);
+		add_color_region(ColorRegion::TYPE_MULTILINE_STRING, "'''", "'''", string_color, false, true);
+	}
 
 	/* Members. */
 	Ref<Script> scr = _get_edited_resource();

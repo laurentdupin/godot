@@ -316,7 +316,7 @@ void ScriptTextEditor::_set_theme_for_script() {
 	text_edit->get_syntax_highlighter()->update_cache();
 
 	Ref<Script> script = edited_res;
-	Vector<String> strings = script->get_language()->get_string_delimiters();
+	Vector<String> strings = script->get_language()->get_string_delimiters_for_path(script->get_path());
 	text_edit->clear_string_delimiters();
 	for (const String &string : strings) {
 		String beg = string.get_slicec(' ', 0);
@@ -332,7 +332,7 @@ void ScriptTextEditor::_set_theme_for_script() {
 
 	text_edit->clear_comment_delimiters();
 
-	for (const String &comment : script->get_language()->get_comment_delimiters()) {
+	for (const String &comment : script->get_language()->get_comment_delimiters_for_path(script->get_path())) {
 		String beg = comment.get_slicec(' ', 0);
 		String end = comment.get_slice_count(" ") > 1 ? comment.get_slicec(' ', 1) : String();
 		text_edit->add_comment_delimiter(beg, end, end.is_empty());
@@ -342,7 +342,7 @@ void ScriptTextEditor::_set_theme_for_script() {
 		}
 	}
 
-	for (const String &doc_comment : script->get_language()->get_doc_comment_delimiters()) {
+	for (const String &doc_comment : script->get_language()->get_doc_comment_delimiters_for_path(script->get_path())) {
 		String beg = doc_comment.get_slicec(' ', 0);
 		String end = doc_comment.get_slice_count(" ") > 1 ? doc_comment.get_slicec(' ', 1) : String();
 		text_edit->add_comment_delimiter(beg, end, end.is_empty());
@@ -424,11 +424,11 @@ void ScriptTextEditor::add_callback(const String &p_function, const PackedString
 	code_editor->get_text_editor()->remove_secondary_carets();
 	code_editor->get_text_editor()->deselect();
 	String code = code_editor->get_text_editor()->get_text();
-	int32_t pos = language->get_editor_language()->find_function(p_function, code);
+	int32_t pos = language->get_editor_language()->find_function_for_path(script->get_path(), p_function, code);
 	if (pos == -1) {
 		// Function does not exist, create it at the end of the file.
 		int last_line = code_editor->get_text_editor()->get_line_count() - 1;
-		String func = language->make_function("", p_function, p_args);
+		String func = language->make_function_for_path(script->get_path(), "", p_function, p_args);
 		code_editor->get_text_editor()->insert_text("\n\n" + func, last_line, code_editor->get_text_editor()->get_line(last_line).length());
 		pos = last_line + 3;
 	}
@@ -1785,7 +1785,7 @@ bool ScriptTextEditor::_edit_option(int p_op) {
 				// Auto indent all lines that have a caret or selection on it.
 				Vector<Point2i> line_ranges = tx->get_line_ranges_from_carets();
 				for (Point2i line_range : line_ranges) {
-					scr->get_language()->get_editor_language()->format_code(text, line_range.x, line_range.y);
+					scr->get_language()->get_editor_language()->format_code_for_path(scr->get_path(), text, line_range.x, line_range.y);
 					if (line_range.x < begin) {
 						begin = line_range.x;
 					}
@@ -1797,7 +1797,7 @@ bool ScriptTextEditor::_edit_option(int p_op) {
 				// Auto indent entire text.
 				begin = 0;
 				end = tx->get_line_count() - 1;
-				scr->get_language()->get_editor_language()->format_code(text, begin, end);
+				scr->get_language()->get_editor_language()->format_code_for_path(scr->get_path(), text, begin, end);
 			}
 
 			// Apply auto indented code.
@@ -1881,7 +1881,7 @@ void ScriptTextEditor::_edit_option_toggle_inline_comment() {
 
 	String delimiter = "#";
 
-	for (const String &script_delimiter : script->get_language()->get_comment_delimiters()) {
+	for (const String &script_delimiter : script->get_language()->get_comment_delimiters_for_path(script->get_path())) {
 		if (!script_delimiter.contains_char(' ')) {
 			delimiter = script_delimiter;
 			break;
@@ -1999,11 +1999,11 @@ static Node *_find_script_node(Node *p_current_node, const Ref<Script> &script) 
 	return nullptr;
 }
 
-static String _quote_drop_data(const String &str) {
+static String _quote_drop_data(const String &str, bool p_cgd = false) {
 	// This function prepares a string for being "dropped" into the script editor.
 	// The string can be a resource path, node path or property name.
 
-	const bool using_single_quotes = EDITOR_GET("text_editor/completion/use_single_quotes");
+	const bool using_single_quotes = !p_cgd && EDITOR_GET("text_editor/completion/use_single_quotes");
 
 	String escaped = str.c_escape();
 
@@ -2016,7 +2016,7 @@ static String _quote_drop_data(const String &str) {
 	return escaped.quote(using_single_quotes ? "'" : "\"");
 }
 
-static String _get_dropped_resource_as_member(const Ref<Resource> &p_resource, bool p_create_field, bool p_allow_uid) {
+static String _get_dropped_resource_as_member(const Ref<Resource> &p_resource, bool p_create_field, bool p_allow_uid, bool p_cgd) {
 	String path = p_resource->get_path();
 	if (p_allow_uid) {
 		ResourceUID::ID id = ResourceLoader::get_resource_uid(path);
@@ -2027,7 +2027,7 @@ static String _get_dropped_resource_as_member(const Ref<Resource> &p_resource, b
 	const bool is_script = p_resource->is_class(SNAME("Script"));
 
 	if (!p_create_field) {
-		return vformat("preload(%s)", _quote_drop_data(path));
+		return vformat("preload(%s)", _quote_drop_data(path, p_cgd));
 	}
 
 	String variable_name = p_resource->get_name();
@@ -2040,7 +2040,7 @@ static String _get_dropped_resource_as_member(const Ref<Resource> &p_resource, b
 	} else {
 		variable_name = variable_name.to_snake_case().to_upper().validate_unicode_identifier();
 	}
-	return vformat("const %s = preload(%s)", variable_name, _quote_drop_data(path));
+	return vformat(p_cgd ? "const dynamic %s = preload(%s);" : "const %s = preload(%s)", variable_name, _quote_drop_data(path, p_cgd));
 }
 
 String ScriptTextEditor::_get_dropped_resource_as_exported_member(const Ref<Resource> &p_resource, const Vector<ObjectID> &p_script_instance_obj_ids) {
@@ -2065,11 +2065,12 @@ String ScriptTextEditor::_get_dropped_resource_as_exported_member(const Ref<Reso
 		pending_dragged_exports.push_back(DraggedExport{ obj_id, variable_name, p_resource, class_name });
 	}
 
-	return vformat("@export var %s: %s", variable_name, class_name);
+	return edited_res->get_path().has_extension("cgd") ? vformat("@export %s %s;", class_name, variable_name) : vformat("@export var %s: %s", variable_name, class_name);
 }
 
 void ScriptTextEditor::drop_data_fw(const Point2 &p_point, const Variant &p_data, Control *p_from) {
 	Dictionary d = p_data;
+	const bool cgd = edited_res->get_path().has_extension("cgd");
 
 	CodeEdit *te = code_editor->get_text_editor();
 	Point2i pos = (p_point == Vector2(Math::INF, Math::INF)) ? Point2i(te->get_caret_line(0), te->get_caret_column(0)) : te->get_line_column_at_pos(p_point);
@@ -2119,14 +2120,14 @@ void ScriptTextEditor::drop_data_fw(const Point2 &p_point, const Variant &p_data
 				String warning = TTR("Preloading internal resources is not supported.");
 				EditorToaster::get_singleton()->popup_str(warning, EditorToaster::SEVERITY_ERROR);
 			} else {
-				text_to_drop = _get_dropped_resource_as_member(resource, is_empty_line, allow_uid);
+				text_to_drop = _get_dropped_resource_as_member(resource, is_empty_line, allow_uid, cgd);
 			}
 		} else if (export_drop_modifier_pressed) {
 			Vector<ObjectID> obj_ids = _get_objects_for_export_assignment();
 			text_to_drop = _get_dropped_resource_as_exported_member(resource, obj_ids);
 
 		} else {
-			text_to_drop = _quote_drop_data(path);
+			text_to_drop = _quote_drop_data(path, cgd);
 		}
 
 		if (is_empty_line) {
@@ -2148,13 +2149,13 @@ void ScriptTextEditor::drop_data_fw(const Point2 &p_point, const Variant &p_data
 				}
 
 				if (member_drop_modifier_pressed) {
-					parts.append(_get_dropped_resource_as_member(resource, is_empty_line, allow_uid));
+					parts.append(_get_dropped_resource_as_member(resource, is_empty_line, allow_uid, cgd));
 				} else if (export_drop_modifier_pressed) {
 					Vector<ObjectID> obj_ids = _get_objects_for_export_assignment();
 					parts.append(_get_dropped_resource_as_exported_member(resource, obj_ids));
 				}
 			} else {
-				parts.append(_quote_drop_data(path));
+				parts.append(_quote_drop_data(path, cgd));
 			}
 		}
 		String join_string;
@@ -2206,6 +2207,7 @@ void ScriptTextEditor::drop_data_fw(const Point2 &p_point, const Variant &p_data
 
 				bool is_unique = node->is_unique_name_in_owner() && (node->get_owner() == sn || node->get_owner() == sn->get_owner());
 				String path = is_unique ? String(node->get_name()) : String(sn->get_path_to(node));
+				const String cgd_path = _quote_drop_data((is_unique ? "%" : "") + path, true);
 				for (const String &segment : path.split("/")) {
 					if (!segment.is_valid_unicode_identifier()) {
 						path = _quote_drop_data(path);
@@ -2214,7 +2216,7 @@ void ScriptTextEditor::drop_data_fw(const Point2 &p_point, const Variant &p_data
 				}
 
 				String variable_name = String(node->get_name()).to_snake_case().validate_unicode_identifier();
-				if (use_type) {
+				if (use_type || cgd) {
 					StringName custom_class_name;
 					Ref<Script> node_script = node->get_script();
 					while (node_script.is_valid() && custom_class_name.is_empty()) {
@@ -2222,7 +2224,7 @@ void ScriptTextEditor::drop_data_fw(const Point2 &p_point, const Variant &p_data
 						node_script = node_script->get_base_script();
 					}
 					const StringName class_name = custom_class_name.is_empty() ? node->get_class_name() : custom_class_name;
-					text_to_drop += vformat("@onready var %s: %s = %c%s", variable_name, class_name, is_unique ? '%' : '$', path);
+					text_to_drop += cgd ? vformat("@onready %s %s = get_node(%s);", class_name, variable_name, cgd_path) : vformat("@onready var %s: %s = %c%s", variable_name, class_name, is_unique ? '%' : '$', path);
 				} else {
 					text_to_drop += vformat("@onready var %s = %c%s", variable_name, is_unique ? '%' : '$', path);
 				}
@@ -2252,7 +2254,7 @@ void ScriptTextEditor::drop_data_fw(const Point2 &p_point, const Variant &p_data
 					node_script = node_script->get_base_script();
 				}
 				const StringName class_name = custom_class_name.is_empty() ? node->get_class_name() : custom_class_name;
-				text_to_drop += vformat("@export var %s: %s\n", variable_name, class_name);
+				text_to_drop += cgd ? vformat("@export %s %s;\n", class_name, variable_name) : vformat("@export var %s: %s\n", variable_name, class_name);
 
 				for (ObjectID obj_id : obj_ids) {
 					pending_dragged_exports.push_back(DraggedExport{ obj_id, variable_name, node, class_name });
@@ -2272,6 +2274,10 @@ void ScriptTextEditor::drop_data_fw(const Point2 &p_point, const Variant &p_data
 
 				bool is_unique = node->is_unique_name_in_owner() && (node->get_owner() == sn || node->get_owner() == sn->get_owner());
 				String path = is_unique ? String(node->get_name()) : String(sn->get_path_to(node));
+				if (cgd) {
+					text_to_drop += "get_node(" + _quote_drop_data((is_unique ? "%" : "") + path, true) + ")";
+					continue;
+				}
 				for (const String &segment : path.split("/")) {
 					if (!segment.is_valid_ascii_identifier()) {
 						path = _quote_drop_data(path);
@@ -2285,10 +2291,13 @@ void ScriptTextEditor::drop_data_fw(const Point2 &p_point, const Variant &p_data
 
 	if (type == "obj_property") {
 		bool add_literal = EDITOR_GET("text_editor/completion/add_node_path_literals");
-		text_to_drop = add_literal ? "^" : "";
+		text_to_drop = add_literal ? (cgd ? "NodePath(" : "^") : "";
 		// It is unclear whether properties may contain single or double quotes.
 		// Assume here that double-quotes may not exist. We are escaping single-quotes if necessary.
-		text_to_drop += _quote_drop_data(String(d["property"]));
+		text_to_drop += _quote_drop_data(String(d["property"]), cgd);
+		if (add_literal && cgd) {
+			text_to_drop += ")";
+		}
 	}
 
 	if (text_to_drop.is_empty()) {

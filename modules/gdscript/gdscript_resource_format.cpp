@@ -29,6 +29,7 @@
 /**************************************************************************/
 
 #include "gdscript_resource_format.h"
+#include "gdc_frontend.h"
 
 #include "gdscript_cache.h"
 #include "gdscript_parser.h"
@@ -61,6 +62,8 @@ Ref<Resource> ResourceFormatLoaderGDScript::load(const String &p_path, const Str
 void ResourceFormatLoaderGDScript::get_recognized_extensions(List<String> *p_extensions) const {
 	p_extensions->push_back("gd");
 	p_extensions->push_back("gdc");
+	p_extensions->push_back("cgd");
+	p_extensions->push_back("gdbin");
 }
 
 bool ResourceFormatLoaderGDScript::handles_type(const String &p_type) const {
@@ -69,7 +72,7 @@ bool ResourceFormatLoaderGDScript::handles_type(const String &p_type) const {
 
 String ResourceFormatLoaderGDScript::get_resource_type(const String &p_path) const {
 	String el = p_path.get_extension().to_lower();
-	if (el == "gd" || el == "gdc") {
+	if (el == "gd" || el == "gdc" || el == "cgd" || el == "gdbin") {
 		return "GDScript";
 	}
 	return "";
@@ -102,8 +105,18 @@ void ResourceFormatLoaderGDScript::get_classes_used(const String &p_path, HashSe
 	}
 
 	const String source = scr->get_source_code();
+	String scan_source = source;
+	GDC::SourceMap gdc_map;
+	if (GDCFrontend::is_source_path(p_path)) {
+		String message;
+		int line = 1;
+		int column = 1;
+		if (GDCFrontend::transpile(source, scan_source, gdc_map, message, line, column) != OK) {
+			return;
+		}
+	}
 	GDScriptTokenizerText tokenizer;
-	tokenizer.set_source_code(source);
+	tokenizer.set_source_code(scan_source);
 	GDScriptTokenizer::Token current = tokenizer.scan();
 	while (current.type != GDScriptTokenizer::Token::TK_EOF) {
 		if (!current.is_identifier()) {
@@ -111,12 +124,13 @@ void ResourceFormatLoaderGDScript::get_classes_used(const String &p_path, HashSe
 			continue;
 		}
 
+		const GDC::Position original = gdc_map.original(current.start_line, current.start_column);
 		int insert_idx = 0;
-		for (int i = 0; i < current.start_line - 1; i++) {
+		for (int i = 0; i < int(original.line) - 1; i++) {
 			insert_idx = source.find("\n", insert_idx) + 1;
 		}
-		// Insert the "cursor" character, needed for the lookup to work.
-		const String source_with_cursor = source.insert(insert_idx + current.start_column, String::chr(0xFFFF));
+		// Insert the cursor in the original source; lookup_code() will transpile it.
+		const String source_with_cursor = source.insert(insert_idx + int(original.column), String::chr(0xFFFF));
 
 		EditorLanguage::LookupResult result;
 		if (GDScriptEditorLanguage::get_singleton()->lookup_code(source_with_cursor, current.get_identifier(), p_path, nullptr, result) == OK) {
@@ -156,6 +170,8 @@ Error ResourceFormatSaverGDScript::save(const Ref<Resource> &p_resource, const S
 	Ref<GDScript> sqscr = p_resource;
 	ERR_FAIL_COND_V(sqscr.is_null(), ERR_INVALID_PARAMETER);
 
+	ERR_FAIL_COND_V_MSG(GDCFrontend::is_source_path(p_path) != GDCFrontend::is_source_path(sqscr->get_script_path()),
+			ERR_INVALID_PARAMETER, "Changing between .gd and .cgd requires an explicit syntax conversion, not Save As.");
 	String source = sqscr->get_source_code();
 
 	{
@@ -178,8 +194,9 @@ Error ResourceFormatSaverGDScript::save(const Ref<Resource> &p_resource, const S
 }
 
 void ResourceFormatSaverGDScript::get_recognized_extensions(const Ref<Resource> &p_resource, List<String> *p_extensions) const {
-	if (Object::cast_to<GDScript>(*p_resource)) {
-		p_extensions->push_back("gd");
+	const GDScript *script = Object::cast_to<GDScript>(*p_resource);
+	if (script) {
+		p_extensions->push_back(GDCFrontend::is_source_path(script->get_script_path()) ? "cgd" : "gd");
 	}
 }
 

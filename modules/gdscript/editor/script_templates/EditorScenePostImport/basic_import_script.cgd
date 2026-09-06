@@ -1,0 +1,9 @@
+// meta-description: Basic import script template
+@tool
+extends _BASE_;
+
+// Called when a scene uses this import script in the Import tab.
+Object _post_import(Node scene) {
+    // Modify the scene and return its root node.
+    return scene;
+}

@@ -1,0 +1,7 @@
+// meta-description: Basic import script template (no comments)
+@tool
+extends _BASE_;
+
+Object _post_import(Node scene) {
+    return scene;
+}

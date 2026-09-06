@@ -43,8 +43,10 @@ public:
 	virtual Error lookup_code(const String &p_code, const String &p_symbol, const String &p_path, Object *p_owner, LookupResult &r_result) override;
 
 	virtual int32_t find_function(const String &p_function, const String &p_code) const override;
+	virtual int32_t find_function_for_path(const String &p_path, const String &p_function, const String &p_code) const override;
 
 	virtual void format_code(String &r_code, uint32_t p_from_line, uint32_t p_to_line) const override;
+	virtual void format_code_for_path(const String &p_path, String &r_code, uint32_t p_from_line, uint32_t p_to_line) const override;
 
 	virtual bool validate(const String &p_code, const String &p_path, List<ScriptError> *r_errors, List<Warning> *r_warnings, List<String> *r_functions, HashSet<int> *r_safe_lines) const override;
 

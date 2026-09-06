@@ -1,0 +1,43 @@
+extends Node;
+
+@export int expected_sum = 8;
+
+const auto Counter = preload("res://counter.cgd");
+const auto NativeCollision = preload("res://collision.gd");
+const auto CStyleCollision = preload("res://collision.cgd");
+
+void _ready() {
+    auto counter = Counter.new();
+    GDCCounter typed_counter = counter;
+    if (!ensure(GDCCounter.Mode.READY == 7 && GDCCounter.LABELS.size() == 2, "global class enum and container constant")) { return; }
+    if (!ensure(GDCCounter.static_value() == 6, "global static method and inferred default")) { return; }
+    if (!ensure(type_is<GDCCounter>(typed_counter) && cast<GDCCounter>(counter) == typed_counter && is_in("ready", GDCCounter.LABELS), "type tests casts and membership")) { return; }
+    if (!ensure(counter.base_value() == 10, "counter.base_value() == 10")) { return; }
+    if (!ensure(counter.sum_skipping_two() == expected_sum, "counter.sum_skipping_two() == expected_sum")) { return; }
+    if (!ensure(counter.nested_loops() == 12, "counter.nested_loops() == 12")) { return; }
+    if (!ensure(counter.choose(1) == 10, "counter.choose(1) == 10")) { return; }
+    if (!ensure(counter.choose(0) == 20, "counter.choose(0) == 20")) { return; }
+    if (!ensure(counter.choose(-1) == 30, "counter.choose(-1) == 30")) { return; }
+    if (!ensure(counter.match_value(2) == 100, "counter.match_value(2) == 100")) { return; }
+    if (!ensure(counter.match_value(3) == 200, "counter.match_value(3) == 200")) { return; }
+    if (!ensure(counter.closure_test() == 42, "counter.closure_test() == 42")) { return; }
+    if (!ensure(counter.foreach_test() == [0, 1, 2], "counter.foreach_test() == [0, 1, 2]")) { return; }
+    if (!ensure(counter.operator_test(), "counter.operator_test()")) { return; }
+    counter.health = -1;
+    if (!ensure(counter.health == 0, "counter.health == 0")) { return; }
+    if (!ensure(NativeCollision.new().value() == 1, "NativeCollision.new().value() == 1")) { return; }
+    if (!ensure(CStyleCollision.new().value() == 2, "CStyleCollision.new().value() == 2")) { return; }
+    if (!ensure(load("res://counter.cgd") == Counter, "load(\"res://counter.cgd\") == Counter")) { return; }
+    if (!ensure(load("res://magic_prefix.cgd").new().result() == 7, "load(\"res://magic_prefix.cgd\").new().result() == 7")) { return; }
+    print("GDC_SMOKE_OK");
+    get_tree().quit(0);
+}
+
+bool ensure(bool condition, String message) {
+    if (!condition) {
+        push_error("GD-C smoke failure: " + message);
+        get_tree().quit(1);
+        return false;
+    }
+    return true;
+}

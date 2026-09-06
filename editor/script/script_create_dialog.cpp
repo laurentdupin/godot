@@ -136,9 +136,12 @@ void ScriptCreateDialog::_notification(int p_what) {
 
 			EditorData &ed = EditorNode::get_editor_data();
 
-			for (int i = 0; i < ScriptServer::get_language_count(); i++) {
+			for (int i = 0; i < language_menu->get_item_count(); i++) {
+				if (ScriptServer::get_language_count() == 0) {
+					break;
+				}
 				// Check if the extension has an icon first.
-				String script_type = ScriptServer::get_language(i)->get_type();
+				String script_type = _get_language(i)->get_type();
 				Ref<Texture2D> language_icon = get_editor_theme_icon(script_type);
 				if (language_icon.is_null() || language_icon == ThemeDB::get_singleton()->get_fallback_icon()) {
 					// The theme doesn't have an icon for this language, ask the extensions.
@@ -183,6 +186,14 @@ bool ScriptCreateDialog::_can_be_built_in() {
 	return (supports_built_in && built_in_enabled);
 }
 
+ScriptLanguage *ScriptCreateDialog::_get_language(int p_index) const {
+	return ScriptServer::get_language(p_index == cgd_language ? default_language : p_index);
+}
+
+String ScriptCreateDialog::_get_extension(int p_index) const {
+	return p_index == cgd_language ? "cgd" : _get_language(p_index)->get_extension();
+}
+
 String ScriptCreateDialog::_adjust_file_path(const String &p_base_path) const {
 	if (p_base_path.is_empty()) {
 		return p_base_path;
@@ -191,7 +202,7 @@ String ScriptCreateDialog::_adjust_file_path(const String &p_base_path) const {
 	String base_dir = p_base_path.get_base_dir();
 	String file_name = p_base_path.get_file().get_basename();
 	file_name = EditorNode::adjust_script_name_casing(file_name, language->preferred_file_name_casing());
-	String extension = language->get_extension();
+	String extension = _get_extension(language_menu->get_selected());
 	return base_dir.path_join(file_name + "." + extension);
 }
 
@@ -206,6 +217,9 @@ void ScriptCreateDialog::config(const String &p_base_name, const String &p_base_
 	built_in_enabled = p_built_in_enabled;
 	load_enabled = p_load_enabled;
 
+	if (p_base_path.has_extension("cgd") && cgd_language >= 0) {
+		language_menu->select(cgd_language);
+	}
 	_language_changed(language_menu->get_selected());
 
 	if (_can_be_built_in()) {
@@ -283,9 +297,9 @@ String ScriptCreateDialog::_validate_path(const String &p_path, bool p_file_must
 	bool found = false;
 	bool match = false;
 	for (int l = 0; l < language_menu->get_item_count(); l++) {
-		if (p.has_extension(ScriptServer::get_language(l)->get_extension())) {
+		if (p.has_extension(_get_extension(l))) {
 			found = true;
-			match = l == language_menu->get_selected();
+			match = p_file_must_exist ? _get_language(l) == language : l == language_menu->get_selected();
 			break;
 		}
 	}
@@ -298,7 +312,7 @@ String ScriptCreateDialog::_validate_path(const String &p_path, bool p_file_must
 	}
 
 	// Let ScriptLanguage do custom validation.
-	return ScriptServer::get_language(language_menu->get_selected())->validate_path(p);
+	return language->validate_path(p);
 }
 
 void ScriptCreateDialog::_parent_name_changed(const String &p_parent) {
@@ -369,7 +383,7 @@ void ScriptCreateDialog::_create_new() {
 	}
 
 	String class_name = file_path->get_text().get_file().get_basename();
-	scr = ScriptServer::get_language(language_menu->get_selected())->make_template(sinfo.content, class_name, parent_class);
+	scr = language->make_template(sinfo.content, class_name, parent_class);
 
 	if (is_built_in) {
 		scr->set_name(built_in_name->get_text());
@@ -404,13 +418,13 @@ void ScriptCreateDialog::_load_exist() {
 }
 
 void ScriptCreateDialog::_language_changed(int l) {
-	language = ScriptServer::get_language(l);
+	language = _get_language(l);
 	if (language == nullptr) {
 		return;
 	}
 
 	can_inherit_from_file = language->can_inherit_from_file();
-	supports_built_in = language->supports_builtin_mode();
+	supports_built_in = l != cgd_language && language->supports_builtin_mode();
 	if (!supports_built_in) {
 		is_built_in = false;
 	}
@@ -458,7 +472,17 @@ void ScriptCreateDialog::_browse_path(bool browse_parent, bool p_save) {
 	file_browse->set_customization_flag_enabled(FileDialog::CUSTOMIZATION_OVERWRITE_WARNING, false);
 
 	file_browse->clear_filters();
-	file_browse->add_filter("*." + ScriptServer::get_language(language_menu->get_selected())->get_extension());
+	if (browse_parent || load_enabled) {
+		PackedStringArray patterns;
+		for (int i = 0; i < language_menu->get_item_count(); i++) {
+			if (_get_language(i) == language) {
+				patterns.push_back("*." + _get_extension(i));
+			}
+		}
+		file_browse->add_filter(String(",").join(patterns));
+	} else {
+		file_browse->add_filter("*." + _get_extension(language_menu->get_selected()));
+	}
 
 	file_browse->set_current_path(file_path->get_text());
 	file_browse->popup_file_dialog();
@@ -470,6 +494,13 @@ void ScriptCreateDialog::_file_selected(const String &p_file) {
 		parent_name->set_text("\"" + path + "\"");
 		_parent_name_changed(parent_name->get_text());
 	} else {
+		for (int i = 0; i < language_menu->get_item_count(); i++) {
+			if (path.has_extension(_get_extension(i)) && language_menu->get_selected() != i) {
+				language_menu->select(i);
+				_language_changed(i);
+				break;
+			}
+		}
 		file_path->set_text(path);
 		_path_changed(path);
 
@@ -555,7 +586,7 @@ void ScriptCreateDialog::_update_template_menu() {
 			for (const String &current_node : hierarchy) {
 				Vector<ScriptLanguage::ScriptTemplate> templates_found;
 				if (template_location == ScriptLanguage::TEMPLATE_BUILT_IN) {
-					templates_found = language->get_built_in_templates(current_node);
+					templates_found = language->get_built_in_templates_for_path("template." + _get_extension(language_menu->get_selected()), current_node);
 				} else {
 					String template_directory;
 					if (template_location == ScriptLanguage::TEMPLATE_PROJECT) {
@@ -722,7 +753,7 @@ ScriptLanguage::ScriptTemplate ScriptCreateDialog::_get_current_template() const
 
 Vector<ScriptLanguage::ScriptTemplate> ScriptCreateDialog::_get_user_templates(const ScriptLanguage *p_language, const StringName &p_object, const String &p_dir, const ScriptLanguage::TemplateLocation &p_origin) const {
 	Vector<ScriptLanguage::ScriptTemplate> user_templates;
-	String extension = p_language->get_extension();
+	String extension = _get_extension(language_menu->get_selected());
 
 	String dir_path = p_dir.path_join(p_object);
 
@@ -748,7 +779,7 @@ ScriptLanguage::ScriptTemplate ScriptCreateDialog::_parse_template(const ScriptL
 	int space_indent_size = 4;
 	// Get meta delimiter
 	String meta_delimiter;
-	for (const String &script_delimiter : p_language->get_comment_delimiters()) {
+	for (const String &script_delimiter : p_language->get_comment_delimiters_for_path(p_filename)) {
 		if (!script_delimiter.contains_char(' ')) {
 			meta_delimiter = script_delimiter;
 			break;
@@ -889,6 +920,10 @@ ScriptCreateDialog::ScriptCreateDialog() {
 		if (lang == "GDScript") {
 			default_language = i;
 		}
+	}
+	if (default_language >= 0 && ScriptServer::get_language(default_language)->handles_extension("cgd")) {
+		cgd_language = language_menu->get_item_count();
+		language_menu->add_item("GD-C (.cgd)");
 	}
 	if (ScriptServer::get_language_count() == 0) {
 		// Edge Case 1: No scripting languages exist at all.

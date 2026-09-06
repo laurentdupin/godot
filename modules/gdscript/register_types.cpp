@@ -29,6 +29,7 @@
 /**************************************************************************/
 
 #include "register_types.h"
+#include "gdc_frontend.h"
 
 #include "gdscript.h"
 #include "gdscript_cache.h"
@@ -50,6 +51,7 @@
 #endif // TOOLS_ENABLED
 
 #ifdef TESTS_ENABLED
+#include "tests/test_cgd_review.h"
 #include "tests/test_gdscript.h"
 #endif
 
@@ -61,6 +63,7 @@
 #ifdef TOOLS_ENABLED
 #include "editor/editor_node.h"
 #include "editor/export/editor_export.h"
+#include "editor/export/editor_export_platform.h"
 #include "editor/translations/editor_translation_parser.h"
 
 #ifndef GDSCRIPT_NO_LSP
@@ -98,23 +101,43 @@ protected:
 	}
 
 	virtual void _export_file(const String &p_path, const String &p_type, const HashSet<String> &p_features) override {
-		if (p_path.get_extension() != "gd" || script_mode == EditorExportPreset::MODE_SCRIPT_TEXT) {
+		const String extension = p_path.get_extension().to_lower();
+		if ((extension != "gd" && extension != "cgd") || GDCFrontend::is_binary_path(p_path)) {
 			return;
 		}
 
-		Vector<uint8_t> file = FileAccess::get_file_as_bytes(p_path);
-		if (file.is_empty()) {
-			return;
+		Error read_error = OK;
+		Vector<uint8_t> file = FileAccess::get_file_as_bytes(p_path, &read_error);
+		String source;
+		String error;
+		if (read_error != OK || (!file.is_empty() && source.append_utf8(reinterpret_cast<const char *>(file.ptr()), file.size()) != OK)) {
+			error = vformat("%s: Cannot read valid UTF-8 script source.", p_path);
+		} else if (script_mode == EditorExportPreset::MODE_SCRIPT_TEXT) {
+			if (extension == "cgd") {
+				GDScriptParser parser;
+				if (parser.parse(source, p_path, false) != OK) {
+					const GDScriptParser::ParserError &failure = parser.get_errors().front()->get();
+					error = vformat("%s:%d:%d: %s", p_path, failure.start_line, failure.start_column, failure.message);
+				}
+			}
+			// Text mode keeps the original .cgd; the patched template transpiles at load time.
+		} else {
+			const GDScriptTokenizerBuffer::CompressMode mode = script_mode == EditorExportPreset::MODE_SCRIPT_BINARY_TOKENS_COMPRESSED ? GDScriptTokenizerBuffer::COMPRESS_ZSTD : GDScriptTokenizerBuffer::COMPRESS_NONE;
+			file = GDCFrontend::compile_binary(source, p_path, mode, error);
+			if (error.is_empty() && file.is_empty()) {
+				error = vformat("%s: Script compilation produced an empty token buffer.", p_path);
+			}
+			if (error.is_empty()) {
+				// Keep ordinary .gd exports on the existing .gdc route.
+				const String compiled_path = extension == "cgd" ? p_path + ".gdbin" : p_path.get_basename() + ".gdc";
+				add_file(compiled_path, file, true);
+			}
 		}
-
-		String source = String::utf8(reinterpret_cast<const char *>(file.ptr()), file.size());
-		GDScriptTokenizerBuffer::CompressMode compress_mode = script_mode == EditorExportPreset::MODE_SCRIPT_BINARY_TOKENS_COMPRESSED ? GDScriptTokenizerBuffer::COMPRESS_ZSTD : GDScriptTokenizerBuffer::COMPRESS_NONE;
-		file = GDScriptTokenizerBuffer::parse_code_string(source, compress_mode);
-		if (file.is_empty()) {
-			return;
+		if (!error.is_empty()) {
+			get_export_preset()->get_platform()->add_message(EditorExportPlatform::EXPORT_MESSAGE_ERROR, "GDScript / GD-C", error);
+			fail_export(ERR_INVALID_DATA); // Consumed by EditorExportPlatform's per-plugin check.
+			skip(); // Never silently package failed source as successful compiled output.
 		}
-
-		add_file(p_path.get_basename() + ".gdc", file, true);
 	}
 
 public:

@@ -1,0 +1,12 @@
+// meta-description: Base template for rich text effects
+@tool
+class_name RichText_CLASS_;
+extends _BASE_;
+
+// Enable BBCode, register this effect, and use [_CLASS_SNAKE_CASE_ param=2.0]hello[/_CLASS_SNAKE_CASE_].
+auto bbcode = "_CLASS_SNAKE_CASE_";
+
+bool _process_custom_fx(CharFXTransform char_fx) {
+    float param = char_fx.env.get("param", 1.0);
+    return true;
+}

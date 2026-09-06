@@ -1,0 +1,10 @@
+GDSCounter value;
+
+class GDSCounter {
+    int number = 7;
+}
+
+int result() {
+    value = GDSCounter.new();
+    return value.number;
+}
