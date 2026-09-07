@@ -116,9 +116,12 @@ HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::resolve(const Ref<HTMLDocument
 }
 
 HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::resolve_glyph(const hcsr_glyph_material_t &glyph, float scale) {
-	const String identity = "glyph:" + uitos(glyph.face) + ":" + uitos(glyph.glyph) + ":" + String::num(glyph.font_size);
+	uint32_t size_bits;
+    memcpy(&size_bits, &glyph.font_size, sizeof(size_bits));
+    const GlyphKey identity{ glyph.face, glyph.glyph, size_bits };
 	const float required = CLAMP(glyph.font_size * scale, 1.0f, 768.0f);
-	int level = glyph_levels.has(identity) ? glyph_levels[identity] : 0;
+	const int *existing_level = glyph_levels.getptr(identity);
+    int level = existing_level ? *existing_level : 0;
 	// Keep 20% headroom and hysteresis: hover scaling never follows fractional raster sizes.
 	if (level == 0 || required > level || required < level * .45f) {
 		level = 12;
@@ -126,9 +129,9 @@ HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::resolve_glyph(const hcsr_glyph
 		level = MIN(level, 768);
 		glyph_levels.insert(identity, level);
 	}
-	const String key = "glyph:" + uitos(glyph.face) + ":" + uitos(glyph.glyph) + ":" + itos(level);
-	const String face_glyph = "glyph:" + uitos(glyph.face) + ":" + uitos(glyph.glyph);
-    if (const Entry *existing = entries.getptr(key)) {
+	const GlyphKey key{ glyph.face, glyph.glyph, uint32_t(level) };
+	const GlyphKey face_glyph{ glyph.face, glyph.glyph, 0 };
+    if (const Entry *existing = glyph_entries.getptr(key)) {
         if (existing->page >= 0) return *existing;
         // A full atlas must not replace a valid lower-resolution glyph with a missing entry.
         if (const Entry *fallback = last_glyphs.getptr(face_glyph)) return *fallback;
@@ -142,8 +145,8 @@ HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::resolve_glyph(const hcsr_glyph
 }
 
 HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::rasterize_glyph(const hcsr_glyph_material_t &glyph, int level) {
-    const String key = "glyph:" + uitos(glyph.face) + ":" + uitos(glyph.glyph) + ":" + itos(level);
-    const String face_glyph = "glyph:" + uitos(glyph.face) + ":" + uitos(glyph.glyph);
+    const GlyphKey key{ glyph.face, glyph.glyph, uint32_t(level) };
+    const GlyphKey face_glyph{ glyph.face, glyph.glyph, 0 };
 	Entry entry;
 	entry.raster_size = level;
 	TextServer *ts = TextServerManager::get_singleton()->get_primary_interface().ptr();
@@ -151,10 +154,10 @@ HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::rasterize_glyph(const hcsr_gly
 	const Vector2i size(level, 0);
 	ts->font_render_glyph(face, size, glyph.glyph);
 	const int texture = ts->font_get_glyph_texture_idx(face, size, glyph.glyph);
-	if (texture < 0) { entries.insert(key, entry); return entry; }
+	if (texture < 0) { glyph_entries.insert(key, entry); return entry; }
 	Ref<Image> source = ts->font_get_texture_image(face, size, texture);
 	const Rect2i uv = ts->font_get_glyph_uv_rect(face, size, glyph.glyph);
-	if (source.is_null() || !uv.has_area()) { entries.insert(key, entry); return entry; }
+	if (source.is_null() || !uv.has_area()) { glyph_entries.insert(key, entry); return entry; }
 	entry.color_glyph = source->get_format() == Image::FORMAT_RGBA8;
 	Ref<Image> image = source->get_region(uv);
 	image->convert(Image::FORMAT_RGBA8);
@@ -186,7 +189,7 @@ HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::rasterize_glyph(const hcsr_gly
 		break;
 	}
 	if (entry.page < 0) WARN_PRINT("HCSR glyph atlas capacity exceeded");
-	entries.insert(key, entry);
+	glyph_entries.insert(key, entry);
     if (entry.page >= 0) last_glyphs.insert(face_glyph, entry);
 	return entry;
 }
@@ -469,7 +472,7 @@ void HCSRNewestImageAtlas::release(RenderingDevice *device) {
 	pages.clear();
 	entries.clear();
     glyph_levels.clear();
-    pending_glyphs.clear(); last_glyphs.clear(); queued_glyphs.clear();
+    pending_glyphs.clear(); last_glyphs.clear(); queued_glyphs.clear(); glyph_entries.clear();
 	vertices.clear();
 	batches.clear();
 	pipeline = buffer = sampler = shader = RID();
@@ -531,7 +534,7 @@ void HCSRNewestImageAtlas::draw_cpu(Ref<Image> target, const Color &background) 
 Dictionary HCSRNewestImageAtlas::get_statistics() const {
 	Dictionary result;
 	result["pages"] = pages.size();
-	result["sources"] = entries.size();
+	result["sources"] = entries.size() + glyph_entries.size();
 	result["decoded_images"] = decoded_images;
     result["rasterized_glyphs"] = rasterized_glyphs;
     result["pending_glyphs"] = pending_glyphs.size();

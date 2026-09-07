@@ -35,6 +35,17 @@ class HCSRNewestImageAtlas {
 		int page;
 		uint32_t first, count;
 	};
+    struct GlyphKey {
+        uint64_t face = 0;
+        uint32_t glyph = 0, size = 0;
+        bool operator==(const GlyphKey &other) const { return face == other.face && glyph == other.glyph && size == other.size; }
+    };
+    struct GlyphHasher {
+        static uint32_t hash(const GlyphKey &key) {
+            return hash_fmix32(hash_murmur3_one_32(key.size, hash_murmur3_one_32(key.glyph, hash_murmur3_one_64(key.face))));
+        }
+    };
+    HashMap<GlyphKey, Entry, GlyphHasher> glyph_entries;
 	HashMap<String, Entry> entries;
 	Vector<Page> pages;
 	Vector<Vertex> vertices;
@@ -46,12 +57,12 @@ class HCSRNewestImageAtlas {
 	Entry resolve(const Ref<HTMLDocument> &document, const String &source);
     Entry resolve_glyph(const hcsr_glyph_material_t &glyph, float scale);
     Entry rasterize_glyph(const hcsr_glyph_material_t &glyph, int level);
-    struct PendingGlyph { hcsr_glyph_material_t glyph; int level; String key; };
+    struct PendingGlyph { hcsr_glyph_material_t glyph; int level; GlyphKey key; };
     Vector<PendingGlyph> pending_glyphs;
-    HashMap<String, Entry> last_glyphs;
-    HashMap<String, bool> queued_glyphs;
+    HashMap<GlyphKey, Entry, GlyphHasher> last_glyphs;
+    HashMap<GlyphKey, bool, GlyphHasher> queued_glyphs;
     uint64_t rasterized_glyphs = 0;
-    HashMap<String, int> glyph_levels;
+    HashMap<GlyphKey, int, GlyphHasher> glyph_levels;
 	bool upload(RenderingDevice *device);
 
 public:
