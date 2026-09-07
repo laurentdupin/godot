@@ -15,7 +15,7 @@ class HCSRNewestImageAtlas {
 		int page = -1;
 		Rect2i rect;
 		Size2i natural_size;
-        Vector2 glyph_offset;
+        Vector2 glyph_offset, glyph_size;
         int raster_size = 0;
         bool color_glyph = false;
 	};

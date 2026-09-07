@@ -159,6 +159,7 @@ HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::rasterize_glyph(const hcsr_gly
 	Ref<Image> image = source->get_region(uv);
 	image->convert(Image::FORMAT_RGBA8);
 	entry.glyph_offset = ts->font_get_glyph_offset(face, size, glyph.glyph);
+    entry.glyph_size = ts->font_get_glyph_size(face, size, glyph.glyph);
 	entry.natural_size = image->get_size();
 	const int width = image->get_width() + 2, height = image->get_height() + 2;
 	for (int i = 0; i <= pages.size() && i < MAX_PAGES; i++) {
@@ -256,7 +257,7 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
             entry = resolve_glyph(glyph, output_scale * transform_scale);
             if (entry.page >= 0) {
                 float factor = glyph.font_size / entry.raster_size;
-                destination = Rect2(Vector2(glyph.baseline_x, glyph.baseline_y) + entry.glyph_offset * factor, Vector2(entry.rect.size) * factor);
+                destination = Rect2(Vector2(glyph.baseline_x, glyph.baseline_y) + entry.glyph_offset * factor, entry.glyph_size * factor);
             }
         }
 		has_images |= entry.page >= 0;

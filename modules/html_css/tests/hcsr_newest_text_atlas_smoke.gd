@@ -43,13 +43,25 @@ func _run() -> void:
 	var doc := HTMLDocument.new()
 	doc.css_files = PackedStringArray(["res://Assets/Shared/UI/RetainedUIFonts.css"])
 	doc.html = """<html><head><style>html,body{margin:0}body{font-family:'Application Sans';font-size:20px;color:white}#label{position:absolute;left:20px;top:20px;transform-origin:0 0}#wrap{position:absolute;left:20px;top:90px;width:100px}#clip{position:absolute;left:200px;top:90px;width:40px;height:25px;overflow:hidden}#clip span{white-space:nowrap}input{position:absolute;left:20px;top:190px;width:160px;height:30px}</style></head><body><div id='label'>Hello atlas 123</div><div id='wrap'>Wrapped words here</div><div id='clip'><span>CLIPPED TEXT</span></div><input value='Editable text'></body></html>"""
+	var unicode := "--unicode" in OS.get_cmdline_user_args()
+	var prefix := "text-atlas-unicode" if unicode else "text-atlas"
+	if unicode:
+		doc.html = doc.html.replace("font-family:'Application Sans'", "font-family:'Application Sans','Application CJK','Application Emoji'").replace("Hello atlas 123", "你好🙂 atlas مرحبا")
 	view.document = doc
 	root.add_child(view)
 	var small := view.create_output(Vector2i(400,240), false)
 	await settle()
 	var first := small.texture.get_image()
 	var original := coverage(first)
-	first.save_png("res://Build/text-atlas-1x.png")
+	first.save_png("res://Build/%s-1x.png" % prefix)
+	if unicode:
+		var colored := 0
+		for y in range(12,70):
+			for x in range(12,295):
+				var pixel := first.get_pixel(x,y)
+				if pixel.a > .4 and maxf(pixel.r,maxf(pixel.g,pixel.b)) - minf(pixel.r,minf(pixel.g,pixel.b)) > .2:
+					colored += 1
+		require(colored > 5, "color emoji preserves intrinsic RGB")
 	var initial := stats()
 	require(int(initial.get("rasterized_glyphs",0)) > 10, "glyphs populate atlas: " + str(initial))
 	require(int(initial.get("glyph_pages",0)) == 1, "dedicated glyph page")
@@ -60,7 +72,7 @@ func _run() -> void:
 	await settle(24)
 	var enlarged := large.texture.get_image()
 	var high := coverage(enlarged)
-	enlarged.save_png("res://Build/text-atlas-2x.png")
+	enlarged.save_png("res://Build/%s-2x.png" % prefix)
 	require(original.position.distance_to(high.position) < 2 and original.size.distance_to(high.size) < 3, "resolution preserves logical placement: " + str(original) + " / " + str(high))
 	var upgraded := stats()
 	require(int(upgraded.rasterized_glyphs) > int(initial.rasterized_glyphs), "higher resolution creates a new level")
