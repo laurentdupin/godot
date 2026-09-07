@@ -5,6 +5,7 @@
 #include "core/crypto/crypto_core.h"
 
 #include <cmath>
+#include "servers/text/text_server.h"
 
 HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::resolve(const Ref<HTMLDocument> &document, const String &source) {
 	const String key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source;
@@ -71,11 +72,14 @@ HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::resolve(const Ref<HTMLDocument
 		const int width = image->get_width() + 2, height = image->get_height() + 2;
 		for (int i = 0; i <= pages.size() && i < MAX_PAGES; i++) {
 			if (i == pages.size()) {
+                int image_pages = 0; for (const Page &existing : pages) if (!existing.glyphs) image_pages++;
+                if (image_pages >= 4) break;
 				Page page;
 				page.pixels = Image::create_empty(PAGE_SIZE, PAGE_SIZE, false, Image::FORMAT_RGBA8);
 				pages.push_back(page);
 			}
 			Page &page = pages.write[i];
+            if (page.glyphs) continue;
 			int x = page.x, y = page.y, row = page.row_height;
 			if (x + width > PAGE_SIZE) {
 				x = 0;
@@ -111,14 +115,90 @@ HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::resolve(const Ref<HTMLDocument
 	return entry;
 }
 
-bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document) {
+HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::resolve_glyph(const hcsr_glyph_material_t &glyph, float scale) {
+	const String identity = "glyph:" + uitos(glyph.face) + ":" + uitos(glyph.glyph) + ":" + String::num(glyph.font_size);
+	const float required = CLAMP(glyph.font_size * scale, 1.0f, 768.0f);
+	int level = glyph_levels.has(identity) ? glyph_levels[identity] : 0;
+	// Keep 20% headroom and hysteresis: hover scaling never follows fractional raster sizes.
+	if (level == 0 || required > level || required < level * .45f) {
+		level = 12;
+		while (level < required * 1.2f && level < 768) level = (level * 3 + 1) / 2;
+		level = MIN(level, 768);
+		glyph_levels.insert(identity, level);
+	}
+	const String key = "glyph:" + uitos(glyph.face) + ":" + uitos(glyph.glyph) + ":" + itos(level);
+	if (const Entry *existing = entries.getptr(key)) return *existing;
+    const String face_glyph = "glyph:" + uitos(glyph.face) + ":" + uitos(glyph.glyph);
+    if (const Entry *fallback = last_glyphs.getptr(face_glyph)) {
+        if (!queued_glyphs.has(key)) { pending_glyphs.push_back({ glyph, level, key }); queued_glyphs.insert(key, true); }
+        return *fallback;
+    }
+    return rasterize_glyph(glyph, level);
+}
+
+HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::rasterize_glyph(const hcsr_glyph_material_t &glyph, int level) {
+    const String key = "glyph:" + uitos(glyph.face) + ":" + uitos(glyph.glyph) + ":" + itos(level);
+    const String face_glyph = "glyph:" + uitos(glyph.face) + ":" + uitos(glyph.glyph);
+	Entry entry;
+	entry.raster_size = level;
+	TextServer *ts = TextServerManager::get_singleton()->get_primary_interface().ptr();
+	const RID face = RID::from_uint64(glyph.face);
+	const Vector2i size(level, 0);
+	ts->font_render_glyph(face, size, glyph.glyph);
+	const int texture = ts->font_get_glyph_texture_idx(face, size, glyph.glyph);
+	if (texture < 0) { entries.insert(key, entry); return entry; }
+	Ref<Image> source = ts->font_get_texture_image(face, size, texture);
+	const Rect2i uv = ts->font_get_glyph_uv_rect(face, size, glyph.glyph);
+	if (source.is_null() || !uv.has_area()) { entries.insert(key, entry); return entry; }
+	Ref<Image> image = source->get_region(uv);
+	image->convert(Image::FORMAT_RGBA8);
+	entry.glyph_offset = ts->font_get_glyph_offset(face, size, glyph.glyph);
+	entry.natural_size = image->get_size();
+	const int width = image->get_width() + 2, height = image->get_height() + 2;
+	for (int i = 0; i <= pages.size() && i < MAX_PAGES; i++) {
+		if (i == pages.size()) {
+            int glyph_pages = 0; for (const Page &existing : pages) if (existing.glyphs) glyph_pages++;
+            if (glyph_pages >= 4) break;
+			Page page;
+			page.glyphs = true;
+			page.pixels = Image::create_empty(PAGE_SIZE, PAGE_SIZE, false, Image::FORMAT_RGBA8);
+			pages.push_back(page);
+		}
+		Page &page = pages.write[i];
+		if (!page.glyphs) continue;
+		int x = page.x, y = page.y, row = page.row_height;
+		if (x + width > PAGE_SIZE) { x = 0; y += row; row = 0; }
+		if (y + height > PAGE_SIZE || width > PAGE_SIZE) continue;
+		entry.page = i;
+		entry.rect = Rect2i(x + 1, y + 1, width - 2, height - 2);
+		page.pixels->blit_rect(image, Rect2i(Point2i(), image->get_size()), entry.rect.position);
+		// Glyph padding stays transparent, unlike the extruded borders of image entries.
+		page.dirty.push_back(Rect2i(x, y, width, height));
+		page.x = x + width; page.y = y; page.row_height = MAX(row, height);
+		rasterized_glyphs++;
+		break;
+	}
+	if (entry.page < 0) WARN_PRINT("HCSR glyph atlas capacity exceeded");
+	entries.insert(key, entry);
+    if (entry.page >= 0) last_glyphs.insert(face_glyph, entry);
+	return entry;
+}
+
+bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale) {
+    // Upgrade previously seen glyphs incrementally; the old level remains visible meanwhile.
+    for (int i = 0; i < 32 && !pending_glyphs.is_empty(); i++) {
+        PendingGlyph pending = pending_glyphs[pending_glyphs.size() - 1];
+        pending_glyphs.resize(pending_glyphs.size() - 1);
+        queued_glyphs.erase(pending.key);
+        rasterize_glyph(pending.glyph, pending.level);
+    }
 	vertices.clear();
 	batches.clear();
 	uploaded = false;
 	bool has_images = false;
 	bool references_images = false;
 	for (size_t i = 0; i < packet.material_count; i++) {
-		references_images |= packet.materials[i].kind == HCSR_MATERIAL_IMAGE;
+		references_images |= (packet.materials[i].kind == HCSR_MATERIAL_IMAGE || packet.materials[i].kind == HCSR_MATERIAL_GLYPH);
 	}
 	if (!references_images) {
 		return false;
@@ -156,6 +236,23 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
 				}
 			}
 		}
+        hcsr_glyph_material_t glyph = {};
+        const bool is_glyph = material.kind == HCSR_MATERIAL_GLYPH && material.payload_size >= sizeof(glyph);
+        if (is_glyph) {
+            memcpy(&glyph, packet.material_payload + material.payload_offset, sizeof(glyph));
+            float transform_scale = 1;
+            for (uint32_t j = 1; j < draw.index_count; j++) {
+                const auto &a = packet.vertices[packet.indices[draw.first_index]];
+                const auto &b = packet.vertices[packet.indices[draw.first_index + j]];
+                float local = Vector2(b.local_x - a.local_x, b.local_y - a.local_y).length();
+                if (local > .001f) transform_scale = MAX(transform_scale, Vector2(b.screen_x - a.screen_x, b.screen_y - a.screen_y).length() / local);
+            }
+            entry = resolve_glyph(glyph, output_scale * transform_scale);
+            if (entry.page >= 0) {
+                float factor = glyph.font_size / entry.raster_size;
+                destination = Rect2(Vector2(glyph.baseline_x, glyph.baseline_y) + entry.glyph_offset * factor, Vector2(entry.rect.size) * factor);
+            }
+        }
 		has_images |= entry.page >= 0;
 		const int page = MAX(0, entry.page);
 		if (batches.is_empty() || batches[batches.size() - 1].page != page) {
@@ -173,7 +270,8 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
 				const Vector2 uv = (Vector2(v.local_x, v.local_y) - destination.position) / destination.size;
 				vertex.position_uv[2] = (entry.rect.position.x + uv.x * entry.rect.size.x) / PAGE_SIZE;
 				vertex.position_uv[3] = (entry.rect.position.y + uv.y * entry.rect.size.y) / PAGE_SIZE;
-				vertex.tint[0] = -1;
+				vertex.tint[0] = is_glyph ? -2 - glyph.red : -1;
+                if (is_glyph) { vertex.tint[1] = glyph.green; vertex.tint[2] = glyph.blue; vertex.tint[3] *= glyph.alpha; }
 				vertex.bounds[0] = float(entry.rect.position.x) / PAGE_SIZE;
 				vertex.bounds[1] = float(entry.rect.position.y) / PAGE_SIZE;
 				vertex.bounds[2] = float(entry.rect.get_end().x) / PAGE_SIZE;
@@ -211,6 +309,7 @@ void main() {
     if (tint.r < 0.0) {
         if (any(lessThan(uv,bounds.xy)) || any(greaterThan(uv,bounds.zw))) discard;
         color = texture(atlas, uv); color.a *= tint.a;
+        if (tint.r <= -2.0) color.rgb *= vec3(-tint.r - 2.0, tint.g, tint.b);
     } else color = tint;
 })"
 		};
@@ -361,6 +460,8 @@ void HCSRNewestImageAtlas::release(RenderingDevice *device) {
 	}
 	pages.clear();
 	entries.clear();
+    glyph_levels.clear();
+    pending_glyphs.clear(); last_glyphs.clear(); queued_glyphs.clear();
 	vertices.clear();
 	batches.clear();
 	pipeline = buffer = sampler = shader = RID();
@@ -409,6 +510,7 @@ void HCSRNewestImageAtlas::draw_cpu(Ref<Image> target, const Color &background) 
 						}
 						color = pages[batch.page].pixels->get_pixel(CLAMP(int(u * PAGE_SIZE), 0, PAGE_SIZE - 1), CLAMP(int(v * PAGE_SIZE), 0, PAGE_SIZE - 1));
 						color.a *= a.tint[3];
+                        if (a.tint[0] <= -2) { color.r *= -a.tint[0] - 2; color.g *= a.tint[1]; color.b *= a.tint[2]; }
 					}
 					const Color under = target->get_pixel(x, y);
 					target->set_pixel(x, y, Color(color.r * color.a + under.r * (1 - color.a), color.g * color.a + under.g * (1 - color.a), color.b * color.a + under.b * (1 - color.a), color.a + under.a * (1 - color.a)));
@@ -423,6 +525,11 @@ Dictionary HCSRNewestImageAtlas::get_statistics() const {
 	result["pages"] = pages.size();
 	result["sources"] = entries.size();
 	result["decoded_images"] = decoded_images;
+    result["rasterized_glyphs"] = rasterized_glyphs;
+    result["pending_glyphs"] = pending_glyphs.size();
+    int glyph_pages = 0; for (const Page &page : pages) if (page.glyphs) glyph_pages++;
+    result["glyph_pages"] = glyph_pages;
+    result["vertices"] = vertices.size();
 	result["uploaded_bytes"] = uploaded_bytes;
 	result["page_size"] = PAGE_SIZE;
 	result["draw_batches"] = batches.size();

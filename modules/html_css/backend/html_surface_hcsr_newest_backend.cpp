@@ -6,6 +6,7 @@
 
 #include "hcsr_newest_performance_monitor.h"
 #include "hcsr_newest_image_atlas.h"
+#include "hcsr_newest_text.h"
 
 #include "../bridge/html_asset_provider.h"
 #include "core/io/file_access.h"
@@ -21,6 +22,8 @@
 struct HTMLSurfaceHCSRNewestBackend::State {
 	mutable Mutex mutex;
 	HCSRNewestImageAtlas image_atlas;
+	HCSRNewestText text;
+	bool text_enabled = OS::get_singleton()->get_environment("HCSR_DISABLE_TEXT") != "1";
 	Dictionary image_atlas_statistics;
 	// Output states own only presentation resources; source, scene and layout stay on this owner.
 	HashMap<uint64_t, State *> outputs;
@@ -103,7 +106,7 @@ static String html_attribute(const String &p_attributes, const String &p_name) {
 }
 
 static Error append_document_stylesheets(const Ref<HTMLDocument> &p_document, const String &p_html,
-		Vector<CharString> &r_stylesheets, HashSet<String> &r_linked_stylesheet_paths, String &r_error) {
+		Vector<CharString> &r_stylesheets, HashSet<String> &r_linked_stylesheet_paths, String &r_error, HCSRNewestText *text) {
 	Ref<RegEx> sources = RegEx::create_from_string(
 			"(?is)<style\\b[^>]*>(.*?)</style\\s*>|<link\\b([^>]*)>", false);
 	if (sources.is_null()) return ERR_BUG;
@@ -129,6 +132,7 @@ static Error append_document_stylesheets(const Ref<HTMLDocument> &p_document, co
 		if (HTMLGodotAssetProvider::load_asset(p_document, href, asset, &r_error) != OK) return ERR_CANT_OPEN;
 		r_stylesheets.push_back(String::utf8((const char *)asset.bytes.ptr(), asset.bytes.size()).utf8());
 		r_linked_stylesheet_paths.insert(asset.path);
+        if (text) text->add_stylesheet(String::utf8((const char *)asset.bytes.ptr(), asset.bytes.size()), asset.path.get_base_dir());
 	}
 	return OK;
 }
@@ -454,7 +458,12 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 			? Size2i(Math::ceil(packet.viewport_width), Math::ceil(packet.viewport_height))
 			: Size2i();
 	const uint64_t record_start_usec = OS::get_singleton()->get_ticks_usec();
-	const bool textured = rendered && state->image_atlas.prepare(packet, state->document);
+	float output_scale = rendered ? MAX(float(physical_size.x) / packet.viewport_width, float(physical_size.y) / packet.viewport_height) : 1;
+    { MutexLock lock(state->mutex);
+        for (const KeyValue<uint64_t, State *> &entry : state->outputs)
+            if (!entry.value->closing && rendered) output_scale = MAX(output_scale, MAX(float(entry.value->physical_size.x) / packet.viewport_width, float(entry.value->physical_size.y) / packet.viewport_height));
+    }
+    const bool textured = rendered && state->image_atlas.prepare(packet, state->document, output_scale);
 	if (!textured) {
 		MutexLock lock(state->mutex);
 		state->image_atlas_statistics = state->image_atlas.get_statistics();
@@ -589,6 +598,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 		}
 		state->render_pending = false;
 		state->image_atlas_statistics = atlas_statistics;
+        state->needs_another_frame |= state->image_atlas.has_pending_glyphs();
 		if (rendered && !state->closing) {
 			state->presentation_changed = true;
 			state->metadata.generation = rendered_generation;
@@ -642,10 +652,11 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
 		html = String::utf8((const char *)asset.bytes.ptr(), asset.bytes.size());
 	}
 	if (html.strip_edges().is_empty()) return ERR_INVALID_DATA;
+	if (state->text_enabled) state->text.configure(document, html + document->get_css());
 	Vector<CharString> stylesheet_bytes;
 	HashSet<String> linked_stylesheet_paths;
 	String stylesheet_error;
-	if (append_document_stylesheets(document, html, stylesheet_bytes, linked_stylesheet_paths, stylesheet_error) != OK) {
+	if (append_document_stylesheets(document, html, stylesheet_bytes, linked_stylesheet_paths, stylesheet_error, state->text_enabled ? &state->text : nullptr) != OK) {
 		set_terminal(state, stylesheet_error.is_empty() ? "hcsr_newest could not resolve a linked stylesheet." : stylesheet_error);
 		return ERR_CANT_OPEN;
 	}
@@ -669,6 +680,7 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
 			return ERR_CANT_OPEN;
 		}
 		stylesheet_bytes.push_back(String::utf8((const char *)asset.bytes.ptr(), asset.bytes.size()).utf8());
+        if (state->text_enabled) state->text.add_stylesheet(String::utf8((const char *)asset.bytes.ptr(), asset.bytes.size()), asset.path.get_base_dir());
 	}
 	if (!document->get_css().is_empty()) stylesheet_bytes.push_back(document->get_css().utf8());
 	Vector<hcsr_utf8_t> stylesheets;
@@ -690,6 +702,9 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
 	if (state->source != 0) hcsr_source_destroy(state->source);
 	state->scene = 0;
 	state->source = 0;
+    if (state->text_enabled) {
+        hcsr_runtime_set_text_shaper(state->runtime, HCSRNewestText::callback, &state->text);
+    }
 	if (hcsr_source_create(state->runtime, &source_desc, &state->source) != HCSR_OK) {
 		set_terminal(state, scene_error(state, "hcsr_newest could not create the document source."));
 		return ERR_INVALID_DATA;
@@ -797,7 +812,7 @@ Error HTMLSurfaceHCSRNewestBackend::prepare_host_frame(uint64_t p_host_frame, do
 	initialize_abi(step);
 	step.flags = HCSR_STEP_BUILD_PACKET;
 	step.packet_format = HCSR_DRAW_PACKET_FORMAT_1;
-	step.paint_mode = HCSR_PAINT_MODE_IMAGES;
+	step.paint_mode = state->text_enabled ? HCSR_PAINT_MODE_TEXT_IMAGES : HCSR_PAINT_MODE_IMAGES;
 	step.time_seconds = p_timeline_time_seconds;
 	step.viewport_width = state->logical_size.x;
 	step.viewport_height = state->logical_size.y;

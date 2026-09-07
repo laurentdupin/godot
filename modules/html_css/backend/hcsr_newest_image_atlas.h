@@ -10,13 +10,16 @@
 // Godot owns GPU lifetime and barriers on both D3D12 and Vulkan.
 class HCSRNewestImageAtlas {
 	static constexpr int PAGE_SIZE = 4096;
-	static constexpr int MAX_PAGES = 4;
+	static constexpr int MAX_PAGES = 8;
 	struct Entry {
 		int page = -1;
 		Rect2i rect;
 		Size2i natural_size;
+        Vector2 glyph_offset;
+        int raster_size = 0;
 	};
 	struct Page {
+        bool glyphs = false;
 		Ref<Image> pixels;
 		Vector<Rect2i> dirty;
 		RID texture, uniform;
@@ -40,12 +43,21 @@ class HCSRNewestImageAtlas {
 	bool uploaded = false;
 	uint64_t uploaded_bytes = 0, decoded_images = 0;
 	Entry resolve(const Ref<HTMLDocument> &document, const String &source);
+    Entry resolve_glyph(const hcsr_glyph_material_t &glyph, float scale);
+    Entry rasterize_glyph(const hcsr_glyph_material_t &glyph, int level);
+    struct PendingGlyph { hcsr_glyph_material_t glyph; int level; String key; };
+    Vector<PendingGlyph> pending_glyphs;
+    HashMap<String, Entry> last_glyphs;
+    HashMap<String, bool> queued_glyphs;
+    uint64_t rasterized_glyphs = 0;
+    HashMap<String, int> glyph_levels;
 	bool upload(RenderingDevice *device);
 
 public:
-	bool prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document);
+	bool prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale = 1);
 	bool draw(RenderingDevice *device, RID target, const Color &background);
 	void draw_cpu(Ref<Image> target, const Color &background);
 	void release(RenderingDevice *device);
 	Dictionary get_statistics() const;
+    bool has_pending_glyphs() const { return !pending_glyphs.is_empty(); }
 };
