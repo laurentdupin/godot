@@ -83,6 +83,11 @@ public:
 	virtual bool get_form_control_state(const StringName &p_id, HTMLFormControlState &r_state) override;
 	virtual bool hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const override;
 	virtual void get_frame_metadata(HTMLFrameMetadata &r_metadata) const override;
+	virtual uint64_t create_presentation_output(const Size2i &, bool) override;
+	virtual Error resize_presentation_output(uint64_t, const Size2i &) override;
+	virtual void destroy_presentation_output(uint64_t) override;
+	virtual Ref<Texture2D> get_presentation_output_texture(uint64_t) const override;
+	virtual uint64_t get_presentation_output_generation(uint64_t) const override;
 	virtual Ref<Texture2D> get_texture() const override;
 	virtual Ref<HTMLTexture2D> get_html_texture() const override;
 

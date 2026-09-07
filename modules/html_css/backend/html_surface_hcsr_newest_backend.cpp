@@ -19,6 +19,11 @@
 
 struct HTMLSurfaceHCSRNewestBackend::State {
 	mutable Mutex mutex;
+	// Output states own only presentation resources; source, scene and layout stay on this owner.
+	HashMap<uint64_t, State *> outputs;
+	uint64_t next_output_id = 1;
+	bool mipmaps = false;
+	RID mipmapped_texture;
 	HTMLSurfaceHCSRNewestRenderer renderer = HTML_SURFACE_HCSR_NEWEST_CPU;
 	hcsr_runtime_t runtime = 0;
 	HashSet<uint64_t> preloads;
@@ -174,6 +179,10 @@ static uint32_t map_key(HTMLSurfaceInputKey p_key) {
 }
 
 static void release_gpu_target(HTMLSurfaceHCSRNewestBackend::State *p_state, RenderingServer *p_server, RenderingDevice *p_device) {
+	if (p_state->mipmapped_texture.is_valid() && p_server != nullptr) {
+		p_server->free_rid(p_state->mipmapped_texture);
+		p_state->mipmapped_texture = RID();
+	}
 	if (p_state->canvas_texture.is_valid() && p_server != nullptr) {
 		p_server->free_rid(p_state->canvas_texture);
 	}
@@ -197,7 +206,8 @@ static bool ensure_gpu_target(HTMLSurfaceHCSRNewestBackend::State *p_state, Rend
 	format.format = RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM;
 	format.width = p_physical_size.x;
 	format.height = p_physical_size.y;
-	format.usage_bits = RenderingDevice::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT;
+	format.usage_bits = RenderingDevice::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT
+			| RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT;
 	format.shareable_formats.push_back(RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM);
 	format.shareable_formats.push_back(RenderingDevice::DATA_FORMAT_R8G8B8A8_SRGB);
 	p_state->rd_texture = p_device->texture_create(format, RenderingDevice::TextureView());
@@ -248,6 +258,17 @@ static bool ensure_presenter(HTMLSurfaceHCSRNewestBackend::State *p_state, Rende
 static void destroy_presenter(uint64_t p_presenter, int p_renderer) {
 	if (p_renderer == HTML_SURFACE_HCSR_NEWEST_D3D12) hcsr_d3d12_destroy(p_presenter);
 	else if (p_renderer == HTML_SURFACE_HCSR_NEWEST_VULKAN) hcsr_vulkan_destroy(p_presenter);
+}
+
+static void release_output(HTMLSurfaceHCSRNewestBackend::State *output, RenderingServer *server, RenderingDevice *device) {
+	if (output->presenter != 0) {
+		const Callable release = callable_mp_static(&destroy_presenter).bind(output->presenter, (int)output->renderer);
+		if (device != nullptr) device->external_resource_defer_release(release);
+		else release.call();
+	}
+	release_gpu_target(output, server, device);
+	output->texture->release_resources();
+	memdelete(output);
 }
 
 static bool record_gpu(HTMLSurfaceHCSRNewestBackend::State *p_state, HTMLSurfaceHCSRNewestRenderer p_renderer,
@@ -307,10 +328,19 @@ static void render_cpu(HTMLSurfaceHCSRNewestBackend::State *p_state, const hcsr_
 		image->fill_rect(bounds.intersection(Rect2i(Point2i(), p_physical_size)),
 				Color(area->luminance, area->luminance, area->luminance, area->opacity));
 	}
+	if (p_state->mipmaps) image->generate_mipmaps();
 	p_state->texture->update_from_image(image);
 }
 
+struct HCSRNewestOutputSubmission {
+	HTMLSurfaceHCSRNewestBackend::State *state = nullptr;
+	Size2i size;
+	uint64_t target = 0;
+	uint64_t target_view = 0;
+};
+
 struct HCSRNewestGpuSubmission {
+	Vector<HCSRNewestOutputSubmission> outputs;
 	HTMLSurfaceHCSRNewestBackend::State *state = nullptr;
 	hcsr_draw_packet_t packet = 0;
 	HTMLSurfaceHCSRNewestRenderer renderer = HTML_SURFACE_HCSR_NEWEST_CPU;
@@ -353,6 +383,14 @@ static void complete_gpu_submission(RenderingDeviceDriver *p_driver, RenderingDe
 				packet, submission->physical_size, submission->background, native_command_buffer,
 				submission->target, submission->target_view, submission->host_frame);
 	}
+	if (rendered) {
+		const uint64_t command_buffer = p_driver->get_resource_native_handle(
+				RenderingDeviceDriver::DRIVER_RESOURCE_COMMAND_BUFFER, p_command_buffer);
+		for (const HCSRNewestOutputSubmission &output : submission->outputs) {
+			rendered = record_gpu(output.state, submission->renderer, packet, output.size, Color(0, 0, 0, 0),
+					command_buffer, output.target, output.target_view, submission->host_frame) && rendered;
+		}
+	}
 	hcsr_draw_packet_destroy(submission->packet);
 	const double record_seconds = (double)(OS::get_singleton()->get_ticks_usec() - record_start_usec) / 1000000.0;
 	double input_to_visible_seconds = 0.0;
@@ -362,6 +400,9 @@ static void complete_gpu_submission(RenderingDeviceDriver *p_driver, RenderingDe
 		if (submission->state->pending_packet == submission->packet) submission->state->pending_packet = 0;
 		submission->state->render_pending = false;
 		if (rendered && !submission->state->closing) {
+			for (const HCSRNewestOutputSubmission &output : submission->outputs) {
+				output.state->active_generation = generation;
+			}
 			submission->state->presentation_changed = true;
 			submission->state->metadata.generation = generation;
 			submission->state->metadata.host_frame_number = submission->host_frame;
@@ -430,8 +471,50 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 			RenderingDevice::CallbackResource resource;
 			resource.rid = state->rd_texture;
 			resource.usage = RenderingDevice::CALLBACK_RESOURCE_USAGE_ATTACHMENT_COLOR_READ_WRITE;
-			const Error callback_error = device->driver_callback_add(complete_gpu_submission, submission, VectorView(&resource, 1));
+			Vector<RenderingDevice::CallbackResource> resources;
+			resources.push_back(resource);
+			{
+				MutexLock lock(state->mutex);
+				Vector<uint64_t> retired;
+				for (const KeyValue<uint64_t, State *> &entry : state->outputs) {
+					State *output = entry.value;
+					if (output->closing) {
+						retired.push_back(entry.key);
+						continue;
+					}
+					if (!ensure_gpu_target(output, server, device, output->physical_size) || !ensure_presenter(output, device)) {
+						rendered = false;
+						break;
+					}
+					HCSRNewestOutputSubmission target;
+					target.state = output;
+					target.size = output->physical_size;
+					target.target = device->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_TEXTURE, output->rd_texture);
+					target.target_view = device->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_TEXTURE_VIEW, output->rd_texture);
+					submission->outputs.push_back(target);
+					resource.rid = output->rd_texture;
+					resources.push_back(resource);
+				}
+				for (uint64_t id : retired) {
+					release_output(state->outputs[id], server, device);
+					state->outputs.erase(id);
+				}
+			}
+			const Error callback_error = rendered ? device->driver_callback_add(complete_gpu_submission, submission,
+					VectorView(resources.ptr(), resources.size())) : ERR_CANT_CREATE;
 			if (callback_error == OK) {
+				// Graph dependencies order mip generation after recording, before 3D sampling.
+				for (const HCSRNewestOutputSubmission &target : submission->outputs) {
+					State *output = target.state;
+					if (!output->mipmaps) continue;
+					if (!output->mipmapped_texture.is_valid()) {
+						output->mipmapped_texture = server->texture_drawable_create(target.size.x, target.size.y,
+								RenderingServerEnums::TEXTURE_DRAWABLE_FORMAT_RGBA8_SRGB, Color(0, 0, 0, 0), true);
+					}
+					server->texture_drawable_copy_level_zero(output->canvas_texture, output->mipmapped_texture);
+					server->texture_drawable_generate_mipmaps(output->mipmapped_texture, true);
+					output->texture->set_external_texture(output->mipmapped_texture, target.size, true);
+				}
 				MutexLock lock(state->mutex);
 				state->pending_gpu_submission = submission;
 				return;
@@ -441,6 +524,18 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 		}
 	} else if (rendered) {
 		render_cpu(state, packet, physical_size, background);
+		MutexLock lock(state->mutex);
+		Vector<uint64_t> retired;
+		for (const KeyValue<uint64_t, State *> &entry : state->outputs) {
+			State *output = entry.value;
+			if (output->closing) { retired.push_back(entry.key); continue; }
+			render_cpu(output, packet, output->physical_size, Color(0, 0, 0, 0));
+			output->active_generation = rendered_generation;
+		}
+		for (uint64_t id : retired) {
+			release_output(state->outputs[id], RenderingServer::get_singleton(), nullptr);
+			state->outputs.erase(id);
+		}
 	}
 	hcsr_draw_packet_destroy(packet_handle);
 	const double record_seconds = (double)(OS::get_singleton()->get_ticks_usec() - record_start_usec) / 1000000.0;
@@ -1111,6 +1206,53 @@ void HTMLSurfaceHCSRNewestBackend::get_frame_metadata(HTMLFrameMetadata &r_metad
 Ref<Texture2D> HTMLSurfaceHCSRNewestBackend::get_texture() const { return texture; }
 Ref<HTMLTexture2D> HTMLSurfaceHCSRNewestBackend::get_html_texture() const { return texture; }
 
+uint64_t HTMLSurfaceHCSRNewestBackend::create_presentation_output(const Size2i &p_size, bool p_mipmaps) {
+	if (p_size.x <= 0 || p_size.y <= 0) return 0;
+	MutexLock lock(state->mutex);
+	State *output = memnew(State);
+	output->renderer = state->renderer;
+	output->physical_size = p_size;
+	output->mipmaps = p_mipmaps;
+	output->texture.instantiate();
+	const uint64_t id = state->next_output_id++;
+	state->outputs.insert(id, output);
+	state->needs_another_frame = true;
+	return id;
+}
+
+Error HTMLSurfaceHCSRNewestBackend::resize_presentation_output(uint64_t p_id, const Size2i &p_size) {
+	if (p_size.x <= 0 || p_size.y <= 0) return ERR_INVALID_PARAMETER;
+	MutexLock lock(state->mutex);
+	State **output = state->outputs.getptr(p_id);
+	if (output == nullptr || (*output)->closing) return ERR_DOES_NOT_EXIST;
+	if ((*output)->physical_size != p_size) {
+		(*output)->physical_size = p_size;
+		state->needs_another_frame = true;
+	}
+	return OK;
+}
+
+void HTMLSurfaceHCSRNewestBackend::destroy_presentation_output(uint64_t p_id) {
+	MutexLock lock(state->mutex);
+	State **output = state->outputs.getptr(p_id);
+	if (output == nullptr) return;
+	// Retire on the render thread after any previously registered callback.
+	(*output)->closing = true;
+	state->needs_another_frame = true;
+}
+
+Ref<Texture2D> HTMLSurfaceHCSRNewestBackend::get_presentation_output_texture(uint64_t p_id) const {
+	MutexLock lock(state->mutex);
+	State *const *output = state->outputs.getptr(p_id);
+	return output != nullptr && !(*output)->closing ? Ref<Texture2D>((*output)->texture) : Ref<Texture2D>();
+}
+
+uint64_t HTMLSurfaceHCSRNewestBackend::get_presentation_output_generation(uint64_t p_id) const {
+	MutexLock lock(state->mutex);
+	State *const *output = state->outputs.getptr(p_id);
+	return output != nullptr && !(*output)->closing ? (*output)->active_generation : 0;
+}
+
 HTMLSurfaceHCSRNewestBackend::HTMLSurfaceHCSRNewestBackend(HTMLSurfaceHCSRNewestRenderer p_renderer) {
 	texture.instantiate();
 	state = memnew(State);
@@ -1135,6 +1277,8 @@ void HTMLSurfaceHCSRNewestBackend::_destroy_state_on_render_thread(uint64_t p_st
 			if (device != nullptr) device->external_resource_defer_release(release);
 			else release.call();
 		}
+		for (const KeyValue<uint64_t, State *> &entry : state->outputs) release_output(entry.value, server, device);
+		state->outputs.clear();
 		release_gpu_target(state, server, device);
 		if (state->scene != 0) hcsr_scene_destroy(state->scene);
 		if (state->source != 0) hcsr_source_destroy(state->source);
