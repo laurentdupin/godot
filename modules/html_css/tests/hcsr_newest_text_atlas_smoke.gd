@@ -61,7 +61,8 @@ func _run() -> void:
 				var pixel := first.get_pixel(x,y)
 				if pixel.a > .4 and maxf(pixel.r,maxf(pixel.g,pixel.b)) - minf(pixel.r,minf(pixel.g,pixel.b)) > .2:
 					colored += 1
-		require(colored > 5, "color emoji preserves intrinsic RGB")
+		print("COLOR_GLYPH_PIXELS ", colored)
+		require(colored > 180, "color emoji preserves intrinsic RGB and complete strike bounds")
 	var initial := stats()
 	require(int(initial.get("rasterized_glyphs",0)) > 10, "glyphs populate atlas: " + str(initial))
 	require(int(initial.get("glyph_pages",0)) == 1, "dedicated glyph page")
