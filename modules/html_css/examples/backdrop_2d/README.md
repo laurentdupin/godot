@@ -18,8 +18,8 @@ compositor limit with these filters:
 Build Godot with the statically linked HCSR provider, then run the scene:
 
 ```powershell
-python -m SCons platform=windows target=editor dev_build=yes module_html_css_renderer=hcsr_old angle=no -j1
-.\bin\godot.windows.editor.dev.x86_64.exe --path modules\html_css\examples\backdrop_2d res://main.tscn
+python -m SCons platform=windows target=editor arch=x86_64 dev_build=yes module_mono_enabled=yes module_html_css_renderer=hcsr_newest extra_suffix=hcsr_newest -j8
+.\bin\godot.windows.editor.dev.x86_64.hcsr_newest.mono.exe --path modules\html_css\examples\backdrop_2d res://main.tscn
 ```
 
 The example selects `HTMLView.BACKEND_GPU_AUTO`, which uses the active Vulkan,
@@ -44,3 +44,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File modules\html_css\tools\build
 
 Android uses Godot's mobile Vulkan renderer. HCSR and its native text/image
 codecs are linked into the Godot shared library; no HCSR DLL is packaged.
+
+With `hcsr_newest`, HCSR supplies rounded, transformed and clipped coverage plus
+ordered operations. Godot creates a cached ID/coverage mask and applies filters
+to the live canvas backbuffer. `HTMLView.get_backdrop_filter_frame()` exposes the
+same mask and effect IDs to other host compositors. The foreground texture stays
+independent; filters are not baked into a secondary 3D output texture.
+
+Regression tests in `../../tests/hcsr_newest_backdrop_mask_smoke.gd` cover alpha,
+rounded clips, transforms, resizing, mask reuse and removal. Run
+`../../tests/hcsr_newest_backdrop_gallery_smoke.gd` with this example as the project
+to validate all eight mask IDs. The existing single-ID compositor still uses the
+last covering effect for overlapping regions; nested CSS backdrop-root semantics
+and Chromium-exact blur kernels remain future work.

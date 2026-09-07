@@ -197,6 +197,12 @@
 				Returns cumulative terminal outcomes for semantic frame requests. Keys are [code]submitted[/code], [code]no_visual_output[/code], [code]superseded_by_newer_revision[/code], [code]physical_pool_blocked[/code], [code]preparation_failed[/code], and [code]submission_failed[/code]. Producer-capacity retries are counted once per requested revision; retirement maintenance is not an outcome and never contributes backpressure.
 			</description>
 		</method>
+		<method name="get_backdrop_filter_frame" qualifiers="const">
+			<return type="Dictionary" />
+			<description>
+				Returns a coherent backdrop mask frame: [code]valid[/code], [code]mask_texture[/code], [code]mask_encoding[/code], [code]logical_size[/code], [code]physical_size[/code], [code]generation[/code], [code]main_target_generation[/code], and [code]effects[/code]. RGBA8 encoding 1 stores the effect ID in red (ID / 255) and coverage in green. Each effect has a matching [code]mask_id[/code]. Coverage already includes rounded geometry, clipping and element opacity; do not apply these a second time. An invalid frame has no active mask. The texture contains coverage only, not filtered scene colors.
+			</description>
+		</method>
 		<method name="get_backdrop_filter_regions">
 			<return type="Array" />
 			<description>

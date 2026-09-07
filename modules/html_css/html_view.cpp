@@ -342,6 +342,7 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_backdrop_filter_enabled", "backdrop_filter_enabled"), &HTMLView::set_backdrop_filter_enabled);
 	ClassDB::bind_method(D_METHOD("is_backdrop_filter_enabled"), &HTMLView::is_backdrop_filter_enabled);
 	ClassDB::bind_method(D_METHOD("get_backdrop_filter_regions"), &HTMLView::get_backdrop_filter_regions);
+	ClassDB::bind_method(D_METHOD("get_backdrop_filter_frame"), &HTMLView::get_backdrop_filter_frame);
 	ClassDB::bind_method(D_METHOD("get_texture"), &HTMLView::get_texture);
 	ClassDB::bind_method(D_METHOD("get_generation"), &HTMLView::get_generation);
 	ClassDB::bind_method(D_METHOD("get_queued_generation"), &HTMLView::get_queued_generation);
@@ -1806,10 +1807,26 @@ Array HTMLView::get_backdrop_filter_regions() const {
 			region.opacity = effect.opacity;
 			region.flags = effect.flags;
 			region.filter_operations = effect.filter_operations;
-			regions.push_back(html_backdrop_filter_region_to_dictionary(region));
+			Dictionary item = html_backdrop_filter_region_to_dictionary(region);
+			item["mask_id"] = effect.id;
+			regions.push_back(item);
 		}
 	}
 	return regions;
+}
+
+Dictionary HTMLView::get_backdrop_filter_frame() const {
+	const HTMLGPUBackdropFrame &frame = surface->get_gpu_backdrop_frame();
+	Dictionary result;
+	result["valid"] = frame.is_valid();
+	result["mask_texture"] = frame.mask_texture;
+	result["mask_encoding"] = frame.mask_encoding;
+	result["logical_size"] = frame.logical_size;
+	result["physical_size"] = frame.physical_size;
+	result["generation"] = frame.frame_generation;
+	result["main_target_generation"] = frame.main_target_generation;
+	result["effects"] = get_backdrop_filter_regions();
+	return result;
 }
 
 Ref<Texture2D> HTMLView::get_texture() const {
@@ -2206,6 +2223,16 @@ Size2 HTMLView::get_minimum_size() const {
 }
 
 HTMLView::HTMLView() {
+#ifdef HTML_CSS_USE_HCSR_NEWEST
+	// Newest outputs contain premultiplied sRGB, including transparent clears.
+	Ref<Shader> paint_shader;
+	paint_shader.instantiate();
+	paint_shader->set_code("shader_type canvas_item; render_mode blend_premul_alpha, unshaded; void vertex() { COLOR.rgb *= COLOR.a; }");
+	Ref<ShaderMaterial> paint_material;
+	paint_material.instantiate();
+	paint_material->set_shader(paint_shader);
+	set_material(paint_material);
+#endif
 	surface.instantiate();
 	surface->set_changed_callback(callable_mp(this, &HTMLView::_surface_changed));
 	surface->set_frame_queued_callback(callable_mp(this, &HTMLView::_surface_frame_queued));

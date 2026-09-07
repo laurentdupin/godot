@@ -223,6 +223,7 @@ public:
 	void set_backdrop_filter_enabled(bool p_backdrop_filter_enabled);
 	bool is_backdrop_filter_enabled() const;
 	Array get_backdrop_filter_regions() const;
+	Dictionary get_backdrop_filter_frame() const;
 
 	Ref<Texture2D> get_texture() const;
 	uint64_t get_generation() const;

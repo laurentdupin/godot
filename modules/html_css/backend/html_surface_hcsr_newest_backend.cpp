@@ -7,6 +7,7 @@
 #include "hcsr_newest_performance_monitor.h"
 #include "hcsr_newest_image_atlas.h"
 #include "hcsr_newest_text.h"
+#include "hcsr_newest_backdrop.h"
 
 #include "../bridge/html_asset_provider.h"
 #include "core/io/file_access.h"
@@ -23,6 +24,9 @@ struct HTMLSurfaceHCSRNewestBackend::State {
 	mutable Mutex mutex;
 	HCSRNewestImageAtlas image_atlas;
 	HCSRNewestText text;
+	HCSRNewestBackdrop backdrop;
+	HTMLGPUBackdropFrame prepared_backdrop;
+	HTMLGPUBackdropFrame active_backdrop;
 	bool text_enabled = OS::get_singleton()->get_environment("HCSR_DISABLE_TEXT") != "1";
 	Dictionary image_atlas_statistics;
 	// Output states own only presentation resources; source, scene and layout stay on this owner.
@@ -418,6 +422,7 @@ static void complete_gpu_submission(RenderingDeviceDriver *p_driver, RenderingDe
 			submission->state->metadata.logical_size = logical_size;
 			submission->state->metadata.physical_size = submission->physical_size;
 			submission->state->active_generation = generation;
+			submission->state->active_backdrop = submission->state->prepared_backdrop;
 			if (submission->state->input_queued_usec != 0) {
 				input_to_visible_seconds = (double)(OS::get_singleton()->get_ticks_usec() - submission->state->input_queued_usec) / 1000000.0;
 				submission->state->input_queued_usec = 0;
@@ -448,7 +453,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 		renderer = state->renderer;
 		prepared = state->prepared;
 		physical_size = prepared.physical_size;
-		background = prepared.background;
+		background = Color(prepared.background.r * prepared.background.a, prepared.background.g * prepared.background.a, prepared.background.b * prepared.background.a, prepared.background.a);
 	}
 	hcsr_draw_packet_view_t packet;
 	initialize_abi(packet);
@@ -458,6 +463,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 			? Size2i(Math::ceil(packet.viewport_width), Math::ceil(packet.viewport_height))
 			: Size2i();
 	const uint64_t record_start_usec = OS::get_singleton()->get_ticks_usec();
+	if (rendered) state->prepared_backdrop = state->backdrop.update(packet_handle, rendered_logical_size, physical_size);
 	float output_scale = rendered ? MAX(float(physical_size.x) / packet.viewport_width, float(physical_size.y) / packet.viewport_height) : 1;
     { MutexLock lock(state->mutex);
         for (const KeyValue<uint64_t, State *> &entry : state->outputs)
@@ -486,7 +492,9 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 				if (!output->mipmapped_texture.is_valid()) output->mipmapped_texture = server->texture_drawable_create(size.x, size.y,
 						RenderingServerEnums::TEXTURE_DRAWABLE_FORMAT_RGBA8_SRGB, Color(0, 0, 0, 0), true);
 				server->texture_drawable_copy_level_zero(output->canvas_texture, output->mipmapped_texture);
-				server->texture_drawable_generate_mipmaps(output->mipmapped_texture, true);
+				// Average premultiplied sRGB directly; alpha-weighting again would
+				// convert the mip into straight color and brighten translucent edges.
+				server->texture_drawable_generate_mipmaps(output->mipmapped_texture, false);
 				output->texture->set_external_texture(output->mipmapped_texture, size, true);
 			}
 			return true;
@@ -562,7 +570,9 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 								RenderingServerEnums::TEXTURE_DRAWABLE_FORMAT_RGBA8_SRGB, Color(0, 0, 0, 0), true);
 					}
 					server->texture_drawable_copy_level_zero(output->canvas_texture, output->mipmapped_texture);
-					server->texture_drawable_generate_mipmaps(output->mipmapped_texture, true);
+					// Average premultiplied sRGB directly; alpha-weighting again would
+					// convert the mip into straight color and brighten translucent edges.
+					server->texture_drawable_generate_mipmaps(output->mipmapped_texture, false);
 					output->texture->set_external_texture(output->mipmapped_texture, target.size, true);
 				}
 				MutexLock lock(state->mutex);
@@ -608,6 +618,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 			state->metadata.logical_size = rendered_logical_size;
 			state->metadata.physical_size = physical_size;
 			state->active_generation = rendered_generation;
+			state->active_backdrop = state->prepared_backdrop;
 			if (state->input_queued_usec != 0) {
 				input_to_visible_seconds = (double)(OS::get_singleton()->get_ticks_usec() - state->input_queued_usec) / 1000000.0;
 				state->input_queued_usec = 0;
@@ -1370,3 +1381,5 @@ HTMLSurfaceHCSRNewestBackend::~HTMLSurfaceHCSRNewestBackend() {
 	document.unref();
 	texture.unref();
 }
+
+void HTMLSurfaceHCSRNewestBackend::get_gpu_backdrop_frame(HTMLGPUBackdropFrame &r_frame) const { MutexLock lock(state->mutex); r_frame = state->active_backdrop; }

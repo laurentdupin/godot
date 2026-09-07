@@ -34,6 +34,7 @@ private:
 	Error _apply_mutation(const hcsr_mutation_t &p_mutation, uint64_t p_preload = 0);
 
 public:
+	virtual void get_gpu_backdrop_frame(HTMLGPUBackdropFrame &r_frame) const override;
 	virtual void mark_document_dirty() override;
 	virtual void set_size(const Size2i &p_size) override;
 	virtual void set_device_scale_factor(float p_device_scale_factor) override;
