@@ -127,8 +127,13 @@ HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::resolve_glyph(const hcsr_glyph
 		glyph_levels.insert(identity, level);
 	}
 	const String key = "glyph:" + uitos(glyph.face) + ":" + uitos(glyph.glyph) + ":" + itos(level);
-	if (const Entry *existing = entries.getptr(key)) return *existing;
-    const String face_glyph = "glyph:" + uitos(glyph.face) + ":" + uitos(glyph.glyph);
+	const String face_glyph = "glyph:" + uitos(glyph.face) + ":" + uitos(glyph.glyph);
+    if (const Entry *existing = entries.getptr(key)) {
+        if (existing->page >= 0) return *existing;
+        // A full atlas must not replace a valid lower-resolution glyph with a missing entry.
+        if (const Entry *fallback = last_glyphs.getptr(face_glyph)) return *fallback;
+        return *existing;
+    }
     if (const Entry *fallback = last_glyphs.getptr(face_glyph)) {
         if (!queued_glyphs.has(key)) { pending_glyphs.push_back({ glyph, level, key }); queued_glyphs.insert(key, true); }
         return *fallback;
@@ -255,7 +260,8 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
             }
         }
 		has_images |= entry.page >= 0;
-		const int page = MAX(0, entry.page);
+		// Solid grayscale draws do not sample the atlas and can stay in the current batch.
+        const int page = entry.page >= 0 ? entry.page : (batches.is_empty() ? 0 : batches[batches.size() - 1].page);
 		if (batches.is_empty() || batches[batches.size() - 1].page != page) {
 			batches.push_back({ page, (uint32_t)vertices.size(), 0 });
 		}
