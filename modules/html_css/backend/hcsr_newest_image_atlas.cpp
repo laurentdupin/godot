@@ -150,6 +150,7 @@ HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::rasterize_glyph(const hcsr_gly
 	Ref<Image> source = ts->font_get_texture_image(face, size, texture);
 	const Rect2i uv = ts->font_get_glyph_uv_rect(face, size, glyph.glyph);
 	if (source.is_null() || !uv.has_area()) { entries.insert(key, entry); return entry; }
+	entry.color_glyph = source->get_format() == Image::FORMAT_RGBA8;
 	Ref<Image> image = source->get_region(uv);
 	image->convert(Image::FORMAT_RGBA8);
 	entry.glyph_offset = ts->font_get_glyph_offset(face, size, glyph.glyph);
@@ -270,7 +271,7 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
 				const Vector2 uv = (Vector2(v.local_x, v.local_y) - destination.position) / destination.size;
 				vertex.position_uv[2] = (entry.rect.position.x + uv.x * entry.rect.size.x) / PAGE_SIZE;
 				vertex.position_uv[3] = (entry.rect.position.y + uv.y * entry.rect.size.y) / PAGE_SIZE;
-				vertex.tint[0] = is_glyph ? -2 - glyph.red : -1;
+				vertex.tint[0] = is_glyph && !entry.color_glyph ? -2 - glyph.red : -1;
                 if (is_glyph) { vertex.tint[1] = glyph.green; vertex.tint[2] = glyph.blue; vertex.tint[3] *= glyph.alpha; }
 				vertex.bounds[0] = float(entry.rect.position.x) / PAGE_SIZE;
 				vertex.bounds[1] = float(entry.rect.position.y) / PAGE_SIZE;

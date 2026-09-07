@@ -703,7 +703,10 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
 	state->scene = 0;
 	state->source = 0;
     if (state->text_enabled) {
-        hcsr_runtime_set_text_shaper(state->runtime, HCSRNewestText::callback, &state->text);
+        if (hcsr_runtime_set_text_shaper(state->runtime, HCSRNewestText::callback, &state->text) != HCSR_OK) {
+            set_terminal(state, "hcsr_newest could not install the host font service.");
+            return ERR_CANT_CREATE;
+        }
     }
 	if (hcsr_source_create(state->runtime, &source_desc, &state->source) != HCSR_OK) {
 		set_terminal(state, scene_error(state, "hcsr_newest could not create the document source."));
