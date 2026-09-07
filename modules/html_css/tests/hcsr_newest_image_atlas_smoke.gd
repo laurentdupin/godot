@@ -49,7 +49,7 @@ func run() -> void:
     view.logical_size = Vector2i(320, 200)
     view.backend_preference = HTMLView.BACKEND_CPU if cpu else HTMLView.BACKEND_GPU_AUTO
     var doc := HTMLDocument.new()
-    doc.html = """<style>html,body{margin:0;width:100%%;height:100%%}img{display:block;position:absolute}#first{left:10px;top:10px;width:80px;height:80px;object-fit:contain}#clip{position:absolute;left:110px;top:10px;width:40px;height:50px;overflow:hidden}#clip img{width:80px;height:80px}#svg{left:200px;top:10px;width:80px;height:80px;object-fit:cover}#alpha{left:10px;top:100px;width:40px;height:40px;opacity:.5;transform:rotate(30deg)}#overlay{position:absolute;left:10px;top:50px;width:80px;height:20px;background:red}</style><img id='first' src='%s'><div id='clip'><img src='%s'></div><img id='svg' src='%s'><img id='alpha' src='%s'><div id='overlay'></div>""" % [red, red, green, red]
+    doc.html = """<style>html,body{margin:0;width:100%%;height:100%%}img{display:block;position:absolute}#first{left:10px;top:10px;width:80px;height:80px;object-fit:contain}#clip{position:absolute;left:110px;top:10px;width:40px;height:50px;overflow:hidden}#clip img{width:80px;height:80px}#svg{left:200px;top:10px;width:80px;height:80px;object-fit:cover}#alpha{left:10px;top:100px;width:40px;height:40px;opacity:.5;transform:rotate(30deg)}#overlay{position:absolute;left:10px;top:50px;width:80px;height:20px;background:red}</style><img id='first' src='%s'><div id='clip'><img id='clipped-image' src='%s'></div><img id='svg' src='%s'><img id='alpha' src='%s'><div id='overlay'></div>""" % [red, red, green, red]
     view.document = doc
     root.add_child(view)
     var large := view.create_output(Vector2i(640,400), true)
@@ -72,6 +72,17 @@ func run() -> void:
     require(int(stats.decoded_images) == 3 and int(stats.pages) == 1, "new source allocation")
     if not cpu:
         require(int(stats.uploaded_bytes)-uploaded == 18*10*4, "only new padded region uploaded: " + str(stats))
+    # Removing CSS image declarations must restore defaults, not retain typed state.
+    require(view.set_element_attribute("first", "style", "object-position:0% 0%") == OK, "override alignment")
+    require(view.set_element_attribute("clipped-image", "style", "object-fit:contain;object-position:0% 100%") == OK, "override fit")
+    await settle()
+    require(large.texture.get_image().get_pixel(40,40).b > .9, "top alignment applied")
+    require(large.texture.get_image().get_pixel(240,40).a < .1, "bottom-contained image leaves top empty")
+    require(view.set_element_attribute("first", "style", "") == OK, "remove alignment")
+    require(view.set_element_attribute("clipped-image", "style", "") == OK, "remove fit")
+    await settle()
+    check_pixels(large.texture.get_image(), true)
+    require(large.texture.get_image().get_pixel(240,40).r > .9, "removed fit restores fill")
     large.size = Vector2i(960,600)
     await settle()
     check_pixels(large.texture.get_image(), true)
