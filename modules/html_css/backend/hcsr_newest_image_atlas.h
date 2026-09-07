@@ -10,7 +10,7 @@
 // Godot owns GPU lifetime and barriers on both D3D12 and Vulkan.
 class HCSRNewestImageAtlas {
 	static constexpr int PAGE_SIZE = 4096;
-	static constexpr int MAX_PAGES = 8;
+	static constexpr int MAX_PAGES = 9;
 	struct Entry {
 		int page = -1;
 		Rect2i rect;

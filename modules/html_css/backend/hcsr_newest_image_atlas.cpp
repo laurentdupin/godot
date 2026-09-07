@@ -72,14 +72,14 @@ HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::resolve(const Ref<HTMLDocument
 		const int width = image->get_width() + 2, height = image->get_height() + 2;
 		for (int i = 0; i <= pages.size() && i < MAX_PAGES; i++) {
 			if (i == pages.size()) {
-                int image_pages = 0; for (const Page &existing : pages) if (!existing.glyphs) image_pages++;
+                int image_pages = 0; for (const Page &existing : pages) if (!existing.glyphs && existing.pixels->get_width() == PAGE_SIZE) image_pages++;
                 if (image_pages >= 4) break;
 				Page page;
 				page.pixels = Image::create_empty(PAGE_SIZE, PAGE_SIZE, false, Image::FORMAT_RGBA8);
 				pages.push_back(page);
 			}
 			Page &page = pages.write[i];
-            if (page.glyphs) continue;
+            if (page.glyphs || page.pixels->get_width() != PAGE_SIZE) continue;
 			int x = page.x, y = page.y, row = page.row_height;
 			if (x + width > PAGE_SIZE) {
 				x = 0;
@@ -175,7 +175,7 @@ HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::rasterize_glyph(const hcsr_gly
 			pages.push_back(page);
 		}
 		Page &page = pages.write[i];
-		if (!page.glyphs) continue;
+		if (!page.glyphs || page.pixels->get_width() != PAGE_SIZE) continue;
 		int x = page.x, y = page.y, row = page.row_height;
 		if (x + width > PAGE_SIZE) { x = 0; y += row; row = 0; }
 		if (y + height > PAGE_SIZE || width > PAGE_SIZE) continue;
@@ -208,7 +208,7 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
 	bool has_images = false;
 	bool references_images = false;
 	for (size_t i = 0; i < packet.material_count; i++) {
-		references_images |= (packet.materials[i].kind == HCSR_MATERIAL_IMAGE || packet.materials[i].kind == HCSR_MATERIAL_GLYPH);
+		references_images |= (packet.materials[i].kind == HCSR_MATERIAL_IMAGE || packet.materials[i].kind == HCSR_MATERIAL_GLYPH || packet.materials[i].kind == HCSR_MATERIAL_VERTEX_COLOR);
 	}
 	if (!references_images) {
 		return false;
@@ -256,7 +256,7 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
                 destination = Rect2(Vector2(glyph.baseline_x, glyph.baseline_y) + entry.glyph_offset * factor, entry.glyph_size * factor);
             }
         }
-		has_images |= entry.page >= 0;
+		has_images |= entry.page >= 0 || material.kind == HCSR_MATERIAL_VERTEX_COLOR;
 		// Solid grayscale draws do not sample the atlas and can stay in the current batch.
         const int page = entry.page >= 0 ? entry.page : (batches.is_empty() ? 0 : batches[batches.size() - 1].page);
 		if (batches.is_empty() || batches[batches.size() - 1].page != page) {
@@ -281,9 +281,22 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
 				vertex.bounds[2] = float(entry.rect.get_end().x) / PAGE_SIZE;
 				vertex.bounds[3] = float(entry.rect.get_end().y) / PAGE_SIZE;
 			}
+            if (material.kind == HCSR_MATERIAL_VERTEX_COLOR) {
+                const uint32_t rgb = uint32_t(v.local_x);
+                vertex.tint[0] = float((rgb >> 16) & 255) / 255;
+                vertex.tint[1] = float((rgb >> 8) & 255) / 255;
+                vertex.tint[2] = float(rgb & 255) / 255;
+                vertex.tint[3] = v.local_y;
+                vertex.bounds[0] = -2;
+            }
 			vertices.push_back(vertex);
 		}
 	}
+    if (has_images && pages.is_empty()) {
+        Page placeholder;
+        placeholder.pixels = Image::create_empty(1, 1, false, Image::FORMAT_RGBA8);
+        pages.push_back(placeholder);
+    }
 	return has_images;
 }
 
@@ -310,7 +323,8 @@ layout(location=1) in vec4 tint;
 layout(location=2) in vec4 bounds;
 layout(location=0) out vec4 color;
 void main() {
-    if (tint.r < 0.0) {
+    if (bounds.x == -2.0) { color=tint; if(color.a>0.0)color.rgb/=color.a; }
+    else if (tint.r < 0.0) {
         if (any(lessThan(uv,bounds.xy)) || any(greaterThan(uv,bounds.zw))) discard;
         color = texture(atlas, uv); color.a *= tint.a;
         if (tint.r <= -2.0) color.rgb *= vec3(-tint.r - 2.0, tint.g, tint.b);
@@ -357,14 +371,14 @@ void main() {
 	for (Page &page : pages) {
 		RD::TextureFormat format;
 		format.format = RD::DATA_FORMAT_R8G8B8A8_UNORM;
-		format.width = PAGE_SIZE;
-		format.height = PAGE_SIZE;
+		format.width = page.pixels->get_width();
+		format.height = page.pixels->get_height();
 		format.usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT;
 		if (!page.texture.is_valid()) {
 			Vector<Vector<uint8_t>> data;
 			data.push_back(page.pixels->get_data());
 			page.texture = device->texture_create(format, RD::TextureView(), data);
-			uploaded_bytes += uint64_t(PAGE_SIZE) * PAGE_SIZE * 4;
+			uploaded_bytes += uint64_t(format.width) * format.height * 4;
 		} else {
 			// Upload only new allocations. Existing atlas coordinates never move.
 			for (const Rect2i &rect : page.dirty) {
@@ -506,6 +520,10 @@ void HCSRNewestImageAtlas::draw_cpu(Ref<Image> target, const Color &background) 
 						continue;
 					}
 					Color color(a.tint[0], a.tint[1], a.tint[2], a.tint[3]);
+                    if (a.bounds[0] == -2) {
+                        color = Color(a.tint[0],a.tint[1],a.tint[2],a.tint[3])*wa + Color(b.tint[0],b.tint[1],b.tint[2],b.tint[3])*wb + Color(c.tint[0],c.tint[1],c.tint[2],c.tint[3])*wc;
+                        if (color.a > 0) { color.r/=color.a; color.g/=color.a; color.b/=color.a; }
+                    }
 					if (a.tint[0] < 0) {
 						const float u = a.position_uv[2] * wa + b.position_uv[2] * wb + c.position_uv[2] * wc;
 						const float v = a.position_uv[3] * wa + b.position_uv[3] * wb + c.position_uv[3] * wc;

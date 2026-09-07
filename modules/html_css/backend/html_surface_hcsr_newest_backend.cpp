@@ -815,7 +815,7 @@ Error HTMLSurfaceHCSRNewestBackend::prepare_host_frame(uint64_t p_host_frame, do
 	initialize_abi(step);
 	step.flags = HCSR_STEP_BUILD_PACKET;
 	step.packet_format = HCSR_DRAW_PACKET_FORMAT_1;
-	step.paint_mode = state->text_enabled ? HCSR_PAINT_MODE_TEXT_IMAGES : HCSR_PAINT_MODE_IMAGES;
+	step.paint_mode = state->text_enabled ? HCSR_PAINT_MODE_DIRECT : HCSR_PAINT_MODE_DIRECT_IMAGES;
 	step.time_seconds = p_timeline_time_seconds;
 	step.viewport_width = state->logical_size.x;
 	step.viewport_height = state->logical_size.y;

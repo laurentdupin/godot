@@ -29,7 +29,7 @@ func check_pixels(image: Image, blue := false) -> void:
     require((color.b > .9 and color.r < .1) if blue else (color.r > .9 and color.g < .1), "image source color " + str(color))
     require(pixel.call(20, 20).a < .1, "contain leaves transparent letterbox")
     color = pixel.call(20, 60)
-    require(abs(color.r-color.g) < .01 and abs(color.g-color.b) < .01 and color.a > .9, "later grayscale overlay stays above image")
+    require(color.r > .9 and color.g < .1 and color.b < .1 and color.a > .9, "later solid-color overlay stays above image")
     color = pixel.call(120, 20)
     require(color.r > .9 and color.g < .1, "clipped image inside")
     require(pixel.call(160, 20).a < .1, "clipped image outside")
