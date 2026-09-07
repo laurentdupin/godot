@@ -5,6 +5,7 @@
 #include "html_surface_hcsr_newest_backend.h"
 
 #include "hcsr_newest_performance_monitor.h"
+#include "hcsr_newest_image_atlas.h"
 
 #include "../bridge/html_asset_provider.h"
 #include "core/io/file_access.h"
@@ -19,6 +20,8 @@
 
 struct HTMLSurfaceHCSRNewestBackend::State {
 	mutable Mutex mutex;
+	HCSRNewestImageAtlas image_atlas;
+	Dictionary image_atlas_statistics;
 	// Output states own only presentation resources; source, scene and layout stay on this owner.
 	HashMap<uint64_t, State *> outputs;
 	uint64_t next_output_id = 1;
@@ -319,7 +322,7 @@ static void render_cpu(HTMLSurfaceHCSRNewestBackend::State *p_state, const hcsr_
 		const hcsr_draw_item_t &draw = p_packet.draw_items[index];
 		if (draw.material_index >= p_packet.material_count) continue;
 		const hcsr_material_t &material = p_packet.materials[draw.material_index];
-		if (material.kind != HCSR_MATERIAL_AREA_GRAYSCALE
+		if ((material.kind != HCSR_MATERIAL_AREA_GRAYSCALE && material.kind != HCSR_MATERIAL_IMAGE)
 				|| material.payload_offset + sizeof(hcsr_area_grayscale_material_t) > p_packet.material_payload_size) continue;
 		const hcsr_area_grayscale_material_t *area = (const hcsr_area_grayscale_material_t *)(p_packet.material_payload + material.payload_offset);
 		const Rect2i bounds(
@@ -451,7 +454,45 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 			? Size2i(Math::ceil(packet.viewport_width), Math::ceil(packet.viewport_height))
 			: Size2i();
 	const uint64_t record_start_usec = OS::get_singleton()->get_ticks_usec();
-	if (rendered && renderer != HTML_SURFACE_HCSR_NEWEST_CPU) {
+	const bool textured = rendered && state->image_atlas.prepare(packet, state->document);
+	if (!textured) {
+		MutexLock lock(state->mutex);
+		state->image_atlas_statistics = state->image_atlas.get_statistics();
+	}
+	if (textured) {
+		RenderingServer *server = RenderingServer::get_singleton();
+		RenderingDevice *device = server ? server->get_rendering_device() : nullptr;
+		auto draw_output = [&](State *output, const Size2i &size, const Color &clear) {
+			if (renderer == HTML_SURFACE_HCSR_NEWEST_CPU) {
+				Ref<Image> image = Image::create_empty(size.x, size.y, false, Image::FORMAT_RGBA8);
+				state->image_atlas.draw_cpu(image, clear);
+				if (output->mipmaps) image->generate_mipmaps();
+				output->texture->update_from_image(image);
+				return true;
+			}
+			if (!device || !ensure_gpu_target(output, server, device, size)
+					|| !state->image_atlas.draw(device, output->rd_texture, clear)) return false;
+			output->gpu_texture_initialized = true;
+			if (output->mipmaps) {
+				if (!output->mipmapped_texture.is_valid()) output->mipmapped_texture = server->texture_drawable_create(size.x, size.y,
+						RenderingServerEnums::TEXTURE_DRAWABLE_FORMAT_RGBA8_SRGB, Color(0, 0, 0, 0), true);
+				server->texture_drawable_copy_level_zero(output->canvas_texture, output->mipmapped_texture);
+				server->texture_drawable_generate_mipmaps(output->mipmapped_texture, true);
+				output->texture->set_external_texture(output->mipmapped_texture, size, true);
+			}
+			return true;
+		};
+		rendered = draw_output(state, physical_size, background);
+		MutexLock lock(state->mutex);
+		Vector<uint64_t> retired;
+		for (const KeyValue<uint64_t, State *> &entry : state->outputs) {
+			State *output = entry.value;
+			if (output->closing) { retired.push_back(entry.key); continue; }
+			if (rendered) rendered = draw_output(output, output->physical_size, Color(0, 0, 0, 0));
+			if (rendered) output->active_generation = rendered_generation;
+		}
+		for (uint64_t id : retired) { release_output(state->outputs[id], server, device); state->outputs.erase(id); }
+	} else if (rendered && renderer != HTML_SURFACE_HCSR_NEWEST_CPU) {
 		RenderingServer *server = RenderingServer::get_singleton();
 		RenderingDevice *device = server != nullptr ? server->get_rendering_device() : nullptr;
 		rendered = server != nullptr && device != nullptr && ensure_gpu_target(state, server, device, physical_size)
@@ -538,6 +579,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 		}
 	}
 	hcsr_draw_packet_destroy(packet_handle);
+	const Dictionary atlas_statistics = state->image_atlas.get_statistics();
 	const double record_seconds = (double)(OS::get_singleton()->get_ticks_usec() - record_start_usec) / 1000000.0;
 	double input_to_visible_seconds = 0.0;
 	{
@@ -546,6 +588,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 			state->pending_packet = 0;
 		}
 		state->render_pending = false;
+		state->image_atlas_statistics = atlas_statistics;
 		if (rendered && !state->closing) {
 			state->presentation_changed = true;
 			state->metadata.generation = rendered_generation;
@@ -754,7 +797,7 @@ Error HTMLSurfaceHCSRNewestBackend::prepare_host_frame(uint64_t p_host_frame, do
 	initialize_abi(step);
 	step.flags = HCSR_STEP_BUILD_PACKET;
 	step.packet_format = HCSR_DRAW_PACKET_FORMAT_1;
-	step.paint_mode = HCSR_PAINT_MODE_AREA_GRAYSCALE;
+	step.paint_mode = HCSR_PAINT_MODE_IMAGES;
 	step.time_seconds = p_timeline_time_seconds;
 	step.viewport_width = state->logical_size.x;
 	step.viewport_height = state->logical_size.y;
@@ -797,6 +840,7 @@ Dictionary HTMLSurfaceHCSRNewestBackend::get_frame_synchronization() const {
 	result["recordings"] = state->recorded_count;
 	result["failures"] = state->synchronization_failures;
 	result["pending"] = state->render_pending;
+	result["image_atlas"] = state->image_atlas_statistics;
 	result["preparation_ms"] = state->preparation_milliseconds;
 	result["maximum_preparation_ms"] = state->maximum_preparation_milliseconds;
 	Dictionary stages;
@@ -1279,6 +1323,7 @@ void HTMLSurfaceHCSRNewestBackend::_destroy_state_on_render_thread(uint64_t p_st
 		}
 		for (const KeyValue<uint64_t, State *> &entry : state->outputs) release_output(entry.value, server, device);
 		state->outputs.clear();
+		state->image_atlas.release(device);
 		release_gpu_target(state, server, device);
 		if (state->scene != 0) hcsr_scene_destroy(state->scene);
 		if (state->source != 0) hcsr_source_destroy(state->source);
