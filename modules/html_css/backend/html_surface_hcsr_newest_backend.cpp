@@ -21,6 +21,7 @@ struct HTMLSurfaceHCSRNewestBackend::State {
 	mutable Mutex mutex;
 	HTMLSurfaceHCSRNewestRenderer renderer = HTML_SURFACE_HCSR_NEWEST_CPU;
 	hcsr_runtime_t runtime = 0;
+	HashSet<uint64_t> preloads;
 	hcsr_source_t source = 0;
 	hcsr_scene_t scene = 0;
 	hcsr_draw_packet_t pending_packet = 0;
@@ -713,6 +714,14 @@ Dictionary HTMLSurfaceHCSRNewestBackend::get_frame_synchronization() const {
 	stages["structural_cascade_count"] = state->profile.structural_cascade_count;
 	stages["layout_pass_count"] = state->profile.layout_pass_count;
 	result["scene_stages"] = stages;
+	hcsr_preload_usage_t usage; initialize_abi(usage);
+	Dictionary preload_usage;
+	if (state->scene != 0 && hcsr_scene_get_preload_usage(state->scene, &usage) == HCSR_OK) {
+		preload_usage["exact_source"] = usage.exact_source != 0;
+		preload_usage["token_count"] = usage.token_count;
+		preload_usage["reused_token_count"] = usage.reused_token_count;
+	}
+	result["preload_usage"] = preload_usage;
 	return result;
 }
 
@@ -888,10 +897,10 @@ Error HTMLSurfaceHCSRNewestBackend::text_input(const String &p_text) {
 	return _queue_input(event, payload);
 }
 
-Error HTMLSurfaceHCSRNewestBackend::_apply_mutation(const hcsr_mutation_t &p_mutation) {
+Error HTMLSurfaceHCSRNewestBackend::_apply_mutation(const hcsr_mutation_t &p_mutation, uint64_t p_preload) {
 	MutexLock lock(state->mutex);
 	if (state->scene == 0) return ERR_UNCONFIGURED;
-	const Error result = hcsr_scene_apply_mutations(state->scene, &p_mutation, 1) == HCSR_OK ? OK : ERR_INVALID_DATA;
+	const Error result = hcsr_scene_apply_mutations_with_preload(state->scene, &p_mutation, 1, p_preload) == HCSR_OK ? OK : ERR_INVALID_DATA;
 	if (result == OK) {
 		state->needs_another_frame = true;
 		if (state->input_queued_usec == 0) state->input_queued_usec = OS::get_singleton()->get_ticks_usec();
@@ -903,6 +912,31 @@ Error HTMLSurfaceHCSRNewestBackend::set_element_text(const StringName &p_id, con
 	const CharString id = String(p_id).utf8(); const CharString value = p_text.utf8();
 	hcsr_mutation_t mutation; initialize_abi(mutation); mutation.kind = HCSR_MUTATION_SET_TEXT; mutation.element_id = utf8_view(id); mutation.value = utf8_view(value);
 	return _apply_mutation(mutation);
+}
+
+uint64_t HTMLSurfaceHCSRNewestBackend::preload_page(const String &p_html) {
+	MutexLock lock(state->mutex);
+	if (state->closing || state->runtime == 0) return 0;
+	const CharString source = p_html.utf8();
+	hcsr_preload_t id = 0;
+	if (hcsr_page_preload(state->runtime, utf8_view(source), &id) != HCSR_OK) return 0;
+	state->preloads.insert(id);
+	return id;
+}
+Error HTMLSurfaceHCSRNewestBackend::unload_page(uint64_t p_preload) {
+	MutexLock lock(state->mutex);
+	if (!state->preloads.has(p_preload)) return ERR_INVALID_PARAMETER;
+	const hcsr_result_t result = hcsr_page_unload(p_preload);
+	state->preloads.erase(p_preload);
+	return result == HCSR_OK ? OK : ERR_INVALID_PARAMETER;
+}
+Error HTMLSurfaceHCSRNewestBackend::set_element_inner_html_with_preload(const StringName &p_id, const String &p_html_fragment, uint64_t p_preload) {
+	const CharString id = String(p_id).utf8();
+	const CharString value = p_html_fragment.utf8();
+	hcsr_mutation_t mutation; initialize_abi(mutation);
+	mutation.kind = HCSR_MUTATION_SET_INNER_HTML;
+	mutation.element_id = utf8_view(id); mutation.value = utf8_view(value);
+	return _apply_mutation(mutation, p_preload);
 }
 
 Error HTMLSurfaceHCSRNewestBackend::set_element_inner_html(const StringName &p_id, const String &p_html_fragment) {
@@ -1104,6 +1138,7 @@ void HTMLSurfaceHCSRNewestBackend::_destroy_state_on_render_thread(uint64_t p_st
 		release_gpu_target(state, server, device);
 		if (state->scene != 0) hcsr_scene_destroy(state->scene);
 		if (state->source != 0) hcsr_source_destroy(state->source);
+		for (uint64_t id : state->preloads) hcsr_page_unload(id);
 		if (state->runtime != 0) hcsr_runtime_destroy(state->runtime);
 		state->texture.unref();
 	}

@@ -357,6 +357,9 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("local_to_html_position", "position"), &HTMLView::local_to_html_position);
 	ClassDB::bind_method(D_METHOD("set_element_text", "id", "text"), &HTMLView::set_element_text);
 	ClassDB::bind_method(D_METHOD("apply_element_mutations", "mutations"), &HTMLView::apply_element_mutations);
+	ClassDB::bind_method(D_METHOD("preload_page", "html"), &HTMLView::preload_page);
+	ClassDB::bind_method(D_METHOD("unload_page", "preload_id"), &HTMLView::unload_page);
+	ClassDB::bind_method(D_METHOD("set_element_inner_html_with_preload", "id", "html_fragment", "preload_id"), &HTMLView::set_element_inner_html_with_preload);
 	ClassDB::bind_method(D_METHOD("set_element_inner_html", "id", "html_fragment"), &HTMLView::set_element_inner_html);
 	ClassDB::bind_method(D_METHOD("set_body_inner_html", "html_fragment"), &HTMLView::set_body_inner_html);
 	ClassDB::bind_method(D_METHOD("set_element_attribute", "id", "name", "value"), &HTMLView::set_element_attribute);
@@ -1833,6 +1836,14 @@ Error HTMLView::apply_element_mutations(const Array &p_mutations) {
 	if (err == OK && !p_mutations.is_empty()) {
 		_queue_frame_render();
 	}
+	return err;
+}
+
+uint64_t HTMLView::preload_page(const String &p_html) { return surface->preload_page(p_html); }
+Error HTMLView::unload_page(uint64_t p_preload) { return surface->unload_page(p_preload); }
+Error HTMLView::set_element_inner_html_with_preload(const StringName &p_id, const String &p_html_fragment, uint64_t p_preload) {
+	Error err = surface->set_element_inner_html_with_preload(p_id, p_html_fragment, p_preload);
+	if (err == OK) _queue_frame_render();
 	return err;
 }
 

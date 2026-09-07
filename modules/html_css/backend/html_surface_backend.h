@@ -138,6 +138,9 @@ public:
 	virtual Error text_input(const String &) { return ERR_UNAVAILABLE; }
 	virtual Error set_element_text(const StringName &, const String &) { return ERR_UNAVAILABLE; }
 	virtual Error apply_element_mutations(const Array &) { return ERR_UNAVAILABLE; }
+	virtual uint64_t preload_page(const String &) { return 0; }
+	virtual Error unload_page(uint64_t) { return ERR_UNAVAILABLE; }
+	virtual Error set_element_inner_html_with_preload(const StringName &p_id, const String &p_html, uint64_t) { return set_element_inner_html(p_id, p_html); }
 	virtual Error set_element_inner_html(const StringName &, const String &) { return ERR_UNAVAILABLE; }
 	virtual Error set_body_inner_html(const String &) { return ERR_UNAVAILABLE; }
 	virtual Error set_element_attribute(const StringName &, const StringName &, const String &) { return ERR_UNAVAILABLE; }

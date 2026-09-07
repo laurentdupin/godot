@@ -508,6 +508,19 @@ Error HTMLRenderSurface::apply_element_mutations(const Array &p_mutations) {
 	return backend->apply_element_mutations(p_mutations);
 }
 
+uint64_t HTMLRenderSurface::preload_page(const String &p_html) {
+	_ensure_backend();
+	return backend->preload_page(p_html);
+}
+Error HTMLRenderSurface::unload_page(uint64_t p_preload) {
+	_ensure_backend();
+	return backend->unload_page(p_preload);
+}
+Error HTMLRenderSurface::set_element_inner_html_with_preload(const StringName &p_id, const String &p_html_fragment, uint64_t p_preload) {
+	_ensure_backend();
+	return backend->set_element_inner_html_with_preload(p_id, p_html_fragment, p_preload);
+}
+
 Error HTMLRenderSurface::set_element_inner_html(const StringName &p_id, const String &p_html_fragment) {
 	_ensure_backend();
 	return backend->set_element_inner_html(p_id, p_html_fragment);

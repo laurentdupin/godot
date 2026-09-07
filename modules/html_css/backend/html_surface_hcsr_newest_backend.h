@@ -31,7 +31,7 @@ private:
 
 	Error _rebuild_scene();
 	Error _queue_input(const hcsr_input_event_t &p_event, const CharString &p_payload = CharString());
-	Error _apply_mutation(const hcsr_mutation_t &p_mutation);
+	Error _apply_mutation(const hcsr_mutation_t &p_mutation, uint64_t p_preload = 0);
 
 public:
 	virtual void mark_document_dirty() override;
@@ -70,6 +70,9 @@ public:
 	virtual Error text_input(const String &p_text) override;
 	virtual Error apply_element_mutations(const Array &p_mutations) override;
 	virtual Error set_element_text(const StringName &p_id, const String &p_text) override;
+	virtual uint64_t preload_page(const String &p_html) override;
+	virtual Error unload_page(uint64_t p_preload) override;
+	virtual Error set_element_inner_html_with_preload(const StringName &p_id, const String &p_html_fragment, uint64_t p_preload) override;
 	virtual Error set_element_inner_html(const StringName &p_id, const String &p_html_fragment) override;
 	virtual Error set_element_attribute(const StringName &p_id, const StringName &p_name, const String &p_value) override;
 	virtual Error remove_element_attribute(const StringName &p_id, const StringName &p_name) override;

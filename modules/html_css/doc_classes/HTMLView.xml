@@ -127,6 +127,23 @@
 		</signal>
 	</signals>
 	<methods>
+		<method name="preload_page">
+			<return type="int" />
+			<param index="0" name="html" type="String" />
+			<description>Prepares immutable page source and returns a surface-owned hint ID, or zero if unavailable. Current source supplied when loading remains authoritative. The hcsr_newest backend supports partial reuse of changed pages. Remaining hints are released when the backend is destroyed.</description>
+		</method>
+		<method name="unload_page">
+			<return type="int" enum="Error" />
+			<param index="0" name="preload_id" type="int" />
+			<description>Releases a hint owned by this surface. Queued loads that have not consumed the hint fall back to ordinary parsing.</description>
+		</method>
+		<method name="set_element_inner_html_with_preload">
+			<return type="int" enum="Error" />
+			<param index="0" name="id" type="StringName" />
+			<param index="1" name="html_fragment" type="String" />
+			<param index="2" name="preload_id" type="int" />
+			<description>Queues current HTML with an optional preload hint, preserving normal frame scheduling. Missing, stale or foreign hints use ordinary loading. Backends without preload support use the ordinary replacement path.</description>
+		</method>
 		<method name="create_output">
 			<return type="HTMLViewOutput" />
 			<param index="0" name="size" type="Vector2i" />
