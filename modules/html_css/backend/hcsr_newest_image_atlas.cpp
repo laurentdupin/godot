@@ -231,18 +231,11 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
 				entry = resolve(document, source);
 				destination = Rect2(image.local_rect.x, image.local_rect.y, image.local_rect.width, image.local_rect.height);
 				if (entry.page >= 0 && image.object_fit != 0) {
-					const Vector2 natural = entry.natural_size;
-					const Vector2 ratios = destination.size / natural;
-					float scale = image.object_fit == 2 ? MAX(ratios.x, ratios.y) : MIN(ratios.x, ratios.y);
-					if (image.object_fit == 3) {
-						scale = 1;
-					}
-					if (image.object_fit == 4) {
-						scale = MIN(1.0f, scale);
-					}
-					const Vector2 size = natural * scale;
-					destination.position += (destination.size - size) * Vector2(image.position_x, image.position_y);
-					destination.size = size;
+                    hcsr_rect_t fitted;
+                    if (hcsr_image_fit_rect(&image.local_rect, entry.natural_size.x, entry.natural_size.y,
+                                image.object_fit, image.position_x, image.position_y, &fitted) == HCSR_OK) {
+                        destination = Rect2(fitted.x, fitted.y, fitted.width, fitted.height);
+                    }
 				}
 			}
 		}
