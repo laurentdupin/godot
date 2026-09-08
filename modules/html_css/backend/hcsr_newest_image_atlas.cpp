@@ -1,18 +1,27 @@
 #include "hcsr_newest_image_atlas.h"
+#include "hcsr_image_codec.h"
 
 #include "../bridge/html_asset_provider.h"
 
 #include "core/crypto/crypto_core.h"
+#include "core/io/xml_parser.h"
 
 #include <cmath>
 #include "servers/text/text_server.h"
 
-HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::resolve(const Ref<HTMLDocument> &document, const String &source) {
-	const String key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source;
-	if (const Entry *existing = entries.getptr(key)) {
-		return *existing;
-	}
-	Entry entry;
+static bool svg_has_filters(const Vector<uint8_t> &bytes) {
+    XMLParser parser;
+    if (parser.open_buffer(bytes) != OK) return false;
+    while (parser.read() == OK) {
+        if (parser.get_node_type() == XMLParser::NODE_ELEMENT && parser.get_node_name().get_slice(":", parser.get_node_name().contains(":") ? 1 : 0) == "filter") return true;
+    }
+    return false;
+}
+
+Ref<Image> HCSRNewestImageAtlas::load_image(const Ref<HTMLDocument> &document, const String &source) {
+    // Caller holds image_mutex. Metadata does not allocate atlas/GPU resources.
+    const String key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source;
+    if (const Ref<Image> *cached = decoded_sources.getptr(key)) return *cached;
 	Vector<uint8_t> bytes;
 	String mime;
 	if (source.begins_with("data:")) {
@@ -50,7 +59,28 @@ HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::resolve(const Ref<HTMLDocument
 	Error error = ERR_FILE_UNRECOGNIZED;
 	if (!bytes.is_empty()) {
 		if (mime.begins_with("image/svg+xml")) {
-			error = image->load_svg_from_buffer(bytes);
+			// Share LunaSVG with Interactive/hcsr_old where supported. LunaSVG skips
+            // SVG filters, so filtered assets use Godot's opacity-corrected ThorVG.
+            if (svg_has_filters(bytes)) {
+                error = image->load_svg_from_buffer(bytes);
+            } else {
+            hcsr_decoded_image decoded = {};
+            if (hcsr_svg_decode_bgra32(bytes.ptr(), bytes.size(), 0, 0, &decoded)) {
+                Vector<uint8_t> rgba;
+                rgba.resize(decoded.width * decoded.height * 4);
+                for (int y = 0; y < decoded.height; ++y) {
+                    const uint8_t *src = decoded.pixels + y * decoded.stride;
+                    uint8_t *dst = rgba.ptrw() + y * decoded.width * 4;
+                    for (int x = 0; x < decoded.width; ++x) {
+                        dst[x*4] = src[x*4+2]; dst[x*4+1] = src[x*4+1];
+                        dst[x*4+2] = src[x*4]; dst[x*4+3] = src[x*4+3];
+                    }
+                }
+                image->set_data(decoded.width, decoded.height, false, Image::FORMAT_RGBA8, rgba);
+                hcsr_image_free(&decoded);
+                error = OK;
+            }
+            }
 		} else if (mime.begins_with("image/png")) {
 			error = image->load_png_from_buffer(bytes);
 		} else if (mime.begins_with("image/jpeg")) {
@@ -61,8 +91,34 @@ HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::resolve(const Ref<HTMLDocument
 			error = image->load_bmp_from_buffer(bytes);
 		}
 	}
-	if (error == OK && !image->is_empty()) {
-		decoded_images++;
+    if (error != OK || image->is_empty()) image.unref();
+    else decoded_images++;
+    decoded_sources.insert(key, image);
+    source_sizes.insert(key, image.is_valid() ? image->get_size() : Size2i());
+    return image;
+}
+
+Size2i HCSRNewestImageAtlas::resolve_size(const Ref<HTMLDocument> &document, const String &source) {
+    MutexLock lock(image_mutex);
+    const String key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source;
+    if (const Size2i *cached = source_sizes.getptr(key)) return *cached;
+    Ref<Image> image = load_image(document, source);
+    return image.is_valid() ? image->get_size() : Size2i();
+}
+
+HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::resolve(const Ref<HTMLDocument> &document, const String &source) {
+	const String key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source;
+	if (const Entry *existing = entries.getptr(key)) {
+		return *existing;
+	}
+	Entry entry;
+	Ref<Image> image;
+	{
+		MutexLock lock(image_mutex);
+		image = load_image(document, source);
+		decoded_sources.erase(key); // Atlas owns pixels after packing; retain only metadata.
+	}
+	if (image.is_valid()) {
 		entry.natural_size = image->get_size();
 		image->convert(Image::FORMAT_RGBA8); // Straight alpha; native BGRA codec contract is unchanged.
 		const float scale = MIN(1.0f, float(PAGE_SIZE - 2) / MAX(image->get_width(), image->get_height()));

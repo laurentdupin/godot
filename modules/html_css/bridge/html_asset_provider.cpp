@@ -212,6 +212,9 @@ String HTMLGodotAssetProvider::get_mime_type_for_path(const String &p_path) {
 	if (extension == "jpg" || extension == "jpeg") {
 		return "image/jpeg";
 	}
+	if (extension == "bmp") {
+		return "image/bmp";
+	}
 	if (extension == "webp") {
 		return "image/webp";
 	}

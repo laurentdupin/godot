@@ -370,6 +370,12 @@ static Paint* _applyFilter(SvgLoaderData& loaderData, Paint* paint, const SvgNod
         }
     }
 
+    // SVG element opacity applies to the filtered result, not its source surface.
+    // Keep it on the filter scene: software filter rendering otherwise discards
+    // the opacity of an isolated source group.
+    scene->opacity(paint->opacity());
+    paint->opacity(255);
+
     scene->add(paint);
 
     auto clip = Shape::gen();

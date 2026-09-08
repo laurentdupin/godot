@@ -134,7 +134,8 @@ elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll"):
     newest_scene_runtime = os.path.join(newest_bundle_directory, "hcsr_scene.dll")
     newest_d3d12_runtime = os.path.join(newest_bundle_directory, "hcsr_render_d3d12.dll")
     newest_vulkan_runtime = os.path.join(newest_bundle_directory, "hcsr_render_vulkan.dll")
-    newest_products = [newest_scene_library, newest_d3d12_library, newest_vulkan_library]
+    newest_codec_library = os.path.join(newest_bundle_directory, "hcsr_native_codecs.lib")
+    newest_products = [newest_scene_library, newest_d3d12_library, newest_vulkan_library, newest_codec_library]
     if newest_linkage == "static":
         newest_static_names = [
             "hcsr_render_common.lib",
@@ -641,7 +642,7 @@ elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll"):
         # SCons cannot infer that a changed pinned HCSR build requires relinking.
         env.Depends(newest_backend_sources, [env.File(path) for path in newest_products])
     env.modules_sources += newest_backend_sources
-    env.Append(LINKFLAGS=[newest_scene_library, newest_d3d12_library, newest_vulkan_library] + newest_static_support)
+    env.Append(LINKFLAGS=[newest_scene_library, newest_d3d12_library, newest_vulkan_library, newest_codec_library] + newest_static_support)
     if _html_css_renderer == "hcsr_newest":
         env.Append(
             LINKFLAGS=[

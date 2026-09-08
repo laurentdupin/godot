@@ -1102,6 +1102,7 @@ Files extracted from upstream source:
 Patches:
 
 - `0001-let-delete-be-delete.patch` ([GH-116024](https://github.com/godotengine/godot/pull/116024))
+- `0002-filter-result-opacity.patch`: apply SVG element opacity to the filtered result, preserving blurred group opacity.
 
 
 ## tinyexr

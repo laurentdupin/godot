@@ -719,6 +719,17 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
             return ERR_CANT_CREATE;
         }
     }
+    if (hcsr_runtime_set_image_resolver(state->runtime,
+            [](void *user, const hcsr_utf8_t *source, float *width, float *height) -> int32_t {
+                State *owner = static_cast<State *>(user);
+                const Size2i size = owner->image_atlas.resolve_size(owner->document,
+                        String::utf8(source->data, source->length));
+                *width = size.x; *height = size.y;
+                return size.x > 0 && size.y > 0;
+            }, state) != HCSR_OK) {
+        set_terminal(state, "hcsr_newest could not install the host image service.");
+        return ERR_CANT_CREATE;
+    }
 	if (hcsr_source_create(state->runtime, &source_desc, &state->source) != HCSR_OK) {
 		set_terminal(state, scene_error(state, "hcsr_newest could not create the document source."));
 		return ERR_INVALID_DATA;

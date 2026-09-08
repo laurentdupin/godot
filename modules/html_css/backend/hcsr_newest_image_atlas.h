@@ -4,6 +4,7 @@
 #include "hcsr_scene.h"
 
 #include "core/io/image.h"
+#include "core/os/mutex.h"
 #include "servers/rendering/rendering_device.h"
 
 // Per-view asset cache, shared by every presentation of the same scene packet.
@@ -47,6 +48,10 @@ class HCSRNewestImageAtlas {
     };
     HashMap<GlyphKey, Entry, GlyphHasher> glyph_entries;
 	HashMap<String, Entry> entries;
+	Mutex image_mutex;
+	HashMap<String, Ref<Image>> decoded_sources;
+	HashMap<String, Size2i> source_sizes;
+	Ref<Image> load_image(const Ref<HTMLDocument> &document, const String &source);
 	Vector<Page> pages;
 	Vector<Vertex> vertices;
 	Vector<Batch> batches;
@@ -66,6 +71,7 @@ class HCSRNewestImageAtlas {
 	bool upload(RenderingDevice *device);
 
 public:
+	Size2i resolve_size(const Ref<HTMLDocument> &document, const String &source);
 	bool prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale = 1);
 	bool draw(RenderingDevice *device, RID target, const Color &background);
 	void draw_cpu(Ref<Image> target, const Color &background);
