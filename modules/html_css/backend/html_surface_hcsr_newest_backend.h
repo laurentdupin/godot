@@ -8,8 +8,13 @@
 
 #include "core/os/mutex.h"
 
+#include "hcsr_render.h"
+#ifdef HTML_CSS_HCSR_NEWEST_D3D12
 #include "hcsr_render_d3d12.h"
+#endif
+#ifdef HTML_CSS_HCSR_NEWEST_VULKAN
 #include "hcsr_render_vulkan.h"
+#endif
 
 enum HTMLSurfaceHCSRNewestRenderer {
 	HTML_SURFACE_HCSR_NEWEST_CPU,

@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import os
+import importlib.util
 import subprocess
 import sys
 
@@ -10,6 +11,10 @@ Import("env")
 Import("env_modules")
 
 env_html_css = env_modules.Clone()
+_platform_spec = importlib.util.spec_from_file_location("hcsr_platform", env.File("#modules/html_css/hcsr_platform.py").abspath)
+_platform_helpers = importlib.util.module_from_spec(_platform_spec)
+_platform_spec.loader.exec_module(_platform_helpers)
+
 
 _html_css_renderer = env["module_html_css_renderer"]
 newest_bundle_directory = ""
@@ -115,6 +120,42 @@ elif _html_css_renderer == "hcsr_old_2":
         Exit(1)
     env_html_css.Append(CPPDEFINES=["HTML_CSS_USE_HCSR_OLD_2"])
     env_html_css.Prepend(CPPPATH=[os.path.join(hcsr_old_2_root, "native", "include")])
+elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll") and env["platform"] != "windows":
+    if _html_css_renderer != "hcsr_newest" or env["platform"] not in ("linuxbsd", "macos") or env["arch"] not in ("x86_64", "arm64"):
+        print("hcsr_newest supports static Linux/macOS x86_64/ARM64 builds; hcsr_newest_dll is Windows-only.")
+        Exit(1)
+    if (env["platform"] == "linuxbsd" and not sys.platform.startswith("linux")) or (env["platform"] == "macos" and sys.platform != "darwin"):
+        print("Build the hcsr_newest NativeAOT package on the target OS (Linux or macOS). BSD/cross-OS builds are not supported.")
+        Exit(1)
+    hcsr_newest_root = env.Dir("#thirdparty/hcsr_newest").abspath
+    newest_arch = "x64" if env["arch"] == "x86_64" else "arm64"
+    newest_rid = ("linux-" if env["platform"] == "linuxbsd" else "osx-") + newest_arch
+    newest_bundle_directory = os.path.join(hcsr_newest_root, "build", "hcsr-bundle", "static", newest_rid, "Release")
+    newest_scene_library = os.path.join(newest_bundle_directory, "libhcsr_scene_combined.a")
+    newest_initializer = os.path.join(newest_bundle_directory, "hcsr_scene_initializer.o")
+    newest_products = [newest_scene_library, newest_initializer]
+    newest_stamp = os.path.join(newest_bundle_directory, ".godot_hcsr_newest_commit")
+    newest_commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=hcsr_newest_root, check=True, capture_output=True, text=True).stdout.strip()
+    newest_is_current = all(os.path.isfile(path) for path in newest_products)
+    if newest_is_current and os.path.isfile(newest_stamp):
+        with open(newest_stamp, encoding="utf-8") as stamp_file:
+            newest_is_current = stamp_file.read().strip() == newest_commit
+    else:
+        newest_is_current = False
+    if not newest_is_current:
+        if not env["module_html_css_hcsr_auto_build"]:
+            print("hcsr_newest Unix bundle is missing or stale and auto-build is disabled.")
+            Exit(1)
+        completed = subprocess.run(["bash", os.path.join(hcsr_newest_root, "tools", "build-hcsr-bundle-unix.sh"),
+            "--platform", "linux" if env["platform"] == "linuxbsd" else "macos", "--architecture", env["arch"]], cwd=hcsr_newest_root)
+        if completed.returncode != 0 or not all(os.path.isfile(path) for path in newest_products):
+            print("hcsr_newest Unix bundle build failed.")
+            Exit(1)
+    newest_defines = ["HTML_CSS_USE_HCSR_NEWEST", "HCSR_SCENE_STATIC", "HCSR_RENDER_STATIC"]
+    if env["platform"] == "linuxbsd" and env.get("vulkan", False):
+        newest_defines += ["HTML_CSS_HCSR_NEWEST_VULKAN"]
+    env_html_css.Append(CPPDEFINES=newest_defines)
+    env_html_css.Prepend(CPPPATH=[os.path.join(hcsr_newest_root, "native", "include")])
 elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll"):
     if env["platform"] != "windows" or env["arch"] != "x86_64":
         print("HTML/CSS hcsr_newest currently requires Windows x86_64.")
@@ -186,6 +227,10 @@ elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll"):
         with open(newest_stamp, "w", encoding="utf-8") as stamp_file:
             stamp_file.write(newest_commit + "\n")
     newest_defines = ["HTML_CSS_USE_HCSR_NEWEST"]
+    if env.get("d3d12", False):
+        newest_defines += ["HTML_CSS_HCSR_NEWEST_D3D12"]
+    if env.get("vulkan", False):
+        newest_defines += ["HTML_CSS_HCSR_NEWEST_VULKAN"]
     if newest_linkage == "static":
         newest_defines += ["HCSR_SCENE_STATIC", "HCSR_RENDER_STATIC"]
     env_html_css.Append(CPPDEFINES=newest_defines)
@@ -546,42 +591,9 @@ if _html_css_renderer == "hcsr_old":
                 "-lz",
             ]
         )
-    elif env["platform"] == "linuxbsd":
+    elif env["platform"] in ("linuxbsd", "macos"):
         hcsr_initializer_path = os.path.join(os.path.dirname(hcsr_library_path), "hcsr_renderer_initializer.o")
-        env.Append(
-            LINKFLAGS=[
-                "-Wl,-z,nostart-stop-gc",
-                hcsr_initializer_path,
-                hcsr_library_path,
-                "-ldl",
-                "-lpthread",
-                "-lm",
-                "-lz",
-                "-lrt",
-            ]
-        )
-    elif env["platform"] == "macos":
-        hcsr_initializer_path = os.path.join(os.path.dirname(hcsr_library_path), "hcsr_renderer_initializer.o")
-        env.Append(
-            LINKFLAGS=[
-                "-mmacosx-version-min=12.0",
-                hcsr_initializer_path,
-                hcsr_library_path,
-                "-framework",
-                "CoreFoundation",
-                "-framework",
-                "Foundation",
-                "-framework",
-                "GSS",
-                "-framework",
-                "Metal",
-                "-framework",
-                "Network",
-                "-framework",
-                "Security",
-                "-lz",
-            ]
-        )
+        env.Append(LINKFLAGS=_platform_helpers.unix_link_flags(env["platform"], hcsr_initializer_path, hcsr_library_path))
     else:
         env.Append(
             LINKFLAGS=[
@@ -642,35 +654,38 @@ elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll"):
         # SCons cannot infer that a changed pinned HCSR build requires relinking.
         env.Depends(newest_backend_sources, [env.File(path) for path in newest_products])
     env.modules_sources += newest_backend_sources
-    env.Append(LINKFLAGS=[newest_scene_library, newest_d3d12_library, newest_vulkan_library, newest_codec_library] + newest_static_support)
-    if _html_css_renderer == "hcsr_newest":
-        env.Append(
-            LINKFLAGS=[
-                "advapi32.lib",
-                "bcrypt.lib",
-                "crypt32.lib",
-                "d3d12.lib",
-                "d3dcompiler.lib",
-                "dxgi.lib",
-                "iphlpapi.lib",
-                "mswsock.lib",
-                "ncrypt.lib",
-                "normaliz.lib",
-                "ntdll.lib",
-                "ole32.lib",
-                "oleaut32.lib",
-                "secur32.lib",
-                "shell32.lib",
-                "user32.lib",
-                "userenv.lib",
-                "version.lib",
-                "ws2_32.lib",
-            ]
-        )
+    if env["platform"] != "windows":
+        env.Append(LINKFLAGS=_platform_helpers.unix_link_flags(env["platform"], newest_initializer, newest_scene_library))
     else:
-        env.CommandNoCache("#bin/hcsr_scene.dll", newest_scene_runtime, Copy("$TARGET", "$SOURCE"))
-        env.CommandNoCache("#bin/hcsr_render_d3d12.dll", newest_d3d12_runtime, Copy("$TARGET", "$SOURCE"))
-        env.CommandNoCache("#bin/hcsr_render_vulkan.dll", newest_vulkan_runtime, Copy("$TARGET", "$SOURCE"))
+        env.Append(LINKFLAGS=[newest_scene_library, newest_d3d12_library, newest_vulkan_library, newest_codec_library] + newest_static_support)
+        if _html_css_renderer == "hcsr_newest":
+            env.Append(
+                LINKFLAGS=[
+                    "advapi32.lib",
+                    "bcrypt.lib",
+                    "crypt32.lib",
+                    "d3d12.lib",
+                    "d3dcompiler.lib",
+                    "dxgi.lib",
+                    "iphlpapi.lib",
+                    "mswsock.lib",
+                    "ncrypt.lib",
+                    "normaliz.lib",
+                    "ntdll.lib",
+                    "ole32.lib",
+                    "oleaut32.lib",
+                    "secur32.lib",
+                    "shell32.lib",
+                    "user32.lib",
+                    "userenv.lib",
+                    "version.lib",
+                    "ws2_32.lib",
+                ]
+            )
+        else:
+            env.CommandNoCache("#bin/hcsr_scene.dll", newest_scene_runtime, Copy("$TARGET", "$SOURCE"))
+            env.CommandNoCache("#bin/hcsr_render_d3d12.dll", newest_d3d12_runtime, Copy("$TARGET", "$SOURCE"))
+            env.CommandNoCache("#bin/hcsr_render_vulkan.dll", newest_vulkan_runtime, Copy("$TARGET", "$SOURCE"))
 else:
     env_html_css.add_source_files(env.modules_sources, "backend/html_surface_no_renderer_factory.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_document.cpp")

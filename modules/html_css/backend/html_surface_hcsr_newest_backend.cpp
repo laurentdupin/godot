@@ -250,6 +250,7 @@ static bool ensure_presenter(HTMLSurfaceHCSRNewestBackend::State *p_state, Rende
 	hcsr_presenter_desc_t common;
 	initialize_abi(common);
 	common.maximum_frames_in_flight = p_device->get_frame_delay();
+#ifdef HTML_CSS_HCSR_NEWEST_D3D12
 	if (p_state->renderer == HTML_SURFACE_HCSR_NEWEST_D3D12) {
 		hcsr_d3d12_engine_desc_t backend;
 		initialize_abi(backend);
@@ -261,6 +262,9 @@ static bool ensure_presenter(HTMLSurfaceHCSRNewestBackend::State *p_state, Rende
 		if (result != HCSR_OK) ERR_PRINT(vformat("hcsr_newest D3D12 presenter creation failed with result %d.", (int)result));
 		return result == HCSR_OK;
 	}
+#endif
+
+#ifdef HTML_CSS_HCSR_NEWEST_VULKAN
 	if (p_state->renderer == HTML_SURFACE_HCSR_NEWEST_VULKAN) {
 		hcsr_vulkan_engine_desc_t backend;
 		initialize_abi(backend);
@@ -274,12 +278,18 @@ static bool ensure_presenter(HTMLSurfaceHCSRNewestBackend::State *p_state, Rende
 		if (result != HCSR_OK) ERR_PRINT(vformat("hcsr_newest Vulkan presenter creation failed with result %d.", (int)result));
 		return result == HCSR_OK;
 	}
+#endif
+
 	return true;
 }
 
 static void destroy_presenter(uint64_t p_presenter, int p_renderer) {
+#ifdef HTML_CSS_HCSR_NEWEST_D3D12
 	if (p_renderer == HTML_SURFACE_HCSR_NEWEST_D3D12) hcsr_d3d12_destroy(p_presenter);
-	else if (p_renderer == HTML_SURFACE_HCSR_NEWEST_VULKAN) hcsr_vulkan_destroy(p_presenter);
+#endif
+#ifdef HTML_CSS_HCSR_NEWEST_VULKAN
+	if (p_renderer == HTML_SURFACE_HCSR_NEWEST_VULKAN) hcsr_vulkan_destroy(p_presenter);
+#endif
 }
 
 static void release_output(HTMLSurfaceHCSRNewestBackend::State *output, RenderingServer *server, RenderingDevice *device) {
@@ -308,6 +318,7 @@ static bool record_gpu(HTMLSurfaceHCSRNewestBackend::State *p_state, HTMLSurface
 	frame.clear_g = p_background.g;
 	frame.clear_b = p_background.b;
 	frame.clear_a = p_background.a;
+#ifdef HTML_CSS_HCSR_NEWEST_D3D12
 	if (p_renderer == HTML_SURFACE_HCSR_NEWEST_D3D12) {
 		hcsr_d3d12_record_target_t target;
 		initialize_abi(target);
@@ -317,7 +328,12 @@ static bool record_gpu(HTMLSurfaceHCSRNewestBackend::State *p_state, HTMLSurface
 		target.render_target = (ID3D12Resource *)p_target;
 		if (target.command_list == nullptr || target.render_target == nullptr
 				|| hcsr_d3d12_record(p_state->presenter, &p_packet, &frame, &target) != HCSR_OK) return false;
-	} else {
+		p_state->gpu_texture_initialized = true;
+		return true;
+	}
+#endif
+#ifdef HTML_CSS_HCSR_NEWEST_VULKAN
+	if (p_renderer == HTML_SURFACE_HCSR_NEWEST_VULKAN) {
 		hcsr_vulkan_record_target_t target;
 		initialize_abi(target);
 		target.width = p_physical_size.x;
@@ -327,9 +343,11 @@ static bool record_gpu(HTMLSurfaceHCSRNewestBackend::State *p_state, HTMLSurface
 		target.image_view = (VkImageView)p_target_view;
 		if (target.command_buffer == VK_NULL_HANDLE || target.image == VK_NULL_HANDLE || target.image_view == VK_NULL_HANDLE
 				|| hcsr_vulkan_record(p_state->presenter, &p_packet, &frame, &target) != HCSR_OK) return false;
+		p_state->gpu_texture_initialized = true;
+		return true;
 	}
-	p_state->gpu_texture_initialized = true;
-	return true;
+#endif
+	return false;
 }
 
 static void render_cpu(HTMLSurfaceHCSRNewestBackend::State *p_state, const hcsr_draw_packet_view_t &p_packet, const Size2i &p_physical_size, const Color &p_background) {

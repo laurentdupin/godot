@@ -18,18 +18,36 @@ static int newest_resolve(HTMLSurfaceBackendPreference p_preference) {
 	if (p_preference == HTML_SURFACE_BACKEND_CPU) {
 		return HTML_SURFACE_HCSR_NEWEST_CPU;
 	}
+#ifdef HTML_CSS_HCSR_NEWEST_D3D12
 	if ((p_preference == HTML_SURFACE_BACKEND_AUTO || p_preference == HTML_SURFACE_BACKEND_GPU_AUTO) && driver == "d3d12") {
 		return HTML_SURFACE_HCSR_NEWEST_D3D12;
 	}
+#endif
+
+#ifdef HTML_CSS_HCSR_NEWEST_VULKAN
 	if ((p_preference == HTML_SURFACE_BACKEND_AUTO || p_preference == HTML_SURFACE_BACKEND_GPU_AUTO) && driver == "vulkan") {
 		return HTML_SURFACE_HCSR_NEWEST_VULKAN;
 	}
+#endif
+
+#ifdef HTML_CSS_HCSR_NEWEST_D3D12
 	if (p_preference == HTML_SURFACE_BACKEND_D3D12 && driver == "d3d12") {
 		return HTML_SURFACE_HCSR_NEWEST_D3D12;
 	}
+#endif
+
+#ifdef HTML_CSS_HCSR_NEWEST_VULKAN
 	if (p_preference == HTML_SURFACE_BACKEND_VULKAN && driver == "vulkan") {
 		return HTML_SURFACE_HCSR_NEWEST_VULKAN;
 	}
+#endif
+
+#ifdef MACOS_ENABLED
+	if (p_preference == HTML_SURFACE_BACKEND_GPU_AUTO) {
+		WARN_PRINT_ONCE("hcsr_newest uses CPU rendering on macOS until its Metal backend is implemented.");
+		return HTML_SURFACE_HCSR_NEWEST_CPU;
+	}
+#endif
 	return p_preference == HTML_SURFACE_BACKEND_AUTO ? HTML_SURFACE_HCSR_NEWEST_CPU : -1;
 }
 
