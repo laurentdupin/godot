@@ -1010,6 +1010,17 @@ Error HTMLSurfaceHCSRNewestBackend::notify_pointer_leave(const Point2 &p_positio
 	return pointer_cancel(p_position, p_pointer_id);
 }
 
+Error HTMLSurfaceHCSRNewestBackend::scroll_element_into_view(const StringName &p_id, const StringName &p_block_alignment) {
+    MutexLock lock(state->mutex);
+    if (state->closing || state->scene == 0) return ERR_UNCONFIGURED;
+    const CharString id = String(p_id).utf8();
+    const CharString alignment = String(p_block_alignment).utf8();
+    if (hcsr_scene_scroll_element_into_view(state->scene, utf8_view(id), utf8_view(alignment)) != HCSR_OK)
+        return ERR_INVALID_PARAMETER;
+    state->needs_another_frame = true;
+    return OK;
+}
+
 Error HTMLSurfaceHCSRNewestBackend::begin_scrollbar_interaction(const Point2 &p_position, double p_event_time_seconds, bool &r_consumed) {
 	MutexLock lock(state->mutex);
 	if (state->scene == 0) { r_consumed = false; return ERR_UNCONFIGURED; }
