@@ -654,7 +654,13 @@ elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll"):
         # SCons cannot infer that a changed pinned HCSR build requires relinking.
         env.Depends(newest_backend_sources, [env.File(path) for path in newest_products])
     env.modules_sources += newest_backend_sources
-    if env["platform"] != "windows":
+    if env["platform"] == "linuxbsd":
+        # LINKFLAGS precede the module objects. Keep the initializer there, but
+        # scan the static archive after its consumers so native SVG/Vulkan
+        # entry points are pulled in as well as the NativeAOT scene exports.
+        env.Append(LINKFLAGS=["-Wl,-z,nostart-stop-gc", newest_initializer])
+        env.Append(LIBS=[env.File(newest_scene_library), "dl", "pthread", "m", "z", "rt"])
+    elif env["platform"] != "windows":
         env.Append(LINKFLAGS=_platform_helpers.unix_link_flags(env["platform"], newest_initializer, newest_scene_library))
     else:
         env.Append(LINKFLAGS=[newest_scene_library, newest_d3d12_library, newest_vulkan_library, newest_codec_library] + newest_static_support)
