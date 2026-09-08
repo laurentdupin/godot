@@ -43,11 +43,22 @@ func dispose(view: HTMLView) -> void:
 func run() -> void:
     root.size = Vector2i(256,128)
     Engine.max_fps = 60
-    for mode in ["ordered singles", "batch", "replacement", "same document change", "clear", "unloaded preload"]:
+    for mode in ["dependent targets", "dependent batch", "ordered singles", "batch", "replacement", "same document change", "clear", "unloaded preload"]:
         var view := new_view()
         check(view.get_generation() == 0, "test must precede the first frame")
         check(view.set_element_inner_html("app", markup("red")) == OK, "startup update rejected")
-        if mode == "batch":
+        if mode == "dependent targets":
+            check(view.set_element_inner_html("app", "<section id='setup-page' style='background:red'></section>") == OK, "page insertion rejected")
+            check(view.set_element_attribute("setup-page", "style", "background:yellow") == OK, "new descendant rejected")
+            check(view.set_element_inner_html("app", "<section id='setup-page' style='background:red'></section>") == OK, "replacement rejected")
+            check(view.set_element_attribute("setup-page", "id", "renamed-page") == OK, "rename rejected")
+            check(view.set_element_attribute("renamed-page", "style", "background:lime") == OK, "renamed target rejected")
+        elif mode == "dependent batch":
+            check(view.apply_element_mutations([
+                {"operation":"set_inner_html", "id":"app", "value":"<section id='child' style='background:red'></section>"},
+                {"operation":"set_attribute", "id":"child", "name":"style", "value":"background:lime"}
+            ]) == OK, "dependent batch rejected")
+        elif mode == "batch":
             check(view.apply_element_mutations([
                 {"operation":"set_inner_html", "id":"app", "value":markup("yellow")},
                 {"operation":"set_inner_html", "id":"app", "value":markup("lime")}
@@ -73,6 +84,15 @@ func run() -> void:
                 view.document = document()
             check(view.set_element_inner_html("app", markup("lime")) == OK, "final update rejected")
         await first_frame(view, mode)
+        if mode == "dependent targets":
+            check(view.set_element_inner_html("app", "<section id='live-child' style='background:red'></section>") == OK, "live insertion rejected")
+            check(view.set_element_attribute("live-child", "style", "background:lime") == OK, "live dependent update rejected")
+            for i in 8:
+                await process_frame
+                await RenderingServer.frame_post_draw
+            var live_pixel := view.get_texture().get_image().get_pixel(20,20)
+            check(live_pixel.g > .8 and live_pixel.r < .2, "live dependent update was lost")
+            print("LIVE_DEPENDENT_MUTATION_OK")
         # Rebuilding a live document must not send updates to its previous scene.
         if mode == "replacement":
             view.document = document()
