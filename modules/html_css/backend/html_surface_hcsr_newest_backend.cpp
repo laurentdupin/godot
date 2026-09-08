@@ -469,7 +469,9 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
         for (const KeyValue<uint64_t, State *> &entry : state->outputs)
             if (!entry.value->closing && rendered) output_scale = MAX(output_scale, MAX(float(entry.value->physical_size.x) / packet.viewport_width, float(entry.value->physical_size.y) / packet.viewport_height));
     }
+    const uint64_t atlas_start_usec = OS::get_singleton()->get_ticks_usec();
     const bool textured = rendered && state->image_atlas.prepare(packet, state->document, output_scale);
+    const uint64_t atlas_end_usec = OS::get_singleton()->get_ticks_usec();
 	if (!textured) {
 		MutexLock lock(state->mutex);
 		state->image_atlas_statistics = state->image_atlas.get_statistics();
@@ -597,6 +599,11 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 			state->outputs.erase(id);
 		}
 	}
+    static const bool record_profile = OS::get_singleton()->get_environment("HCSR_RECORD_PROFILE") == "1";
+    if (record_profile) {
+        const uint64_t now = OS::get_singleton()->get_ticks_usec();
+        print_line("HCSR_RECORD_DETAIL|" + uitos(atlas_start_usec - record_start_usec) + "|" + uitos(atlas_end_usec - atlas_start_usec) + "|" + uitos(now - atlas_end_usec) + "|" + uitos(packet.index_count));
+    }
 	hcsr_draw_packet_destroy(packet_handle);
 	const Dictionary atlas_statistics = state->image_atlas.get_statistics();
 	const double record_seconds = (double)(OS::get_singleton()->get_ticks_usec() - record_start_usec) / 1000000.0;

@@ -269,6 +269,17 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
 	if (!references_images) {
 		return false;
 	}
+    // Draws may reuse index ranges, so size by emitted indices rather than the
+    // packet index buffer. Acquire the writable pointer once; per-vertex push_back
+    // repeats CowData resize/write checks across the entire mesh on every update.
+    uint64_t emitted_count = 0;
+    for (size_t i = 0; i < packet.draw_item_count; i++) {
+        emitted_count += packet.draw_items[i].index_count;
+        if (emitted_count > INT32_MAX) return false;
+    }
+    if (vertices.resize(int(emitted_count)) != OK) return false;
+    Vertex *vertex_data = vertices.ptrw();
+    uint32_t written = 0;
 	for (size_t i = 0; i < packet.draw_item_count; i++) {
 		const hcsr_draw_item_t &draw = packet.draw_items[i];
 		const hcsr_material_t &material = packet.materials[draw.material_index];
@@ -316,7 +327,7 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
 		// Solid grayscale draws do not sample the atlas and can stay in the current batch.
         const int page = entry.page >= 0 ? entry.page : (batches.is_empty() ? 0 : batches[batches.size() - 1].page);
 		if (batches.is_empty() || batches[batches.size() - 1].page != page) {
-			batches.push_back({ page, (uint32_t)vertices.size(), 0 });
+			batches.push_back({ page, written, 0 });
 		}
 		batches.write[batches.size() - 1].count += draw.index_count;
 		for (uint32_t j = 0; j < draw.index_count; j++) {
@@ -345,7 +356,7 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
                 vertex.tint[3] = v.local_y;
                 vertex.bounds[0] = -2;
             }
-			vertices.push_back(vertex);
+			vertex_data[written++] = vertex;
 		}
 	}
     if (has_images && pages.is_empty()) {
