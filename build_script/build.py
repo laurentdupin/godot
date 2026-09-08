@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import platform as host_platform
@@ -18,6 +19,11 @@ from typing import Sequence
 
 SCRIPT_DIRECTORY = Path(__file__).resolve().parent
 GODOT_ROOT = SCRIPT_DIRECTORY.parent
+_platform_spec = importlib.util.spec_from_file_location(
+    "hcsr_platform", GODOT_ROOT / "modules/html_css/hcsr_platform.py"
+)
+_platform_helpers = importlib.util.module_from_spec(_platform_spec)
+_platform_spec.loader.exec_module(_platform_helpers)
 VIRTUAL_ENVIRONMENT = SCRIPT_DIRECTORY / ".venv"
 CACHE_DIRECTORY = SCRIPT_DIRECTORY / ".cache"
 PIP_CACHE_DIRECTORY = CACHE_DIRECTORY / "pip"
@@ -310,11 +316,14 @@ def validate_settings(settings: BuildSettings, godot_platform: str) -> None:
             "The DLL-backed old HCSR runtime currently supports Windows x86_64 only. "
             "Select hcsr_old or none on another host or architecture."
         )
-    if settings.html_css_renderer in ("hcsr_newest", "hcsr_newest_dll") and (
-        godot_platform != "windows" or settings.architecture != "x86_64"
+    if settings.html_css_renderer in ("hcsr_newest", "hcsr_newest_dll") and not (
+        _platform_helpers.newest_target_supported(
+            settings.html_css_renderer, godot_platform, settings.architecture
+        )
     ):
         raise RuntimeError(
-            "The initial hcsr_newest scene/renderer bundle supports Windows x86_64 only."
+            "hcsr_newest supports Windows x86_64 and Linux/macOS x86_64/ARM64. "
+            "hcsr_newest_dll supports Windows x86_64 only."
         )
     if godot_platform == "macos" and settings.architecture == "x86_32":
         raise RuntimeError("Godot does not support x86_32 macOS builds.")

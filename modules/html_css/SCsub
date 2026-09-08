@@ -121,7 +121,7 @@ elif _html_css_renderer == "hcsr_old_2":
     env_html_css.Append(CPPDEFINES=["HTML_CSS_USE_HCSR_OLD_2"])
     env_html_css.Prepend(CPPPATH=[os.path.join(hcsr_old_2_root, "native", "include")])
 elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll") and env["platform"] != "windows":
-    if _html_css_renderer != "hcsr_newest" or env["platform"] not in ("linuxbsd", "macos") or env["arch"] not in ("x86_64", "arm64"):
+    if not _platform_helpers.newest_target_supported(_html_css_renderer, env["platform"], env["arch"]):
         print("hcsr_newest supports static Linux/macOS x86_64/ARM64 builds; hcsr_newest_dll is Windows-only.")
         Exit(1)
     if (env["platform"] == "linuxbsd" and not sys.platform.startswith("linux")) or (env["platform"] == "macos" and sys.platform != "darwin"):
@@ -157,7 +157,7 @@ elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll") and env["platform"
     env_html_css.Append(CPPDEFINES=newest_defines)
     env_html_css.Prepend(CPPPATH=[os.path.join(hcsr_newest_root, "native", "include")])
 elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll"):
-    if env["platform"] != "windows" or env["arch"] != "x86_64":
+    if not _platform_helpers.newest_target_supported(_html_css_renderer, env["platform"], env["arch"]):
         print("HTML/CSS hcsr_newest currently requires Windows x86_64.")
         Exit(1)
     hcsr_newest_root = env.Dir("#thirdparty/hcsr_newest").abspath

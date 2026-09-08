@@ -9,3 +9,12 @@ def unix_link_flags(platform, initializer, archive):
             flags += ["-framework", framework]
         return flags + ["-lz"]
     raise ValueError("Unsupported Unix HCSR platform: " + platform)
+
+
+def newest_target_supported(renderer, platform, architecture):
+    if renderer not in ("hcsr_newest", "hcsr_newest_dll"):
+        return False
+    if platform == "windows":
+        return architecture == "x86_64"
+    return (renderer == "hcsr_newest" and platform in ("linuxbsd", "macos")
+            and architecture in ("x86_64", "arm64"))
