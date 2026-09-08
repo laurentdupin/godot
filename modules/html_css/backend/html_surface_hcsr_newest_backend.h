@@ -32,6 +32,7 @@ private:
 	Error _rebuild_scene();
 	Error _queue_input(const hcsr_input_event_t &p_event, const CharString &p_payload = CharString());
 	Error _apply_mutation(const hcsr_mutation_t &p_mutation, uint64_t p_preload = 0);
+	Error _apply_mutations(const hcsr_mutation_t *p_mutations, int p_count, uint64_t p_preload = 0);
 
 public:
 	virtual void get_gpu_backdrop_frame(HTMLGPUBackdropFrame &r_frame) const override;

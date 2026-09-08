@@ -39,6 +39,17 @@ struct HTMLSurfaceHCSRNewestBackend::State {
 	HashSet<uint64_t> preloads;
 	hcsr_source_t source = 0;
 	hcsr_scene_t scene = 0;
+	struct PendingMutation {
+		hcsr_mutation_t mutation;
+		CharString id;
+		CharString name;
+		CharString value;
+	};
+	struct PendingMutationBatch {
+		Vector<PendingMutation> mutations;
+		uint64_t preload = 0;
+	};
+	Vector<PendingMutationBatch> pending_mutations;
 	hcsr_draw_packet_t pending_packet = 0;
 	hcsr_presenter_t presenter = 0;
 	hcsr_scene_profile_t profile = {};
@@ -750,6 +761,25 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
 		set_terminal(state, scene_error(state, "hcsr_newest could not create the scene."));
 		return ERR_CANT_CREATE;
 	}
+	// Submit accepted startup updates before the first step can build a packet.
+	for (const State::PendingMutationBatch &batch : state->pending_mutations) {
+		Vector<hcsr_mutation_t> mutations;
+		for (const State::PendingMutation &owned : batch.mutations) {
+			hcsr_mutation_t mutation = owned.mutation;
+			mutation.element_id = utf8_view(owned.id);
+			mutation.name = utf8_view(owned.name);
+			mutation.value = utf8_view(owned.value);
+			mutations.push_back(mutation);
+		}
+		// Preloading is optional: unloading a hint must not lose accepted markup.
+		const uint64_t preload = state->preloads.has(batch.preload) ? batch.preload : 0;
+		if (hcsr_scene_apply_mutations_with_preload(state->scene, mutations.ptr(), mutations.size(), preload) != HCSR_OK) {
+			set_terminal(state, scene_error(state, "hcsr_newest could not apply queued startup mutations."));
+			state->pending_mutations.clear();
+			return ERR_INVALID_DATA;
+		}
+	}
+	state->pending_mutations.clear();
 	state->document_dirty = false;
 	state->metadata.logical_size = state->logical_size;
 	state->metadata.physical_size = state->physical_size;
@@ -759,7 +789,9 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
 
 void HTMLSurfaceHCSRNewestBackend::mark_document_dirty() {
 	MutexLock lock(state->mutex);
+	state->pending_mutations.clear();
 	state->document_dirty = true;
+	state->needs_another_frame = true;
 }
 
 void HTMLSurfaceHCSRNewestBackend::set_size(const Size2i &p_size) {
@@ -793,6 +825,7 @@ void HTMLSurfaceHCSRNewestBackend::set_document(const Ref<HTMLDocument> &p_docum
 	document = p_document;
 	MutexLock lock(state->mutex);
 	if (state->document == p_document) return;
+	state->pending_mutations.clear();
 	state->document = p_document;
 	state->document_dirty = true;
 	state->needs_another_frame = true;
@@ -887,6 +920,9 @@ Dictionary HTMLSurfaceHCSRNewestBackend::get_frame_synchronization() const {
 	result["recordings"] = state->recorded_count;
 	result["failures"] = state->synchronization_failures;
 	result["pending"] = state->render_pending;
+	result["pending_startup_mutation_batches"] = state->pending_mutations.size();
+	result["terminal"] = state->terminal;
+	result["terminal_reason"] = state->terminal_reason;
 	result["image_atlas"] = state->image_atlas_statistics;
 	result["preparation_ms"] = state->preparation_milliseconds;
 	result["maximum_preparation_ms"] = state->maximum_preparation_milliseconds;
@@ -1095,14 +1131,37 @@ Error HTMLSurfaceHCSRNewestBackend::text_input(const String &p_text) {
 }
 
 Error HTMLSurfaceHCSRNewestBackend::_apply_mutation(const hcsr_mutation_t &p_mutation, uint64_t p_preload) {
+	return _apply_mutations(&p_mutation, 1, p_preload);
+}
+
+Error HTMLSurfaceHCSRNewestBackend::_apply_mutations(const hcsr_mutation_t *p_mutations, int p_count, uint64_t p_preload) {
 	MutexLock lock(state->mutex);
-	if (state->scene == 0) return ERR_UNCONFIGURED;
-	const Error result = hcsr_scene_apply_mutations_with_preload(state->scene, &p_mutation, 1, p_preload) == HCSR_OK ? OK : ERR_INVALID_DATA;
-	if (result == OK) {
-		state->needs_another_frame = true;
-		if (state->input_queued_usec == 0) state->input_queued_usec = OS::get_singleton()->get_ticks_usec();
+	if (state->closing || state->document.is_null()) return ERR_UNCONFIGURED;
+	if (state->terminal) return ERR_CANT_CREATE;
+	if (state->scene == 0 || state->document_dirty) {
+		State::PendingMutationBatch batch;
+		batch.preload = p_preload;
+		for (int index = 0; index < p_count; index++) {
+			const hcsr_mutation_t &mutation = p_mutations[index];
+			State::PendingMutation owned;
+			owned.mutation = mutation;
+			owned.id = String::utf8(mutation.element_id.data, mutation.element_id.length).utf8();
+			owned.name = mutation.name.length ? String::utf8(mutation.name.data, mutation.name.length).utf8() : CharString();
+			owned.value = mutation.value.length ? String::utf8(mutation.value.data, mutation.value.length).utf8() : CharString();
+			if (owned.id.is_empty() || ((mutation.kind == HCSR_MUTATION_SET_ATTRIBUTE || mutation.kind == HCSR_MUTATION_REMOVE_ATTRIBUTE) && owned.name.is_empty())) return ERR_INVALID_PARAMETER;
+			// No borrowed ABI pointers survive this call; views are rebuilt at replay.
+			owned.mutation.element_id = {};
+			owned.mutation.name = {};
+			owned.mutation.value = {};
+			batch.mutations.push_back(owned);
+		}
+		state->pending_mutations.push_back(batch);
+	} else if (hcsr_scene_apply_mutations_with_preload(state->scene, p_mutations, p_count, p_preload) != HCSR_OK) {
+		return ERR_INVALID_DATA;
 	}
-	return result;
+	state->needs_another_frame = true;
+	if (state->input_queued_usec == 0) state->input_queued_usec = OS::get_singleton()->get_ticks_usec();
+	return OK;
 }
 
 Error HTMLSurfaceHCSRNewestBackend::set_element_text(const StringName &p_id, const String &p_text) {
@@ -1222,14 +1281,7 @@ Error HTMLSurfaceHCSRNewestBackend::apply_element_mutations(const Array &p_mutat
 		} else if (operation == "set_inner_html") mutation.kind = HCSR_MUTATION_SET_INNER_HTML;
 		else return ERR_UNAVAILABLE;
 	}
-	MutexLock lock(state->mutex);
-	if (state->scene == 0) return ERR_UNCONFIGURED;
-	const Error result = hcsr_scene_apply_mutations(state->scene, mutations.ptr(), mutations.size()) == HCSR_OK ? OK : ERR_INVALID_DATA;
-	if (result == OK) {
-		state->needs_another_frame = true;
-		if (state->input_queued_usec == 0) state->input_queued_usec = OS::get_singleton()->get_ticks_usec();
-	}
-	return result;
+	return _apply_mutations(mutations.ptr(), mutations.size());
 }
 
 bool HTMLSurfaceHCSRNewestBackend::hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const {
