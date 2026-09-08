@@ -91,6 +91,8 @@ Use double-quoted strings with escapes such as `\n`. Use `StringName("name")`, `
 
 Comments use `//`, `/* ... */`, or `///` for documentation. `#` and `##` comments are rejected. Block comments do not nest. UTF-8, Unicode identifiers, a leading BOM, and CRLF line endings are supported.
 
+Translation extraction recognizes `// NO_TRANSLATE` and `// TRANSLATORS: ...` either inline or on the immediately preceding comment lines, following Godot's native rules. Blank lines end a preceding comment block. These comments retain their original source lines and are not included in exported bytecode.
+
 ## Rejected compatibility syntax
 
 - `func`, `fn`, `var`, `pass`.

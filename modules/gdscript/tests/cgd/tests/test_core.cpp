@@ -69,6 +69,13 @@ int main() {
 	contains(strings, U"StringName(\"name\")", "StringName constructor");
 	bad(U"String text = \"\"\"native multiline\"\"\";", "triple quoted strings rejected");
 	contains(good(U"auto a=1; /* ignored { ; */ auto b=2; // tail\n", "comments"), U"var b: = 2", "comments stripped safely");
+	auto comments = good(U"\uFEFF// TRANSLATORS: caf\u00e9\r\nvoid f() {\r\n\t// continuation\r\nprint(\"// NO_TRANSLATE\"); // NO_TRANSLATE\r\n/* // hidden */\r\n}\r\n", "translation comments");
+	check(comments.map.comments.size() == 3, "only real line comments are retained");
+	check(comments.map.comments[0].line == 1 && comments.map.comments[0].new_line, "BOM comment starts a line");
+	check(comments.map.comments[0].text == U" TRANSLATORS: caf\u00e9\r", "Unicode comment text retained");
+	check(comments.map.comments[1].line == 3 && comments.map.comments[1].new_line, "indented continuation retains original line");
+	check(comments.map.comments[2].line == 4 && !comments.map.comments[2].new_line, "inline directive retains original line");
+	check(comments.code.find(U"NO_TRANSLATE") == comments.code.rfind(U"NO_TRANSLATE"), "comments do not enter generated code");
 	contains(good(U"int f(auto n=2){ auto local=n; return local; }", "inferred declarations"), U"func f(n: = 2) -> int:", "auto parameter retains inference");
 	contains(good(U"Variant value = 2;", "dynamic declaration"), U"var value: Variant = 2", "Variant remains dynamic");
 	contains(good(U"auto cb=[](int n)->int{return n;};", "typed lambda"), U"func(n: int) -> int:", "lambda return type retained");

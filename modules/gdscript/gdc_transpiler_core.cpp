@@ -181,6 +181,16 @@ class Frontend {
 				}
 				if (doc) {
 					add(Kind::DOC, begin, i);
+				} else {
+					bool new_line = true;
+					for (size_t before = begin; before > 0 && source[before - 1] != U'\n'; --before) {
+						const char32_t previous = source[before - 1];
+						if (previous != U' ' && previous != U'\t' && previous != U'\r' && !(before == 1 && previous == 0xFEFF)) {
+							new_line = false;
+							break;
+						}
+					}
+					result.map.comments.push_back({ locations[begin].line, source.substr(begin + 2, i - begin - 2), new_line });
 				}
 				continue;
 			}

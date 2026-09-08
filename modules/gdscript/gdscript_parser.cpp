@@ -547,6 +547,12 @@ void GDScriptParser::_remap_gdc_positions(const GDC::SourceMap &p_map) {
 		mapped_comments.insert(p_map.original(entry.key, 1).line, entry.value);
 	}
 	comment_data = mapped_comments;
+	// Keep translation directives in original coordinates without injecting comments
+	// into generated expressions, lambdas, or synthetic loop statements.
+	for (const GDC::SourceComment &comment : p_map.comments) {
+		const std::string text = GDC::encode_utf8(comment.text);
+		comment_data.insert(comment.line, GDScriptTokenizer::CommentData("#" + String::utf8(text.c_str(), text.size()), comment.new_line));
+	}
 #endif // TOOLS_ENABLED
 }
 

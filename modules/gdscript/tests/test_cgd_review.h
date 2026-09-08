@@ -7,7 +7,56 @@
 #include "modules/gdscript/gdscript_tokenizer_buffer.h"
 #include "tests/test_macros.h"
 
+#ifdef TOOLS_ENABLED
+#include "modules/gdscript/editor/gdscript_translation_parser_plugin.h"
+#endif
+
 namespace TestCGDReview {
+
+#ifdef TOOLS_ENABLED
+TEST_CASE("[GDScript][CGDReview] Translation comments match native extraction") {
+	const String cgd = "extends RefCounted;\n"
+			"void messages() {\n"
+			"    tr(\"Hidden inline\"); // NO_TRANSLATE\n"
+			"    // NO_TRANSLATE: internal identifier\n"
+			"    tr(\"Hidden above\");\n"
+			"    tr(\"Visible inline\"); // TRANSLATORS: Menu label\n"
+			"    // TRANSLATORS: First line\n"
+			"    // Second line\n"
+			"    tr(\"Visible above\");\n"
+			"    // NO_TRANSLATE\n"
+			"\n"
+			"    tr(\"Visible after blank\");\n"
+			"    tr(\"Literal // NO_TRANSLATE\"); /* // NO_TRANSLATE */\n"
+			"}\n";
+	const String gd = cgd.replace("extends RefCounted;", "extends RefCounted")
+			.replace("void messages() {", "func messages():")
+			.replace("}\n", "")
+			.replace("; //", " #")
+			.replace("    //", "    #")
+			.replace("; /* // NO_TRANSLATE */", "");
+	Ref<GDScript> native;
+	native.instantiate();
+	native->set_source_code(gd);
+	native->set_path("res://review_translation_comments.gd");
+	Ref<GDScript> script;
+	script.instantiate();
+	script->set_source_code(cgd);
+	script->set_path("res://review_translation_comments.cgd");
+	Ref<GDScriptEditorTranslationParserPlugin> extractor;
+	extractor.instantiate();
+	Vector<Vector<String>> expected;
+	Vector<Vector<String>> actual;
+	REQUIRE(extractor->parse_file(native->get_path(), &expected) == OK);
+	REQUIRE(extractor->parse_file(script->get_path(), &actual) == OK);
+	REQUIRE(expected.size() == 4);
+	CHECK(actual == expected);
+	CHECK(expected[0][3] == "Menu label");
+	CHECK(expected[1][3] == "First line\nSecond line");
+	CHECK(expected[2][3].is_empty());
+	CHECK(expected[3][0] == "Literal // NO_TRANSLATE");
+}
+#endif
 
 TEST_CASE("[GDScript][CGDReview] Extension matching is case-insensitive") {
 	GDScriptLanguage *language = GDScriptLanguage::get_singleton();

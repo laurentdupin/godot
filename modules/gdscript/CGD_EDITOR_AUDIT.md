@@ -42,4 +42,5 @@ The resource-picker follow-up reproduces the original raw-GDScript Inspector cra
 - A `.gdshader` file stores shader source only. Save a Shader resource as `.tres` or `.res` to persist its attached script and other Resource properties.
 - Native `.gdc` handling, GD-only golden test inputs, and the Godot 3-to-4 source converter retain their native format rules.
 - Folding uses the editor's existing indentation and region handling. Completion does not promise recovery for every possible malformed buffer.
-- This is an audit and targeted regression coverage, not a claim that every editor operation or external LSP client has been exhaustively tested. Translation comments and hover documentation still use the existing frontend/native documentation behavior.
+- Translation extraction preserves ordinary `//` comments, including `NO_TRANSLATE` and multiline `TRANSLATORS:` notes, in original source coordinates. A native regression compares extraction with equivalent GDScript, including blank-line boundaries and comment-like string contents.
+- This is an audit and targeted regression coverage, not a claim that every editor operation or external LSP client has been exhaustively tested. Hover documentation still uses the existing frontend/native documentation behavior.

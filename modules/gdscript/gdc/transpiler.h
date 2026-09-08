@@ -22,12 +22,19 @@ struct MapRun {
 	uint32_t step = 0; // 0 for inserted characters, 1 for a copied same-line run.
 };
 
+struct SourceComment {
+	uint32_t line = 1;
+	std::u32string text; // Comment contents after //.
+	bool new_line = false;
+};
+
 struct SourceMap {
 	uint32_t generated_size = 0;
 	std::vector<uint32_t> line_starts;
 	std::vector<MapRun> runs;
 	Position completion_source = { 0, 0 }; // Transient editor data, not serialized.
 	Position completion_generated = { 0, 0 };
+	std::vector<SourceComment> comments; // Original source metadata; not serialized into runtime tokens.
 	bool empty() const { return runs.empty(); }
 	Position original(uint32_t p_line, uint32_t p_column) const;
 	void original_range(Position p_start, Position p_end, Position &r_start, Position &r_end) const;
