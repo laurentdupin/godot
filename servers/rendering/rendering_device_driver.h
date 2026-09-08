@@ -290,6 +290,9 @@ public:
 	// the driver's tracker before graph recording prevents the first consumer barrier
 	// from assuming an unrelated or undefined state.
 	virtual void texture_set_external_layout(TextureID p_texture, TextureLayout p_layout) {}
+#if defined(LINUXBSD_ENABLED) && defined(__linux__)
+	virtual bool texture_prepare_linux_dma_buf(TextureID p_texture) { return false; }
+#endif
 	virtual void texture_set_external_queue_family(TextureID p_texture, bool p_foreign_owned) {}
 	// texture_create_shared_*() can only use original, non-view textures as original. RenderingDevice is responsible for ensuring that.
 	virtual TextureID texture_create_shared(TextureID p_original_texture, const TextureView &p_view) = 0;

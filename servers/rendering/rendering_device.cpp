@@ -2402,6 +2402,19 @@ void RenderingDevice::external_texture_set_state(RID p_texture, ExternalTextureS
 	_external_texture_set_layout(texture, (RDD::TextureLayout)p_state);
 }
 
+#if defined(LINUXBSD_ENABLED) && defined(__linux__)
+bool RenderingDevice::external_texture_prepare_linux_dma_buf(RID p_texture) {
+	ERR_RENDER_THREAD_GUARD_V(false);
+	Texture *texture = texture_owner.get_or_null(p_texture);
+	ERR_FAIL_NULL_V(texture, false);
+	if (!driver->texture_prepare_linux_dma_buf(texture->driver_id)) {
+		return false;
+	}
+	_external_texture_set_layout(texture, RDD::TEXTURE_LAYOUT_GENERAL);
+	return true;
+}
+#endif
+
 void RenderingDevice::external_texture_defer_release(RID p_texture, const Callable &p_callback) {
 	ERR_RENDER_THREAD_GUARD();
 	ERR_FAIL_COND_MSG(!p_callback.is_valid(), "An external texture release callback must be valid.");
@@ -9996,6 +10009,10 @@ void RenderingDevice::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("external_texture_pool_acquire_latest", "pool", "allow_pending_producer"), &RenderingDevice::external_texture_pool_acquire_latest, DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("external_texture_pool_get_slot_status", "pool", "slot"), &RenderingDevice::external_texture_pool_get_slot_status);
 	ClassDB::bind_method(D_METHOD("external_texture_pool_stop", "pool"), &RenderingDevice::external_texture_pool_stop);
+#if defined(LINUXBSD_ENABLED) && defined(__linux__)
+	ClassDB::bind_method(D_METHOD("external_texture_prepare_linux_dma_buf", "texture"), &RenderingDevice::external_texture_prepare_linux_dma_buf);
+	ClassDB::bind_method(D_METHOD("external_texture_release_linux_dma_buf", "texture", "callback"), &RenderingDevice::external_texture_defer_release);
+#endif
 	ClassDB::bind_method(D_METHOD("external_resource_defer_release", "callback"), &RenderingDevice::external_resource_defer_release);
 
 	ClassDB::bind_method(D_METHOD("texture_update", "texture", "layer", "data"), &RenderingDevice::texture_update);

@@ -652,6 +652,11 @@ Error RenderingDeviceDriverVulkan::_initialize_device_extensions() {
 	// We don't actually use this extension, but some runtime components on some platforms
 	// can and will fill the validation layers with useless info otherwise if not enabled.
 	_register_requested_device_extension(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME, false);
+#if defined(LINUXBSD_ENABLED) && defined(__linux__)
+	_register_requested_device_extension(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME, false);
+	_register_requested_device_extension(VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME, false);
+	_register_requested_device_extension(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME, false);
+#endif
 
 	if (Engine::get_singleton()->is_generate_spirv_debug_info_enabled()) {
 		_register_requested_device_extension(VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME, true);
@@ -2896,6 +2901,21 @@ RDD::TextureID RenderingDeviceDriverVulkan::texture_create_from_android_hardware
 #endif
 }
 
+#if defined(LINUXBSD_ENABLED) && defined(__linux__)
+bool RenderingDeviceDriverVulkan::texture_prepare_linux_dma_buf(TextureID p_texture) {
+	if (!enabled_device_extension_names.has(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME) ||
+			!enabled_device_extension_names.has(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME) ||
+			!enabled_device_extension_names.has(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME)) {
+		return false;
+	}
+	TextureInfo *texture = (TextureInfo *)p_texture.id;
+	ERR_FAIL_NULL_V(texture, false);
+	texture->linux_dma_buf = true;
+	texture->linux_foreign_owned = true;
+	return true;
+}
+#endif
+
 void RenderingDeviceDriverVulkan::texture_set_external_queue_family(TextureID p_texture, bool p_foreign_owned) {
 	TextureInfo *texture_info = (TextureInfo *)p_texture.id;
 	if (texture_info == nullptr || texture_info->android_hardware_buffer == 0 || texture_info->android_foreign_owned == p_foreign_owned) {
@@ -3388,6 +3408,24 @@ void RenderingDeviceDriverVulkan::command_pipeline_barrier(
 			tex_info->android_foreign_owned = tex_info->android_target_foreign_owned;
 			tex_info->android_ownership_transition_pending = false;
 		}
+#if defined(LINUXBSD_ENABLED) && defined(__linux__)
+		if (tex_info->linux_dma_buf) {
+			// A capture import is used only as a transfer source, then retired to
+			// GENERAL. Resolve ownership while recording each graph barrier, not
+			// while scheduling: acquire and release can occur in the same frame.
+			const bool to_foreign = p_texture_barriers[i].next_layout == RDD::TEXTURE_LAYOUT_GENERAL;
+			if (to_foreign != tex_info->linux_foreign_owned) {
+				vk_image_barriers[i].srcQueueFamilyIndex = to_foreign ? main_queue_family_index : VK_QUEUE_FAMILY_FOREIGN_EXT;
+				vk_image_barriers[i].dstQueueFamilyIndex = to_foreign ? VK_QUEUE_FAMILY_FOREIGN_EXT : main_queue_family_index;
+				if (to_foreign) {
+					vk_image_barriers[i].dstAccessMask = 0;
+				} else {
+					vk_image_barriers[i].srcAccessMask = 0;
+				}
+				tex_info->linux_foreign_owned = to_foreign;
+			}
+		}
+#endif
 		vk_image_barriers[i].image = tex_info->vk_view_create_info.image;
 		vk_image_barriers[i].subresourceRange.aspectMask = (VkImageAspectFlags)p_texture_barriers[i].subresources.aspect;
 		vk_image_barriers[i].subresourceRange.baseMipLevel = p_texture_barriers[i].subresources.base_mipmap;

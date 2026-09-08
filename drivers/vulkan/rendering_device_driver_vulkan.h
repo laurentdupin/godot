@@ -290,6 +290,10 @@ public:
 		} allocation; // All 0/null if just a view.
 		VkDeviceMemory imported_memory = VK_NULL_HANDLE;
 		uint64_t android_hardware_buffer = 0;
+#if defined(LINUXBSD_ENABLED) && defined(__linux__)
+		bool linux_dma_buf = false;
+		bool linux_foreign_owned = true;
+#endif
 		bool android_foreign_owned = false;
 		bool android_ownership_transition_pending = false;
 		bool android_target_foreign_owned = false;
@@ -306,6 +310,9 @@ public:
 	virtual TextureID texture_create(const TextureFormat &p_format, const TextureView &p_view) override final;
 	virtual TextureID texture_create_from_extension(uint64_t p_native_texture, const TextureFormat &p_format) override final;
 	virtual TextureID texture_create_from_android_hardware_buffer(uint64_t p_hardware_buffer, const TextureFormat &p_format) override final;
+#if defined(LINUXBSD_ENABLED) && defined(__linux__)
+	virtual bool texture_prepare_linux_dma_buf(TextureID p_texture) override final;
+#endif
 	virtual void texture_set_external_queue_family(TextureID p_texture, bool p_foreign_owned) override final;
 	virtual TextureID texture_create_shared(TextureID p_original_texture, const TextureView &p_view) override final;
 	virtual TextureID texture_create_shared_from_slice(TextureID p_original_texture, const TextureView &p_view, TextureSliceType p_slice_type, uint32_t p_layer, uint32_t p_layers, uint32_t p_mipmap, uint32_t p_mipmaps) override final;
