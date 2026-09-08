@@ -59,7 +59,7 @@ class HCSRNewestImageAtlas {
 	uint32_t buffer_capacity = 0;
 	bool uploaded = false;
 	uint64_t uploaded_bytes = 0, decoded_images = 0;
-	Entry resolve(const Ref<HTMLDocument> &document, const String &source);
+	Entry resolve(const Ref<HTMLDocument> &document, const String &source, const Size2i &natural, const Vector2 &physical_size);
     Entry resolve_glyph(const hcsr_glyph_material_t &glyph, float scale);
     Entry rasterize_glyph(const hcsr_glyph_material_t &glyph, int level);
     struct PendingGlyph { hcsr_glyph_material_t glyph; int level; GlyphKey key; };

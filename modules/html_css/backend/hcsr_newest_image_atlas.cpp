@@ -106,8 +106,12 @@ Size2i HCSRNewestImageAtlas::resolve_size(const Ref<HTMLDocument> &document, con
     return image.is_valid() ? image->get_size() : Size2i();
 }
 
-HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::resolve(const Ref<HTMLDocument> &document, const String &source) {
-	const String key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source;
+HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::resolve(const Ref<HTMLDocument> &document, const String &source, const Size2i &natural, const Vector2 &physical_size) {
+	// Cache power-of-two reductions, not a new raster for every animated size.
+	const float ratio = MIN(natural.x / MAX(1.0f, physical_size.x), natural.y / MAX(1.0f, physical_size.y));
+	const int level = ratio >= 2 ? MIN(12, int(std::floor(std::log2(ratio)))) : 0;
+	const String source_key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source;
+	const String key = source_key + "\nminification:" + itos(level);
 	if (const Entry *existing = entries.getptr(key)) {
 		return *existing;
 	}
@@ -116,11 +120,27 @@ HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::resolve(const Ref<HTMLDocument
 	{
 		MutexLock lock(image_mutex);
 		image = load_image(document, source);
-		decoded_sources.erase(key); // Atlas owns pixels after packing; retain only metadata.
+		decoded_sources.erase(source_key); // Atlas owns pixels after packing; retain only metadata.
 	}
 	if (image.is_valid()) {
 		entry.natural_size = image->get_size();
 		image->convert(Image::FORMAT_RGBA8); // Straight alpha; native BGRA codec contract is unchanged.
+        if (level > 0) {
+            // Filter each image independently in premultiplied alpha. Whole-atlas
+            // mipmaps would mix neighboring entries and produce edge fringes.
+            image->premultiply_alpha();
+            image->generate_mipmaps();
+            image = image->get_image_from_mipmap(MIN(level, image->get_mipmap_count()));
+            Vector<uint8_t> pixels = image->get_data();
+            uint8_t *data = pixels.ptrw();
+            for (int64_t pixel = 0; pixel < int64_t(image->get_width()) * image->get_height(); pixel++) {
+                uint8_t *rgba = data + pixel * 4;
+                for (int channel = 0; channel < 3; channel++) {
+                    rgba[channel] = rgba[3] ? MIN(255, (int(rgba[channel]) * 255 + rgba[3] / 2) / rgba[3]) : 0;
+                }
+            }
+            image->set_data(image->get_width(), image->get_height(), false, Image::FORMAT_RGBA8, pixels);
+        }
 		const float scale = MIN(1.0f, float(PAGE_SIZE - 2) / MAX(image->get_width(), image->get_height()));
 		if (scale < 1) {
 			image->resize(MAX(1, int(image->get_width() * scale)), MAX(1, int(image->get_height() * scale)));
@@ -295,15 +315,23 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
 			memcpy(&image, packet.material_payload + material.payload_offset, sizeof(image));
 			if (image.source_length <= material.payload_size - sizeof(image)) {
 				const String source = String::utf8((const char *)(packet.material_payload + material.payload_offset + sizeof(image)), image.source_length);
-				entry = resolve(document, source);
+				const Size2i natural = resolve_size(document, source);
 				destination = Rect2(image.local_rect.x, image.local_rect.y, image.local_rect.width, image.local_rect.height);
-				if (entry.page >= 0 && image.object_fit != 0) {
+				if (natural.x > 0 && natural.y > 0 && image.object_fit != 0) {
                     hcsr_rect_t fitted;
-                    if (hcsr_image_fit_rect(&image.local_rect, entry.natural_size.x, entry.natural_size.y,
+                    if (hcsr_image_fit_rect(&image.local_rect, natural.x, natural.y,
                                 image.object_fit, image.position_x, image.position_y, &fitted) == HCSR_OK) {
                         destination = Rect2(fitted.x, fitted.y, fitted.width, fitted.height);
                     }
 				}
+                float transform_scale = 1;
+                for (uint32_t j = 1; j < draw.index_count; j++) {
+                    const auto &a = packet.vertices[packet.indices[draw.first_index]];
+                    const auto &b = packet.vertices[packet.indices[draw.first_index + j]];
+                    const float local = Vector2(b.local_x - a.local_x, b.local_y - a.local_y).length();
+                    if (local > .001f) transform_scale = MAX(transform_scale, Vector2(b.screen_x - a.screen_x, b.screen_y - a.screen_y).length() / local);
+                }
+                entry = resolve(document, source, natural, destination.size * (output_scale * transform_scale));
 			}
 		}
         hcsr_glyph_material_t glyph = {};
