@@ -56,6 +56,20 @@
 #include "servers/display/accessibility_server.h"
 #include "servers/display/display_server.h"
 
+// Flat launch/folder buttons are text rows here, not full-height toolbar buttons.
+static void compact_project_row_button(Button *p_button, Control *p_theme_source) {
+	for (const char *state : { "normal", "hover", "pressed", "hover_pressed", "disabled",
+			 "normal_mirrored", "hover_mirrored", "pressed_mirrored", "hover_pressed_mirrored", "disabled_mirrored" }) {
+		if (!p_theme_source->has_theme_stylebox(state, SNAME("Button"))) {
+			continue;
+		}
+		Ref<StyleBox> style = p_theme_source->get_theme_stylebox(state, SNAME("Button"))->duplicate();
+		style->set_content_margin(SIDE_TOP, EDSCALE);
+		style->set_content_margin(SIDE_BOTTOM, EDSCALE);
+		p_button->add_theme_style_override(state, style);
+	}
+}
+
 void ProjectListItemControl::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_THEME_CHANGED: {
@@ -110,9 +124,11 @@ void ProjectListItemControl::_notification(int p_what) {
 			if (touch_menu_button) {
 				touch_menu_button->set_button_icon(get_editor_theme_icon(SNAME("GuiTabMenuHl")));
 			}
+			compact_project_row_button(explore_button, this);
 			for (Node *child : recent_scenes_container->iterate_children()) {
 				Button *scene_button = Object::cast_to<Button>(child);
 				if (scene_button) {
+					compact_project_row_button(scene_button, this);
 					scene_button->set_button_icon(get_editor_theme_icon(SNAME("Play")));
 				}
 			}
@@ -312,6 +328,7 @@ void ProjectListItemControl::set_recent_scenes(const PackedStringArray &p_recent
 		scene_button->set_tooltip_text(vformat(TTRC("Run recent scene: %s"), scene_path));
 		scene_button->set_accessibility_name(vformat(TTRC("Run recent scene: %s"), scene_path));
 		scene_button->set_flat(true);
+		compact_project_row_button(scene_button, this);
 		scene_button->set_text_alignment(HORIZONTAL_ALIGNMENT_LEFT);
 		scene_button->set_text_overrun_behavior(TextServer::OVERRUN_TRIM_ELLIPSIS);
 		scene_button->set_clip_text(true);
@@ -588,15 +605,14 @@ ProjectListItemControl::ProjectListItemControl() {
 		tag_container->set_h_size_flags(Control::SIZE_EXPAND_FILL);
 		title_hb->add_child(tag_container);
 
-		// Keep recent-scene launchers on the title line instead of growing each
-		// project card by up to three rows. Full paths remain available in tooltips.
-		recent_scenes_container = memnew(HBoxContainer);
-		recent_scenes_container->set_name("RecentScenes");
-		recent_scenes_container->set_h_size_flags(Control::SIZE_EXPAND_FILL);
-		recent_scenes_container->add_theme_constant_override("separation", 2 * EDSCALE);
-		recent_scenes_container->hide();
-		title_hb->add_child(recent_scenes_container);
 	}
+
+	recent_scenes_container = memnew(VBoxContainer);
+	recent_scenes_container->set_name("RecentScenes");
+	recent_scenes_container->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	recent_scenes_container->add_theme_constant_override("separation", 0);
+	recent_scenes_container->hide();
+	main_vbox->add_child(recent_scenes_container);
 
 	// Bottom half, containing the path and view folder button.
 	{
