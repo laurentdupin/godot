@@ -983,7 +983,7 @@ void CopyEffects::make_mipmap(RID p_source_rd_texture, RID p_dest_texture, const
 
 void CopyEffects::make_mipmap_raster(RID p_source_rd_texture, RID p_dest_texture, const Size2i &p_size, bool p_alpha_weighted_srgb) {
 	const bool supports_raster_mipmap = raster_effects.has_flag(RASTER_EFFECT_COPY)
-			|| (p_alpha_weighted_srgb && raster_effects.has_flag(RASTER_EFFECT_ALPHA_WEIGHTED_SRGB_MIPMAP));
+			|| raster_effects.has_flag(RASTER_EFFECT_ALPHA_WEIGHTED_SRGB_MIPMAP);
 	ERR_FAIL_COND_MSG(!supports_raster_mipmap, "Can't use the requested raster version of mipmap.");
 
 	RID dest_framebuffer = FramebufferCacheRD::get_singleton()->get_cache(p_dest_texture);

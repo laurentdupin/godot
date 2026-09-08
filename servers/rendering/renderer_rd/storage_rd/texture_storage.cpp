@@ -2108,7 +2108,9 @@ void TextureStorage::texture_drawable_generate_mipmaps(RID p_texture, bool p_alp
 			source = RD::get_singleton()->texture_create_shared_from_slice(RD::TextureView(), tex->rd_texture, 0, m - 1, 1, RD::TEXTURE_SLICE_2D);
 			dest = RD::get_singleton()->texture_create_shared_from_slice(RD::TextureView(), tex->rd_texture, 0, m, 1, RD::TEXTURE_SLICE_2D);
 		}
-		if (p_alpha_weighted_srgb || copy_effects->get_raster_effects().has_flag(CopyEffects::RASTER_EFFECT_COPY)) {
+		// sRGB-capable drawables have no storage usage: both averaging modes
+		// must render to their color attachment rather than bind a compute image.
+		if (p_alpha_weighted_srgb || tex->drawable_type == RSE::TEXTURE_DRAWABLE_FORMAT_RGBA8_SRGB || copy_effects->get_raster_effects().has_flag(CopyEffects::RASTER_EFFECT_COPY)) {
 			copy_effects->make_mipmap_raster(source, dest, Size2i(width, height), p_alpha_weighted_srgb);
 		} else {
 			copy_effects->make_mipmap(source, dest, Size2i(width, height), p_alpha_weighted_srgb);
