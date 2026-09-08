@@ -280,9 +280,9 @@ void ProjectListItemControl::set_project_icon(const Ref<Texture2D> &p_icon) {
 	icon_needs_reload = false;
 
 	// The default project icon is 128×128 to look crisp on hiDPI displays,
-	// but we want the actual displayed size to be 64×64 on loDPI displays.
+	// but a compact project row only needs a 40×40 display size on loDPI displays.
 	project_icon->set_expand_mode(TextureRect::EXPAND_IGNORE_SIZE);
-	project_icon->set_custom_minimum_size(Size2(64, 64) * EDSCALE);
+	project_icon->set_custom_minimum_size(Size2(40, 40) * EDSCALE);
 	project_icon->set_stretch_mode(TextureRect::STRETCH_KEEP_ASPECT_CENTERED);
 
 	project_icon->set_texture(p_icon);
@@ -313,7 +313,8 @@ void ProjectListItemControl::set_recent_scenes(const PackedStringArray &p_recent
 		scene_button->set_accessibility_name(vformat(TTRC("Run recent scene: %s"), scene_path));
 		scene_button->set_flat(true);
 		scene_button->set_text_alignment(HORIZONTAL_ALIGNMENT_LEFT);
-		scene_button->set_autowrap_mode(TextServer::AUTOWRAP_ARBITRARY);
+		scene_button->set_text_overrun_behavior(TextServer::OVERRUN_TRIM_ELLIPSIS);
+		scene_button->set_clip_text(true);
 		scene_button->set_h_size_flags(Control::SIZE_EXPAND_FILL);
 		scene_button->set_button_icon(get_editor_theme_icon(SNAME("Play")));
 		scene_button->connect(SceneStringName(pressed), callable_mp(this, &ProjectListItemControl::_recent_scene_pressed).bind(scene_path));
@@ -567,12 +568,9 @@ ProjectListItemControl::ProjectListItemControl() {
 
 	main_vbox = memnew(VBoxContainer);
 	main_vbox->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	main_vbox->set_v_size_flags(Control::SIZE_SHRINK_CENTER);
+	main_vbox->add_theme_constant_override("separation", 0);
 	add_child(main_vbox);
-
-	Control *ec = memnew(Control);
-	ec->set_custom_minimum_size(Size2(0, 1));
-	ec->set_mouse_filter(MOUSE_FILTER_PASS);
-	main_vbox->add_child(ec);
 
 	// Top half, title, tags and unsupported features labels.
 	{
@@ -589,14 +587,16 @@ ProjectListItemControl::ProjectListItemControl() {
 		tag_container->set_alignment(FlowContainer::ALIGNMENT_END);
 		tag_container->set_h_size_flags(Control::SIZE_EXPAND_FILL);
 		title_hb->add_child(tag_container);
-	}
 
-	recent_scenes_container = memnew(VBoxContainer);
-	recent_scenes_container->set_name("RecentScenes");
-	recent_scenes_container->set_h_size_flags(Control::SIZE_EXPAND_FILL);
-	recent_scenes_container->add_theme_constant_override("separation", 2 * EDSCALE);
-	recent_scenes_container->hide();
-	main_vbox->add_child(recent_scenes_container);
+		// Keep recent-scene launchers on the title line instead of growing each
+		// project card by up to three rows. Full paths remain available in tooltips.
+		recent_scenes_container = memnew(HBoxContainer);
+		recent_scenes_container->set_name("RecentScenes");
+		recent_scenes_container->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+		recent_scenes_container->add_theme_constant_override("separation", 2 * EDSCALE);
+		recent_scenes_container->hide();
+		title_hb->add_child(recent_scenes_container);
+	}
 
 	// Bottom half, containing the path and view folder button.
 	{

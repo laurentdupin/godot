@@ -58,7 +58,7 @@ class ProjectListItemControl : public HBoxContainer {
 	TextureRect *project_unsupported_features = nullptr;
 	TextureRect *project_different_version = nullptr;
 	HFlowContainer *tag_container = nullptr;
-	VBoxContainer *recent_scenes_container = nullptr;
+	HBoxContainer *recent_scenes_container = nullptr;
 	Button *touch_menu_button = nullptr;
 
 	Color favorite_focus_color;
