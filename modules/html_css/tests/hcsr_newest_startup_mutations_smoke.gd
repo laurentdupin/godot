@@ -108,8 +108,22 @@ func run() -> void:
     check(invalid_view.set_element_inner_html("missing-target", "invalid") == OK, "deferred validation should accept input")
     for i in 20: await process_frame
     var failure: Dictionary = invalid_view.get_frame_scheduler_diagnostics()["frame_synchronization"]
-    check(failure.get("terminal", false) and "missing-target" in str(failure.get("terminal_reason", "")), "deferred failure missing from diagnostics")
-    check(invalid_view.get_generation() == 0, "invalid startup mutations must not present an incomplete page")
+    check(not failure.get("terminal", true) and "missing-target" in str(failure.get("last_mutation_rejection", "")), "rejected startup command must be diagnosed without freezing")
+    check(invalid_view.get_generation() > 0, "rejected startup command prevented rendering")
+    check(invalid_view.set_element_inner_html("app", "<section id='label'>old</section>") == OK, "setup insertion rejected")
+    for i in 4: await process_frame
+    check(invalid_view.set_element_inner_html("app", "<section id='replacement' style='background:red'></section>") == OK, "setup removal rejected")
+    check(invalid_view.set_element_text("label", "stale") == OK, "dependent target must be validated at step")
+    check(invalid_view.set_element_attribute("replacement", "style", "background:lime") == OK, "valid command after stale update rejected")
+    for i in 8:
+        await process_frame
+        await RenderingServer.frame_post_draw
+    failure = invalid_view.get_frame_scheduler_diagnostics()["frame_synchronization"]
+    check(not failure.get("terminal", true), "stale update froze the view")
+    check(failure.get("mutation_rejected_frames", 0) == 2, "rejected update was replayed or not diagnosed")
+    check("label" in str(failure.get("last_mutation_rejection", "")), "missing stale target diagnostic")
+    var recovered := invalid_view.get_texture().get_image().get_pixel(20,20)
+    check(recovered.g > .8 and recovered.r < .2, "valid command after rejected update did not render")
     await dispose(invalid_view)
     print("STARTUP_MUTATION_ORDER_OK")
     quit()

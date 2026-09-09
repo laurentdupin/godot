@@ -86,6 +86,8 @@ struct HTMLSurfaceHCSRNewestBackend::State {
 	bool terminal = false;
 	bool closing = false;
 	String terminal_reason;
+	String last_mutation_rejection;
+	uint64_t mutation_rejected_frames = 0;
 };
 
 namespace {
@@ -791,7 +793,14 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
 		}
 		// Preloading is optional: unloading a hint must not lose accepted markup.
 		const uint64_t preload = state->preloads.has(batch.preload) ? batch.preload : 0;
-		if (hcsr_scene_apply_mutations_with_preload(state->scene, mutations.ptr(), mutations.size(), preload) != HCSR_OK) {
+		const hcsr_result_t mutation_result = hcsr_scene_apply_mutations_with_preload(state->scene, mutations.ptr(), mutations.size(), preload);
+		if (mutation_result == HCSR_INVALID_ARGUMENT || mutation_result == HCSR_UNSUPPORTED) {
+			state->last_mutation_rejection = scene_error(state, "Queued startup HTML mutation was rejected.");
+			state->mutation_rejected_frames++;
+			ERR_PRINT(state->last_mutation_rejection);
+			continue;
+		}
+		if (mutation_result != HCSR_OK) {
 			set_terminal(state, scene_error(state, "hcsr_newest could not apply queued startup mutations."));
 			state->pending_mutations.clear();
 			return ERR_INVALID_DATA;
@@ -906,6 +915,11 @@ Error HTMLSurfaceHCSRNewestBackend::prepare_host_frame(uint64_t p_host_frame, do
 		set_terminal(state, scene_error(state, "hcsr_newest could not advance the scene."));
 		return ERR_INVALID_DATA;
 	}
+	if (result.flags & HCSR_STEP_RESULT_MUTATION_REJECTED) {
+		state->last_mutation_rejection = scene_error(state, "Deferred HTML mutation target was rejected.");
+		state->mutation_rejected_frames++;
+		ERR_PRINT(state->last_mutation_rejection);
+	}
 	hcsr_scene_profile_t profile;
 	initialize_abi(profile);
 	if (hcsr_scene_get_profile(state->scene, &profile) == HCSR_OK) {
@@ -941,6 +955,8 @@ Dictionary HTMLSurfaceHCSRNewestBackend::get_frame_synchronization() const {
 	result["pending_startup_mutation_batches"] = state->pending_mutations.size();
 	result["terminal"] = state->terminal;
 	result["terminal_reason"] = state->terminal_reason;
+	result["last_mutation_rejection"] = state->last_mutation_rejection;
+	result["mutation_rejected_frames"] = state->mutation_rejected_frames;
 	result["image_atlas"] = state->image_atlas_statistics;
 	result["preparation_ms"] = state->preparation_milliseconds;
 	result["maximum_preparation_ms"] = state->maximum_preparation_milliseconds;
