@@ -119,6 +119,22 @@ Error EditorExportPlatformLinuxBSD::export_project(const Ref<EditorExportPreset>
 		return err;
 	}
 
+	// HCSR's Linux NativeAOT runtime must remain a separate ELF image.
+	String hcsr_template = template_path;
+	if (hcsr_template.is_empty()) {
+		hcsr_template = find_export_template(get_template_file_name(p_debug ? "debug" : "release", arch));
+	}
+	const String hcsr_directory = hcsr_template.get_base_dir();
+	if (FileAccess::exists(hcsr_directory.path_join("libhcsr_scene.so"))) {
+		for (const char *library : { "libhcsr_scene.so", "libhcsr_render_vulkan.so", "libhcsr_native_codecs.so" }) {
+			err = da->copy(hcsr_directory.path_join(library), path.get_base_dir().path_join(library), get_chmod_flags());
+			if (err != OK) {
+				add_message(EXPORT_MESSAGE_ERROR, TTR("HCSR Export"), vformat("Could not copy HCSR shared library: %s", library));
+				return err;
+			}
+		}
+	}
+
 	// Save console wrapper.
 	int con_scr = p_preset->get("debug/export_console_wrapper");
 	if ((con_scr == 1 && p_debug) || (con_scr == 2)) {

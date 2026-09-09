@@ -323,7 +323,7 @@ def validate_settings(settings: BuildSettings, godot_platform: str) -> None:
     ):
         raise RuntimeError(
             "hcsr_newest supports Windows x86_64 and Linux/macOS x86_64/ARM64. "
-            "hcsr_newest_dll supports Windows x86_64 only."
+            "hcsr_newest_dll supports Windows x86_64 and Linux x86_64/ARM64."
         )
     if godot_platform == "macos" and settings.architecture == "x86_32":
         raise RuntimeError("Godot does not support x86_32 macOS builds.")

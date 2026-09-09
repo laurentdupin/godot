@@ -36,7 +36,7 @@ class NewestRendererPlatformTests(unittest.TestCase):
                 for architecture in build.ARCHITECTURES:
                     supported = (
                         (platform == "windows" and architecture == "x86_64")
-                        or (renderer == "hcsr_newest" and platform in ("linuxbsd", "macos")
+                        or ((platform == "linuxbsd" or (renderer == "hcsr_newest" and platform == "macos"))
                             and architecture in ("x86_64", "arm64"))
                     )
                     settings = build.BuildSettings(architecture=architecture, html_css_renderer=renderer)

@@ -16,5 +16,7 @@ def newest_target_supported(renderer, platform, architecture):
         return False
     if platform == "windows":
         return architecture == "x86_64"
+    if platform == "linuxbsd":
+        return architecture in ("x86_64", "arm64")
     return (renderer == "hcsr_newest" and platform in ("linuxbsd", "macos")
             and architecture in ("x86_64", "arm64"))
