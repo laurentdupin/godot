@@ -10,6 +10,7 @@ class HCSRNewestText {
 	struct AuthorFace {
 		String family, source;
 		int weight = 400;
+		int maximum_weight = 400;
 		bool italic = false;
 	};
 	Ref<HTMLDocument> document;

@@ -11,6 +11,23 @@ static String decode(hcsr_utf8_t value) {
 	return String::utf8(value.data, value.length);
 }
 
+// CSS Fonts weight matching is directional, with a special 400..500 search.
+static int weight_rank(int requested, int minimum, int maximum) {
+	if (requested >= minimum && requested <= maximum) {
+		return 0;
+	}
+	if (requested < 400) {
+		return maximum < requested ? requested - maximum : 1000 + minimum - requested;
+	}
+	if (requested > 500) {
+		return minimum > requested ? minimum - requested : 1000 + requested - maximum;
+	}
+	if (minimum > requested && minimum <= 500) {
+		return minimum - requested;
+	}
+	return maximum < requested ? 1000 + requested - maximum : 2000 + minimum - 500;
+}
+
 void HCSRNewestText::configure(const Ref<HTMLDocument> &p_document, const String &css) {
 	document = p_document;
 	configuration++;
@@ -22,13 +39,28 @@ void HCSRNewestText::add_stylesheet(const String &css, const String &base) {
 	RegEx faces("(?is)@font-face\\s*\\{([^}]+)\\}");
 	RegEx family("(?i)font-family\\s*:\\s*([^;]+)");
 	RegEx source("(?i)url\\(\\s*['\"]?([^)'\"]+)");
-	RegEx weight("(?i)font-weight\\s*:\\s*(\\d+)");
+	RegEx weight("(?i)font-weight\\s*:\\s*([^;}]+)");
 	for (const Ref<RegExMatch> &match : faces.search_all(css)) {
 		String body = match->get_string(1);
 		Ref<RegExMatch> f = family.search(body), s = source.search(body), w = weight.search(body);
 		if (f.is_valid() && s.is_valid()) {
+			String value = w.is_valid() ? w->get_string(1).strip_edges().to_lower() : "normal";
+			PackedStringArray bounds = value.replace("\t", " ").split(" ", false);
+			int minimum = 400, maximum = 400;
+			if (value == "bold") {
+				minimum = maximum = 700;
+			} else if (value != "normal") {
+				if (bounds.is_empty() || bounds.size() > 2 || !bounds[0].is_valid_int() || (bounds.size() == 2 && !bounds[1].is_valid_int())) {
+					continue;
+				}
+				minimum = bounds[0].to_int();
+				maximum = bounds.size() == 2 ? int(bounds[1].to_int()) : minimum;
+				if (minimum < 1 || maximum > 1000 || minimum > maximum) {
+					continue;
+				}
+			}
 			authors.push_back({ f->get_string(1).strip_edges().unquote().to_lower(), (s->get_string(1).contains("://") || s->get_string(1).is_absolute_path() || base.is_empty()) ? s->get_string(1).strip_edges() : base.path_join(s->get_string(1).strip_edges()).simplify_path(),
-					w.is_valid() ? int(w->get_string(1).to_int()) : 400, body.to_lower().contains("italic") });
+					minimum, maximum, body.to_lower().contains("italic") });
 		}
 	}
 }
@@ -36,7 +68,7 @@ void HCSRNewestText::add_stylesheet(const String &css, const String &base) {
 Ref<Font> HCSRNewestText::resolve(const String &family, int weight, bool italic) {
 	String key = uitos(configuration) + "|" + family + "|" + itos(weight) + "|" + itos(italic);
 	for (const AuthorFace &face : authors) {
-		key += "|" + face.family + ":" + face.source;
+		key += "|" + face.family + ":" + face.source + ":" + itos(face.weight) + ":" + itos(face.maximum_weight) + ":" + itos(face.italic);
 	}
 	if (const Ref<Font> *cached = fonts.getptr(key)) {
 		return *cached;
@@ -50,7 +82,7 @@ Ref<Font> HCSRNewestText::resolve(const String &family, int weight, bool italic)
 						: name == "monospace"													? "Consolas"
 																								: name);
 		for (const AuthorFace &face : authors) {
-			if (face.family == name.to_lower() && (!selected || std::abs(face.weight - weight) + (face.italic != italic ? 1000 : 0) < std::abs(selected->weight - weight) + (selected->italic != italic ? 1000 : 0))) {
+			if (face.family == name.to_lower() && (!selected || weight_rank(weight, face.weight, face.maximum_weight) + (face.italic != italic ? 10000 : 0) <= weight_rank(weight, selected->weight, selected->maximum_weight) + (selected->italic != italic ? 10000 : 0))) {
 				selected = &face;
 			}
 		}
@@ -88,9 +120,15 @@ Ref<Font> HCSRNewestText::resolve(const String &family, int weight, bool italic)
 		variation.instantiate();
 		variation->set_base_font(file);
 		Dictionary axes;
-		axes["wght"] = weight;
-		axes["ital"] = italic ? 1 : 0;
+		TextServer *ts = TextServerManager::get_singleton()->get_primary_interface().ptr();
+		axes[ts->name_to_tag("weight")] = CLAMP(weight, selected->weight, selected->maximum_weight);
+		axes[ts->name_to_tag("italic")] = italic ? 1 : 0;
 		variation->set_variation_opentype(axes);
+		// Keep shaping and rasterization on the same synthesized FontVariation RID.
+		// Real bold faces and ranges containing bold must never be emboldened twice.
+		if (weight >= 600 && selected->maximum_weight < 600) {
+			variation->set_variation_embolden(0.5f);
+		}
 		resolved.push_back(variation);
 	}
 	resolved.push_back(fallback);
