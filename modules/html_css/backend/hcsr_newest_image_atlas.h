@@ -35,7 +35,16 @@ class HCSRNewestImageAtlas {
 	struct Batch {
 		int page;
 		uint32_t first, count;
+		uint32_t kind = 0, depth = 0;
+		float opacity = 1;
+        Rect2 bounds;
 	};
+    struct GroupTarget { RID texture, framebuffer, uniform; Size2i size; };
+    struct GroupPool { RID output; Vector<GroupTarget> targets; };
+    Vector<GroupPool> group_pools;
+    uint32_t group_depth = 0;
+    uint64_t group_allocations = 0;
+    void release_groups(RenderingDevice *device);
     struct GlyphKey {
         uint64_t face = 0;
         uint32_t glyph = 0, size = 0;

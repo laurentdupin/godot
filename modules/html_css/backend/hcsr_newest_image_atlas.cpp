@@ -1,5 +1,6 @@
 #include "hcsr_prepared_drawing.h"
 #include "hcsr_shader_sources.h"
+#include "hcsr_compositing.h"
 #include "hcsr_newest_image_atlas.h"
 #include "hcsr_image_codec.h"
 
@@ -282,9 +283,13 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
     }
 	vertices.clear();
 	batches.clear();
+	hcsr::render::compositing_plan group_plan;
+    std::string group_error;
+    if (!hcsr::render::plan_compositing(packet, group_plan, group_error)) return false;
+    group_depth = group_plan.depth;
 	uploaded = false;
-	bool has_images = false;
-	bool references_images = false;
+	bool has_images = group_depth > 0;
+	bool references_images = group_depth > 0;
 	for (size_t i = 0; i < packet.material_count; i++) {
 		references_images |= (packet.materials[i].kind == HCSR_MATERIAL_IMAGE || packet.materials[i].kind == HCSR_MATERIAL_GLYPH || packet.materials[i].kind == HCSR_MATERIAL_VERTEX_COLOR);
 	}
@@ -297,6 +302,7 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
     uint64_t emitted_count = 0;
     for (size_t i = 0; i < packet.draw_item_count; i++) {
         emitted_count += packet.draw_items[i].index_count;
+        if (group_plan.events[i].kind == HCSR_GROUP_END) emitted_count += 6;
         if (emitted_count > INT32_MAX) return false;
     }
     if (vertices.resize(int(emitted_count)) != OK) return false;
@@ -305,6 +311,20 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
 	for (size_t i = 0; i < packet.draw_item_count; i++) {
 		const hcsr_draw_item_t &draw = packet.draw_items[i];
 		const hcsr_material_t &material = packet.materials[draw.material_index];
+        const auto group = group_plan.events[i];
+        if (group.kind) {
+            batches.push_back({0,written,group.kind==HCSR_GROUP_END ? 6u : 0u,group.kind,group.depth,group.opacity,
+                Rect2(group.bounds.x/packet.viewport_width,group.bounds.y/packet.viewport_height,group.bounds.width/packet.viewport_width,group.bounds.height/packet.viewport_height)});
+            if (group.kind==HCSR_GROUP_END) {
+                const Vector2 corners[] = {{0,0},{1,0},{1,1},{0,0},{1,1},{0,1}};
+                for (const auto &corner: corners) {
+                    Vertex v={}; v.position_uv[0]=corner.x*2-1; v.position_uv[1]=corner.y*2-1;
+                    v.position_uv[2]=corner.x; v.position_uv[3]=corner.y;
+                    v.tint[3]=group.opacity; v.bounds[0]=-3; vertex_data[written++]=v;
+                }
+            }
+            continue;
+        }
 		if (material.payload_size < sizeof(hcsr_area_grayscale_material_t) || material.payload_offset > packet.material_payload_size || material.payload_size > packet.material_payload_size - material.payload_offset) {
 			return false;
 		}
@@ -356,7 +376,7 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
 		has_images |= entry.page >= 0 || material.kind == HCSR_MATERIAL_VERTEX_COLOR;
 		// Solid grayscale draws do not sample the atlas and can stay in the current batch.
         const int page = entry.page >= 0 ? entry.page : (batches.is_empty() ? 0 : batches[batches.size() - 1].page);
-		if (batches.is_empty() || batches[batches.size() - 1].page != page) {
+		if (batches.is_empty() || batches[batches.size() - 1].page != page || batches[batches.size() - 1].kind) {
 			batches.push_back({ page, written, 0 });
 		}
 		batches.write[batches.size() - 1].count += draw.index_count;
@@ -429,6 +449,7 @@ bool HCSRNewestImageAtlas::upload(RenderingDevice *device) {
 			page.uniform = RID();
 		}
 		if (buffer.is_valid()) {
+			release_groups(device);
 			device->free_rid(buffer);
 		}
 		buffer_capacity = MAX(bytes, 65536u);
@@ -516,10 +537,57 @@ bool HCSRNewestImageAtlas::draw(RenderingDevice *device, RID target, const Color
 		device->free_rid(framebuffer);
 		return false;
 	}
-	const RD::DrawListID list = device->draw_list_begin(framebuffer, RD::DRAW_CLEAR_COLOR_ALL, VectorView(&background, 1));
+    const auto format = device->texture_get_format(target);
+    const Size2i size(format.width,format.height);
+    int pool_index=-1;
+    for(int i=group_pools.size()-1;i>=0;--i) {
+        if(!device->texture_is_valid(group_pools[i].output)) {
+            for(const auto &group:group_pools[i].targets)
+                for(RID rid:{group.uniform,group.framebuffer,group.texture}) if(rid.is_valid()) device->free_rid(rid);
+            group_pools.remove_at(i);
+        }
+    }
+    for(int i=0;i<group_pools.size();++i) if(group_pools[i].output==target) pool_index=i;
+    if(pool_index<0) { pool_index=group_pools.size(); GroupPool pool; pool.output=target; group_pools.push_back(pool); }
+    auto &group_targets=group_pools.write[pool_index].targets;
+    while (group_targets.size()<int(group_depth)) {
+        GroupTarget group;
+        auto layer_format=format;
+        layer_format.usage_bits=RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT;
+        group.texture=device->texture_create(layer_format,RD::TextureView()); group.size=size;
+        if (!group.texture.is_valid()) { device->free_rid(framebuffer); return false; }
+        Vector<RID> layers; layers.push_back(group.texture);
+        group.framebuffer=device->framebuffer_create(layers);
+        Vector<RD::Uniform> uniforms;
+        RD::Uniform image; image.uniform_type=RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE; image.binding=0;
+        image.append_id(sampler); image.append_id(group.texture); uniforms.push_back(image);
+        RD::Uniform storage; storage.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER; storage.binding=1;
+        storage.append_id(buffer); uniforms.push_back(storage);
+        group.uniform=device->uniform_set_create(VectorView(uniforms.ptr(),uniforms.size()),shader,0);
+        group_targets.push_back(group);
+        ++group_allocations;
+        if (!group.framebuffer.is_valid() || !group.uniform.is_valid()) { release_groups(device); device->free_rid(framebuffer); return false; }
+    }
+	RD::DrawListID list = device->draw_list_begin(framebuffer, RD::DRAW_CLEAR_COLOR_ALL, VectorView(&background, 1));
 	device->draw_list_bind_render_pipeline(list, pipeline);
 	for (const Batch &batch : batches) {
-		device->draw_list_bind_uniform_set(list, pages[batch.page].uniform, 0);
+        if (batch.kind) {
+            device->draw_list_end();
+            const Color transparent(0,0,0,0);
+            const Vector2 lower=(batch.bounds.position*Vector2(size)).floor();
+            const Vector2 upper=((batch.bounds.position+batch.bounds.size)*Vector2(size)).ceil();
+            const Rect2 region=upper.x>lower.x && upper.y>lower.y ? Rect2(lower,upper-lower) : Rect2(0,0,1,1);
+            RID destination = batch.kind==HCSR_GROUP_BEGIN ? group_targets[batch.depth-1].framebuffer
+                    : batch.depth==1 ? framebuffer : group_targets[batch.depth-2].framebuffer;
+            list=device->draw_list_begin(destination,batch.kind==HCSR_GROUP_BEGIN ? RD::DRAW_CLEAR_COLOR_ALL : 0,VectorView(&transparent,1),1,0,
+                batch.kind==HCSR_GROUP_BEGIN ? region : Rect2());
+            device->draw_list_set_viewport(list,Rect2i(Vector2i(),size));
+            device->draw_list_bind_render_pipeline(list,pipeline);
+            if (batch.kind==HCSR_GROUP_BEGIN) continue;
+            device->draw_list_enable_scissor(list,region);
+        }
+		else device->draw_list_disable_scissor(list);
+		device->draw_list_bind_uniform_set(list, batch.kind==HCSR_GROUP_END ? group_targets[batch.depth-1].uniform : pages[batch.page].uniform, 0);
 		const uint32_t push[] = { batch.first, 0, 0, 0 };
 		device->draw_list_set_push_constant(list, push, sizeof(push));
 		device->draw_list_draw(list, false, 1, batch.count);
@@ -529,7 +597,14 @@ bool HCSRNewestImageAtlas::draw(RenderingDevice *device, RID target, const Color
 	return true;
 }
 
+void HCSRNewestImageAtlas::release_groups(RenderingDevice *device) {
+    if (device) for(const auto &pool:group_pools) for (const auto &group : pool.targets)
+        for (RID rid : {group.uniform,group.framebuffer,group.texture}) if (rid.is_valid()) device->free_rid(rid);
+    group_pools.clear();
+}
+
 void HCSRNewestImageAtlas::release(RenderingDevice *device) {
+    release_groups(device);
 	if (device) {
 		for (const Page &page : pages) {
 			if (page.uniform.is_valid()) {
@@ -571,6 +646,7 @@ static Vector4 read_atlas(const Ref<Image> &atlas, const Vector2i &p) {
 #define HCSR_FLOOR(p) (p).floor()
 #define HCSR_MIX(a,b,t) (a).lerp((b),(t))
 #define HCSR_FETCH(p) read_atlas(atlas,p)
+#define HCSR_GROUP_FETCH(uv,tint) read_atlas(atlas,Vector2i((uv)*Vector2(atlas->get_size())))
 #define HCSR_DISCARD return Vector4()
 #include "hcsr_paint_shader.inc"
 #undef HCSR_F2
@@ -583,13 +659,31 @@ static Vector4 read_atlas(const Ref<Image> &atlas, const Vector2i &p) {
 #undef HCSR_FLOOR
 #undef HCSR_MIX
 #undef HCSR_FETCH
+#undef HCSR_GROUP_FETCH
 #undef HCSR_DISCARD
 }
 
 void HCSRNewestImageAtlas::draw_cpu(Ref<Image> target, const Color &background) {
 	target->fill(background);
 	const Vector2 size = target->get_size();
+    Vector<Ref<Image>> parents;
 	for (const Batch &batch : batches) {
+        if (batch.kind==HCSR_GROUP_BEGIN) {
+            parents.push_back(target);
+            target=Image::create_empty(int(size.x),int(size.y),false,Image::FORMAT_RGBA8);
+            target->fill(Color(0,0,0,0));
+            continue;
+        }
+        if (batch.kind==HCSR_GROUP_END) {
+            Ref<Image> parent=parents[parents.size()-1]; parents.resize(parents.size()-1);
+            for (int y=0;y<int(size.y);++y) for(int x=0;x<int(size.x);++x) {
+                Color color=target->get_pixel(x,y)*batch.opacity;
+                Color under=parent->get_pixel(x,y);
+                parent->set_pixel(x,y,color+under*(1-color.a));
+            }
+            target=parent;
+            continue;
+        }
 		for (uint32_t i = batch.first; i < batch.first + batch.count; i += 3) {
 			const Vertex &a = vertices[i], &b = vertices[i + 1], &c = vertices[i + 2];
 			auto position = [&](const Vertex &v) { return (Vector2(v.position_uv[0], v.position_uv[1]) + Vector2(1, 1)) * .5f * size; };
@@ -648,5 +742,11 @@ Dictionary HCSRNewestImageAtlas::get_statistics() const {
 	result["uploaded_bytes"] = uploaded_bytes;
 	result["page_size"] = PAGE_SIZE;
 	result["draw_batches"] = batches.size();
+    result["opacity_group_depth"] = group_depth;
+    int groups=0; for(const auto &batch:batches) if(batch.kind==HCSR_GROUP_BEGIN) ++groups;
+    result["opacity_groups"] = groups;
+    uint64_t bytes=0; for(const auto &pool:group_pools) for(const auto &group:pool.targets) bytes+=uint64_t(group.size.x)*group.size.y*4;
+    result["opacity_target_bytes"] = bytes;
+    result["opacity_target_allocations"] = group_allocations;
 	return result;
 }
