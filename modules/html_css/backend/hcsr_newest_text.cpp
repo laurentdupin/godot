@@ -148,6 +148,50 @@ int32_t HCSR_CALL HCSRNewestText::callback(void *user, const hcsr_shape_request_
 	return static_cast<HCSRNewestText *>(user)->shape(*request, *result);
 }
 
+void HCSRNewestText::cache_font_metrics(const Ref<Font> &font, int weight) {
+	const TypedArray<RID> rids = font->get_rids();
+	if (rids.is_empty()) {
+		return;
+	}
+	const RID rid = rids[0];
+	if (font_metrics.has(rid)) {
+		return;
+	}
+	// Keep Godot's glyph IDs/shaping and atlas. Only the unrounded CSS metrics
+	// come from the same codec used by the interactive host, once per font RID.
+	Ref<Font> base = font;
+	while (base.is_valid()) {
+		Ref<FontVariation> variation = base;
+		Ref<SystemFont> system = base;
+		if (variation.is_valid()) {
+			base = variation->_get_base_font_or_default();
+		} else if (system.is_valid()) {
+			base = system->_get_base_font_or_default();
+		} else {
+			break;
+		}
+	}
+	hcsr_font_metrics metrics = {};
+	Ref<FontFile> file = base;
+	if (file.is_valid()) {
+		const PackedByteArray data = file->get_data();
+		hcsr_font_face_id face = 0;
+		TextServer *ts = TextServerManager::get_singleton()->get_primary_interface().ptr();
+		if (hcsr_font_register(data.ptr(), data.size(), ts->font_get_face_index(rid), &face)) {
+			hcsr_font_get_metrics_variation(face, 1024, weight, &metrics);
+			hcsr_font_unregister(face);
+			metrics.ascent /= 1024;
+			metrics.descent /= 1024;
+			metrics.line_gap /= 1024;
+			metrics.x_height /= 1024;
+		}
+	}
+	font_metrics.insert(rid, metrics);
+	for (const Ref<Font> &fallback : font->get_fallbacks()) {
+		cache_font_metrics(fallback, weight);
+	}
+}
+
 int HCSRNewestText::shape(const hcsr_shape_request_t &request, hcsr_shape_result_t &result) {
 	TextServer *ts = TextServerManager::get_singleton()->get_primary_interface().ptr();
 	Ref<Font> font = resolve(decode(request.family), request.weight, request.italic != 0);
@@ -166,6 +210,9 @@ int HCSRNewestText::shape(const hcsr_shape_request_t &request, hcsr_shape_result
 		ts->free_rid(shaped);
 		return 0;
 	}
+	cache_font_metrics(font, request.weight);
+	float ascent = 0, descent = 0, gap = 0, x_height = request.size * .5f;
+	RID previous_metrics_rid;
 	Vector<int> utf16;
 	utf16.resize(text.length() + 1);
 	int offset = 0;
@@ -181,6 +228,23 @@ int HCSRNewestText::shape(const hcsr_shape_request_t &request, hcsr_shape_result
 		if (!g.font_rid.is_valid()) {
 			continue;
 		}
+		if (g.font_rid != previous_metrics_rid) {
+			const hcsr_font_metrics *metrics = font_metrics.getptr(g.font_rid);
+			if (metrics && metrics->ascent + metrics->descent > 0) {
+				ascent = MAX(ascent, metrics->ascent * request.size);
+				descent = MAX(descent, metrics->descent * request.size);
+				gap = MAX(gap, metrics->line_gap * request.size);
+				if (!previous_metrics_rid.is_valid() && metrics->x_height > 0) {
+					x_height = metrics->x_height * request.size;
+				}
+			} else {
+				// Godot can select an implicit system fallback whose bytes are not
+				// exposed by Font. Preserve its metrics rather than using another face.
+				ascent = MAX(ascent, (float)ts->font_get_ascent(g.font_rid, 64) * scale);
+				descent = MAX(descent, (float)ts->font_get_descent(g.font_rid, 64) * scale);
+			}
+			previous_metrics_rid = g.font_rid;
+		}
 		Vector2 origin = ts->font_get_glyph_offset(g.font_rid, Vector2i(64, 0), g.index) * scale;
 		Vector2 size = ts->font_get_glyph_size(g.font_rid, Vector2i(64, 0), g.index) * scale;
 		for (int repeat = 0; repeat < g.repeat; repeat++) {
@@ -188,8 +252,7 @@ int HCSRNewestText::shape(const hcsr_shape_request_t &request, hcsr_shape_result
 					g.x_off * scale, g.y_off * scale, g.advance * scale, 0, origin.x, origin.y, size.x, size.y });
 		}
 	}
-	result = { scratch.ptr(), (size_t)scratch.size(), (float)ts->shaped_text_get_ascent(shaped) * scale,
-		(float)ts->shaped_text_get_descent(shaped) * scale, 0, request.size * .5f };
+	result = { scratch.ptr(), (size_t)scratch.size(), ascent, descent, gap, x_height };
 	ts->free_rid(shaped);
 	return 1;
 }

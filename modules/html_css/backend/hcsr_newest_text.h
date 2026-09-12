@@ -2,6 +2,7 @@
 
 #include "../html_document.h"
 #include "hcsr_scene.h"
+#include "hcsr_font_engine.h"
 
 #include "scene/resources/font.h"
 
@@ -17,6 +18,8 @@ class HCSRNewestText {
 	Vector<AuthorFace> authors;
 	HashMap<String, Ref<Font>> fonts;
 	HashMap<String, Ref<FontFile>> face_files;
+	HashMap<RID, hcsr_font_metrics> font_metrics;
+	void cache_font_metrics(const Ref<Font> &font, int weight);
 	uint64_t configuration = 0;
 	Vector<hcsr_shaped_glyph_t> scratch;
 	Ref<Font> resolve(const String &family, int weight, bool italic);
