@@ -1,4 +1,5 @@
 #include "hcsr_prepared_drawing.h"
+#include "hcsr_shader_sources.h"
 #include "hcsr_newest_image_atlas.h"
 #include "hcsr_image_codec.h"
 
@@ -376,16 +377,14 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
             Vertex vertex = {};
             vertex.position_uv[0] = prepared.x;
             vertex.position_uv[1] = -prepared.y; // Godot render-target convention.
-            vertex.position_uv[2] = prepared.u / PAGE_SIZE;
-            vertex.position_uv[3] = prepared.v / PAGE_SIZE;
+            vertex.position_uv[2] = prepared.u;
+            vertex.position_uv[3] = prepared.v;
             vertex.tint[0] = prepared.red; vertex.tint[1] = prepared.green;
             vertex.tint[2] = prepared.blue; vertex.tint[3] = prepared.alpha;
-            vertex.bounds[0] = prepared.left < 0 ? prepared.left : prepared.left / PAGE_SIZE;
-            vertex.bounds[1] = prepared.top / PAGE_SIZE;
-            vertex.bounds[2] = prepared.right / PAGE_SIZE;
-            vertex.bounds[3] = prepared.bottom / PAGE_SIZE;
-            // The Godot shader packs the atlas sampling mode into tint.r.
-            if (textured) vertex.tint[0] = is_glyph && !entry.color_glyph ? -2 - prepared.red : -1;
+            vertex.bounds[0] = prepared.left;
+            vertex.bounds[1] = prepared.top;
+            vertex.bounds[2] = prepared.right;
+            vertex.bounds[3] = prepared.bottom;
             vertex_data[written++] = vertex;
         }
 	}
@@ -400,34 +399,7 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
 bool HCSRNewestImageAtlas::upload(RenderingDevice *device) {
 	using RD = RenderingDevice;
 	if (!shader.is_valid()) {
-		const char *sources[] = {
-			R"(#version 450
-layout(set=0,binding=1,std430) readonly buffer Vertices { vec4 data[]; };
-layout(push_constant,std430) uniform Params { uint first; uint p1; uint p2; uint p3; } params;
-layout(location=0) out vec2 uv;
-layout(location=1) out vec4 tint;
-layout(location=2) out vec4 bounds;
-void main() {
-    uint i = (uint(gl_VertexIndex) + params.first) * 3u;
-    vec4 vertex = data[i];
-    gl_Position = vec4(vertex.xy, 0.0, 1.0);
-    uv = vertex.zw; tint = data[i+1u]; bounds = data[i+2u];
-})",
-			R"(#version 450
-layout(set=0,binding=0) uniform sampler2D atlas;
-layout(location=0) in vec2 uv;
-layout(location=1) in vec4 tint;
-layout(location=2) in vec4 bounds;
-layout(location=0) out vec4 color;
-void main() {
-    if (bounds.x == -2.0) { color=tint; if(color.a>0.0)color.rgb/=color.a; }
-    else if (tint.r < 0.0) {
-        if (any(lessThan(uv,bounds.xy)) || any(greaterThan(uv,bounds.zw))) discard;
-        color = texture(atlas, uv); color.a *= tint.a;
-        if (tint.r <= -2.0) color.rgb *= vec3(-tint.r - 2.0, tint.g, tint.b);
-    } else color = tint;
-})"
-		};
+        const char *sources[] = { hcsr::shaders::godot_vertex, hcsr::shaders::godot_fragment };
 		Vector<RD::ShaderStageSPIRVData> stages;
 		for (int i = 0; i < 2; i++) {
 			RD::ShaderStageSPIRVData stage;
@@ -583,6 +555,37 @@ void HCSRNewestImageAtlas::release(RenderingDevice *device) {
 	buffer_capacity = 0;
 }
 
+// Compile the same paint program used by the GPU adapters for the CPU path.
+namespace hcsr_cpu_paint {
+static Vector4 read_atlas(const Ref<Image> &atlas, const Vector2i &p) {
+    const Color c = atlas->get_pixel(p.x, p.y);
+    return Vector4(c.r, c.g, c.b, c.a);
+}
+#define HCSR_F2 Vector2
+#define HCSR_F4 Vector4
+#define HCSR_I2 Vector2i
+#define HCSR_INLINE inline
+#define HCSR_CONTEXT const Ref<Image> &atlas,
+#define HCSR_ARGS atlas,
+#define HCSR_CLAMP CLAMP
+#define HCSR_FLOOR(p) (p).floor()
+#define HCSR_MIX(a,b,t) (a).lerp((b),(t))
+#define HCSR_FETCH(p) read_atlas(atlas,p)
+#define HCSR_DISCARD return Vector4()
+#include "hcsr_paint_shader.inc"
+#undef HCSR_F2
+#undef HCSR_F4
+#undef HCSR_I2
+#undef HCSR_INLINE
+#undef HCSR_CONTEXT
+#undef HCSR_ARGS
+#undef HCSR_CLAMP
+#undef HCSR_FLOOR
+#undef HCSR_MIX
+#undef HCSR_FETCH
+#undef HCSR_DISCARD
+}
+
 void HCSRNewestImageAtlas::draw_cpu(Ref<Image> target, const Color &background) {
 	target->fill(background);
 	const Vector2 size = target->get_size();
@@ -616,21 +619,14 @@ void HCSRNewestImageAtlas::draw_cpu(Ref<Image> target, const Color &background) 
 					if ((wa == 0 && !owns_edge(q, r)) || (wb == 0 && !owns_edge(r, p)) || (wc == 0 && !owns_edge(p, q))) {
 						continue;
 					}
-					Color color(a.tint[0], a.tint[1], a.tint[2], a.tint[3]);
-                    if (a.bounds[0] == -2) {
-                        color = Color(a.tint[0],a.tint[1],a.tint[2],a.tint[3])*wa + Color(b.tint[0],b.tint[1],b.tint[2],b.tint[3])*wb + Color(c.tint[0],c.tint[1],c.tint[2],c.tint[3])*wc;
-                        if (color.a > 0) { color.r/=color.a; color.g/=color.a; color.b/=color.a; }
-                    }
-					if (a.tint[0] < 0) {
-						const float u = a.position_uv[2] * wa + b.position_uv[2] * wb + c.position_uv[2] * wc;
-						const float v = a.position_uv[3] * wa + b.position_uv[3] * wb + c.position_uv[3] * wc;
-						if (u < a.bounds[0] || v < a.bounds[1] || u > a.bounds[2] || v > a.bounds[3]) {
-							continue;
-						}
-						color = pages[batch.page].pixels->get_pixel(CLAMP(int(u * PAGE_SIZE), 0, PAGE_SIZE - 1), CLAMP(int(v * PAGE_SIZE), 0, PAGE_SIZE - 1));
-						color.a *= a.tint[3];
-                        if (a.tint[0] <= -2) { color.r *= -a.tint[0] - 2; color.g *= a.tint[1]; color.b *= a.tint[2]; }
-					}
+                    const Vector4 tint = Vector4(a.tint[0],a.tint[1],a.tint[2],a.tint[3])*wa
+                            + Vector4(b.tint[0],b.tint[1],b.tint[2],b.tint[3])*wb
+                            + Vector4(c.tint[0],c.tint[1],c.tint[2],c.tint[3])*wc;
+                    const Vector2 uv(a.position_uv[2]*wa+b.position_uv[2]*wb+c.position_uv[2]*wc,
+                            a.position_uv[3]*wa+b.position_uv[3]*wb+c.position_uv[3]*wc);
+                    const Vector4 shaded = hcsr_cpu_paint::hcsr_shade(pages[batch.page].pixels, uv, tint,
+                            Vector4(a.bounds[0],a.bounds[1],a.bounds[2],a.bounds[3]));
+                    const Color color(shaded.x,shaded.y,shaded.z,shaded.w);
 					const Color under = target->get_pixel(x, y);
 					target->set_pixel(x, y, Color(color.r * color.a + under.r * (1 - color.a), color.g * color.a + under.g * (1 - color.a), color.b * color.a + under.b * (1 - color.a), color.a + under.a * (1 - color.a)));
 				}

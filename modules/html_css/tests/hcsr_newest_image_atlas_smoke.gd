@@ -96,14 +96,19 @@ func run() -> void:
     await settle()
     check_pixels(large.texture.get_image(), true)
     if "--pages" in OS.get_cmdline_user_args():
-        require(view.set_element_attribute("first", "src", png(Color.YELLOW,4094,4094)) == OK, "second page")
-        require(view.set_element_attribute("svg", "src", png(Color.MAGENTA,4094,4094)) == OK, "third page")
+        # Keep full-size image geometry inside small clips. Small displayed
+        # images legitimately select reduced cache levels and do not fill pages.
+        # Both outputs stay at >=1 device scale to avoid creating reduced copies.
+        small.size = Vector2i(640,400)
+        doc.html = "<style>html,body{margin:0;width:100%%;height:100%%}.clip{position:absolute;top:10px;width:80px;height:80px;overflow:hidden}.clip img{width:4094px;height:4094px}#a{left:10px}#b{left:200px}#reuse{position:absolute;left:110px;top:110px;width:40px;height:40px}</style><div class='clip' id='a'><img src='%s'></div><div class='clip' id='b'><img src='%s'></div><img id='reuse' src='%s'>" % [png(Color.YELLOW,4094,4094),png(Color.MAGENTA,4094,4094),red]
         await settle()
         var output := small.texture.get_image()
-        var yellow := output.get_pixel(10,20)
-        var magenta := output.get_pixel(110,15)
+        var yellow := output.get_pixel(40,80)
+        var magenta := output.get_pixel(440,60)
+        var reused := output.get_pixel(240,240)
         require(yellow.r > .9 and yellow.g > .9 and yellow.b < .1, "second atlas page sampling")
         require(magenta.r > .9 and magenta.b > .9 and magenta.g < .1, "third atlas page sampling")
+        require(reused.r > .9 and reused.g < .1, "switch back to original atlas page")
         stats = view.get_frame_scheduler_diagnostics().frame_synchronization.image_atlas
         require(int(stats.pages) == 3 and int(stats.draw_batches) >= 3, "page overflow and ordered batches: " + str(stats))
     stats = view.get_frame_scheduler_diagnostics().frame_synchronization.image_atlas
