@@ -78,8 +78,14 @@ Ref<Font> HCSRNewestText::resolve(const String &family, int weight, bool italic)
 	for (const String &part : family.split(",")) {
 		const AuthorFace *selected = nullptr;
 		String name = part.strip_edges().unquote();
-		names.push_back(name == "sans-serif" || name == "system-ui" ? "Arial" : name == "serif" ? "Times New Roman"
-						: name == "monospace"													? "Consolas"
+		String generic = name.to_lower();
+#ifdef WINDOWS_ENABLED
+		if (generic == "system-ui") {
+			names.push_back("Segoe UI");
+		} else
+#endif
+		names.push_back(generic == "sans-serif" || generic == "system-ui" ? "Arial" : generic == "serif" ? "Times New Roman"
+						: generic == "monospace"													? "Consolas"
 																								: name);
 		for (const AuthorFace &face : authors) {
 			if (face.family == name.to_lower() && (!selected || weight_rank(weight, face.weight, face.maximum_weight) + (face.italic != italic ? 10000 : 0) <= weight_rank(weight, selected->weight, selected->maximum_weight) + (selected->italic != italic ? 10000 : 0))) {
