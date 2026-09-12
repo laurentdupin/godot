@@ -51,8 +51,11 @@ func _run() -> void:
 	for y in range(0, 100, 4):
 		for x in range(0, 120, 4):
 			var gpu_pixel := canvas.get_pixel(140 + x, y)
-			direct += _difference(cpu_image.get_pixel(x, y), gpu_pixel)
-			flipped += _difference(cpu_image.get_pixel(x, 99 - y), gpu_pixel)
+			# Compare both textures after the same canvas sampling/compositing.
+			# Raw CPU pixels versus displayed GPU pixels conflate orientation
+			# with filtering and the canvas color/alpha conversion.
+			direct += _difference(canvas.get_pixel(x, y), gpu_pixel)
+			flipped += _difference(canvas.get_pixel(x, 99 - y), gpu_pixel)
 			variation += abs(cpu_image.get_pixel(x, y).r - cpu_image.get_pixel(0, 0).r)
 			samples += 1
 	direct /= samples

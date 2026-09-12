@@ -140,7 +140,7 @@ elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll") and env["platform"
             ("libhcsr_scene.so", "libhcsr_render_vulkan.so", "libhcsr_native_codecs.so")]
         newest_scene_library = newest_products[0]
     newest_stamp = os.path.join(newest_bundle_directory, ".godot_hcsr_newest_commit")
-    newest_commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=hcsr_newest_root, check=True, capture_output=True, text=True).stdout.strip()
+    newest_commit = subprocess.run([sys.executable, os.path.join(hcsr_newest_root, "tools", "hcsr-source-identity.py"), hcsr_newest_root], check=True, capture_output=True, text=True).stdout.strip()
     newest_is_current = all(os.path.isfile(path) for path in newest_products)
     if env["platform"] == "macos" and env.get("metal", False):
         newest_is_current = newest_is_current and os.path.isfile(os.path.join(newest_bundle_directory, ".hcsr_metal_backend_v1"))
@@ -210,7 +210,7 @@ elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll"):
         newest_products += [newest_scene_runtime, newest_d3d12_runtime, newest_vulkan_runtime]
     newest_stamp = os.path.join(newest_bundle_directory, ".godot_hcsr_newest_commit")
     newest_commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=hcsr_newest_root, check=True, capture_output=True, text=True
+        [sys.executable, os.path.join(hcsr_newest_root, "tools", "hcsr-source-identity.py"), hcsr_newest_root], check=True, capture_output=True, text=True
     ).stdout.strip()
     newest_is_current = all(os.path.isfile(path) for path in newest_products)
     if newest_is_current and os.path.isfile(newest_stamp):
@@ -235,8 +235,10 @@ elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll"):
         if completed.returncode != 0 or not all(os.path.isfile(path) for path in newest_products):
             print("HTML/CSS hcsr_newest bundle build failed.")
             Exit(1)
-        with open(newest_stamp, "w", encoding="utf-8") as stamp_file:
-            stamp_file.write(newest_commit + "\n")
+        with open(newest_stamp, encoding="utf-8") as stamp_file:
+            if stamp_file.read().strip() != newest_commit:
+                print("HCSR source changed during bundle build; rerun SCons.")
+                Exit(1)
     newest_defines = ["HTML_CSS_USE_HCSR_NEWEST"]
     if env.get("d3d12", False):
         newest_defines += ["HTML_CSS_HCSR_NEWEST_D3D12"]

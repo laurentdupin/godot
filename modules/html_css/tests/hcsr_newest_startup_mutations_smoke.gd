@@ -104,6 +104,24 @@ func run() -> void:
             check(pixel.r > .8 and pixel.g > .8 and pixel.b < .2, "live document update was lost")
             print("LIVE_DOCUMENT_MUTATION_OK")
         await dispose(view)
+    # A live ABI queue exposes pending values; a document replacement instead
+    # queues in the wrapper. Neither may elide the final A in A -> B -> A.
+    var form_view := new_view()
+    var form_html := "<input id='value' value='A'><input id='checked' type='checkbox'>"
+    form_view.document.html = form_html
+    for i in 8: await process_frame
+    for replace_document in [false, true]:
+        if replace_document:
+            form_view.document.html = form_html + "<!--replacement-->"
+        check(form_view.set_form_control_value("value", "B") == OK, "queued form B rejected")
+        check(form_view.set_form_control_value("value", "A") == OK, "queued form A rejected")
+        check(form_view.set_form_control_checked("checked", true) == OK, "queued checked true rejected")
+        check(form_view.set_form_control_checked("checked", false) == OK, "queued checked false rejected")
+        for i in 8: await process_frame
+        check(form_view.get_form_control_state("value").get("value", "missing") == "A", "last ordered value was elided")
+        check(not form_view.get_form_control_state("checked").get("checked", true), "last ordered checked state was elided")
+    await dispose(form_view)
+    print("FORM_WRITE_ORDER_OK live=true replacement=true")
     var invalid_view := new_view()
     check(invalid_view.set_element_inner_html("missing-target", "invalid") == OK, "deferred validation should accept input")
     for i in 20: await process_frame

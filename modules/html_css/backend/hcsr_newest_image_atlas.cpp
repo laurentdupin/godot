@@ -1,3 +1,4 @@
+#include "hcsr_prepared_drawing.h"
 #include "hcsr_newest_image_atlas.h"
 #include "hcsr_image_codec.h"
 
@@ -358,34 +359,35 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
 			batches.push_back({ page, written, 0 });
 		}
 		batches.write[batches.size() - 1].count += draw.index_count;
-		for (uint32_t j = 0; j < draw.index_count; j++) {
-			const auto &v = packet.vertices[packet.indices[draw.first_index + j]];
-			Vertex vertex = {};
-			vertex.position_uv[0] = v.screen_x / packet.viewport_width * 2 - 1;
-			vertex.position_uv[1] = v.screen_y / packet.viewport_height * 2 - 1;
-			vertex.tint[0] = vertex.tint[1] = vertex.tint[2] = area.luminance;
-			vertex.tint[3] = area.opacity;
-			if (entry.page >= 0 && destination.size.x > 0 && destination.size.y > 0) {
-				const Vector2 uv = (Vector2(v.local_x, v.local_y) - destination.position) / destination.size;
-				vertex.position_uv[2] = (entry.rect.position.x + uv.x * entry.rect.size.x) / PAGE_SIZE;
-				vertex.position_uv[3] = (entry.rect.position.y + uv.y * entry.rect.size.y) / PAGE_SIZE;
-				vertex.tint[0] = is_glyph && !entry.color_glyph ? -2 - glyph.red : -1;
-                if (is_glyph) { vertex.tint[1] = glyph.green; vertex.tint[2] = glyph.blue; vertex.tint[3] *= glyph.alpha; }
-				vertex.bounds[0] = float(entry.rect.position.x) / PAGE_SIZE;
-				vertex.bounds[1] = float(entry.rect.position.y) / PAGE_SIZE;
-				vertex.bounds[2] = float(entry.rect.get_end().x) / PAGE_SIZE;
-				vertex.bounds[3] = float(entry.rect.get_end().y) / PAGE_SIZE;
-			}
-            if (material.kind == HCSR_MATERIAL_VERTEX_COLOR) {
-                const uint32_t rgb = uint32_t(v.local_x);
-                vertex.tint[0] = float((rgb >> 16) & 255) / 255;
-                vertex.tint[1] = float((rgb >> 8) & 255) / 255;
-                vertex.tint[2] = float(rgb & 255) / 255;
-                vertex.tint[3] = v.local_y;
-                vertex.bounds[0] = -2;
-            }
-			vertex_data[written++] = vertex;
-		}
+        hcsr_atlas_glyph_material_t resolved = {};
+        const bool textured = entry.page >= 0 && destination.size.x > 0 && destination.size.y > 0;
+        if (textured) {
+            resolved.local_rect = { destination.position.x, destination.position.y, destination.size.x, destination.size.y };
+            resolved.atlas_rect = { float(entry.rect.position.x), float(entry.rect.position.y), float(entry.rect.size.x), float(entry.rect.size.y) };
+            resolved.red = is_glyph && !entry.color_glyph ? glyph.red : 1;
+            resolved.green = is_glyph && !entry.color_glyph ? glyph.green : 1;
+            resolved.blue = is_glyph && !entry.color_glyph ? glyph.blue : 1;
+            resolved.alpha = area.opacity * (is_glyph ? glyph.alpha : 1);
+        }
+        for (uint32_t j = 0; j < draw.index_count; j++) {
+            const auto &v = packet.vertices[packet.indices[draw.first_index + j]];
+            const auto prepared = hcsr::render::prepare_vertex(v, packet.viewport_width, packet.viewport_height,
+                    area, material.kind == HCSR_MATERIAL_VERTEX_COLOR, textured ? &resolved : nullptr);
+            Vertex vertex = {};
+            vertex.position_uv[0] = prepared.x;
+            vertex.position_uv[1] = -prepared.y; // Godot render-target convention.
+            vertex.position_uv[2] = prepared.u / PAGE_SIZE;
+            vertex.position_uv[3] = prepared.v / PAGE_SIZE;
+            vertex.tint[0] = prepared.red; vertex.tint[1] = prepared.green;
+            vertex.tint[2] = prepared.blue; vertex.tint[3] = prepared.alpha;
+            vertex.bounds[0] = prepared.left < 0 ? prepared.left : prepared.left / PAGE_SIZE;
+            vertex.bounds[1] = prepared.top / PAGE_SIZE;
+            vertex.bounds[2] = prepared.right / PAGE_SIZE;
+            vertex.bounds[3] = prepared.bottom / PAGE_SIZE;
+            // The Godot shader packs the atlas sampling mode into tint.r.
+            if (textured) vertex.tint[0] = is_glyph && !entry.color_glyph ? -2 - prepared.red : -1;
+            vertex_data[written++] = vertex;
+        }
 	}
     if (has_images && pages.is_empty()) {
         Page placeholder;

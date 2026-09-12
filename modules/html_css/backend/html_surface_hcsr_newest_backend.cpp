@@ -1416,7 +1416,10 @@ bool HTMLSurfaceHCSRNewestBackend::hit_test(const Point2 &p_position, HTMLElemen
 
 bool HTMLSurfaceHCSRNewestBackend::get_form_control_state(const StringName &p_id, HTMLFormControlState &r_state) {
 	MutexLock lock(state->mutex);
-	if (state->scene == 0) return false;
+	// The old scene is not authoritative while replacement and startup writes
+	// wait in the wrapper. In particular, do not elide an A -> B -> A write
+	// against the old scene's A value.
+	if (state->scene == 0 || state->document_dirty) return false;
 	const CharString id = String(p_id).utf8();
 	hcsr_form_control_state_t source;
 	initialize_abi(source);
