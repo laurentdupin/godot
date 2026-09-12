@@ -8,6 +8,7 @@
 
 #include "core/crypto/crypto_core.h"
 #include "core/io/xml_parser.h"
+#include "core/os/os.h"
 
 #include <cmath>
 #include "servers/text/text_server.h"
@@ -568,29 +569,64 @@ bool HCSRNewestImageAtlas::draw(RenderingDevice *device, RID target, const Color
         ++group_allocations;
         if (!group.framebuffer.is_valid() || !group.uniform.is_valid()) { release_groups(device); device->free_rid(framebuffer); return false; }
     }
+    auto region_for = [&](const Batch &batch) {
+        const auto area=hcsr::render::group_region({batch.bounds.position.x,batch.bounds.position.y,batch.bounds.size.x,batch.bounds.size.y},1,1,size.x,size.y);
+        return Rect2(area.x,area.y,area.width,area.height);
+    };
+    auto emit = [&](RD::DrawListID list, const Batch &batch) {
+        if(batch.kind==HCSR_GROUP_END) device->draw_list_enable_scissor(list,region_for(batch));
+        else device->draw_list_disable_scissor(list);
+        device->draw_list_bind_uniform_set(list,batch.kind==HCSR_GROUP_END ? group_targets[batch.depth-1].uniform : pages[batch.page].uniform,0);
+        const uint32_t push[]={batch.first,0,0,0};
+        device->draw_list_set_push_constant(list,push,sizeof(push));
+        device->draw_list_draw(list,false,1,batch.count);
+    };
+    std::vector<std::vector<size_t>> passes;
+    // Process-wide diagnostic override for paired profiling and pixel checks.
+    static const bool sequential_groups = OS::get_singleton()->get_environment("HCSR_SEQUENTIAL_OPACITY_GROUPS") == "1";
+    last_disjoint_groups=!sequential_groups && group_depth && hcsr::render::schedule_disjoint_groups(batches.size(),[&](size_t i) {
+        const auto &b=batches[i];
+        return hcsr::render::group_event{b.kind,b.depth,b.opacity,{b.bounds.position.x,b.bounds.position.y,b.bounds.size.x,b.bounds.size.y}};
+    },group_depth,1,1,size.x,size.y,passes);
+    last_render_passes=0;
+    if(last_disjoint_groups) {
+        for(int depth=int(group_depth);depth>=0;--depth) {
+            const Color clear=depth ? Color(0,0,0,0) : background;
+            Rect2 region;
+            bool first=true;
+            if(depth) for(const auto &batch:batches) if(batch.kind==HCSR_GROUP_BEGIN && batch.depth==uint32_t(depth)) {
+                const Rect2 next=region_for(batch);
+                region=first ? next : region.merge(next); first=false;
+            }
+            auto list=device->draw_list_begin(depth ? group_targets[depth-1].framebuffer : framebuffer,
+                RD::DRAW_CLEAR_COLOR_ALL,VectorView(&clear,1),1,0,region);
+            device->draw_list_set_viewport(list,Rect2i(Vector2i(),size));
+            device->draw_list_bind_render_pipeline(list,pipeline);
+            for(size_t i:passes[depth]) emit(list,batches[i]);
+            device->draw_list_end();
+            ++last_render_passes;
+        }
+        device->free_rid(framebuffer);
+        return true;
+    }
 	RD::DrawListID list = device->draw_list_begin(framebuffer, RD::DRAW_CLEAR_COLOR_ALL, VectorView(&background, 1));
+    ++last_render_passes;
 	device->draw_list_bind_render_pipeline(list, pipeline);
 	for (const Batch &batch : batches) {
         if (batch.kind) {
             device->draw_list_end();
             const Color transparent(0,0,0,0);
-            const Vector2 lower=(batch.bounds.position*Vector2(size)).floor();
-            const Vector2 upper=((batch.bounds.position+batch.bounds.size)*Vector2(size)).ceil();
-            const Rect2 region=upper.x>lower.x && upper.y>lower.y ? Rect2(lower,upper-lower) : Rect2(0,0,1,1);
+            const Rect2 region=region_for(batch);
             RID destination = batch.kind==HCSR_GROUP_BEGIN ? group_targets[batch.depth-1].framebuffer
                     : batch.depth==1 ? framebuffer : group_targets[batch.depth-2].framebuffer;
             list=device->draw_list_begin(destination,batch.kind==HCSR_GROUP_BEGIN ? RD::DRAW_CLEAR_COLOR_ALL : 0,VectorView(&transparent,1),1,0,
                 batch.kind==HCSR_GROUP_BEGIN ? region : Rect2());
+            ++last_render_passes;
             device->draw_list_set_viewport(list,Rect2i(Vector2i(),size));
             device->draw_list_bind_render_pipeline(list,pipeline);
             if (batch.kind==HCSR_GROUP_BEGIN) continue;
-            device->draw_list_enable_scissor(list,region);
         }
-		else device->draw_list_disable_scissor(list);
-		device->draw_list_bind_uniform_set(list, batch.kind==HCSR_GROUP_END ? group_targets[batch.depth-1].uniform : pages[batch.page].uniform, 0);
-		const uint32_t push[] = { batch.first, 0, 0, 0 };
-		device->draw_list_set_push_constant(list, push, sizeof(push));
-		device->draw_list_draw(list, false, 1, batch.count);
+        emit(list,batch);
 	}
 	device->draw_list_end();
 	device->free_rid(framebuffer);
@@ -688,31 +724,33 @@ void HCSRNewestImageAtlas::draw_cpu(Ref<Image> target, const Color &background) 
 			const Vertex &a = vertices[i], &b = vertices[i + 1], &c = vertices[i + 2];
 			auto position = [&](const Vertex &v) { return (Vector2(v.position_uv[0], v.position_uv[1]) + Vector2(1, 1)) * .5f * size; };
 			const Vector2 p = position(a), q = position(b), r = position(c);
-			const float denominator = (q - p).cross(r - p);
-			if (Math::is_zero_approx(denominator)) {
-				continue;
-			}
+            // Quantize once to a common subpixel grid. Exact edge equations make
+            // adjacent triangles agree on coverage, including reversed winding.
+            struct Point { int64_t x,y; };
+            auto fixed=[](Vector2 v) { return Point{int64_t(Math::round(v.x*256)),int64_t(Math::round(v.y*256))}; };
+            const Point fp=fixed(p),fq=fixed(q),fr=fixed(r);
+            auto edge=[](Point a,Point b,Point c) { return (b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x); };
+            const int64_t denominator=edge(fp,fq,fr);
+            if(!denominator) continue;
+            const int64_t sign=denominator>0 ? 1 : -1;
+            const double inverse=1.0/double(denominator*sign);
+            auto owns_edge=[&](Point a,Point b) {
+                const int64_t dx=(b.x-a.x)*sign,dy=(b.y-a.y)*sign;
+                return dy<0 || (dy==0 && dx>0);
+            };
+            const bool owns_a=owns_edge(fq,fr),owns_b=owns_edge(fr,fp),owns_c=owns_edge(fp,fq);
 			const int left = MAX(0, (int)Math::floor(MIN(p.x, MIN(q.x, r.x))));
 			const int top = MAX(0, (int)Math::floor(MIN(p.y, MIN(q.y, r.y))));
 			const int right = MIN(target->get_width(), (int)Math::ceil(MAX(p.x, MAX(q.x, r.x))));
 			const int bottom = MIN(target->get_height(), (int)Math::ceil(MAX(p.y, MAX(q.y, r.y))));
 			for (int y = top; y < bottom; y++) {
 				for (int x = left; x < right; x++) {
-					const Vector2 sample(x + .5f, y + .5f);
-					const float wb = (sample - p).cross(r - p) / denominator;
-					const float wc = (q - p).cross(sample - p) / denominator;
-					const float wa = 1 - wb - wc;
-					if (wa < 0 || wb < 0 || wc < 0) {
-						continue;
-					}
-					// The top-left rule assigns shared edges to exactly one triangle.
-					auto owns_edge = [&](Vector2 from, Vector2 to) {
-						Vector2 edge = denominator > 0 ? to - from : from - to;
-						return edge.y < 0 || (edge.y == 0 && edge.x > 0);
-					};
-					if ((wa == 0 && !owns_edge(q, r)) || (wb == 0 && !owns_edge(r, p)) || (wc == 0 && !owns_edge(p, q))) {
-						continue;
-					}
+                    const Point sample{int64_t(x)*256+128,int64_t(y)*256+128};
+                    const int64_t ea=edge(fq,fr,sample)*sign;
+                    const int64_t eb=edge(fr,fp,sample)*sign;
+                    const int64_t ec=edge(fp,fq,sample)*sign;
+                    if(ea<0 || eb<0 || ec<0 || (!ea && !owns_a) || (!eb && !owns_b) || (!ec && !owns_c)) continue;
+                    const float wa=float(ea*inverse),wb=float(eb*inverse),wc=float(ec*inverse);
                     const Vector4 tint = Vector4(a.tint[0],a.tint[1],a.tint[2],a.tint[3])*wa
                             + Vector4(b.tint[0],b.tint[1],b.tint[2],b.tint[3])*wb
                             + Vector4(c.tint[0],c.tint[1],c.tint[2],c.tint[3])*wc;
@@ -748,5 +786,7 @@ Dictionary HCSRNewestImageAtlas::get_statistics() const {
     uint64_t bytes=0; for(const auto &pool:group_pools) for(const auto &group:pool.targets) bytes+=uint64_t(group.size.x)*group.size.y*4;
     result["opacity_target_bytes"] = bytes;
     result["opacity_target_allocations"] = group_allocations;
+    result["render_passes"] = last_render_passes;
+    result["disjoint_opacity_groups"] = last_disjoint_groups;
 	return result;
 }

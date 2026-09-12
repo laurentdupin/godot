@@ -26,6 +26,11 @@ func run() -> void:
         views.append(view)
     await settle()
     var out := OS.get_environment("HCSR_GROUP_OUTPUT")
+    var stats = views[1].get_frame_scheduler_diagnostics().frame_synchronization.image_atlas
+    if OS.get_environment("HCSR_SEQUENTIAL_OPACITY_GROUPS") == "1":
+        require(not stats.disjoint_opacity_groups and stats.render_passes == 9,"sequential diagnostic path")
+    else:
+        require(stats.disjoint_opacity_groups and stats.render_passes == 3,"disjoint groups share depth passes")
     if not out.is_empty(): DirAccess.make_dir_recursive_absolute(out)
     for i in views.size():
         var image := views[i].get_texture().get_image()
@@ -51,6 +56,22 @@ func run() -> void:
     for view in views:
         var pixel := view.get_texture().get_image().get_pixel(70,70)
         require(pixel.b>.99 and pixel.r<.01,"group removal " + str(pixel))
+    # Overlapping sibling groups must preserve source-over order via fallback.
+    for view in views:
+        var overlap_doc := HTMLDocument.new()
+        overlap_doc.html = "<style>body{margin:0;background:white}.a,.b{position:absolute;top:20px;width:120px;height:120px;opacity:.5}.a{left:20px;background:red}.b{left:50px;background:blue}</style><div class='a'></div><div class='b'></div>"
+        view.document = overlap_doc
+    await settle()
+    require(not views[1].get_frame_scheduler_diagnostics().frame_synchronization.image_atlas.disjoint_opacity_groups,"overlap uses sequential passes")
+    for view in views:
+        var image := view.get_texture().get_image()
+        var pixel := image.get_pixel(80,70)
+        require(abs(pixel.r-.5)<.012 and abs(pixel.g-.25)<.012 and abs(pixel.b-.75)<.012,"sibling painter order " + str(pixel))
+        # Interior grid catches cracks and double blending along shared fan edges.
+        for y in range(24,136):
+            for x in range(54,136):
+                var actual := image.get_pixel(x,y)
+                require(abs(actual.r-.5)<.012 and abs(actual.g-.25)<.012 and abs(actual.b-.75)<.012,"triangle seam " + str(Vector2i(x,y)))
         view.queue_free()
     await settle()
     print("GROUP_OPACITY_", "FAILED" if failed else "OK")

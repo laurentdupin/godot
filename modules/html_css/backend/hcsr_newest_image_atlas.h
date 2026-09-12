@@ -44,6 +44,8 @@ class HCSRNewestImageAtlas {
     Vector<GroupPool> group_pools;
     uint32_t group_depth = 0;
     uint64_t group_allocations = 0;
+    uint32_t last_render_passes = 0;
+    bool last_disjoint_groups = false;
     void release_groups(RenderingDevice *device);
     struct GlyphKey {
         uint64_t face = 0;
