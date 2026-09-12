@@ -656,6 +656,11 @@ public:
 	/// update, or nullptr under hazard tracking.
 	MTL::Fence *external_pass_fence();
 
+	// Native renderer callbacks use a driver-owned encoder so they participate
+	// in the same residency and render-graph fences as regular draw commands.
+	virtual MTL::RenderCommandEncoder *begin_external_render_pass(MTL::Texture *p_target) = 0;
+	virtual void end_external_render_pass() = 0;
+
 	virtual void bind_pipeline(RDD::PipelineID p_pipeline) = 0;
 	void encode_push_constant_data(RDD::ShaderID p_shader, VectorView<uint32_t> p_data);
 

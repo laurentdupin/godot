@@ -588,6 +588,8 @@ public:
 	void render_draw_indirect_count(RDD::BufferID p_indirect_buffer, uint64_t p_offset, RDD::BufferID p_count_buffer, uint64_t p_count_buffer_offset, uint32_t p_max_draw_count, uint32_t p_stride) override;
 
 	void render_end_pass() override;
+	MTL::RenderCommandEncoder *begin_external_render_pass(MTL::Texture *p_target) override;
+	void end_external_render_pass() override;
 
 #pragma mark - Compute Commands
 

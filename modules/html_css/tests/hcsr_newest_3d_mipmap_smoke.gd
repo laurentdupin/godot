@@ -1,4 +1,5 @@
-# Run with --rendering-driver d3d12 and a GPU project. Samples each mip on a 3D quad.
+# Run with a GPU project using d3d12, vulkan, or metal. Samples each mip on a 3D quad.
+# On Metal this also covers argument-buffer residency of shared texture views.
 extends SceneTree
 var view: HTMLView
 var output: HTMLViewOutput

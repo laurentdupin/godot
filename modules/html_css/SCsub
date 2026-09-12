@@ -142,6 +142,8 @@ elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll") and env["platform"
     newest_stamp = os.path.join(newest_bundle_directory, ".godot_hcsr_newest_commit")
     newest_commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=hcsr_newest_root, check=True, capture_output=True, text=True).stdout.strip()
     newest_is_current = all(os.path.isfile(path) for path in newest_products)
+    if env["platform"] == "macos" and env.get("metal", False):
+        newest_is_current = newest_is_current and os.path.isfile(os.path.join(newest_bundle_directory, ".hcsr_metal_backend_v1"))
     if newest_is_current and os.path.isfile(newest_stamp):
         with open(newest_stamp, encoding="utf-8") as stamp_file:
             newest_is_current = stamp_file.read().strip() == newest_commit
@@ -161,6 +163,8 @@ elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll") and env["platform"
         newest_defines += ["HCSR_SCENE_STATIC", "HCSR_RENDER_STATIC"]
     if env["platform"] == "linuxbsd" and env.get("vulkan", False):
         newest_defines += ["HTML_CSS_HCSR_NEWEST_VULKAN"]
+    if env["platform"] == "macos" and env.get("metal", False):
+        newest_defines += ["HTML_CSS_HCSR_NEWEST_METAL"]
     env_html_css.Append(CPPDEFINES=newest_defines)
     env_html_css.Prepend(CPPPATH=[os.path.join(hcsr_newest_root, "native", "include")])
 elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll"):

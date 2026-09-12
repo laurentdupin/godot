@@ -17,7 +17,7 @@ class Environment(dict):
     editor_build = False
     def __init__(self, platform, arch, renderer="hcsr_newest"):
         super().__init__(module_html_css_renderer=renderer, platform=platform, arch=arch,
-                         module_html_css_hcsr_auto_build=True, vulkan=True, d3d12=platform=='windows', disable_3d=False)
+                         module_html_css_hcsr_auto_build=True, vulkan=True, d3d12=platform=='windows', metal=platform=='macos' and arch=='arm64', disable_3d=False)
         self.modules_sources = []
     def Clone(self): return self
     def Append(self, **kwargs):
@@ -31,8 +31,9 @@ class Environment(dict):
     def add_source_files(self, target, source): target.append(source)
 
 class PlatformTests(unittest.TestCase):
-    def configure(self, platform, arch, host, renderer="hcsr_newest"):
+    def configure(self, platform, arch, host, renderer="hcsr_newest", metal=None):
         env = Environment(platform, arch, renderer)
+        if metal is not None: env["metal"] = metal
         with patch('sys.platform', host), patch('os.path.isfile', return_value=True), \
              patch('builtins.open', mock_open(read_data='revision\n')), \
              patch('subprocess.run', return_value=SimpleNamespace(stdout='revision\n', returncode=0)) as build:
@@ -60,6 +61,8 @@ class PlatformTests(unittest.TestCase):
                     self.assertNotIn('.lib',flags)
                     self.assertNotIn('HTML_CSS_HCSR_NEWEST_D3D12',env['CPPDEFINES'])
                     self.assertEqual('HTML_CSS_HCSR_NEWEST_VULKAN' in env['CPPDEFINES'],platform=='linuxbsd')
+                    self.assertEqual('HTML_CSS_HCSR_NEWEST_METAL' in env['CPPDEFINES'],platform=='macos' and arch=='arm64')
+                    if platform == 'macos': self.assertIn('QuartzCore', flags)
     def test_linux_static(self):
         env = self.configure('linuxbsd', 'x86_64', 'linux')
         self.assertIn('HCSR_SCENE_STATIC', env['CPPDEFINES'])
@@ -71,6 +74,20 @@ class PlatformTests(unittest.TestCase):
         self.assertIn('HTML_CSS_HCSR_NEWEST_D3D12',env['CPPDEFINES'])
         self.assertIn('HTML_CSS_HCSR_NEWEST_VULKAN',env['CPPDEFINES'])
         self.assertIn('d3d12.lib',env['LINKFLAGS'])
+    def test_macos_without_metal(self):
+        env = self.configure('macos', 'arm64', 'darwin', metal=False)
+        self.assertNotIn('HTML_CSS_HCSR_NEWEST_METAL', env['CPPDEFINES'])
+
+    def test_legacy_macos_bundle_rebuilds(self):
+        env = Environment('macos', 'arm64')
+        with patch('sys.platform', 'darwin'), \
+             patch('os.path.isfile', side_effect=lambda path: not str(path).endswith('.hcsr_metal_backend_v1')), \
+             patch('builtins.open', mock_open(read_data='revision\n')), \
+             patch('subprocess.run', return_value=SimpleNamespace(stdout='revision\n', returncode=0)) as build:
+            runpy.run_path(str(MODULE/'SCsub'), init_globals={'env':env, 'env_modules':env, 'Import':lambda _:None, 'Copy':lambda *args:None})
+        self.assertEqual(build.call_count, 2)
+        self.assertIn('build-hcsr-bundle-unix.sh', build.call_args.args[0][1])
+
     def test_cross_os_rejected(self):
         with self.assertRaises(SystemExit): self.configure('macos','arm64','linux')
 

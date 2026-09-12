@@ -8,7 +8,7 @@
 #include "servers/rendering/rendering_device.h"
 
 // Per-view asset cache, shared by every presentation of the same scene packet.
-// Godot owns GPU lifetime and barriers on both D3D12 and Vulkan.
+// Godot owns GPU lifetime and barriers on D3D12, Vulkan, and Metal.
 class HCSRNewestImageAtlas {
 	static constexpr int PAGE_SIZE = 4096;
 	static constexpr int MAX_PAGES = 9;

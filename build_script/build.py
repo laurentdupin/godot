@@ -16,7 +16,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Sequence
 
-
 SCRIPT_DIRECTORY = Path(__file__).resolve().parent
 GODOT_ROOT = SCRIPT_DIRECTORY.parent
 _platform_spec = importlib.util.spec_from_file_location(
@@ -42,7 +41,7 @@ class BuildSettings:
     architecture: str = "x86_64"
     target: str = "editor"
     mono: bool = True
-    html_css_renderer: str = "hcsr_old"
+    html_css_renderer: str = "hcsr_newest"
     angle: bool = False
     developer_build: bool = False
     suffix: str = ""
@@ -317,9 +316,7 @@ def validate_settings(settings: BuildSettings, godot_platform: str) -> None:
             "Select hcsr_old or none on another host or architecture."
         )
     if settings.html_css_renderer in ("hcsr_newest", "hcsr_newest_dll") and not (
-        _platform_helpers.newest_target_supported(
-            settings.html_css_renderer, godot_platform, settings.architecture
-        )
+        _platform_helpers.newest_target_supported(settings.html_css_renderer, godot_platform, settings.architecture)
     ):
         raise RuntimeError(
             "hcsr_newest supports Windows x86_64 and Linux/macOS x86_64/ARM64. "
@@ -356,6 +353,8 @@ def build_command(
         command.append("--clean")
     if godot_platform == "windows":
         command.extend((f"angle={'yes' if settings.angle else 'no'}", "d3d12=yes", "vulkan=yes"))
+    if godot_platform == "macos" and settings.architecture == "arm64":
+        command.append("metal=yes")
     command.extend(extra_arguments)
     if godot_platform == "macos" and settings.target == "editor":
         if generate_bundle is None:
@@ -372,37 +371,58 @@ def format_command(command: Sequence[str]) -> str:
     return shlex.join(command)
 
 
+def editor_binary_name(settings: BuildSettings, godot_platform: str) -> str:
+    return (
+        f"godot.{godot_platform}.editor"
+        + (".dev" if settings.developer_build else "")
+        + f".{settings.architecture}"
+        + (f".{settings.suffix}" if settings.suffix else "")
+        + (".mono" if settings.mono else "")
+    )
+
+
 def force_macos_hcsr_relink(settings: BuildSettings, godot_platform: str) -> None:
     if (
         godot_platform != "macos"
         or settings.target != "editor"
-        or settings.html_css_renderer != "hcsr_old"
+        or settings.html_css_renderer not in ("hcsr_old", "hcsr_newest")
     ):
         return
 
     runtime_identifier = "osx-arm64" if settings.architecture == "arm64" else "osx-x64"
-    publish_directory = (
-        GODOT_ROOT
-        / "thirdparty"
-        / "hcsr_old"
-        / "src"
-        / "Renderer.NativeBridge"
-        / "bin"
-        / "Release"
-        / "net10.0"
-        / runtime_identifier
-        / "publish"
-    )
-    hcsr_inputs = (
-        publish_directory / "hcsr_renderer_combined.a",
-        publish_directory / "hcsr_renderer_initializer.o",
-    )
-    editor_suffix = (f".{settings.suffix}" if settings.suffix else "") + (".mono" if settings.mono else "")
-    editor_binary = (
-        GODOT_ROOT
-        / "bin"
-        / f"godot.macos.editor.{settings.architecture}{editor_suffix}"
-    )
+    if settings.html_css_renderer == "hcsr_newest":
+        publish_directory = (
+            GODOT_ROOT
+            / "thirdparty"
+            / "hcsr_newest"
+            / "build"
+            / "hcsr-bundle"
+            / "static"
+            / runtime_identifier
+            / "Release"
+        )
+        hcsr_inputs = (
+            publish_directory / "libhcsr_scene_combined.a",
+            publish_directory / "hcsr_scene_initializer.o",
+        )
+    else:
+        publish_directory = (
+            GODOT_ROOT
+            / "thirdparty"
+            / "hcsr_old"
+            / "src"
+            / "Renderer.NativeBridge"
+            / "bin"
+            / "Release"
+            / "net10.0"
+            / runtime_identifier
+            / "publish"
+        )
+        hcsr_inputs = (
+            publish_directory / "hcsr_renderer_combined.a",
+            publish_directory / "hcsr_renderer_initializer.o",
+        )
+    editor_binary = GODOT_ROOT / "bin" / editor_binary_name(settings, godot_platform)
     existing_inputs = [path for path in hcsr_inputs if path.is_file()]
     if not editor_binary.is_file() or not existing_inputs:
         return
@@ -410,8 +430,7 @@ def force_macos_hcsr_relink(settings: BuildSettings, godot_platform: str) -> Non
         return
 
     print(
-        "HCSR static package is newer than the editor; forcing a fresh link: "
-        f"{editor_binary}",
+        f"HCSR static package is newer than the editor; forcing a fresh link: {editor_binary}",
         flush=True,
     )
     editor_binary.unlink()
@@ -421,30 +440,15 @@ def build_managed_editor_assemblies(settings: BuildSettings, godot_platform: str
     if not settings.mono or settings.target != "editor":
         return
 
-    editor_suffix = (f".{settings.suffix}" if settings.suffix else "") + ".mono"
+    binary_name = editor_binary_name(settings, godot_platform)
     if godot_platform == "windows":
         editor_candidates = (
-            GODOT_ROOT
-            / "bin"
-            / f"godot.windows.editor.{settings.architecture}{editor_suffix}.console.exe",
-            GODOT_ROOT / "bin" / f"godot.windows.editor.{settings.architecture}{editor_suffix}.exe",
-        )
-    elif godot_platform == "macos":
-        bundle_name = (
-            "godot_macos_editor"
-            + ("_dev" if settings.developer_build else "")
-            + (f"_{settings.suffix}" if settings.suffix else "")
-            + "_mono.app"
-        )
-        editor_candidates = (
-            GODOT_ROOT / "bin" / f"godot.macos.editor.{settings.architecture}{editor_suffix}",
-            GODOT_ROOT / "bin" / bundle_name / "Contents" / "MacOS" / "Godot",
-            GODOT_ROOT / "bin" / "Godot.app" / "Contents" / "MacOS" / "Godot",
+            GODOT_ROOT / "bin" / (binary_name + ".console.exe"),
+            GODOT_ROOT / "bin" / (binary_name + ".exe"),
         )
     else:
-        editor_candidates = (
-            GODOT_ROOT / "bin" / f"godot.linuxbsd.editor.{settings.architecture}{editor_suffix}",
-        )
+        # Use the executable just built, never a stale app bundle's executable.
+        editor_candidates = (GODOT_ROOT / "bin" / binary_name,)
 
     editor_binary = next((path for path in editor_candidates if path.is_file()), None)
     if editor_binary is None:
@@ -518,6 +522,11 @@ def parse_arguments() -> tuple[argparse.Namespace, list[str]]:
         "--suffix",
         help="Set or clear the persisted custom output suffix (for example, --suffix current or --suffix '').",
     )
+    parser.add_argument(
+        "--renderer",
+        choices=HTML_CSS_RENDERERS,
+        help="Select and persist the HTML/CSS renderer (new configurations default to hcsr_newest).",
+    )
     arguments, extra_arguments = parser.parse_known_args()
     if extra_arguments and extra_arguments[0] == "--":
         extra_arguments = extra_arguments[1:]
@@ -546,6 +555,8 @@ def run() -> int:
     if arguments.reset_settings and SETTINGS_PATH.exists():
         SETTINGS_PATH.unlink()
     settings = load_settings()
+    if arguments.renderer is not None:
+        settings.html_css_renderer = arguments.renderer
     if arguments.suffix is not None:
         settings.suffix = arguments.suffix
 
@@ -562,10 +573,7 @@ def run() -> int:
     # A macOS Mono bundle copies bin/GodotSharp, which can only be built after
     # the native editor exists and has generated the managed API glue.
     staged_macos_mono_bundle = (
-        godot_platform == "macos"
-        and settings.target == "editor"
-        and settings.mono
-        and not arguments.clean
+        godot_platform == "macos" and settings.target == "editor" and settings.mono and not arguments.clean
     )
     command = build_command(
         settings,
