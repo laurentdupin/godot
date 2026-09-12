@@ -913,6 +913,24 @@ MTL::RenderCommandEncoder *MDCommandBuffer::get_new_render_encoder_with_descript
 	return enc;
 }
 
+MTL::RenderCommandEncoder *MDCommandBuffer::begin_external_render_pass(MTL::Texture *p_target) {
+	ERR_FAIL_NULL_V(p_target, nullptr);
+	NS::SharedPtr<MTL::RenderPassDescriptor> desc = NS::TransferPtr(MTL::RenderPassDescriptor::alloc()->init());
+	MTL::RenderPassColorAttachmentDescriptor *color = desc->colorAttachments()->object(0);
+	color->setTexture(p_target);
+	color->setLoadAction(MTL::LoadActionLoad);
+	color->setStoreAction(MTL::StoreActionStore);
+	MTL::RenderCommandEncoder *encoder = get_new_render_encoder_with_descriptor(desc.get());
+	ERR_FAIL_NULL_V(encoder, nullptr);
+	_set_inline_render_encoder(encoder);
+	return encoder;
+}
+
+void MDCommandBuffer::end_external_render_pass() {
+	ERR_FAIL_COND(type != MDCommandBufferStateType::InlineRender);
+	_end_inline_render();
+}
+
 #pragma mark - Render Commands
 
 void MDCommandBuffer::render_bind_uniform_sets(VectorView<RDD::UniformSetID> p_uniform_sets, RDD::ShaderID p_shader, uint32_t p_first_set_index, uint32_t p_set_count, uint32_t p_dynamic_offsets) {
@@ -1093,9 +1111,8 @@ void MDCommandBuffer::_render_set_dirty_state() {
 		}
 	}
 
-	if (sync_mode == RDM::SyncMode::HazardTracking) {
-		render.resource_tracker.encode(render.encoder.get());
-	}
+	// Barrier mode also declares argument-buffer texture views explicitly.
+	render.resource_tracker.encode(render.encoder.get());
 
 	render.dirty.clear();
 }
@@ -1629,9 +1646,7 @@ void MDCommandBuffer::_compute_set_dirty_state() {
 		}
 	}
 
-	if (sync_mode == RDM::SyncMode::HazardTracking) {
-		compute.resource_tracker.encode(compute.encoder.get());
-	}
+	compute.resource_tracker.encode(compute.encoder.get());
 
 	compute.dirty.clear();
 }

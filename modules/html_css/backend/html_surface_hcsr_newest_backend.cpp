@@ -19,6 +19,9 @@
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/rendering_device_driver.h"
 #include "servers/rendering/rendering_server.h"
+#ifdef HTML_CSS_HCSR_NEWEST_METAL
+#include "drivers/metal/rendering_device_driver_metal.h"
+#endif
 
 struct HTMLSurfaceHCSRNewestBackend::State {
 	mutable Mutex mutex;
@@ -79,6 +82,7 @@ struct HTMLSurfaceHCSRNewestBackend::State {
 	} prepared;
 	uint64_t preparation_count = 0;
 	uint64_t recorded_count = 0;
+	uint64_t native_recorded_count = 0;
 	uint64_t synchronization_failures = 0;
 	double preparation_milliseconds = 0.0;
 	double maximum_preparation_milliseconds = 0.0;
@@ -282,10 +286,27 @@ static bool ensure_presenter(HTMLSurfaceHCSRNewestBackend::State *p_state, Rende
 	}
 #endif
 
+#ifdef HTML_CSS_HCSR_NEWEST_METAL
+	if (p_state->renderer == HTML_SURFACE_HCSR_NEWEST_METAL) {
+		hcsr_metal_engine_desc_t backend;
+		initialize_abi(backend);
+		backend.pixel_format = MTL::PixelFormatRGBA8Unorm;
+		backend.sample_count = 1;
+		backend.device = (hcsr_metal_device_t)p_device->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_LOGICAL_DEVICE);
+		if (backend.device == nullptr) return false;
+		const hcsr_result_t result = hcsr_metal_create_engine(&common, &backend, &p_state->presenter);
+		if (result != HCSR_OK) ERR_PRINT(vformat("hcsr_newest Metal presenter creation failed with result %d.", (int)result));
+		return result == HCSR_OK;
+	}
+#endif
+
 	return true;
 }
 
 static void destroy_presenter(uint64_t p_presenter, int p_renderer) {
+#ifdef HTML_CSS_HCSR_NEWEST_METAL
+	if (p_renderer == HTML_SURFACE_HCSR_NEWEST_METAL) hcsr_metal_destroy(p_presenter);
+#endif
 #ifdef HTML_CSS_HCSR_NEWEST_D3D12
 	if (p_renderer == HTML_SURFACE_HCSR_NEWEST_D3D12) hcsr_d3d12_destroy(p_presenter);
 #endif
@@ -307,7 +328,8 @@ static void release_output(HTMLSurfaceHCSRNewestBackend::State *output, Renderin
 
 static bool record_gpu(HTMLSurfaceHCSRNewestBackend::State *p_state, HTMLSurfaceHCSRNewestRenderer p_renderer,
 		const hcsr_draw_packet_view_t &p_packet, const Size2i &p_physical_size, const Color &p_background,
-		uint64_t p_command_buffer, uint64_t p_target, uint64_t p_target_view, uint64_t p_host_frame) {
+		RenderingDeviceDriver *p_driver, RenderingDeviceDriver::CommandBufferID p_command_buffer,
+		uint64_t p_target, uint64_t p_target_view, uint64_t p_host_frame) {
 	hcsr_frame_desc_t frame;
 	initialize_abi(frame);
 	// Upload memory follows Godot's retired frame slots. Scene generations can
@@ -320,13 +342,42 @@ static bool record_gpu(HTMLSurfaceHCSRNewestBackend::State *p_state, HTMLSurface
 	frame.clear_g = p_background.g;
 	frame.clear_b = p_background.b;
 	frame.clear_a = p_background.a;
+#ifdef HTML_CSS_HCSR_NEWEST_METAL
+	if (p_renderer == HTML_SURFACE_HCSR_NEWEST_METAL) {
+		auto *metal = static_cast<RenderingDeviceDriverMetal *>(p_driver);
+		auto *texture = (MTL::Texture *)p_target;
+		if (texture == nullptr) return false;
+		MTL::RenderCommandEncoder *encoder = metal->command_begin_external_render_pass(p_command_buffer, texture);
+		if (encoder == nullptr) return false;
+		hcsr_metal_record_target_t target;
+		initialize_abi(target);
+		target.width = p_physical_size.x;
+		target.height = p_physical_size.y;
+		target.render_encoder = (hcsr_metal_encoder_t)encoder;
+		target.render_target = (hcsr_metal_texture_t)texture;
+		const hcsr_result_t result = hcsr_metal_record(p_state->presenter, &p_packet, &frame, &target);
+		// Close the driver scope even on failure; it updates the graph fence and
+		// resets cached state before Godot encodes the next render/compute pass.
+		metal->command_end_external_render_pass(p_command_buffer);
+		if (result != HCSR_OK) {
+			ERR_PRINT(vformat("hcsr_newest Metal recording failed with result %d.", (int)result));
+			return false;
+		}
+		p_state->gpu_texture_initialized = true;
+		return true;
+	}
+#endif
+#if defined(HTML_CSS_HCSR_NEWEST_D3D12) || defined(HTML_CSS_HCSR_NEWEST_VULKAN)
+	const uint64_t native_command_buffer = p_driver->get_resource_native_handle(
+			RenderingDeviceDriver::DRIVER_RESOURCE_COMMAND_BUFFER, p_command_buffer);
+#endif
 #ifdef HTML_CSS_HCSR_NEWEST_D3D12
 	if (p_renderer == HTML_SURFACE_HCSR_NEWEST_D3D12) {
 		hcsr_d3d12_record_target_t target;
 		initialize_abi(target);
 		target.width = p_physical_size.x;
 		target.height = p_physical_size.y;
-		target.command_list = (ID3D12GraphicsCommandList *)p_command_buffer;
+		target.command_list = (ID3D12GraphicsCommandList *)native_command_buffer;
 		target.render_target = (ID3D12Resource *)p_target;
 		if (target.command_list == nullptr || target.render_target == nullptr
 				|| hcsr_d3d12_record(p_state->presenter, &p_packet, &frame, &target) != HCSR_OK) return false;
@@ -340,7 +391,7 @@ static bool record_gpu(HTMLSurfaceHCSRNewestBackend::State *p_state, HTMLSurface
 		initialize_abi(target);
 		target.width = p_physical_size.x;
 		target.height = p_physical_size.y;
-		target.command_buffer = (VkCommandBuffer)p_command_buffer;
+		target.command_buffer = (VkCommandBuffer)native_command_buffer;
 		target.image = (VkImage)p_target;
 		target.image_view = (VkImageView)p_target_view;
 		if (target.command_buffer == VK_NULL_HANDLE || target.image == VK_NULL_HANDLE || target.image_view == VK_NULL_HANDLE
@@ -419,18 +470,14 @@ static void complete_gpu_submission(RenderingDeviceDriver *p_driver, RenderingDe
 			? Size2i(Math::ceil(packet.viewport_width), Math::ceil(packet.viewport_height))
 			: Size2i();
 	if (rendered) {
-		const uint64_t native_command_buffer = p_driver->get_resource_native_handle(
-				RenderingDeviceDriver::DRIVER_RESOURCE_COMMAND_BUFFER, p_command_buffer);
-		rendered = native_command_buffer != 0 && record_gpu(submission->state, submission->renderer,
-				packet, submission->physical_size, submission->background, native_command_buffer,
+		rendered = record_gpu(submission->state, submission->renderer,
+				packet, submission->physical_size, submission->background, p_driver, p_command_buffer,
 				submission->target, submission->target_view, submission->host_frame);
 	}
 	if (rendered) {
-		const uint64_t command_buffer = p_driver->get_resource_native_handle(
-				RenderingDeviceDriver::DRIVER_RESOURCE_COMMAND_BUFFER, p_command_buffer);
 		for (const HCSRNewestOutputSubmission &output : submission->outputs) {
 			rendered = record_gpu(output.state, submission->renderer, packet, output.size, Color(0, 0, 0, 0),
-					command_buffer, output.target, output.target_view, submission->host_frame) && rendered;
+					p_driver, p_command_buffer, output.target, output.target_view, submission->host_frame) && rendered;
 		}
 	}
 	hcsr_draw_packet_destroy(submission->packet);
@@ -442,6 +489,7 @@ static void complete_gpu_submission(RenderingDeviceDriver *p_driver, RenderingDe
 		if (submission->state->pending_packet == submission->packet) submission->state->pending_packet = 0;
 		submission->state->render_pending = false;
 		if (rendered && !submission->state->closing) {
+			submission->state->native_recorded_count++;
 			for (const HCSRNewestOutputSubmission &output : submission->outputs) {
 				output.state->active_generation = generation;
 			}
@@ -943,6 +991,8 @@ Error HTMLSurfaceHCSRNewestBackend::prepare_host_frame(uint64_t p_host_frame, do
 Dictionary HTMLSurfaceHCSRNewestBackend::get_frame_synchronization() const {
 	MutexLock lock(state->mutex);
 	Dictionary result;
+	const char *renderer_names[] = { "cpu", "d3d12", "vulkan", "metal" };
+	result["renderer"] = renderer_names[state->renderer];
 	result["prepared_host_frame"] = state->prepared.host_frame;
 	result["prepared_time_seconds"] = state->prepared.time_seconds;
 	result["recorded_host_frame"] = state->metadata.host_frame_number;
@@ -950,6 +1000,7 @@ Dictionary HTMLSurfaceHCSRNewestBackend::get_frame_synchronization() const {
 	result["recorded_generation"] = state->active_generation;
 	result["preparations"] = state->preparation_count;
 	result["recordings"] = state->recorded_count;
+	result["native_recordings"] = state->native_recorded_count;
 	result["failures"] = state->synchronization_failures;
 	result["pending"] = state->render_pending;
 	result["pending_startup_mutation_batches"] = state->pending_mutations.size();

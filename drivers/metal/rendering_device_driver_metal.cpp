@@ -1021,6 +1021,16 @@ RDD::CommandQueueFamilyID RenderingDeviceDriverMetal::command_queue_family_get(B
 
 #pragma mark - Command Buffers
 
+MTL::RenderCommandEncoder *RenderingDeviceDriverMetal::command_begin_external_render_pass(CommandBufferID p_cmd_buffer, MTL::Texture *p_target) {
+	ERR_FAIL_COND_V(p_cmd_buffer.id == 0, nullptr);
+	return ((MDCommandBufferBase *)p_cmd_buffer.id)->begin_external_render_pass(p_target);
+}
+
+void RenderingDeviceDriverMetal::command_end_external_render_pass(CommandBufferID p_cmd_buffer) {
+	ERR_FAIL_COND(p_cmd_buffer.id == 0);
+	((MDCommandBufferBase *)p_cmd_buffer.id)->end_external_render_pass();
+}
+
 bool RenderingDeviceDriverMetal::command_buffer_begin(CommandBufferID p_cmd_buffer) {
 	MDCommandBufferBase *obj = (MDCommandBufferBase *)(p_cmd_buffer.id);
 	obj->begin();
@@ -1482,6 +1492,14 @@ RDD::UniformSetID RenderingDeviceDriverMetal::uniform_set_create(VectorView<Boun
 				*sru |= stage_resource_usage(RDD::SHADER_STAGE_COMPUTE, usage);
 			}
 		};
+		// A texture view referenced indirectly by an argument buffer needs its own
+		// residency declaration even when its parent heap is resident. Without it,
+		// proxy/mipmap views can sample zero in barrier mode (notably on Apple M1).
+		auto add_texture_usage = [&](MTL::Texture *p_texture, BitField<RDD::ShaderStage> p_stages, MTL::ResourceUsage p_usage) {
+			if (sync_mode == HazardTracking || p_texture->parentTexture()) {
+				add_usage(p_texture, p_stages, p_usage);
+			}
+		};
 #define ADD_USAGE(res, stage, usage) \
 	if (sync_mode == HazardTracking) { \
 		add_usage(res, stage, usage); \
@@ -1510,7 +1528,7 @@ RDD::UniformSetID RenderingDeviceDriverMetal::uniform_set_create(VectorView<Boun
 						*(MTL::ResourceID *)(ptr + idx.texture + j) = texture->gpuResourceID();
 						*(MTL::ResourceID *)(ptr + idx.sampler + j) = sampler->gpuResourceID();
 
-						ADD_USAGE(texture, ui.active_stages, ui.usage);
+						add_texture_usage(texture, ui.active_stages, ui.usage);
 					}
 				} break;
 				case UNIFORM_TYPE_TEXTURE: {
@@ -1519,7 +1537,7 @@ RDD::UniformSetID RenderingDeviceDriverMetal::uniform_set_create(VectorView<Boun
 						MTL::Texture *texture = ((TextureInfo *)uniform.ids[j].id)->texture.get();
 						*(MTL::ResourceID *)(ptr + idx.texture + j) = texture->gpuResourceID();
 
-						ADD_USAGE(texture, ui.active_stages, ui.usage);
+						add_texture_usage(texture, ui.active_stages, ui.usage);
 					}
 				} break;
 				case UNIFORM_TYPE_IMAGE: {
@@ -1527,7 +1545,7 @@ RDD::UniformSetID RenderingDeviceDriverMetal::uniform_set_create(VectorView<Boun
 					for (size_t j = 0; j < count; j += 1) {
 						MTL::Texture *texture = ((TextureInfo *)uniform.ids[j].id)->texture.get();
 						*(MTL::ResourceID *)(ptr + idx.texture + j) = texture->gpuResourceID();
-						ADD_USAGE(texture, ui.active_stages, ui.usage);
+						add_texture_usage(texture, ui.active_stages, ui.usage);
 
 						if (idx.buffer != UINT32_MAX) {
 							// Emulated atomic image access.
@@ -1561,7 +1579,7 @@ RDD::UniformSetID RenderingDeviceDriverMetal::uniform_set_create(VectorView<Boun
 						MTL::Texture *texture = ((TextureInfo *)uniform.ids[j].id)->texture.get();
 						*(MTL::ResourceID *)(ptr + idx.texture + j) = texture->gpuResourceID();
 
-						ADD_USAGE(texture, ui.active_stages, ui.usage);
+						add_texture_usage(texture, ui.active_stages, ui.usage);
 					}
 				} break;
 				case UNIFORM_TYPE_UNIFORM_BUFFER_DYNAMIC:
@@ -1580,16 +1598,14 @@ RDD::UniformSetID RenderingDeviceDriverMetal::uniform_set_create(VectorView<Boun
 
 #undef ADD_USAGE
 
-		if (sync_mode == HazardTracking) {
-			for (const KeyValue<MTL::Resource *, StageResourceUsage> &keyval : bound_resources) {
-				ResourceVector *resources = set->usage_to_resources.getptr(keyval.value);
-				if (resources == nullptr) {
-					resources = &set->usage_to_resources.insert(keyval.value, ResourceVector())->value;
-				}
-				int64_t pos = resources->span().bisect(keyval.key, true);
-				if (pos == resources->size() || (*resources)[pos] != keyval.key) {
-					resources->insert(pos, keyval.key);
-				}
+		for (const KeyValue<MTL::Resource *, StageResourceUsage> &keyval : bound_resources) {
+			ResourceVector *resources = set->usage_to_resources.getptr(keyval.value);
+			if (resources == nullptr) {
+				resources = &set->usage_to_resources.insert(keyval.value, ResourceVector())->value;
+			}
+			int64_t pos = resources->span().bisect(keyval.key, true);
+			if (pos == resources->size() || (*resources)[pos] != keyval.key) {
+				resources->insert(pos, keyval.key);
 			}
 		}
 

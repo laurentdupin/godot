@@ -42,9 +42,15 @@ static int newest_resolve(HTMLSurfaceBackendPreference p_preference) {
 	}
 #endif
 
+#ifdef HTML_CSS_HCSR_NEWEST_METAL
+	if ((p_preference == HTML_SURFACE_BACKEND_AUTO || p_preference == HTML_SURFACE_BACKEND_GPU_AUTO
+			|| p_preference == HTML_SURFACE_BACKEND_METAL) && driver == "metal") {
+		return HTML_SURFACE_HCSR_NEWEST_METAL;
+	}
+#endif
 #ifdef MACOS_ENABLED
 	if (p_preference == HTML_SURFACE_BACKEND_GPU_AUTO) {
-		WARN_PRINT_ONCE("hcsr_newest uses CPU rendering on macOS until its Metal backend is implemented.");
+		WARN_PRINT_ONCE("hcsr_newest uses CPU rendering because Godot's Metal driver is unavailable or inactive.");
 		return HTML_SURFACE_HCSR_NEWEST_CPU;
 	}
 #endif

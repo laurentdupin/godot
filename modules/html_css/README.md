@@ -5,7 +5,7 @@
 The module has one mutually exclusive renderer selector:
 
 ```text
-module_html_css_renderer=hcsr_old|hcsr_old_dll|hcsr_old_2|none
+module_html_css_renderer=hcsr_newest|hcsr_newest_dll|hcsr_old|hcsr_old_dll|hcsr_old_2|none
 ```
 
 `hcsr_old` is the default. It uses the frozen old architecture in
@@ -16,6 +16,62 @@ Godot executable contains at most one HCSR version and keeps the normal Godot
 executable name. `none` keeps the raw CPU-frame receiver without an HTML engine.
 On Windows x86_64, `hcsr_old_dll` uses the same frozen old backend and C ABI as
 `hcsr_old`, but links its NativeAOT publication through `hcsr_renderer.dll`.
+
+### Newest HCSR on Metal (macOS ARM64)
+
+`hcsr_newest` uses the packet-based native renderer in `thirdparty/hcsr_newest`.
+On macOS ARM64, `BACKEND_AUTO` and `BACKEND_GPU_AUTO` select Metal when Godot is
+running its Metal driver. `BACKEND_METAL` selects it explicitly; `BACKEND_CPU`
+remains available. This requires a build with `metal=yes`; Godot currently
+disables its Metal driver for x86_64 builds.
+
+```sh
+scons platform=macos target=editor arch=arm64 metal=yes module_mono_enabled=yes module_html_css_renderer=hcsr_newest extra_suffix=hcsr_newest generate_bundle=yes -j8
+bin/godot.macos.editor.arm64.hcsr_newest.mono --rendering-method mobile --rendering-driver metal --path /path/to/project
+```
+
+For a Finder launch, the suffixed command above produces
+`bin/godot_macos_editor_hcsr_newest_mono.app`. To update the regular
+`bin/godot_macos_editor_mono.app`, use the build helper with your saved macOS
+ARM64/Mono/editor settings:
+
+```sh
+python3 build_script/build.py --non-interactive --renderer hcsr_newest --suffix ''
+```
+
+The helper also generates matching managed assemblies before packaging the app.
+Restart an already-running editor to use the new build.
+
+The first build creates the macOS NativeAOT bundle, including the native Metal
+renderer. It requires the .NET 10 SDK, CMake, Xcode tools, and llvm-objcopy. SDK
+runtime packs are resolved from the exact published version, whether installed
+through NuGet or bundled with the SDK. Homebrew SDKs use Homebrew's static Brotli
+archives; `HCSR_BROTLI_LIB_DIR` can select another matching-architecture directory.
+For deployment to older macOS versions, these archives must also match your
+minimum OS version. The Homebrew archives used in local testing target macOS 15;
+this build has not been validated on older systems.
+
+Godot supplies the device, textures, frame slots, and command submission. Native
+packet recording runs inside a driver-owned Metal encoder, with render-graph
+fences and residency applied before later sampling. Text, images, and vertex
+colors use the same RenderingDevice atlas path as Vulkan and D3D12, including
+partial uploads, output mipmaps, and deferred destruction. Each secondary output
+has its own native presenter and follows the same retired frame slots.
+
+`get_frame_scheduler_diagnostics().frame_synchronization.renderer` reports
+`metal`, `vulkan`, `d3d12`, or `cpu`; `native_recordings` counts completed native
+recording callbacks (CPU-side recording, not GPU completion).
+
+Run the Metal integration smoke with any project directory and the absolute path
+to `modules/html_css/tests/hcsr_newest_metal_smoke.gd`, using `--script` and the
+Metal launch flags above. Set `MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1` for Metal
+validation. The test checks native clearing, text/image uploads, orientation,
+canvas sampling, multiple outputs, resize, and switching between native and atlas
+rendering. Also run `hcsr_newest_image_atlas_smoke.gd`,
+`hcsr_newest_direct_paint_smoke.gd`, `hcsr_newest_secondary_output_smoke.gd`, and
+`hcsr_newest_3d_mipmap_smoke.gd` with the same flags. The 3D test covers explicit
+residency of shared Metal texture views under the default barrier synchronization
+mode. These GPU tests require a display session; `--headless` disables GPU rendering.
 
 The HCSR integration supports x86_64 and ARM64 builds on Windows, Linux, and
 macOS, plus Android ARM64 and x86_64. A Windows editor can be built with:
