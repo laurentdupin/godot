@@ -47,7 +47,7 @@ class PlatformTests(unittest.TestCase):
                     env=self.configure(platform,arch,host,"hcsr_newest_dll" if platform == "linuxbsd" else "hcsr_newest")
                     flags=' '.join(env['LINKFLAGS'])
                     if platform == 'linuxbsd':
-                        libraries = [item.abspath for item in env['LIBS']]
+                        libraries = [item.abspath.replace('\\', '/') for item in env['LIBS']]
                         self.assertEqual(len(libraries), 3)
                         self.assertTrue(all('/dynamic/'+prefix+suffix+'/' in item and item.endswith('.so') for item in libraries))
                         self.assertIn('$$ORIGIN', flags)
