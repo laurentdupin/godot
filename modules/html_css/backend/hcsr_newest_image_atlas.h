@@ -31,6 +31,7 @@ class HCSRNewestImageAtlas {
 		float position_uv[4];
 		float tint[4];
 		float bounds[4];
+        uint32_t state = UINT32_MAX, pad[3] = {};
 	};
 	struct Batch {
 		int page;
@@ -65,7 +66,31 @@ class HCSRNewestImageAtlas {
 	Ref<Image> load_image(const Ref<HTMLDocument> &document, const String &source);
 	Vector<Page> pages;
 	Vector<Vertex> vertices;
+    Vector<Vertex> uploaded_vertices;
+    struct PreparedMesh { uint32_t source_first=0, prepared_first=0, count=0; };
+    Vector<PreparedMesh> prepared_meshes;
+    Vector<hcsr_paint_vertex_t> prepared_source;
+    Vector<uint32_t> prepared_states;
+    bool apply_color_patches(const hcsr_draw_packet_view_t &packet);
+    uint64_t color_patch_updates = 0;
 	Vector<Batch> batches;
+    // Six vertex invocations per instance: triangle (0), quad (1), or triangle pair (2).
+    struct Primitive { uint32_t first, topology, draw_index=UINT32_MAX, reserved=0; };
+    Vector<Primitive> primitives, all_primitives;
+    Vector<Batch> all_batches;
+    void update_visible_instances(const hcsr_draw_packet_view_t &packet);
+    Vector<hcsr_gpu_state_t> gpu_states;
+    Vector<hcsr_gpu_clip_t> gpu_clips;
+    Vector<hcsr_gpu_plane_t> gpu_planes;
+    RID state_buffer, clip_buffer, plane_buffer, primitive_buffer;
+    uint32_t state_capacity=0, clip_capacity=0, plane_capacity=0, primitive_capacity=0;
+    uint64_t geometry_generation=0, geometry_uploaded_bytes=0, state_uploaded_bytes=0, instance_uploaded_bytes=0;
+    bool gpu_geometry=false, clipping_enabled=true, geometry_dirty=true;
+    float logical_width=1, logical_height=1, prepared_scale=0;
+    uint32_t last_draw_calls=0;
+    double last_gpu_ms=0;
+    uint64_t last_gpu_frame=0;
+
 	RID shader, sampler, buffer, pipeline;
 	uint32_t buffer_capacity = 0;
 	bool uploaded = false;

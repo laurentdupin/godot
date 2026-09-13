@@ -1,3 +1,4 @@
+#include "hcsr_gpu_packet.h"
 #include "hcsr_prepared_drawing.h"
 #include "hcsr_shader_sources.h"
 #include "hcsr_compositing.h"
@@ -275,6 +276,43 @@ HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::rasterize_glyph(const hcsr_gly
 }
 
 bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale) {
+    const bool had_pending = !pending_glyphs.is_empty();
+    const bool next_gpu = packet.format == HCSR_DRAW_PACKET_FORMAT_GPU;
+    if (!hcsr::render::validate_gpu_packet(packet)) return false;
+    auto copy_table = [](auto &destination, const auto *source, size_t count) {
+        if(destination.resize(int(count))!=OK) return false;
+        if (count) memcpy(destination.ptrw(),source,count*sizeof(*source));
+        return true;
+    };
+    if(next_gpu) {
+        if(!copy_table(gpu_states,packet.gpu.states,packet.gpu.state_count)
+            || !copy_table(gpu_clips,packet.gpu.clips,packet.gpu.clip_count)
+            || !copy_table(gpu_planes,packet.gpu.planes,packet.gpu.plane_count)) return false;
+    } else { gpu_states.clear(); gpu_clips.clear(); gpu_planes.clear(); }
+    clipping_enabled = !next_gpu || packet.gpu.clipping_enabled != 0;
+    logical_width=packet.viewport_width; logical_height=packet.viewport_height;
+    if(next_gpu && gpu_geometry && geometry_generation==packet.gpu.geometry_generation && prepared_scale==output_scale
+        && !had_pending) {
+        uploaded=false; geometry_dirty=false;
+        update_visible_instances(packet);
+        return true;
+    }
+    if (next_gpu && gpu_geometry && prepared_scale == output_scale && !had_pending
+        && packet.gpu.color_base_geometry_generation == geometry_generation
+        && apply_color_patches(packet)) {
+        geometry_generation = packet.gpu.geometry_generation;
+        geometry_dirty = true;
+        uploaded = false;
+        ++color_patch_updates;
+        update_visible_instances(packet);
+        return true;
+    }
+    const Vector<Vertex> previous_vertices = vertices;
+    const Vector<PreparedMesh> previous_meshes = prepared_meshes;
+    prepared_meshes.clear();
+    if (next_gpu && prepared_meshes.resize(int(packet.draw_item_count)) != OK) return false;
+    gpu_geometry=next_gpu; geometry_generation=next_gpu ? packet.gpu.geometry_generation : 0;
+    geometry_dirty=true; prepared_scale=output_scale; primitives.clear();
     // Upgrade previously seen glyphs incrementally; the old level remains visible meanwhile.
     for (int i = 0; i < 32 && !pending_glyphs.is_empty(); i++) {
         PendingGlyph pending = pending_glyphs[pending_glyphs.size() - 1];
@@ -289,8 +327,8 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
     if (!hcsr::render::plan_compositing(packet, group_plan, group_error)) return false;
     group_depth = group_plan.depth;
 	uploaded = false;
-	bool has_images = group_depth > 0;
-	bool references_images = group_depth > 0;
+	bool has_images = group_depth > 0 || gpu_geometry;
+	bool references_images = group_depth > 0 || gpu_geometry;
 	for (size_t i = 0; i < packet.material_count; i++) {
 		references_images |= (packet.materials[i].kind == HCSR_MATERIAL_IMAGE || packet.materials[i].kind == HCSR_MATERIAL_GLYPH || packet.materials[i].kind == HCSR_MATERIAL_VERTEX_COLOR);
 	}
@@ -304,7 +342,7 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
     for (size_t i = 0; i < packet.draw_item_count; i++) {
         emitted_count += packet.draw_items[i].index_count;
         if (group_plan.events[i].kind == HCSR_GROUP_END) emitted_count += 6;
-        if (emitted_count > INT32_MAX) return false;
+        if (emitted_count > INT32_MAX/sizeof(Vertex)) return false;
     }
     if (vertices.resize(int(emitted_count)) != OK) return false;
     Vertex *vertex_data = vertices.ptrw();
@@ -314,9 +352,10 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
 		const hcsr_material_t &material = packet.materials[draw.material_index];
         const auto group = group_plan.events[i];
         if (group.kind) {
-            batches.push_back({0,written,group.kind==HCSR_GROUP_END ? 6u : 0u,group.kind,group.depth,group.opacity,
+            batches.push_back({0,gpu_geometry ? uint32_t(primitives.size()) : written,group.kind==HCSR_GROUP_END ? (gpu_geometry ? 1u : 6u) : 0u,group.kind,group.depth,group.opacity,
                 Rect2(group.bounds.x/packet.viewport_width,group.bounds.y/packet.viewport_height,group.bounds.width/packet.viewport_width,group.bounds.height/packet.viewport_height)});
             if (group.kind==HCSR_GROUP_END) {
+                if(gpu_geometry) { primitives.push_back({written,2,UINT32_MAX}); }
                 const Vector2 corners[] = {{0,0},{1,0},{1,1},{0,0},{1,1},{0,1}};
                 for (const auto &corner: corners) {
                     Vertex v={}; v.position_uv[0]=corner.x*2-1; v.position_uv[1]=corner.y*2-1;
@@ -354,6 +393,10 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
                     const float local = Vector2(b.local_x - a.local_x, b.local_y - a.local_y).length();
                     if (local > .001f) transform_scale = MAX(transform_scale, Vector2(b.screen_x - a.screen_x, b.screen_y - a.screen_y).length() / local);
                 }
+                if(gpu_geometry && draw.index_count) {
+                    const auto &m=packet.gpu.states[packet.gpu.vertex_states[packet.indices[draw.first_index]]].transform;
+                    transform_scale=MAX(Vector2(m[0],m[1]).length(),Vector2(m[4],m[5]).length());
+                }
                 entry = resolve(document, source, natural, destination.size * (output_scale * transform_scale));
 			}
 		}
@@ -368,6 +411,10 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
                 float local = Vector2(b.local_x - a.local_x, b.local_y - a.local_y).length();
                 if (local > .001f) transform_scale = MAX(transform_scale, Vector2(b.screen_x - a.screen_x, b.screen_y - a.screen_y).length() / local);
             }
+            if(gpu_geometry && draw.index_count) {
+                const auto &m=packet.gpu.states[packet.gpu.vertex_states[packet.indices[draw.first_index]]].transform;
+                transform_scale=MAX(Vector2(m[0],m[1]).length(),Vector2(m[4],m[5]).length());
+            }
             entry = resolve_glyph(glyph, output_scale * transform_scale);
             if (entry.page >= 0) {
                 float factor = glyph.font_size / entry.raster_size;
@@ -378,9 +425,14 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
 		// Solid grayscale draws do not sample the atlas and can stay in the current batch.
         const int page = entry.page >= 0 ? entry.page : (batches.is_empty() ? 0 : batches[batches.size() - 1].page);
 		if (batches.is_empty() || batches[batches.size() - 1].page != page || batches[batches.size() - 1].kind) {
-			batches.push_back({ page, written, 0 });
+			batches.push_back({ page, gpu_geometry ? uint32_t(primitives.size()) : written, 0 });
 		}
-		batches.write[batches.size() - 1].count += draw.index_count;
+		const bool quad = gpu_geometry && (draw.flags & HCSR_DRAW_AXIS_ALIGNED_RECTANGLE) && draw.index_count==6;
+        batches.write[batches.size() - 1].count += gpu_geometry ? (quad ? 1 : (draw.index_count+5)/6) : draw.index_count;
+        if(gpu_geometry) {
+            if(quad) primitives.push_back({written,1,uint32_t(i)});
+            else for(uint32_t j=0;j<draw.index_count;j+=6) primitives.push_back({written+j,draw.index_count-j>=6 ? 2u : 0u,uint32_t(i)});
+        }
         hcsr_atlas_glyph_material_t resolved = {};
         const bool textured = entry.page >= 0 && destination.size.x > 0 && destination.size.y > 0;
         if (textured) {
@@ -391,13 +443,42 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
             resolved.blue = is_glyph && !entry.color_glyph ? glyph.blue : 1;
             resolved.alpha = area.opacity * (is_glyph ? glyph.alpha : 1);
         }
-        for (uint32_t j = 0; j < draw.index_count; j++) {
-            const auto &v = packet.vertices[packet.indices[draw.first_index + j]];
+        // Direct-color meshes have no atlas-dependent preparation. Compare their
+        // explicit immutable inputs and bulk-copy unchanged encoded vertices.
+        if (gpu_geometry && material.kind == HCSR_MATERIAL_VERTEX_COLOR && draw.index_count && !quad) {
+            const uint32_t first = packet.indices[draw.first_index];
+            bool contiguous = draw.index_count <= packet.vertex_count - first;
+            for (uint32_t j = 0; contiguous && j < draw.index_count; ++j)
+                contiguous = packet.indices[draw.first_index+j] == first+j;
+            if (contiguous) {
+                prepared_meshes.write[i] = {first, written, draw.index_count};
+                if (i < size_t(previous_meshes.size())) {
+                    const auto &old = previous_meshes[i];
+                    if (old.count == draw.index_count
+                        && old.source_first + old.count <= uint32_t(prepared_source.size())
+                        && old.source_first + old.count <= uint32_t(prepared_states.size())
+                        && old.prepared_first + old.count <= uint32_t(previous_vertices.size())
+                        && memcmp(prepared_source.ptr()+old.source_first, packet.vertices+first, old.count*sizeof(hcsr_paint_vertex_t)) == 0
+                        && memcmp(prepared_states.ptr()+old.source_first, packet.gpu.vertex_states+first, old.count*sizeof(uint32_t)) == 0) {
+                        memcpy(vertex_data+written, previous_vertices.ptr()+old.prepared_first, old.count*sizeof(Vertex));
+                        written += old.count;
+                        continue;
+                    }
+                }
+            }
+        }
+        for (uint32_t j = 0; j < (quad ? 4u : draw.index_count); j++) {
+            const auto source_index=packet.indices[draw.first_index + (quad && j==3 ? 5 : j)];
+            const auto &v = packet.vertices[source_index];
             const auto prepared = hcsr::render::prepare_vertex(v, packet.viewport_width, packet.viewport_height,
                     area, material.kind == HCSR_MATERIAL_VERTEX_COLOR, textured ? &resolved : nullptr);
             Vertex vertex = {};
             vertex.position_uv[0] = prepared.x;
             vertex.position_uv[1] = -prepared.y; // Godot render-target convention.
+            if(gpu_geometry) {
+                vertex.position_uv[0]=v.screen_x; vertex.position_uv[1]=v.screen_y;
+                vertex.state=packet.gpu.vertex_states[source_index];
+            }
             vertex.position_uv[2] = prepared.u;
             vertex.position_uv[3] = prepared.v;
             vertex.tint[0] = prepared.red; vertex.tint[1] = prepared.green;
@@ -409,12 +490,86 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
             vertex_data[written++] = vertex;
         }
 	}
+    vertices.resize(written);
+    if (gpu_geometry) {
+        if (!copy_table(prepared_source, packet.vertices, packet.vertex_count)
+            || !copy_table(prepared_states, packet.gpu.vertex_states, packet.vertex_count)) return false;
+    } else { prepared_source.clear(); prepared_states.clear(); }
     if (has_images && pages.is_empty()) {
         Page placeholder;
         placeholder.pixels = Image::create_empty(1, 1, false, Image::FORMAT_RGBA8);
         pages.push_back(placeholder);
     }
+    if(gpu_geometry) { all_primitives=primitives; all_batches=batches; update_visible_instances(packet); }
 	return has_images;
+}
+
+bool HCSRNewestImageAtlas::apply_color_patches(const hcsr_draw_packet_view_t &packet) {
+    if (!packet.gpu.color_patch_count) return false;
+    Vector<PreparedMesh> targets;
+    for (size_t i = 0; i < packet.gpu.color_patch_count; ++i) {
+        const auto &patch = packet.gpu.color_patches[i];
+        bool found = false;
+        for (const auto &mesh : prepared_meshes) {
+            if (mesh.source_first != patch.first || mesh.count != patch.count) continue;
+            if (uint64_t(mesh.source_first)+mesh.count > uint64_t(prepared_source.size())
+                || uint64_t(mesh.source_first)+mesh.count > uint64_t(prepared_states.size())
+                || uint64_t(mesh.prepared_first)+mesh.count > uint64_t(vertices.size())) return false;
+            for (uint32_t j = 0; j < mesh.count; ++j) {
+                const auto &old = prepared_source[mesh.source_first+j];
+                const auto &next = packet.vertices[mesh.source_first+j];
+                if (old.screen_x != next.screen_x || old.screen_y != next.screen_y
+                    || prepared_states[mesh.source_first+j] != packet.gpu.vertex_states[mesh.source_first+j]) return false;
+            }
+            targets.push_back(mesh);
+            found = true;
+            break;
+        }
+        if (!found) return false;
+    }
+    // Validate all ranges before changing any cached product. A missed base or
+    // unsupported mesh shape takes the complete-packet path instead.
+    auto *destination = vertices.ptrw();
+    auto *source = prepared_source.ptrw();
+    const hcsr_area_grayscale_material_t area = {};
+    for (const auto &mesh : targets) {
+        for (uint32_t j = 0; j < mesh.count; ++j) {
+            const auto &next = packet.vertices[mesh.source_first+j];
+            const auto color = hcsr::render::prepare_vertex(next, packet.viewport_width, packet.viewport_height, area, true);
+            auto &vertex = destination[mesh.prepared_first+j];
+            vertex.tint[0] = color.red; vertex.tint[1] = color.green;
+            vertex.tint[2] = color.blue; vertex.tint[3] = color.alpha;
+            source[mesh.source_first+j] = next;
+        }
+    }
+    return true;
+}
+
+void HCSRNewestImageAtlas::update_visible_instances(const hcsr_draw_packet_view_t &packet) {
+    // Coarse CPU visibility only. Precise element clipping stays in the shader.
+    hcsr::render::compositing_plan plan; std::string error;
+    if(group_depth && !hcsr::render::plan_compositing(packet,plan,error)) return;
+    primitives.clear(); batches.clear();
+    size_t event=0;
+    for(const auto &original:all_batches) {
+        Batch batch=original; batch.first=primitives.size(); batch.count=0;
+        if(batch.kind) {
+            while(event<plan.events.size() && !plan.events[event].kind) ++event;
+            if(event<plan.events.size()) {
+                const auto &b=plan.events[event++].bounds;
+                batch.bounds=Rect2(b.x/logical_width,b.y/logical_height,b.width/logical_width,b.height/logical_height);
+            }
+        }
+        for(uint32_t j=0;j<original.count;j++) {
+            const auto &primitive=all_primitives[original.first+j];
+            if(primitive.draw_index!=UINT32_MAX) {
+                const auto &b=packet.draw_items[primitive.draw_index].bounds;
+                if(b.x+b.width<0 || b.y+b.height<0 || b.x>logical_width || b.y>logical_height) continue;
+            }
+            primitives.push_back(primitive); ++batch.count;
+        }
+        if(batch.kind || batch.count) batches.push_back(batch);
+    }
 }
 
 bool HCSRNewestImageAtlas::upload(RenderingDevice *device) {
@@ -441,24 +596,50 @@ bool HCSRNewestImageAtlas::upload(RenderingDevice *device) {
 			return false;
 		}
 	}
-	const uint32_t bytes = vertices.size() * sizeof(Vertex);
-	if (bytes > buffer_capacity) {
-		for (Page &page : pages) {
-			if (page.uniform.is_valid()) {
-				device->free_rid(page.uniform);
-			}
-			page.uniform = RID();
-		}
-		if (buffer.is_valid()) {
-			release_groups(device);
-			device->free_rid(buffer);
-		}
-		buffer_capacity = MAX(bytes, 65536u);
-		buffer = device->storage_buffer_create(buffer_capacity);
-	}
-	if (!buffer.is_valid() || device->buffer_update(buffer, 0, bytes, vertices.ptr()) != OK) {
-		return false;
-	}
+    auto ensure_buffer = [&](RID &rid,uint32_t &capacity,uint32_t bytes) {
+        bytes=MAX(bytes,16u);
+        if(bytes<=capacity) return;
+        for(Page &page:pages) { if(page.uniform.is_valid()) device->free_rid(page.uniform); page.uniform=RID(); }
+        release_groups(device);
+        if(rid.is_valid()) device->free_rid(rid);
+        capacity=MAX(bytes,65536u); rid=device->storage_buffer_create(capacity);
+        if (&rid == &buffer) { geometry_dirty=true; uploaded_vertices.clear(); }
+    };
+    const uint32_t bytes=vertices.size()*sizeof(Vertex);
+    ensure_buffer(buffer,buffer_capacity,bytes);
+    ensure_buffer(state_buffer,state_capacity,gpu_states.size()*sizeof(hcsr_gpu_state_t));
+    ensure_buffer(clip_buffer,clip_capacity,gpu_clips.size()*sizeof(hcsr_gpu_clip_t));
+    ensure_buffer(plane_buffer,plane_capacity,gpu_planes.size()*sizeof(hcsr_gpu_plane_t));
+    ensure_buffer(primitive_buffer,primitive_capacity,primitives.size()*sizeof(Primitive));
+    auto update = [&](RID rid,uint32_t count,const void *data,bool geometry) {
+        if(!count) return true;
+        if(device->buffer_update(rid,0,count,data)!=OK) return false;
+        if(geometry) geometry_uploaded_bytes+=count; else state_uploaded_bytes+=count;
+        return true;
+    };
+    if (geometry_dirty) {
+        // Local drawing changes usually touch a few boxes. Keep unchanged GPU
+        // storage, including offscreen geometry, instead of uploading the scene.
+        if (gpu_geometry && uploaded_vertices.size() == vertices.size()) {
+            constexpr uint32_t block = 1024 * sizeof(Vertex);
+            const auto *next = reinterpret_cast<const uint8_t *>(vertices.ptr());
+            const auto *previous = reinterpret_cast<const uint8_t *>(uploaded_vertices.ptr());
+            for (uint32_t offset = 0; offset < bytes; offset += block) {
+                const uint32_t count = MIN(block, bytes - offset);
+                if (memcmp(next + offset, previous + offset, count) == 0) continue;
+                if (device->buffer_update(buffer, offset, count, next + offset) != OK) return false;
+                geometry_uploaded_bytes += count;
+            }
+        } else if (!update(buffer, bytes, vertices.ptr(), true)) return false;
+        uploaded_vertices = vertices;
+    }
+    const uint32_t instance_bytes=primitives.size()*sizeof(Primitive);
+    if(instance_bytes && device->buffer_update(primitive_buffer,0,instance_bytes,primitives.ptr())!=OK) return false;
+    instance_uploaded_bytes+=instance_bytes;
+    if(!update(state_buffer,gpu_states.size()*sizeof(hcsr_gpu_state_t),gpu_states.ptr(),false)
+        || !update(clip_buffer,gpu_clips.size()*sizeof(hcsr_gpu_clip_t),gpu_clips.ptr(),false)
+        || !update(plane_buffer,gpu_planes.size()*sizeof(hcsr_gpu_plane_t),gpu_planes.ptr(),false)) return false;
+    geometry_dirty=false;
 	for (Page &page : pages) {
 		RD::TextureFormat format;
 		format.format = RD::DATA_FORMAT_R8G8B8A8_UNORM;
@@ -507,6 +688,8 @@ bool HCSRNewestImageAtlas::upload(RenderingDevice *device) {
 			storage.binding = 1;
 			storage.append_id(buffer);
 			uniforms.push_back(storage);
+            const RID extra[]={state_buffer,clip_buffer,plane_buffer,primitive_buffer};
+            for(int i=0;i<4;i++) { RD::Uniform u; u.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER; u.binding=2+i; u.append_id(extra[i]); uniforms.push_back(u); }
 			page.uniform = device->uniform_set_create(VectorView(uniforms.ptr(), uniforms.size()), shader, 0);
 			if (!page.uniform.is_valid()) {
 				return false;
@@ -518,6 +701,21 @@ bool HCSRNewestImageAtlas::upload(RenderingDevice *device) {
 
 bool HCSRNewestImageAtlas::draw(RenderingDevice *device, RID target, const Color &background) {
 	using RD = RenderingDevice;
+    // Optional timestamps: no profiling queries in normal application runs.
+    const bool profile_gpu=OS::get_singleton()->get_environment("HCSR_GPU_PROFILE")=="1";
+    const String label="HCSR/"+String::num_uint64(target.get_id());
+    if(profile_gpu) {
+        uint64_t start=0;
+        for(uint32_t i=0;i<device->get_captured_timestamps_count();i++) {
+            const String name=device->get_captured_timestamp_name(i);
+            if(name==label+"/begin") start=device->get_captured_timestamp_gpu_time(i);
+            if(name==label+"/end" && start) { last_gpu_ms=double(device->get_captured_timestamp_gpu_time(i)-start)/1000000.0; last_gpu_frame=device->get_captured_timestamps_frame(); }
+        }
+        device->capture_timestamp(label+"/begin");
+    }
+    struct TimestampEnd { RenderingDevice *device; String label; bool active;
+        ~TimestampEnd() { if(active) device->capture_timestamp(label+"/end"); }
+    } timestamp_end{device,label,profile_gpu};
 	if (!uploaded && !upload(device)) {
 		return false;
 	}
@@ -564,6 +762,8 @@ bool HCSRNewestImageAtlas::draw(RenderingDevice *device, RID target, const Color
         image.append_id(sampler); image.append_id(group.texture); uniforms.push_back(image);
         RD::Uniform storage; storage.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER; storage.binding=1;
         storage.append_id(buffer); uniforms.push_back(storage);
+        const RID extra[]={state_buffer,clip_buffer,plane_buffer,primitive_buffer};
+        for(int i=0;i<4;i++) { RD::Uniform u; u.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER; u.binding=2+i; u.append_id(extra[i]); uniforms.push_back(u); }
         group.uniform=device->uniform_set_create(VectorView(uniforms.ptr(),uniforms.size()),shader,0);
         group_targets.push_back(group);
         ++group_allocations;
@@ -577,9 +777,11 @@ bool HCSRNewestImageAtlas::draw(RenderingDevice *device, RID target, const Color
         if(batch.kind==HCSR_GROUP_END) device->draw_list_enable_scissor(list,region_for(batch));
         else device->draw_list_disable_scissor(list);
         device->draw_list_bind_uniform_set(list,batch.kind==HCSR_GROUP_END ? group_targets[batch.depth-1].uniform : pages[batch.page].uniform,0);
-        const uint32_t push[]={batch.first,0,0,0};
-        device->draw_list_set_push_constant(list,push,sizeof(push));
-        device->draw_list_draw(list,false,1,batch.count);
+        const struct { uint32_t first,flags; float width,height,target_width,target_height; } push{batch.first,
+            (gpu_geometry ? 2u : 0u) | (clipping_enabled ? 1u : 0u),logical_width,logical_height,float(size.x),float(size.y)};
+        device->draw_list_set_push_constant(list,&push,sizeof(push));
+        device->draw_list_draw(list,false,gpu_geometry ? batch.count : 1,gpu_geometry ? 6 : batch.count);
+        ++last_draw_calls;
     };
     std::vector<std::vector<size_t>> passes;
     // Process-wide diagnostic override for paired profiling and pixel checks.
@@ -588,7 +790,7 @@ bool HCSRNewestImageAtlas::draw(RenderingDevice *device, RID target, const Color
         const auto &b=batches[i];
         return hcsr::render::group_event{b.kind,b.depth,b.opacity,{b.bounds.position.x,b.bounds.position.y,b.bounds.size.x,b.bounds.size.y}};
     },group_depth,1,1,size.x,size.y,passes);
-    last_render_passes=0;
+    last_render_passes=0; last_draw_calls=0;
     if(last_disjoint_groups) {
         for(int depth=int(group_depth);depth>=0;--depth) {
             const Color clear=depth ? Color(0,0,0,0) : background;
@@ -650,7 +852,7 @@ void HCSRNewestImageAtlas::release(RenderingDevice *device) {
 				device->free_rid(page.texture);
 			}
 		}
-		for (RID rid : { pipeline, buffer, sampler, shader }) {
+		for (RID rid : { pipeline, buffer, sampler, shader, state_buffer,clip_buffer,plane_buffer,primitive_buffer }) {
 			if (rid.is_valid()) {
 				device->free_rid(rid);
 			}
@@ -664,6 +866,11 @@ void HCSRNewestImageAtlas::release(RenderingDevice *device) {
 	batches.clear();
 	pipeline = buffer = sampler = shader = RID();
 	buffer_capacity = 0;
+    state_buffer=clip_buffer=plane_buffer=primitive_buffer=RID();
+    state_capacity=clip_capacity=plane_capacity=primitive_capacity=0;
+    geometry_generation=0; gpu_geometry=false; primitives.clear();
+    uploaded_vertices.clear();
+    prepared_meshes.clear(); prepared_source.clear(); prepared_states.clear();
 }
 
 // Compile the same paint program used by the GPU adapters for the CPU path.
@@ -777,6 +984,17 @@ Dictionary HCSRNewestImageAtlas::get_statistics() const {
     int glyph_pages = 0; for (const Page &page : pages) if (page.glyphs) glyph_pages++;
     result["glyph_pages"] = glyph_pages;
     result["vertices"] = vertices.size();
+    result["gpu_geometry"] = gpu_geometry;
+    result["clipping_enabled"] = clipping_enabled;
+    result["instances"] = primitives.size();
+    result["draw_calls"] = last_draw_calls;
+    result["gpu_ms"] = last_gpu_ms;
+    result["gpu_timestamp_frame"] = last_gpu_frame;
+    result["geometry_uploaded_bytes"] = geometry_uploaded_bytes;
+    result["instance_uploaded_bytes"] = instance_uploaded_bytes;
+    result["state_uploaded_bytes"] = state_uploaded_bytes;
+    result["geometry_generation"] = geometry_generation;
+    result["color_patch_updates"] = color_patch_updates;
 	result["uploaded_bytes"] = uploaded_bytes;
 	result["page_size"] = PAGE_SIZE;
 	result["draw_batches"] = batches.size();
