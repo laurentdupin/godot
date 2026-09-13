@@ -5,7 +5,7 @@
 #include "html_surface_hcsr_newest_backend.h"
 
 #include "hcsr_newest_performance_monitor.h"
-#include "hcsr_newest_image_atlas.h"
+#include "hcsr_newest_scene_renderer.h"
 #include "hcsr_newest_text.h"
 #include "hcsr_newest_backdrop.h"
 
@@ -21,7 +21,8 @@
 
 struct HTMLSurfaceHCSRNewestBackend::State {
 	mutable Mutex mutex;
-	HCSRNewestImageAtlas image_atlas;
+	HCSRNewestRasterResources raster_resources;
+	HCSRNewestSceneRenderer scene_renderer{raster_resources};
 	HCSRNewestText text;
 	HCSRNewestBackdrop backdrop;
 	HTMLGPUBackdropFrame prepared_backdrop;
@@ -286,7 +287,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
             if (!entry.value->closing && rendered) output_scale = MAX(output_scale, MAX(float(entry.value->physical_size.x) / packet.viewport_width, float(entry.value->physical_size.y) / packet.viewport_height));
     }
     const uint64_t atlas_start_usec = OS::get_singleton()->get_ticks_usec();
-    const bool textured = rendered && state->image_atlas.prepare(packet, state->document, output_scale);
+    const bool textured = rendered && state->scene_renderer.prepare(packet, state->document, output_scale);
     const uint64_t atlas_end_usec = OS::get_singleton()->get_ticks_usec();
 	if (textured) {
 		RenderingServer *server = RenderingServer::get_singleton();
@@ -294,13 +295,13 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 		auto draw_output = [&](State *output, const Size2i &size, const Color &clear) {
 			if (renderer == HTML_SURFACE_HCSR_NEWEST_CPU) {
 				Ref<Image> image = Image::create_empty(size.x, size.y, false, Image::FORMAT_RGBA8);
-				state->image_atlas.draw_cpu(image, clear);
+				state->scene_renderer.draw_cpu(image, clear);
 				if (output->mipmaps) image->generate_mipmaps();
 				output->texture->update_from_image(image);
 				return true;
 			}
 			if (!device || !ensure_gpu_target(output, server, device, size)
-					|| !state->image_atlas.draw(device, output->rd_texture, clear)) return false;
+					|| !state->scene_renderer.draw(device, output->rd_texture, clear)) return false;
 			output->gpu_texture_initialized = true;
 			if (output->mipmaps) {
 				if (!output->mipmapped_texture.is_valid()) output->mipmapped_texture = server->texture_drawable_create(size.x, size.y,
@@ -332,7 +333,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
         print_line("HCSR_RECORD_DETAIL|" + uitos(atlas_start_usec - record_start_usec) + "|" + uitos(atlas_end_usec - atlas_start_usec) + "|" + uitos(now - atlas_end_usec) + "|" + uitos(packet.index_count));
     }
 	hcsr_draw_packet_destroy(packet_handle);
-	const Dictionary atlas_statistics = state->image_atlas.get_statistics();
+	const Dictionary atlas_statistics = state->scene_renderer.get_statistics();
 	const double record_seconds = (double)(OS::get_singleton()->get_ticks_usec() - record_start_usec) / 1000000.0;
 	double input_to_visible_seconds = 0.0;
 	{
@@ -342,7 +343,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 		}
 		state->render_pending = false;
 		state->image_atlas_statistics = atlas_statistics;
-        state->needs_another_frame |= state->image_atlas.has_pending_glyphs();
+        state->needs_another_frame |= state->raster_resources.has_pending_glyphs();
 		if (rendered && !state->closing) {
 			state->presentation_changed = true;
 			state->metadata.generation = rendered_generation;
@@ -438,7 +439,7 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
     if (hcsr_runtime_set_image_resolver(state->runtime,
             [](void *user, const hcsr_utf8_t *source, float *width, float *height) -> int32_t {
                 State *owner = static_cast<State *>(user);
-                const Size2i size = owner->image_atlas.resolve_size(owner->document,
+                const Size2i size = owner->raster_resources.resolve_size(owner->document,
                         String::utf8(source->data, source->length));
                 *width = size.x; *height = size.y;
                 return size.x > 0 && size.y > 0;
@@ -1148,7 +1149,7 @@ void HTMLSurfaceHCSRNewestBackend::_destroy_state_on_render_thread(uint64_t p_st
 		if (state->pending_packet != 0) hcsr_draw_packet_destroy(state->pending_packet);
 		for (const KeyValue<uint64_t, State *> &entry : state->outputs) release_output(entry.value, server, device);
 		state->outputs.clear();
-		state->image_atlas.release(device);
+		state->scene_renderer.release(device);
 		release_gpu_target(state, server, device);
 		if (state->scene != 0) hcsr_scene_destroy(state->scene);
 		if (state->source != 0) hcsr_source_destroy(state->source);

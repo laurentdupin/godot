@@ -658,7 +658,8 @@ elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll"):
     newest_backend_sources = []
     env_html_css.add_source_files(newest_backend_sources, "backend/hcsr_newest_performance_monitor.cpp")
     env_html_css.add_source_files(newest_backend_sources, "backend/html_surface_hcsr_newest_backend.cpp")
-    env_html_css.add_source_files(newest_backend_sources, "backend/hcsr_newest_image_atlas.cpp")
+    env_html_css.add_source_files(newest_backend_sources, "backend/hcsr_newest_scene_renderer.cpp")
+    env_html_css.add_source_files(newest_backend_sources, "backend/hcsr_newest_raster_resources.cpp")
     env_html_css.add_source_files(newest_backend_sources, "backend/hcsr_newest_text.cpp")
     env_html_css.add_source_files(newest_backend_sources, "backend/hcsr_newest_backdrop.cpp")
     env_html_css.add_source_files(newest_backend_sources, "backend/html_surface_hcsr_newest_factory.cpp")

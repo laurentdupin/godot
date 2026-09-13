@@ -2,281 +2,13 @@
 #include "hcsr_prepared_drawing.h"
 #include "hcsr_shader_sources.h"
 #include "hcsr_compositing.h"
-#include "hcsr_newest_image_atlas.h"
+#include "hcsr_newest_scene_renderer.h"
 #include "hcsr_image_codec.h"
-
-#include "../bridge/html_asset_provider.h"
-
-#include "core/crypto/crypto_core.h"
-#include "core/io/xml_parser.h"
 #include "core/os/os.h"
-
 #include <cmath>
-#include "servers/text/text_server.h"
 
-static bool svg_has_filters(const Vector<uint8_t> &bytes) {
-    XMLParser parser;
-    if (parser.open_buffer(bytes) != OK) return false;
-    while (parser.read() == OK) {
-        if (parser.get_node_type() == XMLParser::NODE_ELEMENT && parser.get_node_name().get_slice(":", parser.get_node_name().contains(":") ? 1 : 0) == "filter") return true;
-    }
-    return false;
-}
-
-Ref<Image> HCSRNewestImageAtlas::load_image(const Ref<HTMLDocument> &document, const String &source) {
-    // Caller holds image_mutex. Metadata does not allocate atlas/GPU resources.
-    const String key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source;
-    if (const Ref<Image> *cached = decoded_sources.getptr(key)) return *cached;
-	Vector<uint8_t> bytes;
-	String mime;
-	if (source.begins_with("data:")) {
-		const int comma = source.find(",");
-		if (comma >= 0) {
-			mime = source.substr(5, comma - 5).to_lower();
-			const String data = source.substr(comma + 1);
-			if (mime.ends_with(";base64")) {
-				const CharString encoded = data.ascii();
-				bytes.resize(encoded.length());
-				size_t length = 0;
-				if (CryptoCore::b64_decode(bytes.ptrw(), bytes.size(), &length,
-							(const uint8_t *)encoded.get_data(), encoded.length()) == OK) {
-					bytes.resize(length);
-				} else {
-					bytes.clear();
-				}
-			} else {
-				const CharString decoded = data.uri_decode().utf8();
-				bytes.resize(decoded.length());
-				if (!bytes.is_empty()) {
-					memcpy(bytes.ptrw(), decoded.get_data(), bytes.size());
-				}
-			}
-		}
-	} else {
-		HTMLAssetResource asset;
-		if (HTMLGodotAssetProvider::load_asset(document, source, asset) == OK) {
-			bytes = asset.bytes;
-			mime = asset.mime_type;
-		}
-	}
-	Ref<Image> image;
-	image.instantiate();
-	Error error = ERR_FILE_UNRECOGNIZED;
-	if (!bytes.is_empty()) {
-		if (mime.begins_with("image/svg+xml")) {
-			// Share LunaSVG with Interactive/hcsr_old where supported. LunaSVG skips
-            // SVG filters, so filtered assets use Godot's opacity-corrected ThorVG.
-            if (svg_has_filters(bytes)) {
-                error = image->load_svg_from_buffer(bytes);
-            } else {
-            hcsr_decoded_image decoded = {};
-            if (hcsr_svg_decode_bgra32(bytes.ptr(), bytes.size(), 0, 0, &decoded)) {
-                Vector<uint8_t> rgba;
-                rgba.resize(decoded.width * decoded.height * 4);
-                for (int y = 0; y < decoded.height; ++y) {
-                    const uint8_t *src = decoded.pixels + y * decoded.stride;
-                    uint8_t *dst = rgba.ptrw() + y * decoded.width * 4;
-                    for (int x = 0; x < decoded.width; ++x) {
-                        dst[x*4] = src[x*4+2]; dst[x*4+1] = src[x*4+1];
-                        dst[x*4+2] = src[x*4]; dst[x*4+3] = src[x*4+3];
-                    }
-                }
-                image->set_data(decoded.width, decoded.height, false, Image::FORMAT_RGBA8, rgba);
-                hcsr_image_free(&decoded);
-                error = OK;
-            }
-            }
-		} else if (mime.begins_with("image/png")) {
-			error = image->load_png_from_buffer(bytes);
-		} else if (mime.begins_with("image/jpeg")) {
-			error = image->load_jpg_from_buffer(bytes);
-		} else if (mime.begins_with("image/webp")) {
-			error = image->load_webp_from_buffer(bytes);
-		} else if (mime.begins_with("image/bmp")) {
-			error = image->load_bmp_from_buffer(bytes);
-		}
-	}
-    if (error != OK || image->is_empty()) image.unref();
-    else decoded_images++;
-    decoded_sources.insert(key, image);
-    source_sizes.insert(key, image.is_valid() ? image->get_size() : Size2i());
-    return image;
-}
-
-Size2i HCSRNewestImageAtlas::resolve_size(const Ref<HTMLDocument> &document, const String &source) {
-    MutexLock lock(image_mutex);
-    const String key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source;
-    if (const Size2i *cached = source_sizes.getptr(key)) return *cached;
-    Ref<Image> image = load_image(document, source);
-    return image.is_valid() ? image->get_size() : Size2i();
-}
-
-HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::resolve(const Ref<HTMLDocument> &document, const String &source, const Size2i &natural, const Vector2 &physical_size) {
-	// Cache power-of-two reductions, not a new raster for every animated size.
-	const float ratio = MIN(natural.x / MAX(1.0f, physical_size.x), natural.y / MAX(1.0f, physical_size.y));
-	const int level = ratio >= 2 ? MIN(12, int(std::floor(std::log2(ratio)))) : 0;
-	const String source_key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source;
-	const String key = source_key + "\nminification:" + itos(level);
-	if (const Entry *existing = entries.getptr(key)) {
-		return *existing;
-	}
-	Entry entry;
-	Ref<Image> image;
-	{
-		MutexLock lock(image_mutex);
-		image = load_image(document, source);
-		decoded_sources.erase(source_key); // Atlas owns pixels after packing; retain only metadata.
-	}
-	if (image.is_valid()) {
-		entry.natural_size = image->get_size();
-		image->convert(Image::FORMAT_RGBA8); // Straight alpha; native BGRA codec contract is unchanged.
-        if (level > 0) {
-            // Filter each image independently in premultiplied alpha. Whole-atlas
-            // mipmaps would mix neighboring entries and produce edge fringes.
-            image->premultiply_alpha();
-            image->generate_mipmaps();
-            image = image->get_image_from_mipmap(MIN(level, image->get_mipmap_count()));
-            Vector<uint8_t> pixels = image->get_data();
-            uint8_t *data = pixels.ptrw();
-            for (int64_t pixel = 0; pixel < int64_t(image->get_width()) * image->get_height(); pixel++) {
-                uint8_t *rgba = data + pixel * 4;
-                for (int channel = 0; channel < 3; channel++) {
-                    rgba[channel] = rgba[3] ? MIN(255, (int(rgba[channel]) * 255 + rgba[3] / 2) / rgba[3]) : 0;
-                }
-            }
-            image->set_data(image->get_width(), image->get_height(), false, Image::FORMAT_RGBA8, pixels);
-        }
-		const float scale = MIN(1.0f, float(PAGE_SIZE - 2) / MAX(image->get_width(), image->get_height()));
-		if (scale < 1) {
-			image->resize(MAX(1, int(image->get_width() * scale)), MAX(1, int(image->get_height() * scale)));
-		}
-		const int width = image->get_width() + 2, height = image->get_height() + 2;
-		for (int i = 0; i <= pages.size() && i < MAX_PAGES; i++) {
-			if (i == pages.size()) {
-                int image_pages = 0; for (const Page &existing : pages) if (!existing.glyphs && existing.pixels->get_width() == PAGE_SIZE) image_pages++;
-                if (image_pages >= 4) break;
-				Page page;
-				page.pixels = Image::create_empty(PAGE_SIZE, PAGE_SIZE, false, Image::FORMAT_RGBA8);
-				pages.push_back(page);
-			}
-			Page &page = pages.write[i];
-            if (page.glyphs || page.pixels->get_width() != PAGE_SIZE) continue;
-			int x = page.x, y = page.y, row = page.row_height;
-			if (x + width > PAGE_SIZE) {
-				x = 0;
-				y += row;
-				row = 0;
-			}
-			if (y + height > PAGE_SIZE) {
-				continue;
-			}
-			entry.page = i;
-			entry.rect = Rect2i(x + 1, y + 1, width - 2, height - 2);
-			page.pixels->blit_rect(image, Rect2i(Point2i(), image->get_size()), entry.rect.position);
-			// Extrude one texel on every side so linear sampling never bleeds adjacent entries.
-			for (int px = -1; px <= image->get_width(); px++) {
-				page.pixels->set_pixel(x + px + 1, y, image->get_pixel(CLAMP(px, 0, image->get_width() - 1), 0));
-				page.pixels->set_pixel(x + px + 1, y + height - 1, image->get_pixel(CLAMP(px, 0, image->get_width() - 1), image->get_height() - 1));
-			}
-			for (int py = 0; py < image->get_height(); py++) {
-				page.pixels->set_pixel(x, y + py + 1, image->get_pixel(0, py));
-				page.pixels->set_pixel(x + width - 1, y + py + 1, image->get_pixel(image->get_width() - 1, py));
-			}
-			page.dirty.push_back(Rect2i(x, y, width, height));
-			page.x = x + width;
-			page.y = y;
-			page.row_height = MAX(row, height);
-			break;
-		}
-	}
-	if (entry.page < 0) {
-		WARN_PRINT("hcsr_newest image unavailable or atlas capacity exceeded: " + source.left(100));
-	}
-	entries.insert(key, entry); // Cache failures too; never retry I/O every animation frame.
-	return entry;
-}
-
-HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::resolve_glyph(const hcsr_glyph_material_t &glyph, float scale) {
-	uint32_t size_bits;
-    memcpy(&size_bits, &glyph.font_size, sizeof(size_bits));
-    const GlyphKey identity{ glyph.face, glyph.glyph, size_bits };
-	const float required = CLAMP(glyph.font_size * scale, 1.0f, 768.0f);
-	const int *existing_level = glyph_levels.getptr(identity);
-    int level = existing_level ? *existing_level : 0;
-	// Keep 20% headroom and hysteresis: hover scaling never follows fractional raster sizes.
-	if (level == 0 || required > level || required < level * .45f) {
-		level = 12;
-		while (level < required * 1.2f && level < 768) level = (level * 3 + 1) / 2;
-		level = MIN(level, 768);
-		glyph_levels.insert(identity, level);
-	}
-	const GlyphKey key{ glyph.face, glyph.glyph, uint32_t(level) };
-	const GlyphKey face_glyph{ glyph.face, glyph.glyph, 0 };
-    if (const Entry *existing = glyph_entries.getptr(key)) {
-        if (existing->page >= 0) return *existing;
-        // A full atlas must not replace a valid lower-resolution glyph with a missing entry.
-        if (const Entry *fallback = last_glyphs.getptr(face_glyph)) return *fallback;
-        return *existing;
-    }
-    if (const Entry *fallback = last_glyphs.getptr(face_glyph)) {
-        if (!queued_glyphs.has(key)) { pending_glyphs.push_back({ glyph, level, key }); queued_glyphs.insert(key, true); }
-        return *fallback;
-    }
-    return rasterize_glyph(glyph, level);
-}
-
-HCSRNewestImageAtlas::Entry HCSRNewestImageAtlas::rasterize_glyph(const hcsr_glyph_material_t &glyph, int level) {
-    const GlyphKey key{ glyph.face, glyph.glyph, uint32_t(level) };
-    const GlyphKey face_glyph{ glyph.face, glyph.glyph, 0 };
-	Entry entry;
-	entry.raster_size = level;
-	TextServer *ts = TextServerManager::get_singleton()->get_primary_interface().ptr();
-	const RID face = RID::from_uint64(glyph.face);
-	const Vector2i size(level, 0);
-	ts->font_render_glyph(face, size, glyph.glyph);
-	const int texture = ts->font_get_glyph_texture_idx(face, size, glyph.glyph);
-	if (texture < 0) { glyph_entries.insert(key, entry); return entry; }
-	Ref<Image> source = ts->font_get_texture_image(face, size, texture);
-	const Rect2i uv = ts->font_get_glyph_uv_rect(face, size, glyph.glyph);
-	if (source.is_null() || !uv.has_area()) { glyph_entries.insert(key, entry); return entry; }
-	entry.color_glyph = source->get_format() == Image::FORMAT_RGBA8;
-	Ref<Image> image = source->get_region(uv);
-	image->convert(Image::FORMAT_RGBA8);
-	entry.glyph_offset = ts->font_get_glyph_offset(face, size, glyph.glyph);
-    entry.glyph_size = ts->font_get_glyph_size(face, size, glyph.glyph);
-	entry.natural_size = image->get_size();
-	const int width = image->get_width() + 2, height = image->get_height() + 2;
-	for (int i = 0; i <= pages.size() && i < MAX_PAGES; i++) {
-		if (i == pages.size()) {
-            int glyph_pages = 0; for (const Page &existing : pages) if (existing.glyphs) glyph_pages++;
-            if (glyph_pages >= 4) break;
-			Page page;
-			page.glyphs = true;
-			page.pixels = Image::create_empty(PAGE_SIZE, PAGE_SIZE, false, Image::FORMAT_RGBA8);
-			pages.push_back(page);
-		}
-		Page &page = pages.write[i];
-		if (!page.glyphs || page.pixels->get_width() != PAGE_SIZE) continue;
-		int x = page.x, y = page.y, row = page.row_height;
-		if (x + width > PAGE_SIZE) { x = 0; y += row; row = 0; }
-		if (y + height > PAGE_SIZE || width > PAGE_SIZE) continue;
-		entry.page = i;
-		entry.rect = Rect2i(x + 1, y + 1, width - 2, height - 2);
-		page.pixels->blit_rect(image, Rect2i(Point2i(), image->get_size()), entry.rect.position);
-		// Glyph padding stays transparent, unlike the extruded borders of image entries.
-		page.dirty.push_back(Rect2i(x, y, width, height));
-		page.x = x + width; page.y = y; page.row_height = MAX(row, height);
-		rasterized_glyphs++;
-		break;
-	}
-	if (entry.page < 0) WARN_PRINT("HCSR glyph atlas capacity exceeded");
-	glyph_entries.insert(key, entry);
-    if (entry.page >= 0) last_glyphs.insert(face_glyph, entry);
-	return entry;
-}
-
-bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale) {
-    const bool had_pending = !pending_glyphs.is_empty();
+bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale) {
+    const bool had_pending = resources.has_pending_glyphs();
     const bool next_gpu = packet.format == HCSR_DRAW_PACKET_FORMAT_GPU;
     if (!hcsr::render::validate_gpu_packet(packet)) return false;
     auto copy_table = [](auto &destination, const auto *source, size_t count) {
@@ -312,13 +44,7 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
     if (next_gpu && prepared_meshes.resize(int(packet.draw_item_count)) != OK) return false;
     gpu_geometry=next_gpu; geometry_generation=next_gpu ? packet.gpu.geometry_generation : 0;
     geometry_dirty=true; prepared_scale=output_scale; primitives.clear();
-    // Upgrade previously seen glyphs incrementally; the old level remains visible meanwhile.
-    for (int i = 0; i < 32 && !pending_glyphs.is_empty(); i++) {
-        PendingGlyph pending = pending_glyphs[pending_glyphs.size() - 1];
-        pending_glyphs.resize(pending_glyphs.size() - 1);
-        queued_glyphs.erase(pending.key);
-        rasterize_glyph(pending.glyph, pending.level);
-    }
+    resources.advance_rasterization();
 	vertices.clear();
 	batches.clear();
 	hcsr::render::compositing_plan group_plan;
@@ -368,7 +94,7 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
 			memcpy(&image, packet.material_payload + material.payload_offset, sizeof(image));
 			if (image.source_length <= material.payload_size - sizeof(image)) {
 				const String source = String::utf8((const char *)(packet.material_payload + material.payload_offset + sizeof(image)), image.source_length);
-				const Size2i natural = resolve_size(document, source);
+				const Size2i natural = resources.resolve_size(document, source);
 				destination = Rect2(image.local_rect.x, image.local_rect.y, image.local_rect.width, image.local_rect.height);
 				if (natural.x > 0 && natural.y > 0 && image.object_fit != 0) {
                     hcsr_rect_t fitted;
@@ -388,7 +114,7 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
                     const auto &m=packet.gpu.states[packet.gpu.vertex_states[packet.indices[draw.first_index]]].transform;
                     transform_scale=MAX(Vector2(m[0],m[1]).length(),Vector2(m[4],m[5]).length());
                 }
-                entry = resolve(document, source, natural, destination.size * (output_scale * transform_scale));
+                entry = resources.resolve_image(document, source, natural, destination.size * (output_scale * transform_scale));
 			}
 		}
         hcsr_glyph_material_t glyph = {};
@@ -406,7 +132,7 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
                 const auto &m=packet.gpu.states[packet.gpu.vertex_states[packet.indices[draw.first_index]]].transform;
                 transform_scale=MAX(Vector2(m[0],m[1]).length(),Vector2(m[4],m[5]).length());
             }
-            entry = resolve_glyph(glyph, output_scale * transform_scale);
+            entry = resources.resolve_glyph(glyph, output_scale * transform_scale);
             if (entry.page >= 0) {
                 float factor = glyph.font_size / entry.raster_size;
                 destination = Rect2(Vector2(glyph.baseline_x, glyph.baseline_y) + entry.glyph_offset * factor, entry.glyph_size * factor);
@@ -488,16 +214,12 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
     // Empty and solid-only scenes use the same submission path. A bound
     // placeholder satisfies the shader interface without inventing a second
     // renderer for clears or for missing image resources.
-    if (pages.is_empty()) {
-        Page placeholder;
-        placeholder.pixels = Image::create_empty(1, 1, false, Image::FORMAT_RGBA8);
-        pages.push_back(placeholder);
-    }
+    resources.ensure_sampling_page();
     if(gpu_geometry) { all_primitives=primitives; all_batches=batches; update_visible_instances(packet); }
 	return true;
 }
 
-bool HCSRNewestImageAtlas::apply_color_patches(const hcsr_draw_packet_view_t &packet) {
+bool HCSRNewestSceneRenderer::apply_color_patches(const hcsr_draw_packet_view_t &packet) {
     if (!packet.gpu.color_patch_count) return false;
     Vector<PreparedMesh> targets;
     for (size_t i = 0; i < packet.gpu.color_patch_count; ++i) {
@@ -538,7 +260,7 @@ bool HCSRNewestImageAtlas::apply_color_patches(const hcsr_draw_packet_view_t &pa
     return true;
 }
 
-void HCSRNewestImageAtlas::update_visible_instances(const hcsr_draw_packet_view_t &packet) {
+void HCSRNewestSceneRenderer::update_visible_instances(const hcsr_draw_packet_view_t &packet) {
     // Coarse CPU visibility only. Precise element clipping stays in the shader.
     hcsr::render::compositing_plan plan; std::string error;
     if(group_depth && !hcsr::render::plan_compositing(packet,plan,error)) return;
@@ -565,7 +287,7 @@ void HCSRNewestImageAtlas::update_visible_instances(const hcsr_draw_packet_view_
     }
 }
 
-bool HCSRNewestImageAtlas::upload(RenderingDevice *device) {
+bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {
 	using RD = RenderingDevice;
 	if (!shader.is_valid()) {
         const char *sources[] = { hcsr::shaders::godot_vertex, hcsr::shaders::godot_fragment };
@@ -592,7 +314,7 @@ bool HCSRNewestImageAtlas::upload(RenderingDevice *device) {
     auto ensure_buffer = [&](RID &rid,uint32_t &capacity,uint32_t bytes) {
         bytes=MAX(bytes,16u);
         if(bytes<=capacity) return;
-        for(Page &page:pages) { if(page.uniform.is_valid()) device->free_rid(page.uniform); page.uniform=RID(); }
+        for(GpuPage &page:gpu_pages) { if(page.uniform.is_valid()) device->free_rid(page.uniform); page.uniform=RID(); }
         release_groups(device);
         if(rid.is_valid()) device->free_rid(rid);
         capacity=MAX(bytes,65536u); rid=device->storage_buffer_create(capacity);
@@ -633,25 +355,28 @@ bool HCSRNewestImageAtlas::upload(RenderingDevice *device) {
         || !update(clip_buffer,gpu_clips.size()*sizeof(hcsr_gpu_clip_t),gpu_clips.ptr(),false)
         || !update(plane_buffer,gpu_planes.size()*sizeof(hcsr_gpu_plane_t),gpu_planes.ptr(),false)) return false;
     geometry_dirty=false;
-	for (Page &page : pages) {
+    if (gpu_pages.resize(resources.page_count()) != OK) return false;
+    for (int index = 0; index < gpu_pages.size(); ++index) {
+        GpuPage &page = gpu_pages.write[index];
+        const Ref<Image> &pixels = resources.page_image(index);
 		RD::TextureFormat format;
 		format.format = RD::DATA_FORMAT_R8G8B8A8_UNORM;
-		format.width = page.pixels->get_width();
-		format.height = page.pixels->get_height();
+		format.width = pixels->get_width();
+		format.height = pixels->get_height();
 		format.usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT;
 		if (!page.texture.is_valid()) {
 			Vector<Vector<uint8_t>> data;
-			data.push_back(page.pixels->get_data());
+			data.push_back(pixels->get_data());
 			page.texture = device->texture_create(format, RD::TextureView(), data);
 			uploaded_bytes += uint64_t(format.width) * format.height * 4;
 		} else {
 			// Upload only new allocations. Existing atlas coordinates never move.
-			for (const Rect2i &rect : page.dirty) {
+			for (const Rect2i &rect : resources.page_updates(index)) {
 				format.width = rect.size.x;
 				format.height = rect.size.y;
 				format.usage_bits = RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT;
 				Vector<Vector<uint8_t>> data;
-				data.push_back(page.pixels->get_region(rect)->get_data());
+				data.push_back(pixels->get_region(rect)->get_data());
 				RID patch = device->texture_create(format, RD::TextureView(), data);
 				if (!patch.is_valid()) {
 					return false;
@@ -664,7 +389,7 @@ bool HCSRNewestImageAtlas::upload(RenderingDevice *device) {
 				uploaded_bytes += uint64_t(rect.size.x) * rect.size.y * 4;
 			}
 		}
-		page.dirty.clear();
+		resources.acknowledge_upload(index);
 		if (!page.texture.is_valid()) {
 			return false;
 		}
@@ -692,7 +417,7 @@ bool HCSRNewestImageAtlas::upload(RenderingDevice *device) {
 	return true;
 }
 
-bool HCSRNewestImageAtlas::draw(RenderingDevice *device, RID target, const Color &background) {
+bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Color &background) {
 	using RD = RenderingDevice;
     // Optional timestamps: no profiling queries in normal application runs.
     const bool profile_gpu=OS::get_singleton()->get_environment("HCSR_GPU_PROFILE")=="1";
@@ -769,7 +494,7 @@ bool HCSRNewestImageAtlas::draw(RenderingDevice *device, RID target, const Color
     auto emit = [&](RD::DrawListID list, const Batch &batch) {
         if(batch.kind==HCSR_GROUP_END) device->draw_list_enable_scissor(list,region_for(batch));
         else device->draw_list_disable_scissor(list);
-        device->draw_list_bind_uniform_set(list,batch.kind==HCSR_GROUP_END ? group_targets[batch.depth-1].uniform : pages[batch.page].uniform,0);
+        device->draw_list_bind_uniform_set(list,batch.kind==HCSR_GROUP_END ? group_targets[batch.depth-1].uniform : gpu_pages[batch.page].uniform,0);
         const struct { uint32_t first,gpu_geometry; float width,height,target_width,target_height; } push{batch.first,
             gpu_geometry ? 1u : 0u,logical_width,logical_height,float(size.x),float(size.y)};
         device->draw_list_set_push_constant(list,&push,sizeof(push));
@@ -828,16 +553,16 @@ bool HCSRNewestImageAtlas::draw(RenderingDevice *device, RID target, const Color
 	return true;
 }
 
-void HCSRNewestImageAtlas::release_groups(RenderingDevice *device) {
+void HCSRNewestSceneRenderer::release_groups(RenderingDevice *device) {
     if (device) for(const auto &pool:group_pools) for (const auto &group : pool.targets)
         for (RID rid : {group.uniform,group.framebuffer,group.texture}) if (rid.is_valid()) device->free_rid(rid);
     group_pools.clear();
 }
 
-void HCSRNewestImageAtlas::release(RenderingDevice *device) {
+void HCSRNewestSceneRenderer::release(RenderingDevice *device) {
     release_groups(device);
 	if (device) {
-		for (const Page &page : pages) {
+		for (const GpuPage &page : gpu_pages) {
 			if (page.uniform.is_valid()) {
 				device->free_rid(page.uniform);
 			}
@@ -851,10 +576,7 @@ void HCSRNewestImageAtlas::release(RenderingDevice *device) {
 			}
 		}
 	}
-	pages.clear();
-	entries.clear();
-    glyph_levels.clear();
-    pending_glyphs.clear(); last_glyphs.clear(); queued_glyphs.clear(); glyph_entries.clear();
+	gpu_pages.clear();
 	vertices.clear();
 	batches.clear();
 	pipeline = buffer = sampler = shader = RID();
@@ -899,7 +621,7 @@ static Vector4 read_atlas(const Ref<Image> &atlas, const Vector2i &p) {
 #undef HCSR_DISCARD
 }
 
-void HCSRNewestImageAtlas::draw_cpu(Ref<Image> target, const Color &background) {
+void HCSRNewestSceneRenderer::draw_cpu(Ref<Image> target, const Color &background) {
 	target->fill(background);
 	const Vector2 size = target->get_size();
     Vector<Ref<Image>> parents;
@@ -956,7 +678,7 @@ void HCSRNewestImageAtlas::draw_cpu(Ref<Image> target, const Color &background) 
                             + Vector4(c.tint[0],c.tint[1],c.tint[2],c.tint[3])*wc;
                     const Vector2 uv(a.position_uv[2]*wa+b.position_uv[2]*wb+c.position_uv[2]*wc,
                             a.position_uv[3]*wa+b.position_uv[3]*wb+c.position_uv[3]*wc);
-                    const Vector4 shaded = hcsr_cpu_paint::hcsr_shade(pages[batch.page].pixels, uv, tint,
+                    const Vector4 shaded = hcsr_cpu_paint::hcsr_shade(resources.page_image(batch.page), uv, tint,
                             Vector4(a.bounds[0],a.bounds[1],a.bounds[2],a.bounds[3]));
                     const Color color(shaded.x,shaded.y,shaded.z,shaded.w);
 					const Color under = target->get_pixel(x, y);
@@ -967,15 +689,8 @@ void HCSRNewestImageAtlas::draw_cpu(Ref<Image> target, const Color &background) 
 	}
 }
 
-Dictionary HCSRNewestImageAtlas::get_statistics() const {
-	Dictionary result;
-	result["pages"] = pages.size();
-	result["sources"] = entries.size() + glyph_entries.size();
-	result["decoded_images"] = decoded_images;
-    result["rasterized_glyphs"] = rasterized_glyphs;
-    result["pending_glyphs"] = pending_glyphs.size();
-    int glyph_pages = 0; for (const Page &page : pages) if (page.glyphs) glyph_pages++;
-    result["glyph_pages"] = glyph_pages;
+Dictionary HCSRNewestSceneRenderer::get_statistics() const {
+	Dictionary result = resources.get_statistics();
     result["vertices"] = vertices.size();
     result["gpu_geometry"] = gpu_geometry;
     result["instances"] = primitives.size();
@@ -988,7 +703,6 @@ Dictionary HCSRNewestImageAtlas::get_statistics() const {
     result["geometry_generation"] = geometry_generation;
     result["color_patch_updates"] = color_patch_updates;
 	result["uploaded_bytes"] = uploaded_bytes;
-	result["page_size"] = PAGE_SIZE;
 	result["draw_batches"] = batches.size();
     result["opacity_group_depth"] = group_depth;
     int groups=0; for(const auto &batch:batches) if(batch.kind==HCSR_GROUP_BEGIN) ++groups;
