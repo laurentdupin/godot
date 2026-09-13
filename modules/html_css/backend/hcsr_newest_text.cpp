@@ -205,11 +205,8 @@ int HCSRNewestText::shape(const hcsr_shape_request_t &request, hcsr_shape_result
 	const float scale = request.size / 64.0f;
 	RID shaped = ts->create_shaped_text(request.rtl ? TextServer::DIRECTION_RTL : TextServer::DIRECTION_LTR);
 	Dictionary features;
-	RegEx feature("['\"]?([A-Za-z0-9]{4})['\"]?\\s*(?:=|\\s)\\s*(\\d+|on|off)");
-	for (const Ref<RegExMatch> &match : feature.search_all(decode(request.features))) {
-		String value = match->get_string(2);
-		features[match->get_string(1)] = value == "on" ? 1 : value == "off" ? 0
-																			: value.to_int();
+	for (size_t i = 0; i < request.feature_count; i++) {
+		features[int64_t(request.features[i].tag)] = request.features[i].value;
 	}
 	bool ok = ts->shaped_text_add_string(shaped, text, font->get_rids(), 64, features, decode(request.language)) && ts->shaped_text_shape(shaped);
 	if (!ok) {
