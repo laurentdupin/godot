@@ -326,14 +326,6 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
     if (!hcsr::render::plan_compositing(packet, group_plan, group_error)) return false;
     group_depth = group_plan.depth;
 	uploaded = false;
-	bool has_images = group_depth > 0 || gpu_geometry;
-	bool references_images = group_depth > 0 || gpu_geometry;
-	for (size_t i = 0; i < packet.material_count; i++) {
-		references_images |= (packet.materials[i].kind == HCSR_MATERIAL_IMAGE || packet.materials[i].kind == HCSR_MATERIAL_GLYPH || packet.materials[i].kind == HCSR_MATERIAL_VERTEX_COLOR);
-	}
-	if (!references_images) {
-		return false;
-	}
     // Draws may reuse index ranges, so size by emitted indices rather than the
     // packet index buffer. Acquire the writable pointer once; per-vertex push_back
     // repeats CowData resize/write checks across the entire mesh on every update.
@@ -420,7 +412,6 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
                 destination = Rect2(Vector2(glyph.baseline_x, glyph.baseline_y) + entry.glyph_offset * factor, entry.glyph_size * factor);
             }
         }
-		has_images |= entry.page >= 0 || material.kind == HCSR_MATERIAL_VERTEX_COLOR;
 		// Solid grayscale draws do not sample the atlas and can stay in the current batch.
         const int page = entry.page >= 0 ? entry.page : (batches.is_empty() ? 0 : batches[batches.size() - 1].page);
 		if (batches.is_empty() || batches[batches.size() - 1].page != page || batches[batches.size() - 1].kind) {
@@ -494,13 +485,16 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
         if (!copy_table(prepared_source, packet.vertices, packet.vertex_count)
             || !copy_table(prepared_states, packet.gpu.vertex_states, packet.vertex_count)) return false;
     } else { prepared_source.clear(); prepared_states.clear(); }
-    if (has_images && pages.is_empty()) {
+    // Empty and solid-only scenes use the same submission path. A bound
+    // placeholder satisfies the shader interface without inventing a second
+    // renderer for clears or for missing image resources.
+    if (pages.is_empty()) {
         Page placeholder;
         placeholder.pixels = Image::create_empty(1, 1, false, Image::FORMAT_RGBA8);
         pages.push_back(placeholder);
     }
     if(gpu_geometry) { all_primitives=primitives; all_batches=batches; update_visible_instances(packet); }
-	return has_images;
+	return true;
 }
 
 bool HCSRNewestImageAtlas::apply_color_patches(const hcsr_draw_packet_view_t &packet) {

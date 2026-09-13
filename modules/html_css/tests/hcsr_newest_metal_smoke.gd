@@ -32,23 +32,22 @@ func run() -> void:
 	view.logical_size = Vector2i(240, 160)
 	view.backend_preference = HTMLView.BACKEND_GPU_AUTO
 	var document := HTMLDocument.new()
-	# An empty packet exercises native recording and target clear inside Godot's
-	# encoder; colored paint/text/images then exercise the shared RD atlas path.
+	# Empty scenes, paint, text and images all use the same RenderingDevice path.
 	document.html = "<style>html,body{margin:0;background:transparent}</style><div id='content'></div>"
 	view.document = document
 	root.add_child(view)
 	var small := view.create_output(Vector2i(240, 160), false)
 	var large := view.create_output(Vector2i(480, 320), true)
-	phase = "initial native rendering"
+	phase = "initial empty scene"
 	await settle()
 	require(diagnostics().get("renderer") == "metal", "GPU_AUTO selects Metal, not CPU fallback")
-	require(int(diagnostics().get("native_recordings", 0)) > 0, "native Metal callback executed")
-	require(not diagnostics().terminal, "native render succeeded: " + str(diagnostics()))
+	require(int(diagnostics().get("gpu_recordings", 0)) > 0, "RenderingDevice recording executed")
+	require(not diagnostics().terminal, "scene render succeeded: " + str(diagnostics()))
 	if diagnostics().terminal:
 		quit(1)
 		return
 	var image := small.texture.get_image()
-	require(image != null and image.get_pixel(20, 20).a < .01, "transparent native clear")
+	require(image != null and image.get_pixel(20, 20).a < .01, "transparent clear")
 	view.backend_preference = HTMLView.BACKEND_METAL
 	phase = "explicit backend selection"
 	await settle(2)
@@ -88,16 +87,15 @@ func run() -> void:
 	phase = "output resize"
 	await settle()
 	require(large.texture.get_image().get_size() == Vector2i(360, 240), "resize")
-	# Return to the native path after atlas rendering and resizing. This checks
-	# resource/state transitions and clears old atlas content from both outputs.
+	# Clearing content stays on the same path and clears both outputs.
 	require(view.set_element_inner_html("content", "") == OK, "remove atlas content")
-	var native_before := int(diagnostics().native_recordings)
-	phase = "native rendering after atlas"
+	var recordings_before := int(diagnostics().gpu_recordings)
+	phase = "empty scene after content"
 	await settle()
-	require(int(diagnostics().native_recordings) > native_before, "native recording resumes after atlas drawing")
+	require(int(diagnostics().gpu_recordings) > recordings_before, "empty scene records through RenderingDevice")
 	for output in [small, large]:
 		image = output.texture.get_image()
-		require(image.get_pixel(20, 20).a < .01, "native clear removes prior content")
+		require(image.get_pixel(20, 20).a < .01, "clear removes prior content")
 	require(int(diagnostics().failures) == 0 and not diagnostics().terminal, "frame synchronization")
 	small.release()
 	large.release()

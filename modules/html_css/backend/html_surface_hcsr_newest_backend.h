@@ -8,16 +8,7 @@
 
 #include "core/os/mutex.h"
 
-#include "hcsr_render.h"
-#ifdef HTML_CSS_HCSR_NEWEST_METAL
-#include "hcsr_render_metal.h"
-#endif
-#ifdef HTML_CSS_HCSR_NEWEST_D3D12
-#include "hcsr_render_d3d12.h"
-#endif
-#ifdef HTML_CSS_HCSR_NEWEST_VULKAN
-#include "hcsr_render_vulkan.h"
-#endif
+#include "hcsr_scene.h"
 
 enum HTMLSurfaceHCSRNewestRenderer {
 	HTML_SURFACE_HCSR_NEWEST_CPU,
@@ -30,7 +21,6 @@ class HTMLSurfaceHCSRNewestBackend : public HTMLSurfaceBackend {
 public:
 	struct State;
 	static void _render_on_render_thread(uint64_t p_state_pointer);
-	static void _cancel_gpu_submission_on_render_thread(uint64_t p_state_pointer);
 	static void _destroy_state_on_render_thread(uint64_t p_state_pointer);
 
 private:

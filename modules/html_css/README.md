@@ -51,23 +51,23 @@ For deployment to older macOS versions, these archives must also match your
 minimum OS version. The Homebrew archives used in local testing target macOS 15;
 this build has not been validated on older systems.
 
-Godot supplies the device, textures, frame slots, and command submission. Native
-packet recording runs inside a driver-owned Metal encoder, with render-graph
-fences and residency applied before later sampling. Text, images, and vertex
-colors use the same RenderingDevice atlas path as Vulkan and D3D12, including
-partial uploads, output mipmaps, and deferred destruction. Each secondary output
-has its own native presenter and follows the same retired frame slots.
+Godot supplies the device, textures and command submission. Empty scenes,
+solid paint, text and images all use the same RenderingDevice submission path
+on Metal, Vulkan and D3D12, including partial uploads and output mipmaps.
+Secondary outputs share prepared scene data and own only presentation targets.
+A preparation failure is reported; it does not switch to a separate packet
+renderer with different painting behavior.
 
 `get_frame_scheduler_diagnostics().frame_synchronization.renderer` reports
-`metal`, `vulkan`, `d3d12`, or `cpu`; `native_recordings` counts completed native
-recording callbacks (CPU-side recording, not GPU completion).
+`metal`, `vulkan`, `d3d12`, or `cpu`. `render_path` identifies `rendering_device`
+or `cpu_reference`; `gpu_recordings` counts recorded RenderingDevice scenes,
+not GPU completions.
 
 Run the Metal integration smoke with any project directory and the absolute path
 to `modules/html_css/tests/hcsr_newest_metal_smoke.gd`, using `--script` and the
 Metal launch flags above. Set `MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1` for Metal
-validation. The test checks native clearing, text/image uploads, orientation,
-canvas sampling, multiple outputs, resize, and switching between native and atlas
-rendering. Also run `hcsr_newest_image_atlas_smoke.gd`,
+validation. The test checks empty-scene clearing, text/image uploads, orientation,
+canvas sampling, multiple outputs and resize. Also run `hcsr_newest_image_atlas_smoke.gd`,
 `hcsr_newest_direct_paint_smoke.gd`, `hcsr_newest_secondary_output_smoke.gd`, and
 `hcsr_newest_3d_mipmap_smoke.gd` with the same flags. The 3D test covers explicit
 residency of shared Metal texture views under the default barrier synchronization
