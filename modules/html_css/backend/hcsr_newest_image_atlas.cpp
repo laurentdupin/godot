@@ -289,7 +289,6 @@ bool HCSRNewestImageAtlas::prepare(const hcsr_draw_packet_view_t &packet, const 
             || !copy_table(gpu_clips,packet.gpu.clips,packet.gpu.clip_count)
             || !copy_table(gpu_planes,packet.gpu.planes,packet.gpu.plane_count)) return false;
     } else { gpu_states.clear(); gpu_clips.clear(); gpu_planes.clear(); }
-    clipping_enabled = !next_gpu || packet.gpu.clipping_enabled != 0;
     logical_width=packet.viewport_width; logical_height=packet.viewport_height;
     if(next_gpu && gpu_geometry && geometry_generation==packet.gpu.geometry_generation && prepared_scale==output_scale
         && !had_pending) {
@@ -777,8 +776,8 @@ bool HCSRNewestImageAtlas::draw(RenderingDevice *device, RID target, const Color
         if(batch.kind==HCSR_GROUP_END) device->draw_list_enable_scissor(list,region_for(batch));
         else device->draw_list_disable_scissor(list);
         device->draw_list_bind_uniform_set(list,batch.kind==HCSR_GROUP_END ? group_targets[batch.depth-1].uniform : pages[batch.page].uniform,0);
-        const struct { uint32_t first,flags; float width,height,target_width,target_height; } push{batch.first,
-            (gpu_geometry ? 2u : 0u) | (clipping_enabled ? 1u : 0u),logical_width,logical_height,float(size.x),float(size.y)};
+        const struct { uint32_t first,gpu_geometry; float width,height,target_width,target_height; } push{batch.first,
+            gpu_geometry ? 1u : 0u,logical_width,logical_height,float(size.x),float(size.y)};
         device->draw_list_set_push_constant(list,&push,sizeof(push));
         device->draw_list_draw(list,false,gpu_geometry ? batch.count : 1,gpu_geometry ? 6 : batch.count);
         ++last_draw_calls;
@@ -985,7 +984,6 @@ Dictionary HCSRNewestImageAtlas::get_statistics() const {
     result["glyph_pages"] = glyph_pages;
     result["vertices"] = vertices.size();
     result["gpu_geometry"] = gpu_geometry;
-    result["clipping_enabled"] = clipping_enabled;
     result["instances"] = primitives.size();
     result["draw_calls"] = last_draw_calls;
     result["gpu_ms"] = last_gpu_ms;

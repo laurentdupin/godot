@@ -85,7 +85,7 @@ class HCSRNewestImageAtlas {
     RID state_buffer, clip_buffer, plane_buffer, primitive_buffer;
     uint32_t state_capacity=0, clip_capacity=0, plane_capacity=0, primitive_capacity=0;
     uint64_t geometry_generation=0, geometry_uploaded_bytes=0, state_uploaded_bytes=0, instance_uploaded_bytes=0;
-    bool gpu_geometry=false, clipping_enabled=true, geometry_dirty=true;
+    bool gpu_geometry=false, geometry_dirty=true;
     float logical_width=1, logical_height=1, prepared_scale=0;
     uint32_t last_draw_calls=0;
     double last_gpu_ms=0;

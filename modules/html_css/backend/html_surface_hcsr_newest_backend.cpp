@@ -955,7 +955,6 @@ Error HTMLSurfaceHCSRNewestBackend::prepare_host_frame(uint64_t p_host_frame, do
     const bool gpu_geometry = state->renderer != HTML_SURFACE_HCSR_NEWEST_CPU
         && OS::get_singleton()->get_environment("HCSR_CPU_GEOMETRY") != "1";
     step.packet_format = gpu_geometry ? HCSR_DRAW_PACKET_FORMAT_GPU : HCSR_DRAW_PACKET_FORMAT_1;
-    if (OS::get_singleton()->get_environment("HCSR_DISABLE_CLIPPING") == "1") step.flags |= HCSR_STEP_DISABLE_CLIPPING;
 	step.paint_mode = state->text_enabled ? HCSR_PAINT_MODE_DIRECT : HCSR_PAINT_MODE_DIRECT_IMAGES;
 	step.time_seconds = p_timeline_time_seconds;
 	step.viewport_width = state->logical_size.x;
