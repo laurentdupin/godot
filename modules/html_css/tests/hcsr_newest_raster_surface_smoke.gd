@@ -47,6 +47,14 @@ func run() -> void:
     await settle()
     image = output.texture.get_image()
     require(image.get_pixel(24,40).g>.85 && image.get_pixel(164,40).r>.85,"secondary resolution")
+    for iteration in 60:
+        require(view.set_element_attribute("a","style","width:%dpx;background:linear-gradient(90deg,rgb(%d 255 0),blue);box-shadow:none" % [40+iteration%2*4,iteration])==OK,"style churn")
+        await settle()
+        stats = view.get_frame_scheduler_diagnostics().frame_synchronization.image_atlas
+        require(int(stats.raster_surfaces)==3,"retired appearance allocations released")
+    require(int(stats.reused_surface_slots)>50,"reclaimed atlas slots reused")
+    image = output.texture.get_image()
+    require(image.get_pixel(24,40).g>.85 && image.get_pixel(164,40).r>.85,"reclaimed slots preserve unrelated pixels")
     require(int(view.get_frame_scheduler_diagnostics().frame_synchronization.failures)==0,"frame preparation")
     output.release()
     view.queue_free()

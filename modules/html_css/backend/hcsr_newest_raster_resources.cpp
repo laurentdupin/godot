@@ -124,6 +124,51 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_image(const 
     return entry;
 }
 
+void HCSRNewestRasterResources::retain_surfaces(const HashSet<uint64_t> &live) {
+    Vector<SurfaceKey> retired;
+    for (const auto &item : surface_entries) if (!live.has(item.key.identity)) retired.push_back(item.key);
+    for (const auto &key : retired) {
+        const Entry entry = surface_entries[key];
+        if (entry.page >= 0) release_image_slot(pages.write[entry.page],Rect2i(entry.rect.position-Point2i(1,1),entry.rect.size+Size2i(2,2)));
+        surface_entries.erase(key);
+    }
+}
+
+void HCSRNewestRasterResources::release_image_slot(Page &page, Rect2i slot) {
+    for (int i=0; i<page.free_slots.size();) {
+        const Rect2i other=page.free_slots[i];
+        const bool horizontal=slot.position.y==other.position.y && slot.size.y==other.size.y
+            && (slot.get_end().x==other.position.x || other.get_end().x==slot.position.x);
+        const bool vertical=slot.position.x==other.position.x && slot.size.x==other.size.x
+            && (slot.get_end().y==other.position.y || other.get_end().y==slot.position.y);
+        if (horizontal || vertical) { slot=slot.merge(other); page.free_slots.remove_at(i); i=0; }
+        else ++i;
+    }
+    page.free_slots.push_back(slot);
+}
+
+bool HCSRNewestRasterResources::reserve_image_slot(Page &page, int width, int height, Point2i &position) {
+    int selected=-1, waste=INT32_MAX;
+    for (int i=0; i<page.free_slots.size(); ++i) {
+        const Rect2i slot=page.free_slots[i];
+        const int remaining=slot.size.x*slot.size.y-width*height;
+        if (slot.size.x>=width && slot.size.y>=height && remaining<waste) { selected=i; waste=remaining; }
+    }
+    if (selected>=0) {
+        const Rect2i slot=page.free_slots[selected]; page.free_slots.remove_at(selected);
+        position=slot.position;
+        if (slot.size.x>width) page.free_slots.push_back(Rect2i(position+Point2i(width,0),Size2i(slot.size.x-width,height)));
+        if (slot.size.y>height) page.free_slots.push_back(Rect2i(position+Point2i(0,height),Size2i(slot.size.x,slot.size.y-height)));
+        ++reused_surface_slots;
+        return true;
+    }
+    int x=page.x, y=page.y, row=page.row_height;
+    if (x+width>PAGE_SIZE) { x=0; y+=row; row=0; }
+    if (width>PAGE_SIZE || y+height>PAGE_SIZE) return false;
+    position=Point2i(x,y); page.x=x+width; page.y=y; page.row_height=MAX(row,height);
+    return true;
+}
+
 HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_raster(const hcsr_raster_material_t &raster, const Vector2 &physical_size) {
     Entry entry;
     if (!raster.identity || !raster.pixels || !raster.width || !raster.height
@@ -182,15 +227,9 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::pack_image(Ref<Image
 			}
 			Page &page = pages.write[i];
             if (page.glyphs || page.pixels->get_width() != PAGE_SIZE) continue;
-			int x = page.x, y = page.y, row = page.row_height;
-			if (x + width > PAGE_SIZE) {
-				x = 0;
-				y += row;
-				row = 0;
-			}
-			if (y + height > PAGE_SIZE) {
-				continue;
-			}
+            Point2i position;
+            if (!reserve_image_slot(page,width,height,position)) continue;
+            const int x=position.x, y=position.y;
 			entry.page = i;
 			entry.rect = Rect2i(x + 1, y + 1, width - 2, height - 2);
 			page.pixels->blit_rect(image, Rect2i(Point2i(), image->get_size()), entry.rect.position);
@@ -204,9 +243,6 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::pack_image(Ref<Image
 				page.pixels->set_pixel(x + width - 1, y + py + 1, image->get_pixel(image->get_width() - 1, py));
 			}
 			page.dirty.push_back(Rect2i(x, y, width, height));
-			page.x = x + width;
-			page.y = y;
-			page.row_height = MAX(row, height);
 			break;
 		}
 	}
@@ -315,6 +351,7 @@ Dictionary HCSRNewestRasterResources::get_statistics() const {
 	result["pages"] = pages.size();
 	result["sources"] = entries.size() + glyph_entries.size() + surface_entries.size();
 	result["decoded_images"] = decoded_images;
+    result["reused_surface_slots"] = reused_surface_slots;
     result["raster_surfaces"] = surface_entries.size();
     result["rasterized_glyphs"] = rasterized_glyphs;
     result["pending_glyphs"] = pending_glyphs.size();

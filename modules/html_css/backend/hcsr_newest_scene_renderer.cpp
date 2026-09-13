@@ -50,6 +50,17 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
 	hcsr::render::compositing_plan group_plan;
     std::string group_error;
     if (!hcsr::render::plan_compositing(packet, group_plan, group_error)) return false;
+    HashSet<uint64_t> live_surfaces;
+    for (size_t i=0; i<packet.draw_item_count; ++i) {
+        const auto &material=packet.materials[packet.draw_items[i].material_index];
+        if (material.kind!=HCSR_MATERIAL_RASTER) continue;
+        if (material.payload_size!=sizeof(hcsr_raster_material_t) || material.payload_offset>packet.material_payload_size
+            || material.payload_size>packet.material_payload_size-material.payload_offset) return false;
+        hcsr_raster_material_t raster;
+        memcpy(&raster,packet.material_payload+material.payload_offset,sizeof(raster));
+        live_surfaces.insert(raster.identity);
+    }
+    resources.retain_surfaces(live_surfaces);
     group_depth = group_plan.depth;
 	uploaded = false;
     // Draws may reuse index ranges, so size by emitted indices rather than the

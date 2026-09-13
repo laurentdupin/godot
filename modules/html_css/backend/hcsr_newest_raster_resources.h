@@ -4,6 +4,7 @@
 #include "hcsr_scene.h"
 #include "core/io/image.h"
 #include "core/os/mutex.h"
+#include "core/templates/hash_set.h"
 
 // Owns decoded/rasterized pixels, atlas allocation and resolution policy.
 // It has no scene geometry, drawing pipeline or RenderingDevice resources.
@@ -28,6 +29,7 @@ private:
         bool glyphs = false;
 		Ref<Image> pixels;
 		Vector<Rect2i> dirty;
+        Vector<Rect2i> free_slots;
 		int x = 0, y = 0, row_height = 0;
 	};
     struct GlyphKey {
@@ -50,6 +52,10 @@ private:
     };
     HashMap<SurfaceKey, Entry, SurfaceHasher> surface_entries;
     Entry pack_image(Ref<Image> image, int level);
+    bool reserve_image_slot(Page &page, int width, int height, Point2i &position);
+    static void release_image_slot(Page &page, Rect2i slot);
+    uint64_t reused_surface_slots = 0;
+
     HashMap<GlyphKey, Entry, GlyphHasher> glyph_entries;
 	HashMap<String, Entry> entries;
 	Mutex image_mutex;
@@ -59,6 +65,7 @@ private:
 	Vector<Page> pages;
 public:
 	Entry resolve_image(const Ref<HTMLDocument> &document, const String &source, const Size2i &natural, const Vector2 &physical_size);
+    void retain_surfaces(const HashSet<uint64_t> &live);
     Entry resolve_raster(const hcsr_raster_material_t &raster, const Vector2 &physical_size);
     Entry resolve_glyph(const hcsr_glyph_material_t &glyph, float scale);
 private:
