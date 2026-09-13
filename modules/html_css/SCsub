@@ -193,7 +193,7 @@ elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll"):
             "hcsr_render_common.lib",
             "bootstrapperdll.obj",
             "Runtime.WorkstationGC.lib",
-            "eventpipe-disabled.lib",
+            "eventpipe-enabled.lib" if os.environ.get("HCSR_ALLOCATION_TRACE_BUILD") == "1" else "eventpipe-disabled.lib",
             "Runtime.VxsortDisabled.lib",
             "standalonegc-disabled.lib",
             "aotminipal.lib",
@@ -218,6 +218,12 @@ elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll"):
             newest_is_current = stamp_file.read().strip() == newest_commit
     else:
         newest_is_current = False
+    allocation_trace_stamp = os.path.join(newest_bundle_directory, ".allocation_trace_build")
+    allocation_trace_built = "0"
+    if os.path.isfile(allocation_trace_stamp):
+        with open(allocation_trace_stamp, encoding="utf-8") as trace_stamp:
+            allocation_trace_built = trace_stamp.read().strip()
+    newest_is_current = newest_is_current and allocation_trace_built == ("1" if os.environ.get("HCSR_ALLOCATION_TRACE_BUILD") == "1" else "0")
     if not newest_is_current:
         completed = subprocess.run(
             [
