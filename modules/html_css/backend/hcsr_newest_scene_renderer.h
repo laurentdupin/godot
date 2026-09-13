@@ -37,8 +37,6 @@ class HCSRNewestSceneRenderer {
     Vector<PreparedMesh> prepared_meshes;
     Vector<hcsr_paint_vertex_t> prepared_source;
     Vector<uint32_t> prepared_states;
-    bool apply_color_patches(const hcsr_draw_packet_view_t &packet);
-    uint64_t color_patch_updates = 0;
 	Vector<Batch> batches;
     // Six vertex invocations per instance: triangle (0), quad (1), or triangle pair (2).
     struct Primitive { uint32_t first, topology, draw_index=UINT32_MAX, reserved=0; };

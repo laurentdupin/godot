@@ -26,7 +26,7 @@ public:
 	};
 private:
 	struct Page {
-        bool glyphs = false;
+        bool contains_glyphs = false;
 		Ref<Image> pixels;
 		Vector<Rect2i> dirty;
         Vector<Rect2i> free_slots;
@@ -51,7 +51,7 @@ private:
         static uint32_t hash(const SurfaceKey &key) { return hash_fmix32(hash_murmur3_one_32(key.level, hash_murmur3_one_64(key.identity))); }
     };
     HashMap<SurfaceKey, Entry, SurfaceHasher> surface_entries;
-    Entry pack_image(Ref<Image> image, int level);
+    Entry pack_image(Ref<Image> image, int level, bool glyph = false);
     bool reserve_image_slot(Page &page, int width, int height, Point2i &position);
     static void release_image_slot(Page &page, Rect2i slot);
     uint64_t reused_surface_slots = 0;

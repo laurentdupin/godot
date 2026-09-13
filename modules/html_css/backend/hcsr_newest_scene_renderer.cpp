@@ -28,16 +28,6 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
         update_visible_instances(packet);
         return true;
     }
-    if (next_gpu && gpu_geometry && prepared_scale == output_scale && !had_pending
-        && packet.gpu.color_base_geometry_generation == geometry_generation
-        && apply_color_patches(packet)) {
-        geometry_generation = packet.gpu.geometry_generation;
-        geometry_dirty = true;
-        uploaded = false;
-        ++color_patch_updates;
-        update_visible_instances(packet);
-        return true;
-    }
     const Vector<Vertex> previous_vertices = vertices;
     const Vector<PreparedMesh> previous_meshes = prepared_meshes;
     prepared_meshes.clear();
@@ -53,8 +43,9 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
     HashSet<uint64_t> live_surfaces;
     for (size_t i=0; i<packet.draw_item_count; ++i) {
         const auto &material=packet.materials[packet.draw_items[i].material_index];
-        if (material.kind!=HCSR_MATERIAL_RASTER) continue;
-        if (material.payload_size!=sizeof(hcsr_raster_material_t) || material.payload_offset>packet.material_payload_size
+        if (material.kind!=HCSR_MATERIAL_RASTER && material.kind!=HCSR_MATERIAL_RASTER_SLICE) continue;
+        const size_t expected = material.kind==HCSR_MATERIAL_RASTER_SLICE ? sizeof(hcsr_raster_slice_material_t) : sizeof(hcsr_raster_material_t);
+        if (material.payload_size!=expected || material.payload_offset>packet.material_payload_size
             || material.payload_size>packet.material_payload_size-material.payload_offset) return false;
         hcsr_raster_material_t raster;
         memcpy(&raster,packet.material_payload+material.payload_offset,sizeof(raster));
@@ -100,8 +91,9 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
 		memcpy(&area, packet.material_payload + material.payload_offset, sizeof(area));
 		Entry entry;
 		Rect2 destination;
-        if (material.kind == HCSR_MATERIAL_RASTER) {
-            if (material.payload_size != sizeof(hcsr_raster_material_t)) return false;
+        if (material.kind == HCSR_MATERIAL_RASTER || material.kind == HCSR_MATERIAL_RASTER_SLICE) {
+            const bool sliced = material.kind == HCSR_MATERIAL_RASTER_SLICE;
+            if (material.payload_size != (sliced ? sizeof(hcsr_raster_slice_material_t) : sizeof(hcsr_raster_material_t))) return false;
             hcsr_raster_material_t raster;
             memcpy(&raster, packet.material_payload + material.payload_offset, sizeof(raster));
             destination = Rect2(raster.local_rect.x, raster.local_rect.y, raster.local_rect.width, raster.local_rect.height);
@@ -117,8 +109,22 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
                     if (local > .001f) transform_scale = MAX(transform_scale,Vector2(b.screen_x-a.screen_x,b.screen_y-a.screen_y).length()/local);
                 }
             }
-            entry = resources.resolve_raster(raster,destination.size * (output_scale * transform_scale));
+            // Nine-slice cuts share one pixel grid. Retain the authored raster
+            // level instead of choosing a different mip from each patch's size.
+            entry = resources.resolve_raster(raster,sliced ? Vector2(raster.width,raster.height) : destination.size * (output_scale * transform_scale));
             if (entry.page < 0) return false;
+            if (sliced) {
+                hcsr_raster_slice_material_t slice;
+                memcpy(&slice, packet.material_payload + material.payload_offset, sizeof(slice));
+                const auto &r = slice.source_rect;
+                if (!std::isfinite(r.x) || !std::isfinite(r.y) || !std::isfinite(r.width) || !std::isfinite(r.height)
+                    || r.x < 0 || r.y < 0 || r.width <= 0 || r.height <= 0
+                    || r.x+r.width > raster.width || r.y+r.height > raster.height) return false;
+                if (r.x != std::floor(r.x) || r.y != std::floor(r.y)
+                    || r.width != std::floor(r.width) || r.height != std::floor(r.height)
+                    || entry.rect.size != Size2i(raster.width,raster.height)) return false;
+                entry.rect = Rect2i(entry.rect.position + Point2i(r.x,r.y), Size2i(r.width,r.height));
+            }
         }
 		if (material.kind == HCSR_MATERIAL_IMAGE && material.payload_size >= sizeof(hcsr_image_material_t)) {
 			hcsr_image_material_t image;
@@ -248,47 +254,6 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
     resources.ensure_sampling_page();
     if(gpu_geometry) { all_primitives=primitives; all_batches=batches; update_visible_instances(packet); }
 	return true;
-}
-
-bool HCSRNewestSceneRenderer::apply_color_patches(const hcsr_draw_packet_view_t &packet) {
-    if (!packet.gpu.color_patch_count) return false;
-    Vector<PreparedMesh> targets;
-    for (size_t i = 0; i < packet.gpu.color_patch_count; ++i) {
-        const auto &patch = packet.gpu.color_patches[i];
-        bool found = false;
-        for (const auto &mesh : prepared_meshes) {
-            if (mesh.source_first != patch.first || mesh.count != patch.count) continue;
-            if (uint64_t(mesh.source_first)+mesh.count > uint64_t(prepared_source.size())
-                || uint64_t(mesh.source_first)+mesh.count > uint64_t(prepared_states.size())
-                || uint64_t(mesh.prepared_first)+mesh.count > uint64_t(vertices.size())) return false;
-            for (uint32_t j = 0; j < mesh.count; ++j) {
-                const auto &old = prepared_source[mesh.source_first+j];
-                const auto &next = packet.vertices[mesh.source_first+j];
-                if (old.screen_x != next.screen_x || old.screen_y != next.screen_y
-                    || prepared_states[mesh.source_first+j] != packet.gpu.vertex_states[mesh.source_first+j]) return false;
-            }
-            targets.push_back(mesh);
-            found = true;
-            break;
-        }
-        if (!found) return false;
-    }
-    // Validate all ranges before changing any cached product. A missed base or
-    // unsupported mesh shape takes the complete-packet path instead.
-    auto *destination = vertices.ptrw();
-    auto *source = prepared_source.ptrw();
-    const hcsr_area_grayscale_material_t area = {};
-    for (const auto &mesh : targets) {
-        for (uint32_t j = 0; j < mesh.count; ++j) {
-            const auto &next = packet.vertices[mesh.source_first+j];
-            const auto color = hcsr::render::prepare_vertex(next, packet.viewport_width, packet.viewport_height, area, true);
-            auto &vertex = destination[mesh.prepared_first+j];
-            vertex.tint[0] = color.red; vertex.tint[1] = color.green;
-            vertex.tint[2] = color.blue; vertex.tint[3] = color.alpha;
-            source[mesh.source_first+j] = next;
-        }
-    }
-    return true;
 }
 
 void HCSRNewestSceneRenderer::update_visible_instances(const hcsr_draw_packet_view_t &packet) {
@@ -732,7 +697,7 @@ Dictionary HCSRNewestSceneRenderer::get_statistics() const {
     result["instance_uploaded_bytes"] = instance_uploaded_bytes;
     result["state_uploaded_bytes"] = state_uploaded_bytes;
     result["geometry_generation"] = geometry_generation;
-    result["color_patch_updates"] = color_patch_updates;
+    result["color_patch_updates"] = 0; // Compatibility diagnostic; appearances replace color-patch updates.
 	result["uploaded_bytes"] = uploaded_bytes;
 	result["draw_batches"] = batches.size();
     result["opacity_group_depth"] = group_depth;

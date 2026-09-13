@@ -191,7 +191,7 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_raster(const
     return entry;
 }
 
-HCSRNewestRasterResources::Entry HCSRNewestRasterResources::pack_image(Ref<Image> image, int level) {
+HCSRNewestRasterResources::Entry HCSRNewestRasterResources::pack_image(Ref<Image> image, int level, bool glyph) {
     Entry entry;
 	if (image.is_valid()) {
 		entry.natural_size = image->get_size();
@@ -219,20 +219,27 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::pack_image(Ref<Image
 		const int width = image->get_width() + 2, height = image->get_height() + 2;
 		for (int i = 0; i <= pages.size() && i < MAX_PAGES; i++) {
 			if (i == pages.size()) {
-                int image_pages = 0; for (const Page &existing : pages) if (!existing.glyphs && existing.pixels->get_width() == PAGE_SIZE) image_pages++;
-                if (image_pages >= 4) break;
+                int atlas_pages = 0; for (const Page &existing : pages) if (existing.pixels->get_width() == PAGE_SIZE) atlas_pages++;
+                if (atlas_pages >= MAX_PAGES - 1) break;
 				Page page;
 				page.pixels = Image::create_empty(PAGE_SIZE, PAGE_SIZE, false, Image::FORMAT_RGBA8);
 				pages.push_back(page);
 			}
 			Page &page = pages.write[i];
-            if (page.glyphs || page.pixels->get_width() != PAGE_SIZE) continue;
+            if (page.pixels->get_width() != PAGE_SIZE) continue;
             Point2i position;
             if (!reserve_image_slot(page,width,height,position)) continue;
             const int x=position.x, y=position.y;
 			entry.page = i;
 			entry.rect = Rect2i(x + 1, y + 1, width - 2, height - 2);
-			page.pixels->blit_rect(image, Rect2i(Point2i(), image->get_size()), entry.rect.position);
+			// A reused image slot may contain opaque gutters. Glyphs need
+            // transparent padding, even when sharing allocation with images.
+            if (glyph) {
+                page.contains_glyphs = true;
+                page.pixels->fill_rect(Rect2i(x,y,width,height), Color(0,0,0,0));
+            }
+            page.pixels->blit_rect(image, Rect2i(Point2i(), image->get_size()), entry.rect.position);
+            if (!glyph) {
 			// Extrude one texel on every side so linear sampling never bleeds adjacent entries.
 			for (int px = -1; px <= image->get_width(); px++) {
 				page.pixels->set_pixel(x + px + 1, y, image->get_pixel(CLAMP(px, 0, image->get_width() - 1), 0));
@@ -242,6 +249,7 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::pack_image(Ref<Image
 				page.pixels->set_pixel(x, y + py + 1, image->get_pixel(0, py));
 				page.pixels->set_pixel(x + width - 1, y + py + 1, image->get_pixel(image->get_width() - 1, py));
 			}
+            }
 			page.dirty.push_back(Rect2i(x, y, width, height));
 			break;
 		}
@@ -298,30 +306,10 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::rasterize_glyph(cons
 	entry.glyph_offset = ts->font_get_glyph_offset(face, size, glyph.glyph);
     entry.glyph_size = ts->font_get_glyph_size(face, size, glyph.glyph);
 	entry.natural_size = image->get_size();
-	const int width = image->get_width() + 2, height = image->get_height() + 2;
-	for (int i = 0; i <= pages.size() && i < MAX_PAGES; i++) {
-		if (i == pages.size()) {
-            int glyph_pages = 0; for (const Page &existing : pages) if (existing.glyphs) glyph_pages++;
-            if (glyph_pages >= 4) break;
-			Page page;
-			page.glyphs = true;
-			page.pixels = Image::create_empty(PAGE_SIZE, PAGE_SIZE, false, Image::FORMAT_RGBA8);
-			pages.push_back(page);
-		}
-		Page &page = pages.write[i];
-		if (!page.glyphs || page.pixels->get_width() != PAGE_SIZE) continue;
-		int x = page.x, y = page.y, row = page.row_height;
-		if (x + width > PAGE_SIZE) { x = 0; y += row; row = 0; }
-		if (y + height > PAGE_SIZE || width > PAGE_SIZE) continue;
-		entry.page = i;
-		entry.rect = Rect2i(x + 1, y + 1, width - 2, height - 2);
-		page.pixels->blit_rect(image, Rect2i(Point2i(), image->get_size()), entry.rect.position);
-		// Glyph padding stays transparent, unlike the extruded borders of image entries.
-		page.dirty.push_back(Rect2i(x, y, width, height));
-		page.x = x + width; page.y = y; page.row_height = MAX(row, height);
-		rasterized_glyphs++;
-		break;
-	}
+    const Entry allocation = pack_image(image, 0, true);
+    entry.page = allocation.page;
+    entry.rect = allocation.rect;
+    if (entry.page >= 0) ++rasterized_glyphs;
 	if (entry.page < 0) WARN_PRINT("HCSR glyph atlas capacity exceeded");
 	glyph_entries.insert(key, entry);
     if (entry.page >= 0) last_glyphs.insert(face_glyph, entry);
@@ -355,7 +343,7 @@ Dictionary HCSRNewestRasterResources::get_statistics() const {
     result["raster_surfaces"] = surface_entries.size();
     result["rasterized_glyphs"] = rasterized_glyphs;
     result["pending_glyphs"] = pending_glyphs.size();
-    int glyph_pages = 0; for (const Page &page : pages) if (page.glyphs) glyph_pages++;
+    int glyph_pages = 0; for (const Page &page : pages) if (page.contains_glyphs) glyph_pages++;
     result["glyph_pages"] = glyph_pages;
     result["page_size"] = PAGE_SIZE;
     return result;

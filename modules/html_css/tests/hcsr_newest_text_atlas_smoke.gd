@@ -65,7 +65,7 @@ func _run() -> void:
 		require(colored > 180, "color emoji preserves intrinsic RGB and complete strike bounds")
 	var initial := stats()
 	require(int(initial.get("rasterized_glyphs",0)) > 10, "glyphs populate atlas: " + str(initial))
-	require(int(initial.get("glyph_pages",0)) == 1, "dedicated glyph page")
+	require(int(initial.get("glyph_pages",0)) == 1, "one page contains glyphs")
 	var large := view.create_output(Vector2i(800,480), false)
 	await settle(1)
 	coverage(large.texture.get_image())
