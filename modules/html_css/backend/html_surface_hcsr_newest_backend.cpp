@@ -19,7 +19,20 @@
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/rendering_server.h"
 
-struct HTMLSurfaceHCSRNewestBackend::State {
+// A presentation target has no scene, font service or raster cache of its own.
+// The owning State serializes access and retires targets on the render thread.
+struct HCSRNewestPresentationOutput {
+	bool mipmaps = false;
+	RID mipmapped_texture;
+	Ref<HTMLTexture2D> texture;
+	Size2i physical_size = Size2i(512, 512);
+	RID rd_texture;
+	RID canvas_texture;
+	uint64_t active_generation = 0;
+	bool closing = false;
+};
+
+struct HTMLSurfaceHCSRNewestBackend::State : HCSRNewestPresentationOutput {
 	mutable Mutex mutex;
 	HCSRNewestRasterResources raster_resources;
 	HCSRNewestSceneRenderer scene_renderer{raster_resources};
@@ -30,10 +43,8 @@ struct HTMLSurfaceHCSRNewestBackend::State {
 	bool text_enabled = OS::get_singleton()->get_environment("HCSR_DISABLE_TEXT") != "1";
 	Dictionary image_atlas_statistics;
 	// Output states own only presentation resources; source, scene and layout stay on this owner.
-	HashMap<uint64_t, State *> outputs;
+	HashMap<uint64_t, HCSRNewestPresentationOutput *> outputs;
 	uint64_t next_output_id = 1;
-	bool mipmaps = false;
-	RID mipmapped_texture;
 	HTMLSurfaceHCSRNewestRenderer renderer = HTML_SURFACE_HCSR_NEWEST_CPU;
 	hcsr_runtime_t runtime = 0;
 	HashSet<uint64_t> preloads;
@@ -52,23 +63,17 @@ struct HTMLSurfaceHCSRNewestBackend::State {
 	Vector<PendingMutationBatch> pending_mutations;
 	hcsr_draw_packet_t pending_packet = 0;
 	hcsr_scene_profile_t profile = {};
-	Ref<HTMLTexture2D> texture;
 	Ref<HTMLDocument> document;
 	Size2i logical_size = Size2i(512, 512);
-	Size2i physical_size = Size2i(512, 512);
 	float device_scale = 1.0f;
 	Color background = Color(0, 0, 0, 1);
 	Color placeholder = Color(0, 0, 0, 1);
-	RID rd_texture;
-	RID canvas_texture;
 	HTMLFrameMetadata metadata;
 	bool document_dirty = true;
 	bool render_pending = false;
 	bool presentation_changed = false;
 	bool needs_another_frame = false;
-	bool gpu_texture_initialized = false;
 	uint64_t queued_generation = 0;
-	uint64_t active_generation = 0;
 	struct PreparedFrame {
 		uint64_t host_frame = 0;
 		double time_seconds = 0.0;
@@ -83,7 +88,6 @@ struct HTMLSurfaceHCSRNewestBackend::State {
 	double maximum_preparation_milliseconds = 0.0;
 	uint64_t input_queued_usec = 0;
 	bool terminal = false;
-	bool closing = false;
 	String terminal_reason;
 	String last_mutation_rejection;
 	uint64_t mutation_rejected_frames = 0;
@@ -201,7 +205,7 @@ static uint32_t map_key(HTMLSurfaceInputKey p_key) {
 	}
 }
 
-static void release_gpu_target(HTMLSurfaceHCSRNewestBackend::State *p_state, RenderingServer *p_server, RenderingDevice *p_device) {
+static void release_gpu_target(HCSRNewestPresentationOutput *p_state, RenderingServer *p_server, RenderingDevice *p_device) {
 	if (p_state->mipmapped_texture.is_valid() && p_server != nullptr) {
 		p_server->free_rid(p_state->mipmapped_texture);
 		p_state->mipmapped_texture = RID();
@@ -214,10 +218,9 @@ static void release_gpu_target(HTMLSurfaceHCSRNewestBackend::State *p_state, Ren
 	}
 	p_state->canvas_texture = RID();
 	p_state->rd_texture = RID();
-	p_state->gpu_texture_initialized = false;
 }
 
-static bool ensure_gpu_target(HTMLSurfaceHCSRNewestBackend::State *p_state, RenderingServer *p_server, RenderingDevice *p_device, const Size2i &p_physical_size) {
+static bool ensure_gpu_target(HCSRNewestPresentationOutput *p_state, RenderingServer *p_server, RenderingDevice *p_device, const Size2i &p_physical_size) {
 	if (p_state->rd_texture.is_valid()) {
 		const RenderingDevice::TextureFormat existing = p_device->texture_get_format(p_state->rd_texture);
 		if ((int)existing.width == p_physical_size.x && (int)existing.height == p_physical_size.y) {
@@ -246,7 +249,7 @@ static bool ensure_gpu_target(HTMLSurfaceHCSRNewestBackend::State *p_state, Rend
 	return true;
 }
 
-static void release_output(HTMLSurfaceHCSRNewestBackend::State *output, RenderingServer *server, RenderingDevice *device) {
+static void release_output(HCSRNewestPresentationOutput *output, RenderingServer *server, RenderingDevice *device) {
 	release_gpu_target(output, server, device);
 	output->texture->release_resources();
 	memdelete(output);
@@ -283,7 +286,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 	if (rendered) state->prepared_backdrop = state->backdrop.update(packet_handle, rendered_logical_size, physical_size);
 	float output_scale = rendered ? MAX(float(physical_size.x) / packet.viewport_width, float(physical_size.y) / packet.viewport_height) : 1;
     { MutexLock lock(state->mutex);
-        for (const KeyValue<uint64_t, State *> &entry : state->outputs)
+        for (const KeyValue<uint64_t, HCSRNewestPresentationOutput *> &entry : state->outputs)
             if (!entry.value->closing && rendered) output_scale = MAX(output_scale, MAX(float(entry.value->physical_size.x) / packet.viewport_width, float(entry.value->physical_size.y) / packet.viewport_height));
     }
     const uint64_t atlas_start_usec = OS::get_singleton()->get_ticks_usec();
@@ -292,7 +295,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 	if (textured) {
 		RenderingServer *server = RenderingServer::get_singleton();
 		RenderingDevice *device = server ? server->get_rendering_device() : nullptr;
-		auto draw_output = [&](State *output, const Size2i &size, const Color &clear) {
+		auto draw_output = [&](HCSRNewestPresentationOutput *output, const Size2i &size, const Color &clear) {
 			if (renderer == HTML_SURFACE_HCSR_NEWEST_CPU) {
 				Ref<Image> image = Image::create_empty(size.x, size.y, false, Image::FORMAT_RGBA8);
 				state->scene_renderer.draw_cpu(image, clear);
@@ -302,7 +305,6 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 			}
 			if (!device || !ensure_gpu_target(output, server, device, size)
 					|| !state->scene_renderer.draw(device, output->rd_texture, clear)) return false;
-			output->gpu_texture_initialized = true;
 			if (output->mipmaps) {
 				if (!output->mipmapped_texture.is_valid()) output->mipmapped_texture = server->texture_drawable_create(size.x, size.y,
 						RenderingServerEnums::TEXTURE_DRAWABLE_FORMAT_RGBA8_SRGB, Color(0, 0, 0, 0), true);
@@ -317,8 +319,8 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 		rendered = draw_output(state, physical_size, background);
 		MutexLock lock(state->mutex);
 		Vector<uint64_t> retired;
-		for (const KeyValue<uint64_t, State *> &entry : state->outputs) {
-			State *output = entry.value;
+		for (const KeyValue<uint64_t, HCSRNewestPresentationOutput *> &entry : state->outputs) {
+			HCSRNewestPresentationOutput *output = entry.value;
 			if (output->closing) { retired.push_back(entry.key); continue; }
 			if (rendered) rendered = draw_output(output, output->physical_size, Color(0, 0, 0, 0));
 			if (rendered) output->active_generation = rendered_generation;
@@ -1086,8 +1088,7 @@ Ref<HTMLTexture2D> HTMLSurfaceHCSRNewestBackend::get_html_texture() const { retu
 uint64_t HTMLSurfaceHCSRNewestBackend::create_presentation_output(const Size2i &p_size, bool p_mipmaps) {
 	if (p_size.x <= 0 || p_size.y <= 0) return 0;
 	MutexLock lock(state->mutex);
-	State *output = memnew(State);
-	output->renderer = state->renderer;
+	HCSRNewestPresentationOutput *output = memnew(HCSRNewestPresentationOutput);
 	output->physical_size = p_size;
 	output->mipmaps = p_mipmaps;
 	output->texture.instantiate();
@@ -1100,7 +1101,7 @@ uint64_t HTMLSurfaceHCSRNewestBackend::create_presentation_output(const Size2i &
 Error HTMLSurfaceHCSRNewestBackend::resize_presentation_output(uint64_t p_id, const Size2i &p_size) {
 	if (p_size.x <= 0 || p_size.y <= 0) return ERR_INVALID_PARAMETER;
 	MutexLock lock(state->mutex);
-	State **output = state->outputs.getptr(p_id);
+	HCSRNewestPresentationOutput **output = state->outputs.getptr(p_id);
 	if (output == nullptr || (*output)->closing) return ERR_DOES_NOT_EXIST;
 	if ((*output)->physical_size != p_size) {
 		(*output)->physical_size = p_size;
@@ -1111,7 +1112,7 @@ Error HTMLSurfaceHCSRNewestBackend::resize_presentation_output(uint64_t p_id, co
 
 void HTMLSurfaceHCSRNewestBackend::destroy_presentation_output(uint64_t p_id) {
 	MutexLock lock(state->mutex);
-	State **output = state->outputs.getptr(p_id);
+	HCSRNewestPresentationOutput **output = state->outputs.getptr(p_id);
 	if (output == nullptr) return;
 	// Retire on the render thread after previously queued drawing.
 	(*output)->closing = true;
@@ -1120,13 +1121,13 @@ void HTMLSurfaceHCSRNewestBackend::destroy_presentation_output(uint64_t p_id) {
 
 Ref<Texture2D> HTMLSurfaceHCSRNewestBackend::get_presentation_output_texture(uint64_t p_id) const {
 	MutexLock lock(state->mutex);
-	State *const *output = state->outputs.getptr(p_id);
+	HCSRNewestPresentationOutput *const *output = state->outputs.getptr(p_id);
 	return output != nullptr && !(*output)->closing ? Ref<Texture2D>((*output)->texture) : Ref<Texture2D>();
 }
 
 uint64_t HTMLSurfaceHCSRNewestBackend::get_presentation_output_generation(uint64_t p_id) const {
 	MutexLock lock(state->mutex);
-	State *const *output = state->outputs.getptr(p_id);
+	HCSRNewestPresentationOutput *const *output = state->outputs.getptr(p_id);
 	return output != nullptr && !(*output)->closing ? (*output)->active_generation : 0;
 }
 
@@ -1147,7 +1148,7 @@ void HTMLSurfaceHCSRNewestBackend::_destroy_state_on_render_thread(uint64_t p_st
 	{
 		MutexLock lock(state->mutex);
 		if (state->pending_packet != 0) hcsr_draw_packet_destroy(state->pending_packet);
-		for (const KeyValue<uint64_t, State *> &entry : state->outputs) release_output(entry.value, server, device);
+		for (const KeyValue<uint64_t, HCSRNewestPresentationOutput *> &entry : state->outputs) release_output(entry.value, server, device);
 		state->outputs.clear();
 		state->scene_renderer.release(device);
 		release_gpu_target(state, server, device);

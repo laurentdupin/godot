@@ -42,18 +42,12 @@ enum HTMLFramePixelFormat {
 	HTML_FRAME_PIXEL_FORMAT_BGRA8,
 };
 
-struct HTMLFrameDamage {
-	Vector<Rect2i> rects;
-	bool full_frame = true;
-};
-
 struct HTMLCPUFrame {
 	Size2i size;
 	int stride = 0;
 	HTMLFramePixelFormat pixel_format = HTML_FRAME_PIXEL_FORMAT_RGBA8;
-	bool premultiplied_alpha = true;
+	// Complete straight-alpha pixels in the declared channel order.
 	Vector<uint8_t> pixels;
-	HTMLFrameDamage damage;
 
 	bool is_valid() const {
 		if (size.x <= 0 || size.y <= 0) {
