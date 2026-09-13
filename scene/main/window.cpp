@@ -3376,6 +3376,9 @@ void Window::_update_displayed_title() {
 		displayed_title = vformat("%s (DEBUG)", displayed_title);
 		if (debug_frames_per_second >= 0) {
 			displayed_title = vformat("%s - %d FPS", displayed_title, debug_frames_per_second);
+			if (!debug_worst_frame_times.is_empty()) {
+				displayed_title += vformat(" | Worst 5 (1s): %s ms", debug_worst_frame_times);
+			}
 		}
 	}
 #endif
@@ -3405,12 +3408,13 @@ void Window::_update_displayed_title() {
 }
 
 #ifdef DEBUG_ENABLED
-void Window::set_debug_frames_per_second(int p_frames_per_second) {
+void Window::set_debug_frame_statistics(int p_frames_per_second, const String &p_worst_frame_times) {
 	const int new_frames_per_second = MAX(0, p_frames_per_second);
-	if (debug_frames_per_second == new_frames_per_second) {
+	if (debug_frames_per_second == new_frames_per_second && debug_worst_frame_times == p_worst_frame_times) {
 		return;
 	}
 	debug_frames_per_second = new_frames_per_second;
+	debug_worst_frame_times = p_worst_frame_times;
 	_update_displayed_title();
 }
 #endif

@@ -122,6 +122,7 @@ private:
 	String displayed_title;
 #ifdef DEBUG_ENABLED
 	int debug_frames_per_second = -1;
+	String debug_worst_frame_times;
 #endif
 	mutable int current_screen = 0;
 	mutable Point2i position;
@@ -318,7 +319,7 @@ public:
 	String get_title() const;
 	String get_displayed_title() const;
 #ifdef DEBUG_ENABLED
-	void set_debug_frames_per_second(int p_frames_per_second);
+	void set_debug_frame_statistics(int p_frames_per_second, const String &p_worst_frame_times);
 #endif
 
 	void set_initial_position(WindowInitialPosition p_initial_position);

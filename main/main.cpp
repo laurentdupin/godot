@@ -57,6 +57,7 @@
 #include "core/profiling/profiling.h"
 #include "core/register_core_types.h"
 #include "core/string/translation_server.h"
+#include "core/templates/ring_buffer.h"
 #include "core/variant/variant_parser.h"
 #include "core/version.h"
 #include "drivers/register_driver_types.h"
@@ -4883,6 +4884,15 @@ static uint64_t physics_process_max = 0;
 static uint64_t process_max = 0;
 static uint64_t navigation_process_max = 0;
 
+#ifdef DEBUG_ENABLED
+struct DebugFrameTime {
+	uint64_t end_usec = 0;
+	uint64_t duration_usec = 0;
+};
+static RingBuffer<DebugFrameTime> debug_frame_times;
+static int debug_frame_times_power = 10;
+#endif
+
 // Return false means iterating further, returning true means `OS::run`
 // will terminate the program. In case of failure, the OS exit code needs
 // to be set explicitly here (defaults to EXIT_SUCCESS).
@@ -4897,6 +4907,21 @@ bool Main::iteration() {
 	main_timer_sync.set_fixed_fps(fixed_fps);
 
 	const uint64_t ticks_elapsed = ticks - last_ticks;
+
+#ifdef DEBUG_ENABLED
+	if (!editor && !project_manager && last_ticks != 0) {
+		// Use real frame intervals, including presentation/limiter waits, rather
+		// than scaled simulation delta or CPU processing time. Ignore startup.
+		DebugFrameTime oldest;
+		while (debug_frame_times.copy(&oldest, 0, 1) && ticks - oldest.end_usec >= 1000000) {
+			debug_frame_times.advance_read(1);
+		}
+		if (debug_frame_times.space_left() == 0) {
+			debug_frame_times.resize(debug_frame_times_power++);
+		}
+		debug_frame_times.write({ ticks, ticks_elapsed });
+	}
+#endif
 
 	const int physics_ticks_per_second = Engine::get_singleton()->get_user_physics_ticks_per_second();
 	const double physics_step = 1.0 / physics_ticks_per_second;
@@ -5110,7 +5135,28 @@ bool Main::iteration() {
 #ifdef DEBUG_ENABLED
 		SceneTree *fps_scene_tree = SceneTree::get_singleton();
 		if (!editor && !project_manager && fps_scene_tree != nullptr && fps_scene_tree->get_root() != nullptr) {
-			fps_scene_tree->get_root()->set_debug_frames_per_second(frames);
+			uint64_t worst[5] = {};
+			for (int i = 0; i < debug_frame_times.data_left(); i++) {
+				DebugFrameTime sample;
+				debug_frame_times.copy(&sample, i, 1);
+				for (int rank = 0; rank < 5; rank++) {
+					if (sample.duration_usec > worst[rank]) {
+						for (int j = 4; j > rank; j--) {
+							worst[j] = worst[j - 1];
+						}
+						worst[rank] = sample.duration_usec;
+						break;
+					}
+				}
+			}
+			String worst_frame_times;
+			for (int i = 0; i < 5 && worst[i] != 0; i++) {
+				if (i != 0) {
+					worst_frame_times += ", ";
+				}
+				worst_frame_times += String::num(worst[i] / 1000.0, 2);
+			}
+			fps_scene_tree->get_root()->set_debug_frame_statistics(frames, worst_frame_times);
 		}
 #endif
 		performance->set_process_time(USEC_TO_SEC(process_max));
