@@ -26,6 +26,9 @@ func run() -> void:
     var bold = OS.get_environment("HCSR_FONT_BOLD").replace("\\", "/")
     var variable = OS.get_environment("HCSR_FONT_VARIABLE").replace("\\", "/")
     for path in [regular, bold, variable]:
+        if not (path.begins_with("res://") or path.begins_with("user://")):
+            check(false, "Font fixture must use an HTML resource path (res:// or user://): " + path)
+            return
         check(FileAccess.file_exists(path), "Missing explicit font fixture: " + path)
     var css = "body{margin:0;background:white;color:black}.row{height:60px;font-size:40px;line-height:60px}"
     for face in [["Regular", regular, "400"], ["Bold", bold, "700"],
