@@ -40,6 +40,16 @@ private:
             return hash_fmix32(hash_murmur3_one_32(key.size, hash_murmur3_one_32(key.glyph, hash_murmur3_one_64(key.face))));
         }
     };
+    struct SurfaceKey {
+        uint64_t identity;
+        int level;
+        bool operator==(const SurfaceKey &other) const { return identity == other.identity && level == other.level; }
+    };
+    struct SurfaceHasher {
+        static uint32_t hash(const SurfaceKey &key) { return hash_fmix32(hash_murmur3_one_32(key.level, hash_murmur3_one_64(key.identity))); }
+    };
+    HashMap<SurfaceKey, Entry, SurfaceHasher> surface_entries;
+    Entry pack_image(Ref<Image> image, int level);
     HashMap<GlyphKey, Entry, GlyphHasher> glyph_entries;
 	HashMap<String, Entry> entries;
 	Mutex image_mutex;
@@ -49,6 +59,7 @@ private:
 	Vector<Page> pages;
 public:
 	Entry resolve_image(const Ref<HTMLDocument> &document, const String &source, const Size2i &natural, const Vector2 &physical_size);
+    Entry resolve_raster(const hcsr_raster_material_t &raster, const Vector2 &physical_size);
     Entry resolve_glyph(const hcsr_glyph_material_t &glyph, float scale);
 private:
     Entry rasterize_glyph(const hcsr_glyph_material_t &glyph, int level);

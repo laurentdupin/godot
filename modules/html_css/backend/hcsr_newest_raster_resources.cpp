@@ -112,13 +112,42 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_image(const 
 	if (const Entry *existing = entries.getptr(key)) {
 		return *existing;
 	}
-	Entry entry;
 	Ref<Image> image;
 	{
 		MutexLock lock(image_mutex);
 		image = load_image(document, source);
 		decoded_sources.erase(source_key); // Atlas owns pixels after packing; retain only metadata.
 	}
+    Entry entry = pack_image(image, level);
+    if (entry.page < 0) WARN_PRINT("hcsr_newest image unavailable or atlas capacity exceeded: " + source.left(100));
+    entries.insert(key, entry);
+    return entry;
+}
+
+HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_raster(const hcsr_raster_material_t &raster, const Vector2 &physical_size) {
+    Entry entry;
+    if (!raster.identity || !raster.pixels || !raster.width || !raster.height
+        || raster.width > INT32_MAX / 4 || raster.stride != raster.width * 4
+        || uint64_t(raster.stride) * raster.height > INT32_MAX) return entry;
+    const float ratio = MIN(raster.width / MAX(1.0f, physical_size.x), raster.height / MAX(1.0f, physical_size.y));
+    const int level = ratio >= 2 ? MIN(12, int(std::floor(std::log2(ratio)))) : 0;
+    const SurfaceKey key{ raster.identity, level };
+    if (const Entry *cached = surface_entries.getptr(key)) return *cached;
+    Vector<uint8_t> pixels;
+    if (pixels.resize(int(raster.stride * raster.height)) != OK) return entry;
+    uint8_t *dst = pixels.ptrw();
+    for (uint64_t i = 0; i < uint64_t(raster.width) * raster.height; ++i) {
+        dst[i*4] = raster.pixels[i*4+2]; dst[i*4+1] = raster.pixels[i*4+1];
+        dst[i*4+2] = raster.pixels[i*4]; dst[i*4+3] = raster.pixels[i*4+3];
+    }
+    Ref<Image> image = Image::create_from_data(raster.width, raster.height, false, Image::FORMAT_RGBA8, pixels);
+    entry = pack_image(image, level);
+    surface_entries.insert(key, entry);
+    return entry;
+}
+
+HCSRNewestRasterResources::Entry HCSRNewestRasterResources::pack_image(Ref<Image> image, int level) {
+    Entry entry;
 	if (image.is_valid()) {
 		entry.natural_size = image->get_size();
 		image->convert(Image::FORMAT_RGBA8); // Straight alpha; native BGRA codec contract is unchanged.
@@ -181,10 +210,6 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_image(const 
 			break;
 		}
 	}
-	if (entry.page < 0) {
-		WARN_PRINT("hcsr_newest image unavailable or atlas capacity exceeded: " + source.left(100));
-	}
-	entries.insert(key, entry); // Cache failures too; never retry I/O every animation frame.
 	return entry;
 }
 
@@ -288,8 +313,9 @@ void HCSRNewestRasterResources::ensure_sampling_page() {
 Dictionary HCSRNewestRasterResources::get_statistics() const {
     Dictionary result;
 	result["pages"] = pages.size();
-	result["sources"] = entries.size() + glyph_entries.size();
+	result["sources"] = entries.size() + glyph_entries.size() + surface_entries.size();
 	result["decoded_images"] = decoded_images;
+    result["raster_surfaces"] = surface_entries.size();
     result["rasterized_glyphs"] = rasterized_glyphs;
     result["pending_glyphs"] = pending_glyphs.size();
     int glyph_pages = 0; for (const Page &page : pages) if (page.glyphs) glyph_pages++;

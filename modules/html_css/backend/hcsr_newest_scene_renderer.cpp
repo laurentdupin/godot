@@ -89,6 +89,26 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
 		memcpy(&area, packet.material_payload + material.payload_offset, sizeof(area));
 		Entry entry;
 		Rect2 destination;
+        if (material.kind == HCSR_MATERIAL_RASTER) {
+            if (material.payload_size != sizeof(hcsr_raster_material_t)) return false;
+            hcsr_raster_material_t raster;
+            memcpy(&raster, packet.material_payload + material.payload_offset, sizeof(raster));
+            destination = Rect2(raster.local_rect.x, raster.local_rect.y, raster.local_rect.width, raster.local_rect.height);
+            float transform_scale = 1;
+            if (gpu_geometry && draw.index_count) {
+                const auto &m = packet.gpu.states[packet.gpu.vertex_states[packet.indices[draw.first_index]]].transform;
+                transform_scale = MAX(Vector2(m[0],m[1]).length(),Vector2(m[4],m[5]).length());
+            } else if (draw.index_count) {
+                const auto &a = packet.vertices[packet.indices[draw.first_index]];
+                for (uint32_t j=1; j<draw.index_count; ++j) {
+                    const auto &b = packet.vertices[packet.indices[draw.first_index+j]];
+                    const float local = Vector2(b.local_x-a.local_x,b.local_y-a.local_y).length();
+                    if (local > .001f) transform_scale = MAX(transform_scale,Vector2(b.screen_x-a.screen_x,b.screen_y-a.screen_y).length()/local);
+                }
+            }
+            entry = resources.resolve_raster(raster,destination.size * (output_scale * transform_scale));
+            if (entry.page < 0) return false;
+        }
 		if (material.kind == HCSR_MATERIAL_IMAGE && material.payload_size >= sizeof(hcsr_image_material_t)) {
 			hcsr_image_material_t image;
 			memcpy(&image, packet.material_payload + material.payload_offset, sizeof(image));
