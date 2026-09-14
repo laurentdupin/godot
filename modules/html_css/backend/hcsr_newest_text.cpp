@@ -216,6 +216,7 @@ int HCSRNewestText::shape(const hcsr_shape_request_t &request, hcsr_shape_result
 	cache_font_metrics(font, request.weight);
 	float ascent = 0, descent = 0, gap = 0, x_height = request.size * .5f;
 	RID previous_metrics_rid;
+	hcsr_shape_run_t run_metrics = {};
 	Vector<int> utf16;
 	utf16.resize(text.length() + 1);
 	int offset = 0;
@@ -225,6 +226,7 @@ int HCSRNewestText::shape(const hcsr_shape_request_t &request, hcsr_shape_result
 	}
 	utf16.write[text.length()] = offset;
 	scratch.clear();
+	scratch_runs.clear();
 	const Glyph *glyphs = ts->shaped_text_get_glyphs(shaped);
 	for (int i = 0; i < ts->shaped_text_get_glyph_count(shaped); i++) {
 		const Glyph &g = glyphs[i];
@@ -232,8 +234,17 @@ int HCSRNewestText::shape(const hcsr_shape_request_t &request, hcsr_shape_result
 			continue;
 		}
 		if (g.font_rid != previous_metrics_rid) {
+			if (run_metrics.glyph_count > 0) {
+				scratch_runs.push_back(run_metrics);
+			}
+			run_metrics = {};
+			run_metrics.glyph_start = scratch.size();
 			const hcsr_font_metrics *metrics = font_metrics.getptr(g.font_rid);
 			if (metrics && metrics->ascent + metrics->descent > 0) {
+				run_metrics.ascent = metrics->ascent * request.size;
+				run_metrics.descent = metrics->descent * request.size;
+				run_metrics.line_gap = metrics->line_gap * request.size;
+				run_metrics.x_height = metrics->x_height * request.size;
 				ascent = MAX(ascent, metrics->ascent * request.size);
 				descent = MAX(descent, metrics->descent * request.size);
 				gap = MAX(gap, metrics->line_gap * request.size);
@@ -243,6 +254,8 @@ int HCSRNewestText::shape(const hcsr_shape_request_t &request, hcsr_shape_result
 			} else {
 				// Godot can select an implicit system fallback whose bytes are not
 				// exposed by Font. Preserve its metrics rather than using another face.
+				run_metrics.ascent = (float)ts->font_get_ascent(g.font_rid, 64) * scale;
+				run_metrics.descent = (float)ts->font_get_descent(g.font_rid, 64) * scale;
 				ascent = MAX(ascent, (float)ts->font_get_ascent(g.font_rid, 64) * scale);
 				descent = MAX(descent, (float)ts->font_get_descent(g.font_rid, 64) * scale);
 			}
@@ -251,11 +264,15 @@ int HCSRNewestText::shape(const hcsr_shape_request_t &request, hcsr_shape_result
 		Vector2 origin = ts->font_get_glyph_offset(g.font_rid, Vector2i(64, 0), g.index) * scale;
 		Vector2 size = ts->font_get_glyph_size(g.font_rid, Vector2i(64, 0), g.index) * scale;
 		for (int repeat = 0; repeat < g.repeat; repeat++) {
+			run_metrics.glyph_count++;
 			scratch.push_back({ g.font_rid.get_id(), (uint32_t)g.index, (uint32_t)utf16[CLAMP(g.start, 0, text.length())],
 					g.x_off * scale, g.y_off * scale, g.advance * scale, 0, origin.x, origin.y, size.x, size.y });
 		}
 	}
-	result = { scratch.ptr(), (size_t)scratch.size(), ascent, descent, gap, x_height };
+	if (run_metrics.glyph_count > 0) {
+		scratch_runs.push_back(run_metrics);
+	}
+	result = { scratch.ptr(), (size_t)scratch.size(), ascent, descent, gap, x_height, scratch_runs.ptr(), (size_t)scratch_runs.size() };
 	ts->free_rid(shaped);
 	return 1;
 }

@@ -22,6 +22,7 @@ class HCSRNewestText {
 	void cache_font_metrics(const Ref<Font> &font, int weight);
 	uint64_t configuration = 0;
 	Vector<hcsr_shaped_glyph_t> scratch;
+	Vector<hcsr_shape_run_t> scratch_runs;
 	Ref<Font> resolve(const String &family, int weight, bool italic);
 	int shape(const hcsr_shape_request_t &request, hcsr_shape_result_t &result);
 
