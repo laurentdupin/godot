@@ -332,18 +332,23 @@ bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {
         || !update(clip_buffer,gpu_clips.size()*sizeof(hcsr_gpu_clip_t),gpu_clips.ptr(),false)
         || !update(plane_buffer,gpu_planes.size()*sizeof(hcsr_gpu_plane_t),gpu_planes.ptr(),false)) return false;
     geometry_dirty=false;
+    auto rgba_upload = [&](int page, const Rect2i &rect) {
+        Vector<uint8_t> pixels = resources.page_pixels(page, rect);
+        for (int i = 0; i < pixels.size(); i += 4) SWAP(pixels.write[i], pixels.write[i + 2]);
+        return pixels;
+    };
     if (gpu_pages.resize(resources.page_count()) != OK) return false;
     for (int index = 0; index < gpu_pages.size(); ++index) {
         GpuPage &page = gpu_pages.write[index];
-        const Ref<Image> &pixels = resources.page_image(index);
+        const Size2i size = resources.page_size(index);
 		RD::TextureFormat format;
 		format.format = RD::DATA_FORMAT_R8G8B8A8_UNORM;
-		format.width = pixels->get_width();
-		format.height = pixels->get_height();
+		format.width = size.x;
+		format.height = size.y;
 		format.usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT;
 		if (!page.texture.is_valid()) {
 			Vector<Vector<uint8_t>> data;
-			data.push_back(pixels->get_data());
+			data.push_back(rgba_upload(index,Rect2i(Point2i(),size)));
 			page.texture = device->texture_create(format, RD::TextureView(), data);
 			uploaded_bytes += uint64_t(format.width) * format.height * 4;
 		} else {
@@ -353,7 +358,7 @@ bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {
 				format.height = rect.size.y;
 				format.usage_bits = RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT;
 				Vector<Vector<uint8_t>> data;
-				data.push_back(pixels->get_region(rect)->get_data());
+				data.push_back(rgba_upload(index,rect));
 				RID patch = device->texture_create(format, RD::TextureView(), data);
 				if (!patch.is_valid()) {
 					return false;
@@ -602,6 +607,7 @@ void HCSRNewestSceneRenderer::draw_cpu(Ref<Image> target, const Color &backgroun
 	target->fill(background);
 	const Vector2 size = target->get_size();
     Vector<Ref<Image>> parents;
+    Vector<Ref<Image>> reference_pages; reference_pages.resize(resources.page_count());
 	for (const Batch &batch : batches) {
         if (batch.kind==HCSR_GROUP_BEGIN) {
             parents.push_back(target);
@@ -618,6 +624,16 @@ void HCSRNewestSceneRenderer::draw_cpu(Ref<Image> target, const Color &backgroun
             }
             target=parent;
             continue;
+        }
+        Ref<Image> &atlas_image = reference_pages.write[batch.page];
+        if (atlas_image.is_null()) {
+            // Temporary reference pixels, shared by all batches on this page.
+            const Size2i atlas_size = resources.page_size(batch.page);
+            Vector<uint8_t> atlas_pixels = resources.page_pixels(batch.page, Rect2i(Point2i(), atlas_size));
+            for (int offset = 0; offset < atlas_pixels.size(); offset += 4) {
+                SWAP(atlas_pixels.write[offset], atlas_pixels.write[offset + 2]);
+            }
+            atlas_image = Image::create_from_data(atlas_size.x, atlas_size.y, false, Image::FORMAT_RGBA8, atlas_pixels);
         }
 		for (uint32_t i = batch.first; i < batch.first + batch.count; i += 3) {
 			const Vertex &a = vertices[i], &b = vertices[i + 1], &c = vertices[i + 2];
@@ -655,7 +671,7 @@ void HCSRNewestSceneRenderer::draw_cpu(Ref<Image> target, const Color &backgroun
                             + Vector4(c.tint[0],c.tint[1],c.tint[2],c.tint[3])*wc;
                     const Vector2 uv(a.position_uv[2]*wa+b.position_uv[2]*wb+c.position_uv[2]*wc,
                             a.position_uv[3]*wa+b.position_uv[3]*wb+c.position_uv[3]*wc);
-                    const Vector4 shaded = hcsr_cpu_paint::hcsr_shade(resources.page_image(batch.page), uv, tint,
+                    const Vector4 shaded = hcsr_cpu_paint::hcsr_shade(atlas_image, uv, tint,
                             Vector4(a.bounds[0],a.bounds[1],a.bounds[2],a.bounds[3]));
                     const Color color(shaded.x,shaded.y,shaded.z,shaded.w);
 					const Color under = target->get_pixel(x, y);

@@ -6,6 +6,27 @@
 #include "servers/text/text_server.h"
 #include <cmath>
 
+HCSRNewestRasterResources::HCSRNewestRasterResources() { ERR_FAIL_COND(hcsr_atlas_create(&atlas)!=HCSR_OK); }
+HCSRNewestRasterResources::~HCSRNewestRasterResources() { if(atlas) hcsr_atlas_destroy(atlas); }
+
+Vector<uint8_t> HCSRNewestRasterResources::page_pixels(int page,const Rect2i &region) const {
+    Vector<uint8_t> pixels;
+    ERR_FAIL_COND_V(pixels.resize(region.size.x*region.size.y*4)!=OK,pixels);
+    if(page==0) { memset(pixels.ptrw(),0,pixels.size());return pixels; }
+    const hcsr_atlas_region_t r{region.position.x,region.position.y,region.size.x,region.size.y};
+    ERR_FAIL_COND_V(hcsr_atlas_copy_region(atlas,page-1,&r,reinterpret_cast<uint32_t *>(pixels.ptrw()),pixels.size()/4)!=HCSR_OK,Vector<uint8_t>());
+    return pixels;
+}
+Vector<Rect2i> HCSRNewestRasterResources::page_updates(int page) const {
+    Vector<Rect2i> result;
+    if(page==0) return result;
+    const int count=hcsr_atlas_update_count(atlas,page-1);
+    for(int i=0;i<count;++i) { hcsr_atlas_region_t r{};
+        if(hcsr_atlas_get_update(atlas,page-1,i,&r)==HCSR_OK) result.push_back(Rect2i(r.x,r.y,r.width,r.height));
+    }
+    return result;
+}
+
 static bool svg_has_filters(const Vector<uint8_t> &bytes) {
     XMLParser parser;
     if (parser.open_buffer(bytes) != OK) return false;
@@ -105,8 +126,7 @@ Size2i HCSRNewestRasterResources::resolve_size(const Ref<HTMLDocument> &document
 
 HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_image(const Ref<HTMLDocument> &document, const String &source, const Size2i &natural, const Vector2 &physical_size) {
 	// Cache power-of-two reductions, not a new raster for every animated size.
-	const float ratio = MIN(natural.x / MAX(1.0f, physical_size.x), natural.y / MAX(1.0f, physical_size.y));
-	const int level = ratio >= 2 ? MIN(12, int(std::floor(std::log2(ratio)))) : 0;
+	const int level = hcsr_atlas_image_level(natural.x,natural.y,physical_size.x,physical_size.y);
 	const String source_key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source;
 	const String key = source_key + "\nminification:" + itos(level);
 	if (const Entry *existing = entries.getptr(key)) {
@@ -129,44 +149,12 @@ void HCSRNewestRasterResources::retain_surfaces(const HashSet<uint64_t> &live) {
     for (const auto &item : surface_entries) if (!live.has(item.key.identity)) retired.push_back(item.key);
     for (const auto &key : retired) {
         const Entry entry = surface_entries[key];
-        if (entry.page >= 0) release_image_slot(pages.write[entry.page],Rect2i(entry.rect.position-Point2i(1,1),entry.rect.size+Size2i(2,2)));
+        if (entry.page>0) {
+            const hcsr_atlas_entry_t allocation{entry.page-1,{entry.rect.position.x,entry.rect.position.y,entry.rect.size.x,entry.rect.size.y}};
+            hcsr_atlas_release(atlas,&allocation);
+        }
         surface_entries.erase(key);
     }
-}
-
-void HCSRNewestRasterResources::release_image_slot(Page &page, Rect2i slot) {
-    for (int i=0; i<page.free_slots.size();) {
-        const Rect2i other=page.free_slots[i];
-        const bool horizontal=slot.position.y==other.position.y && slot.size.y==other.size.y
-            && (slot.get_end().x==other.position.x || other.get_end().x==slot.position.x);
-        const bool vertical=slot.position.x==other.position.x && slot.size.x==other.size.x
-            && (slot.get_end().y==other.position.y || other.get_end().y==slot.position.y);
-        if (horizontal || vertical) { slot=slot.merge(other); page.free_slots.remove_at(i); i=0; }
-        else ++i;
-    }
-    page.free_slots.push_back(slot);
-}
-
-bool HCSRNewestRasterResources::reserve_image_slot(Page &page, int width, int height, Point2i &position) {
-    int selected=-1, waste=INT32_MAX;
-    for (int i=0; i<page.free_slots.size(); ++i) {
-        const Rect2i slot=page.free_slots[i];
-        const int remaining=slot.size.x*slot.size.y-width*height;
-        if (slot.size.x>=width && slot.size.y>=height && remaining<waste) { selected=i; waste=remaining; }
-    }
-    if (selected>=0) {
-        const Rect2i slot=page.free_slots[selected]; page.free_slots.remove_at(selected);
-        position=slot.position;
-        if (slot.size.x>width) page.free_slots.push_back(Rect2i(position+Point2i(width,0),Size2i(slot.size.x-width,height)));
-        if (slot.size.y>height) page.free_slots.push_back(Rect2i(position+Point2i(0,height),Size2i(slot.size.x,slot.size.y-height)));
-        ++reused_surface_slots;
-        return true;
-    }
-    int x=page.x, y=page.y, row=page.row_height;
-    if (x+width>PAGE_SIZE) { x=0; y+=row; row=0; }
-    if (width>PAGE_SIZE || y+height>PAGE_SIZE) return false;
-    position=Point2i(x,y); page.x=x+width; page.y=y; page.row_height=MAX(row,height);
-    return true;
 }
 
 HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_raster(const hcsr_raster_material_t &raster, const Vector2 &physical_size) {
@@ -174,103 +162,36 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_raster(const
     if (!raster.identity || !raster.pixels || !raster.width || !raster.height
         || raster.width > INT32_MAX / 4 || raster.stride != raster.width * 4
         || uint64_t(raster.stride) * raster.height > INT32_MAX) return entry;
-    const float ratio = MIN(raster.width / MAX(1.0f, physical_size.x), raster.height / MAX(1.0f, physical_size.y));
-    const int level = ratio >= 2 ? MIN(12, int(std::floor(std::log2(ratio)))) : 0;
+    const int level = hcsr_atlas_image_level(raster.width,raster.height,physical_size.x,physical_size.y);
     const SurfaceKey key{ raster.identity, level };
     if (const Entry *cached = surface_entries.getptr(key)) return *cached;
-    Vector<uint8_t> pixels;
-    if (pixels.resize(int(raster.stride * raster.height)) != OK) return entry;
-    uint8_t *dst = pixels.ptrw();
-    for (uint64_t i = 0; i < uint64_t(raster.width) * raster.height; ++i) {
-        dst[i*4] = raster.pixels[i*4+2]; dst[i*4+1] = raster.pixels[i*4+1];
-        dst[i*4+2] = raster.pixels[i*4]; dst[i*4+3] = raster.pixels[i*4+3];
+    hcsr_atlas_entry_t allocation{};
+    if(hcsr_atlas_pack(atlas,reinterpret_cast<const uint32_t *>(raster.pixels),raster.width,raster.height,level,0,&allocation)==HCSR_OK) {
+        entry.page=allocation.page+1;entry.rect=Rect2i(allocation.rect.x,allocation.rect.y,allocation.rect.width,allocation.rect.height);
+        entry.natural_size=Size2i(raster.width,raster.height);
     }
-    Ref<Image> image = Image::create_from_data(raster.width, raster.height, false, Image::FORMAT_RGBA8, pixels);
-    entry = pack_image(image, level);
     surface_entries.insert(key, entry);
     return entry;
 }
 
-HCSRNewestRasterResources::Entry HCSRNewestRasterResources::pack_image(Ref<Image> image, int level, bool glyph) {
+HCSRNewestRasterResources::Entry HCSRNewestRasterResources::pack_image(Ref<Image> image,int level,bool glyph) {
     Entry entry;
-	if (image.is_valid()) {
-		entry.natural_size = image->get_size();
-		image->convert(Image::FORMAT_RGBA8); // Straight alpha; native BGRA codec contract is unchanged.
-        if (level > 0) {
-            // Filter each image independently in premultiplied alpha. Whole-atlas
-            // mipmaps would mix neighboring entries and produce edge fringes.
-            image->premultiply_alpha();
-            image->generate_mipmaps();
-            image = image->get_image_from_mipmap(MIN(level, image->get_mipmap_count()));
-            Vector<uint8_t> pixels = image->get_data();
-            uint8_t *data = pixels.ptrw();
-            for (int64_t pixel = 0; pixel < int64_t(image->get_width()) * image->get_height(); pixel++) {
-                uint8_t *rgba = data + pixel * 4;
-                for (int channel = 0; channel < 3; channel++) {
-                    rgba[channel] = rgba[3] ? MIN(255, (int(rgba[channel]) * 255 + rgba[3] / 2) / rgba[3]) : 0;
-                }
-            }
-            image->set_data(image->get_width(), image->get_height(), false, Image::FORMAT_RGBA8, pixels);
-        }
-		const float scale = MIN(1.0f, float(PAGE_SIZE - 2) / MAX(image->get_width(), image->get_height()));
-		if (scale < 1) {
-			image->resize(MAX(1, int(image->get_width() * scale)), MAX(1, int(image->get_height() * scale)));
-		}
-		const int width = image->get_width() + 2, height = image->get_height() + 2;
-		for (int i = 0; i <= pages.size() && i < MAX_PAGES; i++) {
-			if (i == pages.size()) {
-                int atlas_pages = 0; for (const Page &existing : pages) if (existing.pixels->get_width() == PAGE_SIZE) atlas_pages++;
-                if (atlas_pages >= MAX_PAGES - 1) break;
-				Page page;
-				page.pixels = Image::create_empty(PAGE_SIZE, PAGE_SIZE, false, Image::FORMAT_RGBA8);
-				pages.push_back(page);
-			}
-			Page &page = pages.write[i];
-            if (page.pixels->get_width() != PAGE_SIZE) continue;
-            Point2i position;
-            if (!reserve_image_slot(page,width,height,position)) continue;
-            const int x=position.x, y=position.y;
-			entry.page = i;
-			entry.rect = Rect2i(x + 1, y + 1, width - 2, height - 2);
-			// A reused image slot may contain opaque gutters. Glyphs need
-            // transparent padding, even when sharing allocation with images.
-            if (glyph) {
-                page.contains_glyphs = true;
-                page.pixels->fill_rect(Rect2i(x,y,width,height), Color(0,0,0,0));
-            }
-            page.pixels->blit_rect(image, Rect2i(Point2i(), image->get_size()), entry.rect.position);
-            if (!glyph) {
-			// Extrude one texel on every side so linear sampling never bleeds adjacent entries.
-			for (int px = -1; px <= image->get_width(); px++) {
-				page.pixels->set_pixel(x + px + 1, y, image->get_pixel(CLAMP(px, 0, image->get_width() - 1), 0));
-				page.pixels->set_pixel(x + px + 1, y + height - 1, image->get_pixel(CLAMP(px, 0, image->get_width() - 1), image->get_height() - 1));
-			}
-			for (int py = 0; py < image->get_height(); py++) {
-				page.pixels->set_pixel(x, y + py + 1, image->get_pixel(0, py));
-				page.pixels->set_pixel(x + width - 1, y + py + 1, image->get_pixel(image->get_width() - 1, py));
-			}
-            }
-			page.dirty.push_back(Rect2i(x, y, width, height));
-			break;
-		}
-	}
-	return entry;
+    if(image.is_null()) return entry;
+    entry.natural_size=image->get_size();image->convert(Image::FORMAT_RGBA8);
+    const Vector<uint8_t> pixels=image->get_data();hcsr_atlas_entry_t allocation{};
+    if(hcsr_atlas_pack(atlas,reinterpret_cast<const uint32_t *>(pixels.ptr()),image->get_width(),image->get_height(),level,2u|(glyph?1u:0u),&allocation)==HCSR_OK) {
+        entry.page=allocation.page+1;entry.rect=Rect2i(allocation.rect.x,allocation.rect.y,allocation.rect.width,allocation.rect.height);
+    }
+    return entry;
 }
 
 HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_glyph(const hcsr_glyph_material_t &glyph, float scale) {
 	uint32_t size_bits;
     memcpy(&size_bits, &glyph.font_size, sizeof(size_bits));
     const GlyphKey identity{ glyph.face, glyph.glyph, size_bits };
-	const float required = CLAMP(glyph.font_size * scale, 1.0f, 768.0f);
-	const int *existing_level = glyph_levels.getptr(identity);
-    int level = existing_level ? *existing_level : 0;
-	// Keep 20% headroom and hysteresis: hover scaling never follows fractional raster sizes.
-	if (level == 0 || required > level || required < level * .45f) {
-		level = 12;
-		while (level < required * 1.2f && level < 768) level = (level * 3 + 1) / 2;
-		level = MIN(level, 768);
-		glyph_levels.insert(identity, level);
-	}
+    const int *previous=glyph_levels.getptr(identity);
+    const int level=hcsr_atlas_glyph_level(glyph.font_size,scale,previous?*previous:0);
+    glyph_levels.insert(identity,level);
 	const GlyphKey key{ glyph.face, glyph.glyph, uint32_t(level) };
 	const GlyphKey face_glyph{ glyph.face, glyph.glyph, 0 };
     if (const Entry *existing = glyph_entries.getptr(key)) {
@@ -326,24 +247,19 @@ void HCSRNewestRasterResources::advance_rasterization() {
     }
 }
 
-void HCSRNewestRasterResources::ensure_sampling_page() {
-    if (pages.is_empty()) {
-        Page placeholder;
-        placeholder.pixels = Image::create_empty(1, 1, false, Image::FORMAT_RGBA8);
-        pages.push_back(placeholder);
-    }
-}
+void HCSRNewestRasterResources::ensure_sampling_page() {} // Page zero is the permanent empty sampler.
 
 Dictionary HCSRNewestRasterResources::get_statistics() const {
     Dictionary result;
-	result["pages"] = pages.size();
+	result["pages"] = page_count();
 	result["sources"] = entries.size() + glyph_entries.size() + surface_entries.size();
 	result["decoded_images"] = decoded_images;
-    result["reused_surface_slots"] = reused_surface_slots;
+    result["reused_surface_slots"] = hcsr_atlas_reused_slots(atlas);
     result["raster_surfaces"] = surface_entries.size();
     result["rasterized_glyphs"] = rasterized_glyphs;
     result["pending_glyphs"] = pending_glyphs.size();
-    int glyph_pages = 0; for (const Page &page : pages) if (page.contains_glyphs) glyph_pages++;
+    HashSet<int> glyph_page_ids; for(const auto &item:glyph_entries) if(item.value.page>0) glyph_page_ids.insert(item.value.page);
+    const int glyph_pages=glyph_page_ids.size();
     result["glyph_pages"] = glyph_pages;
     result["page_size"] = PAGE_SIZE;
     return result;

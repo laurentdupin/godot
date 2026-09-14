@@ -2,6 +2,7 @@
 
 #include "../html_document.h"
 #include "hcsr_scene.h"
+#include "hcsr_atlas.h"
 #include "core/io/image.h"
 #include "core/os/mutex.h"
 #include "core/templates/hash_set.h"
@@ -25,13 +26,7 @@ public:
         bool color_glyph = false;
 	};
 private:
-	struct Page {
-        bool contains_glyphs = false;
-		Ref<Image> pixels;
-		Vector<Rect2i> dirty;
-        Vector<Rect2i> free_slots;
-		int x = 0, y = 0, row_height = 0;
-	};
+    uint64_t atlas = 0;
     struct GlyphKey {
         uint64_t face = 0;
         uint32_t glyph = 0, size = 0;
@@ -52,9 +47,6 @@ private:
     };
     HashMap<SurfaceKey, Entry, SurfaceHasher> surface_entries;
     Entry pack_image(Ref<Image> image, int level, bool glyph = false);
-    bool reserve_image_slot(Page &page, int width, int height, Point2i &position);
-    static void release_image_slot(Page &page, Rect2i slot);
-    uint64_t reused_surface_slots = 0;
 
     HashMap<GlyphKey, Entry, GlyphHasher> glyph_entries;
 	HashMap<String, Entry> entries;
@@ -62,8 +54,12 @@ private:
 	HashMap<String, Ref<Image>> decoded_sources;
 	HashMap<String, Size2i> source_sizes;
 	Ref<Image> load_image(const Ref<HTMLDocument> &document, const String &source);
-	Vector<Page> pages;
+
 public:
+    HCSRNewestRasterResources();
+    ~HCSRNewestRasterResources();
+    HCSRNewestRasterResources(const HCSRNewestRasterResources &) = delete;
+    HCSRNewestRasterResources &operator=(const HCSRNewestRasterResources &) = delete;
 	Entry resolve_image(const Ref<HTMLDocument> &document, const String &source, const Size2i &natural, const Vector2 &physical_size);
     void retain_surfaces(const HashSet<uint64_t> &live);
     Entry resolve_raster(const hcsr_raster_material_t &raster, const Vector2 &physical_size);
@@ -82,9 +78,10 @@ public:
     bool has_pending_glyphs() const { return !pending_glyphs.is_empty(); }
     void advance_rasterization();
     void ensure_sampling_page();
-    int page_count() const { return pages.size(); }
-    const Ref<Image> &page_image(int page) const { return pages[page].pixels; }
-    const Vector<Rect2i> &page_updates(int page) const { return pages[page].dirty; }
-    void acknowledge_upload(int page) { pages.write[page].dirty.clear(); }
+    int page_count() const { return MAX(0,hcsr_atlas_page_count(atlas))+1; }
+    Size2i page_size(int page) const { return page==0 ? Size2i(1,1) : Size2i(PAGE_SIZE,PAGE_SIZE); }
+    Vector<uint8_t> page_pixels(int page,const Rect2i &region) const;
+    Vector<Rect2i> page_updates(int page) const;
+    void acknowledge_upload(int page) { if(page>0) hcsr_atlas_acknowledge(atlas,page-1); }
     Dictionary get_statistics() const;
 };
