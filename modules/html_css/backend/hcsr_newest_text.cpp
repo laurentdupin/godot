@@ -177,7 +177,7 @@ void HCSRNewestText::cache_font_metrics(const Ref<Font> &font, int weight) {
 			break;
 		}
 	}
-	hcsr_font_metrics metrics = {};
+	FontMetrics metrics = {};
 	Ref<FontFile> file = base;
 	if (file.is_valid()) {
 		const PackedByteArray data = file->get_data();
@@ -185,6 +185,7 @@ void HCSRNewestText::cache_font_metrics(const Ref<Font> &font, int weight) {
 		TextServer *ts = TextServerManager::get_singleton()->get_primary_interface().ptr();
 		if (hcsr_font_register(data.ptr(), data.size(), ts->font_get_face_index(rid), &face)) {
 			hcsr_font_get_metrics_variation(face, 1024, weight, &metrics);
+			metrics.has_vertical_metrics = hcsr_font_has_vertical_metrics(face) != 0;
 			hcsr_font_unregister(face);
 			metrics.ascent /= 1024;
 			metrics.descent /= 1024;
@@ -203,7 +204,8 @@ int HCSRNewestText::shape(const hcsr_shape_request_t &request, hcsr_shape_result
 	Ref<Font> font = resolve(decode(request.family), request.weight, request.italic != 0);
 	const String text = decode(request.text);
 	const float scale = request.size / 64.0f;
-	RID shaped = ts->create_shaped_text(request.rtl ? TextServer::DIRECTION_RTL : TextServer::DIRECTION_LTR);
+	RID shaped = ts->create_shaped_text(request.rtl ? TextServer::DIRECTION_RTL : TextServer::DIRECTION_LTR,
+			request.vertical ? TextServer::ORIENTATION_VERTICAL : TextServer::ORIENTATION_HORIZONTAL);
 	Dictionary features;
 	for (size_t i = 0; i < request.feature_count; i++) {
 		features[int64_t(request.features[i].tag)] = request.features[i].value;
@@ -217,6 +219,7 @@ int HCSRNewestText::shape(const hcsr_shape_request_t &request, hcsr_shape_result
 	float ascent = 0, descent = 0, gap = 0, x_height = request.size * .5f;
 	RID previous_metrics_rid;
 	hcsr_shape_run_t run_metrics = {};
+	float synthesized_vertical_advance = 0;
 	Vector<int> utf16;
 	utf16.resize(text.length() + 1);
 	int offset = 0;
@@ -239,9 +242,13 @@ int HCSRNewestText::shape(const hcsr_shape_request_t &request, hcsr_shape_result
 			}
 			run_metrics = {};
 			run_metrics.glyph_start = scratch.size();
-			const hcsr_font_metrics *metrics = font_metrics.getptr(g.font_rid);
+			synthesized_vertical_advance = 0;
+			const FontMetrics *metrics = font_metrics.getptr(g.font_rid);
 			if (metrics && metrics->ascent + metrics->descent > 0) {
 				run_metrics.ascent = metrics->ascent * request.size;
+				if (request.vertical && !metrics->has_vertical_metrics) {
+					synthesized_vertical_advance = Math::round(metrics->ascent * request.size) + Math::round(metrics->descent * request.size);
+				}
 				run_metrics.descent = metrics->descent * request.size;
 				run_metrics.line_gap = metrics->line_gap * request.size;
 				run_metrics.x_height = metrics->x_height * request.size;
@@ -266,7 +273,8 @@ int HCSRNewestText::shape(const hcsr_shape_request_t &request, hcsr_shape_result
 		for (int repeat = 0; repeat < g.repeat; repeat++) {
 			run_metrics.glyph_count++;
 			scratch.push_back({ g.font_rid.get_id(), (uint32_t)g.index, (uint32_t)utf16[CLAMP(g.start, 0, text.length())],
-					g.x_off * scale, g.y_off * scale, g.advance * scale, 0, origin.x, origin.y, size.x, size.y });
+					g.x_off * scale, g.y_off * scale, request.vertical ? 0 : g.advance * scale,
+					request.vertical ? (synthesized_vertical_advance > 0 && g.advance != 0 ? synthesized_vertical_advance : g.advance * scale) : 0, origin.x, origin.y, size.x, size.y });
 		}
 	}
 	if (run_metrics.glyph_count > 0) {

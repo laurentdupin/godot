@@ -18,7 +18,10 @@ class HCSRNewestText {
 	Vector<AuthorFace> authors;
 	HashMap<String, Ref<Font>> fonts;
 	HashMap<String, Ref<FontFile>> face_files;
-	HashMap<RID, hcsr_font_metrics> font_metrics;
+	struct FontMetrics : hcsr_font_metrics {
+		bool has_vertical_metrics = true;
+	};
+	HashMap<RID, FontMetrics> font_metrics;
 	void cache_font_metrics(const Ref<Font> &font, int weight);
 	uint64_t configuration = 0;
 	Vector<hcsr_shaped_glyph_t> scratch;
