@@ -180,11 +180,11 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
 		if (batches.is_empty() || batches[batches.size() - 1].page != page || batches[batches.size() - 1].kind) {
 			batches.push_back({ page, gpu_geometry ? uint32_t(primitives.size()) : written, 0 });
 		}
-		const bool quad = gpu_geometry && (draw.flags & HCSR_DRAW_AXIS_ALIGNED_RECTANGLE) && draw.index_count==6;
+		const bool quad = hcsr::render::scene_quad(packet,draw);
         batches.write[batches.size() - 1].count += gpu_geometry ? (quad ? 1 : (draw.index_count+5)/6) : draw.index_count;
         if(gpu_geometry) {
-            if(quad) primitives.push_back({written,1,uint32_t(i)});
-            else for(uint32_t j=0;j<draw.index_count;j+=6) primitives.push_back({written+j,draw.index_count-j>=6 ? 2u : 0u,uint32_t(i)});
+            hcsr::render::append_scene_primitives(written,draw.index_count,quad,uint32_t(i),
+                [&](Primitive primitive) { primitives.push_back(primitive); });
         }
         hcsr_atlas_glyph_material_t resolved = {};
         const bool textured = entry.page >= 0 && destination.size.x > 0 && destination.size.y > 0;
@@ -221,26 +221,8 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
             }
         }
         for (uint32_t j = 0; j < (quad ? 4u : draw.index_count); j++) {
-            const auto source_index=packet.indices[draw.first_index + (quad && j==3 ? 5 : j)];
-            const auto &v = packet.vertices[source_index];
-            const auto prepared = hcsr::render::prepare_vertex(v, packet.viewport_width, packet.viewport_height,
-                    area, material.kind == HCSR_MATERIAL_VERTEX_COLOR, textured ? &resolved : nullptr);
-            Vertex vertex = {};
-            vertex.position_uv[0] = prepared.x;
-            vertex.position_uv[1] = -prepared.y; // Godot render-target convention.
-            if(gpu_geometry) {
-                vertex.position_uv[0]=v.screen_x; vertex.position_uv[1]=v.screen_y;
-                vertex.state=packet.gpu.vertex_states[source_index];
-            }
-            vertex.position_uv[2] = prepared.u;
-            vertex.position_uv[3] = prepared.v;
-            vertex.tint[0] = prepared.red; vertex.tint[1] = prepared.green;
-            vertex.tint[2] = prepared.blue; vertex.tint[3] = prepared.alpha;
-            vertex.bounds[0] = prepared.left;
-            vertex.bounds[1] = prepared.top;
-            vertex.bounds[2] = prepared.right;
-            vertex.bounds[3] = prepared.bottom;
-            vertex_data[written++] = vertex;
+            vertex_data[written++] = hcsr::render::prepare_scene_vertex(packet,draw,j,area,
+                material.kind == HCSR_MATERIAL_VERTEX_COLOR,textured ? &resolved : nullptr);
         }
 	}
     vertices.resize(written);
@@ -274,8 +256,7 @@ void HCSRNewestSceneRenderer::update_visible_instances(const hcsr_draw_packet_vi
         for(uint32_t j=0;j<original.count;j++) {
             const auto &primitive=all_primitives[original.first+j];
             if(primitive.draw_index!=UINT32_MAX) {
-                const auto &b=hcsr::render::draw_screen_bounds(packet, primitive.draw_index);
-                if(b.x+b.width<0 || b.y+b.height<0 || b.x>logical_width || b.y>logical_height) continue;
+                if (!hcsr::render::scene_draw_visible(packet,primitive.draw_index)) continue;
             }
             primitives.push_back(primitive); ++batch.count;
         }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "hcsr_newest_raster_resources.h"
+#include "hcsr_scene_submission.h"
 #include "servers/rendering/rendering_device.h"
 
 // Submits prepared scene drawing. Raster resource lifetime is owned by the view,
@@ -10,12 +11,7 @@ class HCSRNewestSceneRenderer {
     using Entry = HCSRNewestRasterResources::Entry;
     struct GpuPage { RID texture, uniform; };
     Vector<GpuPage> gpu_pages;
-	struct Vertex {
-		float position_uv[4];
-		float tint[4];
-		float bounds[4];
-        uint32_t state = UINT32_MAX, pad[3] = {};
-	};
+    using Vertex = hcsr::render::scene_vertex;
 	struct Batch {
 		int page;
 		uint32_t first, count;
@@ -39,7 +35,7 @@ class HCSRNewestSceneRenderer {
     Vector<uint32_t> prepared_states;
 	Vector<Batch> batches;
     // Six vertex invocations per instance: triangle (0), quad (1), or triangle pair (2).
-    struct Primitive { uint32_t first, topology, draw_index=UINT32_MAX, reserved=0; };
+    using Primitive = hcsr::render::scene_primitive;
     Vector<Primitive> primitives, all_primitives;
     Vector<Batch> all_batches;
     void update_visible_instances(const hcsr_draw_packet_view_t &packet);
