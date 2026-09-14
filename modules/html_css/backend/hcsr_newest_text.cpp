@@ -128,12 +128,22 @@ Ref<Font> HCSRNewestText::resolve(const String &family, int weight, bool italic)
 		Dictionary axes;
 		TextServer *ts = TextServerManager::get_singleton()->get_primary_interface().ptr();
 		axes[ts->name_to_tag("weight")] = CLAMP(weight, selected->weight, selected->maximum_weight);
-		axes[ts->name_to_tag("italic")] = italic ? 1 : 0;
+		const bool variable_italic = file->get_supported_variation_list().has(ts->name_to_tag("italic"));
+		if (variable_italic) {
+			axes[ts->name_to_tag("italic")] = italic ? 1 : 0;
+		}
 		variation->set_variation_opentype(axes);
 		// Keep shaping and rasterization on the same synthesized FontVariation RID.
 		// Real bold faces and ranges containing bold must never be emboldened twice.
 		if (weight >= 600 && selected->maximum_weight < 600) {
 			variation->set_variation_embolden(0.5f);
+		}
+		cache_font_metrics(variation, weight);
+		const TypedArray<RID> rids = variation->get_rids();
+		if (!rids.is_empty()) {
+			FontMetrics *metadata = font_metrics.getptr(rids[0]);
+			metadata->authored = true;
+			metadata->italic_face = selected->italic || (variable_italic && italic);
 		}
 		resolved.push_back(variation);
 	}
@@ -145,6 +155,9 @@ Ref<Font> HCSRNewestText::resolve(const String &family, int weight, bool italic)
 			fallbacks.push_back(resolved[i]);
 		}
 		font->set_fallbacks(fallbacks);
+	}
+	for (const Ref<Font> &resolved_font : resolved) {
+		cache_font_metrics(resolved_font, weight);
 	}
 	fonts.insert(key, font);
 	return font;
@@ -178,6 +191,9 @@ void HCSRNewestText::cache_font_metrics(const Ref<Font> &font, int weight) {
 		}
 	}
 	FontMetrics metrics = {};
+	TextServer *text_server = TextServerManager::get_singleton()->get_primary_interface().ptr();
+	metrics.italic_face = text_server->font_get_style(rid).has_flag(TextServer::FONT_ITALIC)
+			|| text_server->font_get_transform(rid) != Transform2D();
 	Ref<FontFile> file = base;
 	if (file.is_valid()) {
 		const PackedByteArray data = file->get_data();
@@ -246,6 +262,10 @@ int HCSRNewestText::shape(const hcsr_shape_request_t &request, hcsr_shape_result
 			const FontMetrics *metrics = font_metrics.getptr(g.font_rid);
 			if (metrics && metrics->ascent + metrics->descent > 0) {
 				run_metrics.ascent = metrics->ascent * request.size;
+				if (request.allow_style_synthesis && !metrics->italic_face &&
+						(metrics->authored ? request.slant_degrees >= 14 : request.slant_degrees == 14)) {
+					run_metrics.synthetic_skew = 0.25f;
+				}
 				if (request.vertical && !metrics->has_vertical_metrics) {
 					synthesized_vertical_advance = Math::round(metrics->ascent * request.size) + Math::round(metrics->descent * request.size);
 				}

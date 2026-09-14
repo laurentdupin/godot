@@ -20,6 +20,8 @@ class HCSRNewestText {
 	HashMap<String, Ref<FontFile>> face_files;
 	struct FontMetrics : hcsr_font_metrics {
 		bool has_vertical_metrics = true;
+		bool authored = false;
+		bool italic_face = false;
 	};
 	HashMap<RID, FontMetrics> font_metrics;
 	void cache_font_metrics(const Ref<Font> &font, int weight);
