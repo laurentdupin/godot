@@ -274,7 +274,7 @@ void HCSRNewestSceneRenderer::update_visible_instances(const hcsr_draw_packet_vi
         for(uint32_t j=0;j<original.count;j++) {
             const auto &primitive=all_primitives[original.first+j];
             if(primitive.draw_index!=UINT32_MAX) {
-                const auto &b=packet.draw_items[primitive.draw_index].bounds;
+                const auto &b=hcsr::render::draw_screen_bounds(packet, primitive.draw_index);
                 if(b.x+b.width<0 || b.y+b.height<0 || b.x>logical_width || b.y>logical_height) continue;
             }
             primitives.push_back(primitive); ++batch.count;
