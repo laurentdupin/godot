@@ -230,6 +230,9 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::rasterize_glyph(cons
     const Entry allocation = pack_image(image, 0, true);
     entry.page = allocation.page;
     entry.rect = allocation.rect;
+    const Vector2 padding = entry.glyph_size / Vector2(entry.natural_size) * HCSR_ATLAS_GLYPH_PADDING;
+    entry.glyph_offset -= padding;
+    entry.glyph_size += padding * 2;
     if (entry.page >= 0) ++rasterized_glyphs;
 	if (entry.page < 0) WARN_PRINT("HCSR glyph atlas capacity exceeded");
 	glyph_entries.insert(key, entry);

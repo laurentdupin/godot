@@ -583,6 +583,8 @@ static Vector4 read_atlas(const Ref<Image> &atlas, const Vector2i &p) {
 #define HCSR_CONTEXT const Ref<Image> &atlas,
 #define HCSR_ARGS atlas,
 #define HCSR_CLAMP CLAMP
+#define HCSR_MIN MIN
+#define HCSR_MAX MAX
 #define HCSR_FLOOR(p) (p).floor()
 #define HCSR_MIX(a,b,t) (a).lerp((b),(t))
 #define HCSR_FETCH(p) read_atlas(atlas,p)
@@ -596,6 +598,8 @@ static Vector4 read_atlas(const Ref<Image> &atlas, const Vector2i &p) {
 #undef HCSR_CONTEXT
 #undef HCSR_ARGS
 #undef HCSR_CLAMP
+#undef HCSR_MIN
+#undef HCSR_MAX
 #undef HCSR_FLOOR
 #undef HCSR_MIX
 #undef HCSR_FETCH
@@ -649,6 +653,11 @@ void HCSRNewestSceneRenderer::draw_cpu(Ref<Image> target, const Color &backgroun
             if(!denominator) continue;
             const int64_t sign=denominator>0 ? 1 : -1;
             const double inverse=1.0/double(denominator*sign);
+            const Vector2 ab=q-p, ac=r-p;
+            const Vector2 uv_ab(b.position_uv[2]-a.position_uv[2],b.position_uv[3]-a.position_uv[3]);
+            const Vector2 uv_ac(c.position_uv[2]-a.position_uv[2],c.position_uv[3]-a.position_uv[3]);
+            const float uv_area=ab.cross(ac);
+            const Vector2 footprint=((uv_ab*ac.y-uv_ac*ab.y)/uv_area).abs()+((uv_ac*ab.x-uv_ab*ac.x)/uv_area).abs();
             auto owns_edge=[&](Point a,Point b) {
                 const int64_t dx=(b.x-a.x)*sign,dy=(b.y-a.y)*sign;
                 return dy<0 || (dy==0 && dx>0);
@@ -672,7 +681,7 @@ void HCSRNewestSceneRenderer::draw_cpu(Ref<Image> target, const Color &backgroun
                     const Vector2 uv(a.position_uv[2]*wa+b.position_uv[2]*wb+c.position_uv[2]*wc,
                             a.position_uv[3]*wa+b.position_uv[3]*wb+c.position_uv[3]*wc);
                     const Vector4 shaded = hcsr_cpu_paint::hcsr_shade(atlas_image, uv, tint,
-                            Vector4(a.bounds[0],a.bounds[1],a.bounds[2],a.bounds[3]));
+                            Vector4(a.bounds[0],a.bounds[1],a.bounds[2],a.bounds[3]),footprint);
                     const Color color(shaded.x,shaded.y,shaded.z,shaded.w);
 					const Color under = target->get_pixel(x, y);
 					target->set_pixel(x, y, Color(color.r * color.a + under.r * (1 - color.a), color.g * color.a + under.g * (1 - color.a), color.b * color.a + under.b * (1 - color.a), color.a + under.a * (1 - color.a)));
