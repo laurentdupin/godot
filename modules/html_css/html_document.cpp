@@ -89,6 +89,9 @@ bool HTMLDocument::_validate_source() {
 	}
 
 	for (const String &css_file : css_files) {
+		if (css_file.is_empty()) {
+			continue;
+		}
 		PackedStringArray css_file_errors = HTMLSourceValidator::validate_resource_uri(css_file);
 		for (const String &error : css_file_errors) {
 			new_errors.push_back(vformat("CSS file '%s': %s", css_file, error));
@@ -163,10 +166,9 @@ String HTMLDocument::get_package_file() const {
 void HTMLDocument::set_css_files(const PackedStringArray &p_css_files) {
 	PackedStringArray new_css_files;
 	for (const String &css_file : p_css_files) {
-		const String stripped = css_file.strip_edges();
-		if (!stripped.is_empty()) {
-			new_css_files.push_back(stripped);
-		}
+		// Keep empty entries so the Inspector can create a slot before the user
+		// enters its path. Consumers ignore these editor placeholders.
+		new_css_files.push_back(css_file.strip_edges());
 	}
 
 	if (css_files == new_css_files) {

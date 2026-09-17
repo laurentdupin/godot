@@ -43,6 +43,7 @@
 #include "scene/gui/color_rect.h"
 #include "scene/gui/scroll_bar.h"
 #include "scene/main/viewport.h"
+#include "scene/main/window.h"
 #include "scene/resources/material.h"
 #include "servers/rendering/rendering_server.h"
 
@@ -993,7 +994,7 @@ Vector2 HTMLView::_get_screen_pixel_scale() const {
 }
 
 Size2i HTMLView::_get_target_viewport_size() const {
-	if (logical_size.x > 0 && logical_size.y > 0) {
+	if (viewport_size_mode != VIEWPORT_SIZE_PHYSICAL_SIZE && logical_size.x > 0 && logical_size.y > 0) {
 		return logical_size;
 	}
 	const Size2 control_size = get_size();
@@ -1015,8 +1016,14 @@ Size2i HTMLView::_get_target_viewport_size() const {
 		} break;
 
 		case VIEWPORT_SIZE_PHYSICAL_SIZE: {
-			const Vector2 scale = _get_screen_pixel_scale();
-			target_size = Size2i(Math::ceil(control_size.x * scale.x), Math::ceil(control_size.y * scale.y));
+			Viewport *viewport = get_viewport();
+			if (Window *host_window = Object::cast_to<Window>(viewport)) {
+				target_size = host_window->get_size();
+			} else if (SubViewport *subviewport = Object::cast_to<SubViewport>(viewport)) {
+				target_size = subviewport->get_size();
+			} else if (viewport != nullptr) {
+				target_size = Size2i(viewport->get_visible_rect().size);
+			}
 		} break;
 	}
 
@@ -1028,7 +1035,6 @@ Size2i HTMLView::_get_target_viewport_size() const {
 }
 
 void HTMLView::set_logical_size(const Size2i &p_logical_size) {
-	ERR_FAIL_COND_MSG((p_logical_size.x == 0) != (p_logical_size.y == 0), "HTMLView logical_size must either be automatic (0, 0) or have two positive dimensions.");
 	ERR_FAIL_COND_MSG(p_logical_size.x < 0 || p_logical_size.y < 0, "HTMLView logical_size cannot be negative.");
 	if (logical_size == p_logical_size) {
 		return;
@@ -1045,7 +1051,7 @@ void HTMLView::set_logical_size(const Size2i &p_logical_size) {
 }
 
 Size2i HTMLView::get_logical_size() const {
-	return _get_target_viewport_size();
+	return logical_size;
 }
 
 bool HTMLView::_is_output_aspect_compatible(const Size2i &p_logical_size, const Size2i &p_output_size) {

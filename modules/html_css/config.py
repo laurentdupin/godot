@@ -5,7 +5,7 @@ def get_opts(platform):
         EnumVariable(
             "module_html_css_renderer",
             "HTML/CSS renderer implementation compiled into the module. 'none' keeps only the raw CPU frame receiver.",
-            "hcsr_old",
+            "hcsr_newest",
             allowed_values=("none", "hcsr_old", "hcsr_old_dll", "hcsr_old_2", "hcsr_newest", "hcsr_newest_dll"),
         ),
         PathVariable(

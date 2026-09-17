@@ -19,7 +19,7 @@
 			Inline CSS source applied after [member css_files].
 		</member>
 		<member name="css_files" type="PackedStringArray" setter="set_css_files" getter="get_css_files" default="PackedStringArray()">
-			Ordered list of CSS files applied to the document. Entries may be [code]res://[/code], [code]user://[/code], or relative to [member html_file]'s directory or [member resource_root].
+			Ordered list of CSS files applied to the document. Entries may be [code]res://[/code], [code]user://[/code], or relative to [member html_file]'s directory or [member resource_root]. Empty entries are ignored, allowing new paths to be added and edited in the Inspector.
 		</member>
 		<member name="html" type="String" setter="set_html" getter="get_html" default="&quot;&quot;">
 			Inline HTML/CSS source.

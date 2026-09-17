@@ -88,6 +88,7 @@ struct HTMLSurfaceHCSRNewestBackend::State : HCSRNewestPresentationOutput {
 	double maximum_preparation_milliseconds = 0.0;
 	uint64_t input_queued_usec = 0;
 	bool terminal = false;
+	bool terminal_recoverable_on_document_change = false;
 	String terminal_reason;
 	String last_mutation_rejection;
 	uint64_t mutation_rejected_frames = 0;
@@ -100,9 +101,17 @@ static void initialize_abi(T &r_value) {
 	r_value.struct_size = sizeof(T);
 }
 
-static void set_terminal(HTMLSurfaceHCSRNewestBackend::State *p_state, const String &p_reason) {
+static void set_terminal(HTMLSurfaceHCSRNewestBackend::State *p_state, const String &p_reason, bool p_recoverable_on_document_change = false) {
 	p_state->terminal = true;
+	p_state->terminal_recoverable_on_document_change = p_recoverable_on_document_change;
 	p_state->terminal_reason = p_reason;
+	if (p_recoverable_on_document_change) {
+		// An Inspector text edit can temporarily name a file that does not exist.
+		// Consume that request and wait for the next document change instead of
+		// keeping the view's frame scheduler awake.
+		p_state->document_dirty = false;
+		p_state->needs_another_frame = false;
+	}
 	ERR_PRINT(p_reason);
 }
 
@@ -376,7 +385,7 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
 		HTMLAssetResource asset;
 		String error;
 		if (HTMLGodotAssetProvider::load_asset(document, document->get_html_file(), asset, &error) != OK) {
-			set_terminal(state, error);
+			set_terminal(state, error, true);
 			return ERR_CANT_OPEN;
 		}
 		html = String::utf8((const char *)asset.bytes.ptr(), asset.bytes.size());
@@ -387,14 +396,17 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
 	HashSet<String> linked_stylesheet_paths;
 	String stylesheet_error;
 	if (append_document_stylesheets(document, html, stylesheet_bytes, linked_stylesheet_paths, stylesheet_error, state->text_enabled ? &state->text : nullptr) != OK) {
-		set_terminal(state, stylesheet_error.is_empty() ? "hcsr_newest could not resolve a linked stylesheet." : stylesheet_error);
+		set_terminal(state, stylesheet_error.is_empty() ? "hcsr_newest could not resolve a linked stylesheet." : stylesheet_error, true);
 		return ERR_CANT_OPEN;
 	}
 	for (const String &path : document->get_css_files()) {
+		if (path.is_empty()) {
+			continue;
+		}
 		String resolved_path;
 		String error;
 		if (HTMLGodotAssetProvider::resolve_asset_path(document, path, resolved_path, &error) != OK) {
-			set_terminal(state, error);
+			set_terminal(state, error, true);
 			return ERR_CANT_OPEN;
 		}
 		// Resolve before loading so cross-source duplicates incur neither I/O nor
@@ -406,7 +418,7 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
 		}
 		HTMLAssetResource asset;
 		if (HTMLGodotAssetProvider::load_asset(document, path, asset, &error) != OK) {
-			set_terminal(state, error);
+			set_terminal(state, error, true);
 			return ERR_CANT_OPEN;
 		}
 		stylesheet_bytes.push_back(String::utf8((const char *)asset.bytes.ptr(), asset.bytes.size()).utf8());
@@ -497,6 +509,11 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
 
 void HTMLSurfaceHCSRNewestBackend::mark_document_dirty() {
 	MutexLock lock(state->mutex);
+	if (state->terminal_recoverable_on_document_change) {
+		state->terminal = false;
+		state->terminal_recoverable_on_document_change = false;
+		state->terminal_reason = String();
+	}
 	state->pending_mutations.clear();
 	state->document_dirty = true;
 	state->needs_another_frame = true;
@@ -562,12 +579,15 @@ Error HTMLSurfaceHCSRNewestBackend::update_compositor(double p_timeline_time_sec
 	if (r_needs_begin_frame != nullptr) *r_needs_begin_frame = state->needs_another_frame;
 	// Requests may arrive during script execution. Only the host's frame
 	// boundary may flush mutations and build the packet for rendering.
-	return state->terminal ? ERR_CANT_CREATE : OK;
+	return state->terminal && !state->terminal_recoverable_on_document_change ? ERR_CANT_CREATE : OK;
 }
 
 Error HTMLSurfaceHCSRNewestBackend::prepare_host_frame(uint64_t p_host_frame, double p_timeline_time_seconds) {
 	MutexLock lock(state->mutex);
-	if (state->terminal) return ERR_CANT_CREATE;
+	// A terminal failure has already been reported. Wait for an authored
+	// document change to recover eligible source-loading failures instead of
+	// emitting the same preparation error at every frame boundary.
+	if (state->terminal) return OK;
 	if (state->closing) return OK;
 	if (state->render_pending) {
 		state->synchronization_failures++;
@@ -578,7 +598,9 @@ Error HTMLSurfaceHCSRNewestBackend::prepare_host_frame(uint64_t p_host_frame, do
 	const uint64_t preparation_start_usec = OS::get_singleton()->get_ticks_usec();
 	if (state->document_dirty) {
 		const Error rebuild = _rebuild_scene();
-		if (rebuild != OK) return rebuild;
+		if (rebuild != OK) {
+			return state->terminal_recoverable_on_document_change ? OK : rebuild;
+		}
 	}
 	if (state->scene == 0) return ERR_UNCONFIGURED;
 	hcsr_step_desc_t step;

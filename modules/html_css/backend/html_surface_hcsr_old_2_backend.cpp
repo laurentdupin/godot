@@ -248,6 +248,9 @@ static bool runtime_load_document_source(
 	}
 
 	for (const String &css_file : p_document->get_css_files()) {
+		if (css_file.is_empty()) {
+			continue;
+		}
 		HTMLAssetResource asset;
 		if (HTMLGodotAssetProvider::load_asset(p_document, css_file, asset, &r_error) != OK) {
 			return false;

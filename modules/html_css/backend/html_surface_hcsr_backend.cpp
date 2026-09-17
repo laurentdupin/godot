@@ -386,6 +386,9 @@ bool HTMLSurfaceHCSRBackend::_load_document_source(String &r_html, String &r_doc
 
 	String css;
 	for (const String &css_file : document->get_css_files()) {
+		if (css_file.is_empty()) {
+			continue;
+		}
 		HTMLAssetResource asset;
 		String error;
 		if (HTMLGodotAssetProvider::load_asset(document, css_file, asset, &error) != OK) {

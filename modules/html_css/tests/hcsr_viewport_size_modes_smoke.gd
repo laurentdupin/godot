@@ -30,10 +30,20 @@ func _initialize() -> void:
 	view.size = Vector2(320, 180)
 	view.document = document
 	parent.add_child(view)
+	if view.logical_size != Vector2i.ZERO:
+		_fail("Automatic logical_size did not remain (0, 0).")
+		return
+	view.logical_size = Vector2i(640, 0)
+	if view.logical_size != Vector2i(640, 0):
+		_fail("A partially entered logical_size was rejected before its second Inspector component could be set.")
+		return
+	view.logical_size = Vector2i.ZERO
 
 	await _assert_mode(view, HTMLView.VIEWPORT_SIZE_CONTROL, Vector2i(320, 180), Vector2(160, 90), "Control Size")
 	await _assert_mode(view, HTMLView.VIEWPORT_SIZE_CONTROL_PHYSICAL_ADJUSTED, Vector2i(640, 360), Vector2(160, 90), "Control Physical Adjusted")
-	await _assert_mode(view, HTMLView.VIEWPORT_SIZE_PHYSICAL_SIZE, Vector2i(640, 360), Vector2(320, 180), "Physical Size")
+	view.logical_size = Vector2i(320, 180)
+	await _assert_mode(view, HTMLView.VIEWPORT_SIZE_PHYSICAL_SIZE, Vector2i(1000, 600), Vector2(500, 300), "Physical Size")
+	view.logical_size = Vector2i.ZERO
 
 	view.fixed_viewport_size = Vector2i(400, 240)
 	view.fixed_viewport_device_scale_factor = 0.0
@@ -46,7 +56,7 @@ func _initialize() -> void:
 	await _assert_mode(view, HTMLView.VIEWPORT_SIZE_FIXED, Vector2i(400, 240), Vector2(200, 120), "Fixed after downscale")
 	await _assert_mode(view, HTMLView.VIEWPORT_SIZE_CONTROL, Vector2i(320, 180), Vector2(160, 90), "Control Size after downscale")
 	await _assert_mode(view, HTMLView.VIEWPORT_SIZE_CONTROL_PHYSICAL_ADJUSTED, Vector2i(160, 90), Vector2(160, 90), "Control Physical Adjusted downscale")
-	await _assert_mode(view, HTMLView.VIEWPORT_SIZE_PHYSICAL_SIZE, Vector2i(160, 90), Vector2(80, 45), "Physical Size after downscale")
+	await _assert_mode(view, HTMLView.VIEWPORT_SIZE_PHYSICAL_SIZE, Vector2i(1000, 600), Vector2(500, 300), "Physical Size after downscale")
 
 	view.viewport_size_mode = HTMLView.VIEWPORT_SIZE_CONTROL
 	view.size = Vector2(400, 200)
