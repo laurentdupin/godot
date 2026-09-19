@@ -154,6 +154,10 @@ RID HTMLTexture2D::get_rid() const {
 	return proxy_texture_rid;
 }
 
+RID HTMLTexture2D::get_external_texture_rid() const {
+	return external_texture_rid;
+}
+
 bool HTMLTexture2D::has_alpha() const {
 	return alpha;
 }

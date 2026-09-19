@@ -59,6 +59,7 @@ public:
 	int get_width() const override;
 	int get_height() const override;
 	RID get_rid() const override;
+	RID get_external_texture_rid() const;
 	bool has_alpha() const override;
 	Ref<Image> get_image() const override;
 	Ref<Image> get_latest_image() const;
