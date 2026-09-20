@@ -718,7 +718,6 @@ elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll"):
 else:
     env_html_css.add_source_files(env.modules_sources, "backend/html_surface_no_renderer_factory.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_document.cpp")
-env_html_css.add_source_files(env.modules_sources, "html_desktop_overlay.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_render_target.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_render_surface.cpp")
 env_html_css.add_source_files(env.modules_sources, "html_texture.cpp")

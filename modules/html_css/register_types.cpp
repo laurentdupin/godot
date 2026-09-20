@@ -31,7 +31,6 @@
 #include "register_types.h"
 
 #include "html_document.h"
-#include "html_desktop_overlay.h"
 #include "html_render_target.h"
 #include "html_texture.h"
 #include "html_view.h"
@@ -69,7 +68,6 @@ void initialize_html_css_module(ModuleInitializationLevel p_level) {
 	}
 
 	GDREGISTER_CLASS(HTMLDocument);
-	GDREGISTER_CLASS(HTMLDesktopOverlay);
 	GDREGISTER_CLASS(HTMLTexture2D);
 	GDREGISTER_CLASS(HTMLRenderTarget);
 	GDREGISTER_CLASS(HTMLView);
