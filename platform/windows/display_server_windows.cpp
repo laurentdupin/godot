@@ -6702,6 +6702,20 @@ LRESULT DisplayServerWindows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 			_legacy_update_hdr_output_for_tracked_windows(true);
 		} break;
 
+		case WM_DPICHANGED: {
+			// Per-monitor-v2 windows receive their recommended physical bounds when
+			// either the monitor DPI or the user's display scale changes. Applying
+			// them immediately prevents Windows from bitmap-stretching a stale
+			// system-DPI surface; WM_WINDOWPOSCHANGED performs the usual renderer
+			// and window bookkeeping for the resulting move and resize.
+			const RECT *suggested_rect = reinterpret_cast<const RECT *>(lParam);
+			SetWindowPos(hWnd, nullptr, suggested_rect->left, suggested_rect->top,
+					suggested_rect->right - suggested_rect->left,
+					suggested_rect->bottom - suggested_rect->top,
+					SWP_NOACTIVATE | SWP_NOZORDER);
+			return 0;
+		} break;
+
 		case WM_WINDOWPOSCHANGED: {
 			WindowData &window = windows[window_id];
 
@@ -8010,7 +8024,13 @@ DisplayServerWindows::DisplayServerWindows(const String &p_rendering_driver, Dis
 	}
 
 	if (OS::get_singleton()->is_hidpi_allowed()) {
-		SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE);
+		if (bool(GLOBAL_GET("display/window/dpi/windows_per_monitor_v2"))) {
+			if (!SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {
+				WARN_PRINT(vformat("Unable to enable per-monitor-v2 DPI awareness (Windows error %d).", GetLastError()));
+			}
+		} else {
+			SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE);
+		}
 	}
 
 	HMODULE comctl32 = LoadLibraryW(L"comctl32.dll");

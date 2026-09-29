@@ -2722,6 +2722,7 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 	}
 
 	OS::get_singleton()->_allow_hidpi = GLOBAL_DEF("display/window/dpi/allow_hidpi", true);
+	GLOBAL_DEF_RST("display/window/dpi/windows_per_monitor_v2", false);
 	OS::get_singleton()->_allow_layered = GLOBAL_DEF_RST("display/window/per_pixel_transparency/allowed", false);
 
 	load_shell_env = GLOBAL_DEF("application/run/load_shell_environment", false);

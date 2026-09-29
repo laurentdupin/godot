@@ -971,6 +971,9 @@
 			If [code]true[/code], allows HiDPI display on Windows, macOS, Android, iOS and Web. If [code]false[/code], the platform's low-DPI fallback will be used on HiDPI displays, which causes the window to be displayed in a blurry or pixelated manner (and can cause various window management bugs). Therefore, it is recommended to make your project scale to [url=$DOCS_URL/tutorials/rendering/multiple_resolutions.html]multiple resolutions[/url] instead of disabling this setting.
 			[b]Note:[/b] This setting has no effect on Linux as DPI-awareness fallbacks are not supported there.
 		</member>
+		<member name="display/window/dpi/windows_per_monitor_v2" type="bool" setter="" getter="" default="false">
+			If [code]true[/code], opts the Windows process into per-monitor-v2 DPI awareness before its first window is created. This keeps rendering sharp when a window moves between monitors with different display scales or when the Windows display scale changes while the application is running. Disabled by default for compatibility with projects that rely on system-DPI coordinate virtualization.
+		</member>
 		<member name="display/window/energy_saving/keep_screen_on" type="bool" setter="" getter="" default="true">
 			If [code]true[/code], keeps the screen on (even in case of inactivity), so the screensaver does not take over. Works on desktop and mobile platforms.
 		</member>
