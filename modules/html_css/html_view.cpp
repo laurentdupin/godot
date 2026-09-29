@@ -1341,6 +1341,16 @@ bool HTMLView::_same_activation_target(const HTMLElementHit &p_pressed, const HT
 	return p_pressed.tag_name == p_released.tag_name && p_pressed.bounds == p_released.bounds;
 }
 
+bool HTMLView::_same_pointer_target(const HTMLElementHit &p_previous, const HTMLElementHit &p_current) const {
+	if (p_previous.stable_target_id != 0 && p_current.stable_target_id != 0) {
+		return p_previous.stable_target_id == p_current.stable_target_id;
+	}
+	if (p_previous.element_id != StringName() || p_current.element_id != StringName()) {
+		return p_previous.element_id == p_current.element_id;
+	}
+	return p_previous.tag_name == p_current.tag_name && p_previous.bounds == p_current.bounds;
+}
+
 void HTMLView::_emit_activation(const HTMLElementHit &p_hit, const Vector2 &p_html_position, MouseButton p_button) {
 	if (p_hit.disabled || p_hit.suppresses_host_activation) {
 		return;
@@ -1365,6 +1375,38 @@ void HTMLView::_emit_pointer_phase(const StringName &p_phase, const HTMLElementH
 	activation.payload[SNAME("target_element_id")] = p_hit.element_id;
 	activation.payload[SNAME("element_id")] = activation.element_id;
 	emit_signal(SNAME("element_pointer_event"), p_phase, activation.element_id, activation.action, (int)p_button, activation.payload);
+}
+
+void HTMLView::_update_host_pointer_hover(const Vector2 &p_html_position) {
+	HTMLElementHit next_hit;
+	const bool has_next_hit = _hit_test(p_html_position, next_hit) && !next_hit.disabled;
+	const bool same_target = pointer_hover_active && has_next_hit &&
+			_same_pointer_target(pointer_hover_hit, next_hit);
+	if (pointer_hover_active && !same_target) {
+		_emit_pointer_phase(SNAME("leave"), pointer_hover_hit, p_html_position, MouseButton::NONE);
+		pointer_hover_active = false;
+		pointer_hover_hit = HTMLElementHit();
+	}
+	if (!has_next_hit) {
+		return;
+	}
+	if (!same_target) {
+		pointer_hover_active = true;
+		pointer_hover_hit = next_hit;
+		_emit_pointer_phase(SNAME("enter"), pointer_hover_hit, p_html_position, MouseButton::NONE);
+	} else {
+		pointer_hover_hit = next_hit;
+		_emit_pointer_phase(SNAME("move"), pointer_hover_hit, p_html_position, MouseButton::NONE);
+	}
+}
+
+void HTMLView::_clear_host_pointer_hover(const StringName &p_phase) {
+	if (!pointer_hover_active) {
+		return;
+	}
+	_emit_pointer_phase(p_phase, pointer_hover_hit, pointer_last_html_position, MouseButton::NONE);
+	pointer_hover_active = false;
+	pointer_hover_hit = HTMLElementHit();
 }
 
 bool HTMLView::_emit_surface_pointer_event(const HTMLPointerEvent &p_event) {
@@ -1462,6 +1504,7 @@ bool HTMLView::_drain_surface_pointer_events(bool *r_activation_emitted, bool p_
 }
 
 void HTMLView::_cancel_pointer_interaction(const StringName &p_phase) {
+	_clear_host_pointer_hover(p_phase);
 	if (scrollbar_interaction_active) {
 		bool consumed = false;
 		surface->end_scrollbar_interaction(consumed);
@@ -2022,7 +2065,13 @@ void HTMLView::gui_input(const Ref<InputEvent> &p_event) {
 		}
 		bool visual_state_changed = true;
 		if (surface->mouse_move(html_position, _modifiers_from_event(mm), visual_state_changed) == OK) {
-			_drain_surface_pointer_events();
+			const bool used_surface_dispatch = _drain_surface_pointer_events();
+			if (!used_surface_dispatch) {
+				_update_host_pointer_hover(html_position);
+			} else {
+				pointer_hover_active = false;
+				pointer_hover_hit = HTMLElementHit();
+			}
 			if (visual_state_changed) {
 				_note_visual_input();
 				_queue_frame_render();

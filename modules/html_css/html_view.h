@@ -86,6 +86,8 @@ private:
 	bool scrollbar_interaction_active = false;
 	MouseButton pointer_press_button = MouseButton::NONE;
 	HTMLElementHit pointer_press_hit;
+	bool pointer_hover_active = false;
+	HTMLElementHit pointer_hover_hit;
 	Vector2 pointer_last_html_position;
 	bool frame_render_pending = false;
 	uint64_t frame_render_request_generation = 0;
@@ -147,8 +149,11 @@ private:
 	HTMLSurfaceInputKey _to_html_input_key(Key p_key) const;
 	bool _hit_test(const Vector2 &p_html_position, HTMLElementHit &r_hit) const;
 	bool _same_activation_target(const HTMLElementHit &p_pressed, const HTMLElementHit &p_released) const;
+	bool _same_pointer_target(const HTMLElementHit &p_previous, const HTMLElementHit &p_current) const;
 	void _emit_activation(const HTMLElementHit &p_hit, const Vector2 &p_html_position, MouseButton p_button);
 	void _emit_pointer_phase(const StringName &p_phase, const HTMLElementHit &p_hit, const Vector2 &p_html_position, MouseButton p_button);
+	void _update_host_pointer_hover(const Vector2 &p_html_position);
+	void _clear_host_pointer_hover(const StringName &p_phase);
 	bool _drain_surface_pointer_events(bool *r_activation_emitted = nullptr, bool p_emit_events = true, const HTMLElementHit *p_pressed_hit = nullptr, const HTMLElementHit *p_released_hit = nullptr);
 	bool _emit_surface_pointer_event(const HTMLPointerEvent &p_event);
 	void _cancel_pointer_interaction(const StringName &p_phase);
