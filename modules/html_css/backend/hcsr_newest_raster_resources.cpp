@@ -36,9 +36,9 @@ static bool svg_has_filters(const Vector<uint8_t> &bytes) {
     return false;
 }
 
-Ref<Image> HCSRNewestRasterResources::load_image(const Ref<HTMLDocument> &document, const String &source) {
+Ref<Image> HCSRNewestRasterResources::load_image(const Ref<HTMLDocument> &document, const String &source, int width, int height) {
     // Caller holds image_mutex. Metadata does not allocate atlas/GPU resources.
-    const String key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source;
+    const String key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source + (width > 0 ? "\nraster:" + itos(width) + ":" + itos(height) : String());
     if (const Ref<Image> *cached = decoded_sources.getptr(key)) return *cached;
 	Vector<uint8_t> bytes;
 	String mime;
@@ -80,10 +80,10 @@ Ref<Image> HCSRNewestRasterResources::load_image(const Ref<HTMLDocument> &docume
 			// Share LunaSVG with Interactive/hcsr_old where supported. LunaSVG skips
             // SVG filters, so filtered assets use Godot's opacity-corrected ThorVG.
             if (svg_has_filters(bytes)) {
-                error = image->load_svg_from_buffer(bytes);
+                error = image->load_svg_from_buffer(bytes, width > 0 ? float(width) / MAX(1, source_sizes[(document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source].x) : 1.0f);
             } else {
             hcsr_decoded_image decoded = {};
-            if (hcsr_svg_decode_bgra32(bytes.ptr(), bytes.size(), 0, 0, &decoded)) {
+            if (hcsr_svg_decode_bgra32(bytes.ptr(), bytes.size(), width, height, &decoded)) {
                 Vector<uint8_t> rgba;
                 rgba.resize(decoded.width * decoded.height * 4);
                 for (int y = 0; y < decoded.height; ++y) {
@@ -112,8 +112,44 @@ Ref<Image> HCSRNewestRasterResources::load_image(const Ref<HTMLDocument> &docume
     if (error != OK || image->is_empty()) image.unref();
     else decoded_images++;
     decoded_sources.insert(key, image);
-    source_sizes.insert(key, image.is_valid() ? image->get_size() : Size2i());
+    if (width == 0) source_sizes.insert(key, image.is_valid() ? image->get_size() : Size2i());
     return image;
+}
+
+bool HCSRNewestRasterResources::copy_source_pixels(const Ref<HTMLDocument> &document, const String &source,
+        int width, int height, Vector<uint8_t> &pixels, hcsr_image_pixels_t &output) {
+    MutexLock lock(image_mutex);
+    Ref<Image> image = load_image(document, source);
+    if (image.is_null()) return false;
+    int scale = 1;
+    while (scale < 16 && MAX(image->get_width(), image->get_height()) * scale * 2 <= 2048
+            && (image->get_width() * scale < width || image->get_height() * scale < height)) scale *= 2;
+    // SVG decode honors the requested raster size; bitmap decoders preserve native pixels.
+    const int raster_width = scale > 1 ? image->get_width() * scale : 0;
+    const int raster_height = scale > 1 ? image->get_height() * scale : 0;
+    if (scale > 1) image = load_image(document, source, raster_width, raster_height);
+    if (image.is_null()) return false;
+    if (image->get_format() != Image::FORMAT_RGBA8) {
+        image = image->duplicate();
+        image->convert(Image::FORMAT_RGBA8);
+    }
+    const Vector<uint8_t> rgba = image->get_data();
+    const int count = image->get_width() * image->get_height();
+    if (pixels.resize(count * 4) != OK) return false;
+    uint8_t *dst = pixels.ptrw();
+    const uint8_t *src = rgba.ptr();
+    for (int i = 0; i < count; ++i) {
+        dst[i*4] = src[i*4+2]; dst[i*4+1] = src[i*4+1];
+        dst[i*4+2] = src[i*4]; dst[i*4+3] = src[i*4+3];
+    }
+    output.width = image->get_width(); output.height = image->get_height();
+    output.stride = output.width * 4; output.pixels = pixels.ptr(); output.length = pixels.size();
+    if (scale > 1) {
+        const String key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String())
+                + "\n" + source + "\nraster:" + itos(raster_width) + ":" + itos(raster_height);
+        decoded_sources.erase(key); // The scene asset owner now owns the copied pixels.
+    }
+    return true;
 }
 
 Size2i HCSRNewestRasterResources::resolve_size(const Ref<HTMLDocument> &document, const String &source) {
