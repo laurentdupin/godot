@@ -345,7 +345,8 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
         print_line("HCSR_RECORD_DETAIL|" + uitos(atlas_start_usec - record_start_usec) + "|" + uitos(atlas_end_usec - atlas_start_usec) + "|" + uitos(now - atlas_end_usec) + "|" + uitos(packet.index_count));
     }
 	hcsr_draw_packet_destroy(packet_handle);
-	const Dictionary atlas_statistics = state->scene_renderer.get_statistics();
+	Dictionary atlas_statistics = state->scene_renderer.get_statistics();
+    atlas_statistics.merge(state->backdrop.get_statistics());
 	const double record_seconds = (double)(OS::get_singleton()->get_ticks_usec() - record_start_usec) / 1000000.0;
 	double input_to_visible_seconds = 0.0;
 	{
@@ -1177,7 +1178,7 @@ HTMLSurfaceHCSRNewestBackend::HTMLSurfaceHCSRNewestBackend(HTMLSurfaceHCSRNewest
 	state = memnew(State);
 	state->renderer = p_renderer;
 	state->texture = texture;
-	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_6 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
+	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_7 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
 		set_terminal(state, "hcsr_newest scene ABI initialization failed.");
 	}
 }
