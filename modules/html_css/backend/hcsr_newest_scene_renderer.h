@@ -9,7 +9,7 @@
 class HCSRNewestSceneRenderer {
     HCSRNewestRasterResources &resources;
     using Entry = HCSRNewestRasterResources::Entry;
-    struct GpuPage { RID texture, uniform; };
+    struct GpuPage { RID texture, uniform, mask_uniform,blend_uniform; };
     Vector<GpuPage> gpu_pages;
     using Vertex = hcsr::render::scene_vertex;
 	struct Batch {
@@ -18,9 +18,13 @@ class HCSRNewestSceneRenderer {
 		uint32_t kind = 0, depth = 0;
 		float opacity = 1;
         Rect2 bounds;
+        size_t event_index=0;
+        int mask_page=0;
+        uint32_t blend_mode=0;
+        bool source_scratch=false;
 	};
     struct GroupTarget { RID texture, framebuffer, uniform; Size2i size; };
-    struct GroupPool { RID output; Vector<GroupTarget> targets; };
+    struct GroupPool { RID output,blend_texture,blend_uniform; Vector<GroupTarget> targets; };
     Vector<GroupPool> group_pools;
     uint32_t group_depth = 0;
     uint64_t group_allocations = 0;
@@ -51,7 +55,7 @@ class HCSRNewestSceneRenderer {
     double last_gpu_ms=0;
     uint64_t last_gpu_frame=0;
 
-	RID shader, sampler, buffer, pipeline;
+	RID shader, sampler, buffer, pipeline, shadow_pipeline;
 	uint32_t buffer_capacity = 0;
 	bool uploaded = false;
 	uint64_t uploaded_bytes = 0;

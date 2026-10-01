@@ -121,13 +121,11 @@ bool HCSRNewestRasterResources::copy_source_pixels(const Ref<HTMLDocument> &docu
     MutexLock lock(image_mutex);
     Ref<Image> image = load_image(document, source);
     if (image.is_null()) return false;
-    int scale = 1;
-    while (scale < 16 && MAX(image->get_width(), image->get_height()) * scale * 2 <= 2048
-            && (image->get_width() * scale < width || image->get_height() * scale < height)) scale *= 2;
-    // SVG decode honors the requested raster size; bitmap decoders preserve native pixels.
-    const int raster_width = scale > 1 ? image->get_width() * scale : 0;
-    const int raster_height = scale > 1 ? image->get_height() * scale : 0;
-    if (scale > 1) image = load_image(document, source, raster_width, raster_height);
+    // Generated appearances have an explicit requested raster size. Do not
+    // substitute the ordinary image atlas's power-of-two upgrade buckets.
+    const int raster_width=CLAMP(width,1,2048),raster_height=CLAMP(height,1,2048);
+    const bool rerasterize=image->get_width()!=raster_width || image->get_height()!=raster_height;
+    if(rerasterize)image=load_image(document,source,raster_width,raster_height);
     if (image.is_null()) return false;
     if (image->get_format() != Image::FORMAT_RGBA8) {
         image = image->duplicate();
@@ -144,7 +142,7 @@ bool HCSRNewestRasterResources::copy_source_pixels(const Ref<HTMLDocument> &docu
     }
     output.width = image->get_width(); output.height = image->get_height();
     output.stride = output.width * 4; output.pixels = pixels.ptr(); output.length = pixels.size();
-    if (scale > 1) {
+    if (rerasterize) {
         const String key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String())
                 + "\n" + source + "\nraster:" + itos(raster_width) + ":" + itos(raster_height);
         decoded_sources.erase(key); // The scene asset owner now owns the copied pixels.
