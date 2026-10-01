@@ -858,7 +858,6 @@ Dictionary HCSRNewestSceneRenderer::get_statistics() const {
     result["instance_uploaded_bytes"] = instance_uploaded_bytes;
     result["state_uploaded_bytes"] = state_uploaded_bytes;
     result["geometry_generation"] = geometry_generation;
-    result["color_patch_updates"] = 0; // Compatibility diagnostic; appearances replace color-patch updates.
 	result["uploaded_bytes"] = uploaded_bytes;
 	result["draw_batches"] = batches.size();
     result["opacity_group_depth"] = group_depth;

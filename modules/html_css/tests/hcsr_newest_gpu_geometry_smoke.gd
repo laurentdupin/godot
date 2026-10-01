@@ -30,6 +30,7 @@ func run():
     require(stats.instances>0,"instanced drawing")
     var geometry=stats.geometry_generation
     var uploads=stats.geometry_uploaded_bytes
+    var pixel_uploads=stats.uploaded_bytes
     var out=OS.get_environment("HCSR_GPU_SMOKE_OUTPUT")
     if not out.is_empty(): DirAccess.make_dir_recursive_absolute(out)
     for state in ["before","after"]:
@@ -55,11 +56,13 @@ func run():
     stats=views[1].get_frame_scheduler_diagnostics().frame_synchronization.image_atlas
     require(stats.geometry_generation==geometry,"scroll preserves geometry generation")
     require(stats.geometry_uploaded_bytes==uploads,"scroll uploads no geometry")
+    require(stats.uploaded_bytes==pixel_uploads,"scroll reuses appearance pixels")
+    var paint_uploads=stats.uploaded_bytes
     for view in views: view.set_element_attribute("content","style","background:purple")
     await settle()
     stats=views[1].get_frame_scheduler_diagnostics().frame_synchronization.image_atlas
     require(stats.geometry_generation!=geometry,"paint change updates geometry")
-    require(stats.color_patch_updates > 0,"color edit patches the existing GPU drawing")
+    require(stats.uploaded_bytes > paint_uploads,"appearance change uploads new surface pixels")
     for view in views:
         var pixel = view.get_texture().get_image().get_pixel(50,50)
         require(abs(pixel.r-.502)<.01 and pixel.g<.01 and abs(pixel.b-.502)<.01,
