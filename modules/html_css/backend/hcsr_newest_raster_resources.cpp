@@ -36,10 +36,11 @@ static bool svg_has_filters(const Vector<uint8_t> &bytes) {
     return false;
 }
 
-Ref<Image> HCSRNewestRasterResources::load_image(const Ref<HTMLDocument> &document, const String &source, int width, int height) {
+Ref<Image> HCSRNewestRasterResources::load_image(const Ref<HTMLDocument> &document, const String &source, int width, int height, float content_width, float content_height) {
     // Caller holds image_mutex. Metadata does not allocate atlas/GPU resources.
     const String key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source + (width > 0 ? "\nraster:" + itos(width) + ":" + itos(height) : String());
-    if (const Ref<Image> *cached = decoded_sources.getptr(key)) return *cached;
+    const bool tile = content_width > 0 && content_height > 0;
+    if (!tile) if (const Ref<Image> *cached = decoded_sources.getptr(key)) return *cached;
 	Vector<uint8_t> bytes;
 	String mime;
 	if (source.begins_with("data:")) {
@@ -80,10 +81,12 @@ Ref<Image> HCSRNewestRasterResources::load_image(const Ref<HTMLDocument> &docume
 			// Share LunaSVG with Interactive/hcsr_old where supported. LunaSVG skips
             // SVG filters, so filtered assets use Godot's opacity-corrected ThorVG.
             if (svg_has_filters(bytes)) {
+                if (tile) return Ref<Image>();
                 error = image->load_svg_from_buffer(bytes, width > 0 ? float(width) / MAX(1, source_sizes[(document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source].x) : 1.0f);
             } else {
             hcsr_decoded_image decoded = {};
-            if (hcsr_svg_decode_bgra32(bytes.ptr(), bytes.size(), width, height, &decoded)) {
+            if (tile ? hcsr_svg_decode_tile_bgra32(bytes.ptr(), bytes.size(), width, height, content_width, content_height, &decoded)
+                     : hcsr_svg_decode_bgra32(bytes.ptr(), bytes.size(), width, height, &decoded)) {
                 Vector<uint8_t> rgba;
                 rgba.resize(decoded.width * decoded.height * 4);
                 for (int y = 0; y < decoded.height; ++y) {
@@ -99,7 +102,9 @@ Ref<Image> HCSRNewestRasterResources::load_image(const Ref<HTMLDocument> &docume
                 error = OK;
             }
             }
-		} else if (mime.begins_with("image/png")) {
+		} else if (tile) {
+            return Ref<Image>();
+        } else if (mime.begins_with("image/png")) {
 			error = image->load_png_from_buffer(bytes);
 		} else if (mime.begins_with("image/jpeg")) {
 			error = image->load_jpg_from_buffer(bytes);
@@ -111,9 +116,26 @@ Ref<Image> HCSRNewestRasterResources::load_image(const Ref<HTMLDocument> &docume
 	}
     if (error != OK || image->is_empty()) image.unref();
     else decoded_images++;
-    decoded_sources.insert(key, image);
+    if (!tile) decoded_sources.insert(key, image);
     if (width == 0) source_sizes.insert(key, image.is_valid() ? image->get_size() : Size2i());
     return image;
+}
+
+bool HCSRNewestRasterResources::copy_tile_pixels(const Ref<HTMLDocument> &document,const String &source,
+        int width,int height,float content_width,float content_height,Vector<uint8_t> &pixels,hcsr_image_pixels_t &output) {
+    MutexLock lock(image_mutex);
+    if (width <= 0 || height <= 0 || width > 2048 || height > 2048) return false;
+    Ref<Image> image=load_image(document,source,width,height,content_width,content_height);
+    if (image.is_null()) return false;
+    const Vector<uint8_t> rgba=image->get_data();
+    pixels.resize(rgba.size());
+    for (int i=0;i<width*height;i++) {
+        pixels.ptrw()[i*4]=rgba[i*4+2];pixels.ptrw()[i*4+1]=rgba[i*4+1];
+        pixels.ptrw()[i*4+2]=rgba[i*4];pixels.ptrw()[i*4+3]=rgba[i*4+3];
+    }
+    output.width=width;output.height=height;output.stride=width*4;
+    output.pixels=pixels.ptr();output.length=pixels.size();
+    return true;
 }
 
 bool HCSRNewestRasterResources::copy_source_pixels(const Ref<HTMLDocument> &document, const String &source,

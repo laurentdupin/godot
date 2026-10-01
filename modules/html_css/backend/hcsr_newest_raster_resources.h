@@ -53,9 +53,10 @@ private:
 	Mutex image_mutex;
 	HashMap<String, Ref<Image>> decoded_sources;
 	HashMap<String, Size2i> source_sizes;
-	Ref<Image> load_image(const Ref<HTMLDocument> &document, const String &source, int width = 0, int height = 0);
+	Ref<Image> load_image(const Ref<HTMLDocument> &document, const String &source, int width = 0, int height = 0, float content_width = 0, float content_height = 0);
 
 public:
+    bool copy_tile_pixels(const Ref<HTMLDocument> &document,const String &source,int width,int height,float content_width,float content_height,Vector<uint8_t> &pixels,hcsr_image_pixels_t &output);
     HCSRNewestRasterResources();
     ~HCSRNewestRasterResources();
     HCSRNewestRasterResources(const HCSRNewestRasterResources &) = delete;

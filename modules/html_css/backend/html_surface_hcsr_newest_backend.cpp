@@ -471,6 +471,15 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
         set_terminal(state, "hcsr_newest could not install the host image pixel service.");
         return ERR_CANT_CREATE;
     }
+    if (hcsr_runtime_set_image_tile_pixels(state->runtime,
+            [](void *user,const hcsr_utf8_t *source,int32_t width,int32_t height,float content_width,float content_height,hcsr_image_pixels_t *output) -> int32_t {
+                State *owner=static_cast<State *>(user);
+                return owner->raster_resources.copy_tile_pixels(owner->document,String::utf8(source->data,source->length),
+                        width,height,content_width,content_height,owner->borrowed_image_pixels,*output);
+            },state)!=HCSR_OK) {
+        set_terminal(state,"hcsr_newest could not install the SVG tile pixel service.");
+        return ERR_CANT_CREATE;
+    }
 	if (hcsr_source_create(state->runtime, &source_desc, &state->source) != HCSR_OK) {
 		set_terminal(state, scene_error(state, "hcsr_newest could not create the document source."));
 		return ERR_INVALID_DATA;
