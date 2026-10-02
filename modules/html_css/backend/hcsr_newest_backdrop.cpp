@@ -63,8 +63,9 @@ const HTMLGPUBackdropFrame &HCSRNewestBackdrop::update(hcsr_draw_packet_t packet
 				continue;
 			}
 			states.insert(state);
-			append(&packet_view.gpu.states[state], sizeof(hcsr_gpu_state_t));
-			uint32_t clip = packet_view.gpu.states[state].clip;
+            const auto placement=renderer.reference_state(packet_view,state);
+            append(&placement, sizeof(placement));
+            uint32_t clip = placement.clip;
 			while (clip && !clips.has(clip)) {
 				clips.insert(clip);
 				const auto &record = packet_view.gpu.clips[clip];
@@ -231,7 +232,8 @@ bool HCSRNewestBackdrop::draw_gpu(const hcsr_backdrop_view_t &view, const hcsr_d
         for(uint32_t j=0;j<source.surface_count;++j) {
             const auto &surface=view.surfaces[source.first_surface+j];
             const auto &r=surface.appearance.raster.local_rect;
-            const auto &m=packet.gpu.states[surface.gpu_state].transform;
+            const auto placement=renderer.reference_state(packet,surface.gpu_state);
+            const auto &m=placement.transform;
             const Vector2 corners[]={{r.x,r.y},{r.x+r.width,r.y},{r.x+r.width,r.y+r.height},{r.x,r.y+r.height}};
             for(const auto &local:corners) {
                 float w=m[3]*local.x+m[7]*local.y+m[15];

@@ -8,9 +8,12 @@
 #include "core/os/os.h"
 #include <cmath>
 
+hcsr_gpu_state_t HCSRNewestSceneRenderer::reference_state(const hcsr_draw_packet_view_t &packet,uint32_t index) const {
+    return hcsr::render::query_reference_state(packet,index,local_hierarchy?&hierarchy:nullptr);
+}
+
 bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, const Ref<HTMLDocument> &document, float output_scale, const hcsr_backdrop_view_t &backdrop,const hcsr_hierarchy_view_t &local) {
-    auto packet=submitted;
-    std::vector<hcsr_gpu_state_t> appearance_reference;
+    const auto &packet=submitted;
     const bool had_pending = resources.has_pending_glyphs();
     const bool next_gpu = packet.format == HCSR_DRAW_PACKET_FORMAT_GPU;
     const bool next_hierarchy=next_gpu && local.revision!=0;
@@ -33,11 +36,6 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
         }
     } else { gpu_states.clear(); gpu_clips.clear(); gpu_planes.clear(); }
     logical_width=packet.viewport_width; logical_height=packet.viewport_height;
-    if(next_hierarchy && !packet.gpu.states && (!gpu_geometry || geometry_generation!=packet.gpu.geometry_generation
-        || prepared_scale!=output_scale || had_pending)) {
-        hcsr::render::resolve_reference_states(hierarchy,appearance_reference);
-        packet.gpu.states=appearance_reference.data();
-    }
     Vector<uint64_t> next_backdrop_identities;
     if(backdrop.surface_count && (!next_gpu || !backdrop.surfaces))return false;
     if(next_backdrop_identities.resize(int(backdrop.surface_count))!=OK)return false;
@@ -49,7 +47,6 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
     if(next_gpu && gpu_geometry && geometry_generation==packet.gpu.geometry_generation && prepared_scale==output_scale
         && !had_pending && next_backdrop_identities==backdrop_identities) {
         uploaded=false; geometry_dirty=false;
-        if(next_gpu && packet.gpu.state_count && !packet.gpu.states && group_depth)return false;
         update_compositing_bounds(packet);
         return true;
     }
@@ -64,8 +61,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
 	batches.clear();
 	hcsr::render::compositing_plan group_plan;
     std::string group_error;
-    if (!hcsr::render::plan_compositing(packet, group_plan, group_error,next_hierarchy)) return false;
-    if(next_gpu && packet.gpu.state_count && !packet.gpu.states && (group_plan.depth || backdrop.effect_count))return false;
+    if (!hcsr::render::plan_compositing(packet, group_plan, group_error,next_hierarchy,next_hierarchy?&hierarchy:nullptr)) return false;
     std::vector<hcsr::render::ordered_backdrop> backdrop_plan;
     if(gpu_geometry && !hcsr::render::plan_ordered_backdrops(packet,group_plan,backdrop,backdrop_plan,group_error))return false;
     ordered_backdrops=gpu_geometry && !backdrop_plan.empty();
@@ -271,7 +267,8 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
             destination = Rect2(raster.local_rect.x, raster.local_rect.y, raster.local_rect.width, raster.local_rect.height);
             float transform_scale = 1;
             if (gpu_geometry && draw.index_count) {
-                const auto &m = packet.gpu.states[packet.gpu.vertex_states[packet.indices[draw.first_index]]].transform;
+                const auto state=hcsr::render::query_reference_state(packet,packet.gpu.vertex_states[packet.indices[draw.first_index]],local_hierarchy?&hierarchy:nullptr);
+                const auto &m = state.transform;
                 transform_scale = MAX(Vector2(m[0],m[1]).length(),Vector2(m[4],m[5]).length());
             } else if (draw.index_count) {
                 const auto &a = packet.vertices[packet.indices[draw.first_index]];
@@ -320,7 +317,8 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
                     if (local > .001f) transform_scale = MAX(transform_scale, Vector2(b.screen_x - a.screen_x, b.screen_y - a.screen_y).length() / local);
                 }
                 if(gpu_geometry && draw.index_count) {
-                    const auto &m=packet.gpu.states[packet.gpu.vertex_states[packet.indices[draw.first_index]]].transform;
+                    const auto state=hcsr::render::query_reference_state(packet,packet.gpu.vertex_states[packet.indices[draw.first_index]],local_hierarchy?&hierarchy:nullptr);
+                    const auto &m=state.transform;
                     transform_scale=MAX(Vector2(m[0],m[1]).length(),Vector2(m[4],m[5]).length());
                 }
                 entry = resources.resolve_image(document, source, natural, destination.size * (output_scale * transform_scale));
@@ -338,7 +336,8 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
                 if (local > .001f) transform_scale = MAX(transform_scale, Vector2(b.screen_x - a.screen_x, b.screen_y - a.screen_y).length() / local);
             }
             if(gpu_geometry && draw.index_count) {
-                const auto &m=packet.gpu.states[packet.gpu.vertex_states[packet.indices[draw.first_index]]].transform;
+                const auto state=hcsr::render::query_reference_state(packet,packet.gpu.vertex_states[packet.indices[draw.first_index]],local_hierarchy?&hierarchy:nullptr);
+                const auto &m=state.transform;
                 transform_scale=MAX(Vector2(m[0],m[1]).length(),Vector2(m[4],m[5]).length());
             }
             entry = resources.resolve_glyph(glyph, output_scale * transform_scale);
@@ -434,7 +433,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
 
 void HCSRNewestSceneRenderer::update_compositing_bounds(const hcsr_draw_packet_view_t &packet) {
     if (!group_depth) return;
-    bounds_program.update(packet);
+    bounds_program.update(packet,local_hierarchy?&hierarchy:nullptr);
     for (auto &batch:batches) {
         if (batch.kind && (!batch.backdrop || (batch.backdrop_prefix && !batch.backdrop_first))) {
             const auto &b=bounds_program.bounds(batch.event_index);
