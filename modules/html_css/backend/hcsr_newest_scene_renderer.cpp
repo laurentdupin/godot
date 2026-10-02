@@ -112,6 +112,13 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
         hcsr::render::filter_program program{reinterpret_cast<const uint8_t *>(operations.data()),uint32_t(operations.size())};
         hcsr::render::plan_filter_passes(program,filter_passes);
         const bool spatial=std::any_of(filter_passes.begin(),filter_passes.end(),[](const auto &pass){return pass.axis!=0;});
+        Vector2 blur_sigma;
+        uint32_t blur_passes=0;
+        for (const auto &pass:filter_passes) {
+            if (pass.axis==1) blur_sigma.x+=pass.sigma;
+            if (pass.axis==2) blur_sigma.y+=pass.sigma;
+            if (pass.axis) ++blur_passes;
+        }
         size_t intermediates=spatial?filter_passes.size():0;
         if(intermediates && filter_passes.back().axis==0)--intermediates;
         const bool snapshot=op.document_input || !op.prefix_events.empty();
@@ -151,11 +158,28 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
             constexpr float corners[][2]={{0,0},{1,0},{1,1},{0,0},{1,1},{0,1}};
             for(const auto &c:corners){Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=c[0]*2-1;v.position_uv[1]=c[1]*2-1;v.position_uv[2]=c[0];v.position_uv[3]=c[1];v.tint[3]=1;
                 v.bounds[0]=surface?-6.f:axis?-5.f:colors.empty()?-3.f:-4.f;v.bounds[1]=surface?mask_parameters:parameters;v.bounds[2]=colors.size();v.bounds[3]=4;vertex_data[written++]=v;}
-            Batch batch{0,primitive,1,6,op.destination_depth,1,Rect2(0,0,1,1),effect.before_draw_index};
+            Batch batch{0,primitive,1,6,op.destination_depth,1,Rect2(0,0,1,1),op.destination_event};
             batch.mask_page=mask_page;batch.backdrop=true;batch.backdrop_mask=surface!=nullptr;
             batch.backdrop_first=surface && surface==&backdrop.surfaces[effect.first_surface];
             batch.document_source=document_source;
-            batch.backdrop_source=source;batch.backdrop_destination=destination;batch.backdrop_source_event=source<group_plan.depth?op.source_event:SIZE_MAX;batches.push_back(batch);
+            if (!surface) {
+                batch.backdrop_blur_sigma=blur_sigma;
+                batch.backdrop_blur_passes=blur_passes;
+                batch.backdrop_blur_state=backdrop.surfaces[effect.first_surface].gpu_state;
+            }
+            batch.backdrop_source=source;batch.backdrop_destination=destination;batch.backdrop_source_event=source<group_plan.depth?op.source_event:SIZE_MAX;
+            // Coverage slices share the same sampled input and atlas binding.
+            // Submit their contiguous GPU instances in one compositing pass.
+            if (surface && !batch.backdrop_first && !batches.is_empty()) {
+                auto &previous=batches.write[batches.size()-1];
+                if (previous.backdrop_mask && previous.event_index==batch.event_index
+                        && previous.backdrop_source==source && previous.backdrop_destination==destination
+                        && previous.mask_page==mask_page && previous.first+previous.count==primitive) {
+                    ++previous.count;
+                    return;
+                }
+            }
+            batches.push_back(batch);
         };
         for(size_t i=0;i<intermediates;++i){const auto &pass=filter_passes[i];const uint32_t destination=group_plan.depth+uint32_t(i%2);
             emit(pass.colors,pass.sigma,pass.axis,nullptr,destination);source=destination;document_source=false;}
@@ -421,7 +445,21 @@ void HCSRNewestSceneRenderer::update_compositing_bounds(const hcsr_draw_packet_v
     if (!group_depth) return;
     bounds_program.update(packet);
     for (auto &batch:batches) {
-        if (batch.kind && (!batch.backdrop || (batch.backdrop_prefix && !batch.backdrop_first))) {
+        if (!batch.kind) continue;
+        if (batch.backdrop && !batch.backdrop_blur_sigma.is_zero_approx()) {
+            const auto &b=bounds_program.bounds(batch.event_index);
+            const auto *m=packet.gpu.states[batch.backdrop_blur_state].transform;
+            // Every intermediate covers the owner plus the support of the whole
+            // filter chain. Later passes can therefore sample earlier results
+            // without reading stale pixels outside a partially cleared target.
+            // Kernel radii round up in physical pixels on every axis pass.
+            const float guard=batch.backdrop_blur_passes/MAX(prepared_scale,0.0001f);
+            const Vector2 padding(3*(batch.backdrop_blur_sigma.x*std::abs(m[0])+batch.backdrop_blur_sigma.y*std::abs(m[4]))+guard,
+                    3*(batch.backdrop_blur_sigma.x*std::abs(m[1])+batch.backdrop_blur_sigma.y*std::abs(m[5]))+guard);
+            Rect2 region(Vector2(b.x,b.y)-padding,Vector2(b.width,b.height)+padding*2);
+            region=region.intersection(Rect2(0,0,logical_width,logical_height));
+            batch.bounds=Rect2(region.position/Vector2(logical_width,logical_height),region.size/Vector2(logical_width,logical_height));
+        } else if (!batch.backdrop || batch.backdrop_mask || batch.backdrop_merge || (batch.backdrop_prefix && !batch.backdrop_first)) {
             const auto &b=bounds_program.bounds(batch.event_index);
             batch.bounds=Rect2(b.x/logical_width,b.y/logical_height,b.width/logical_width,b.height/logical_height);
         }
@@ -626,7 +664,7 @@ bool HCSRNewestSceneRenderer::prepare_gpu_resources(RenderingDevice *device) {
     return true;
 }
 
-bool HCSRNewestSceneRenderer::snapshot_document(RenderingDevice *device, RID prefix, RID snapshot, const CanvasRenderTargetPreparation::Input *input) {
+bool HCSRNewestSceneRenderer::snapshot_document(RenderingDevice *device, RID prefix, RID snapshot, const Rect2 &region, const CanvasRenderTargetPreparation::Input *input) {
     using RD=RenderingDevice;
     if (!document_shader.is_valid()) {
         RD::ShaderStageSPIRVData stage;stage.shader_stage=RD::SHADER_STAGE_COMPUTE;
@@ -645,7 +683,8 @@ bool HCSRNewestSceneRenderer::snapshot_document(RenderingDevice *device, RID pre
     if(!bindings.is_valid())return false;
     const auto size=device->texture_get_format(snapshot);
     struct {float row_x[4],row_y[4],sizes[4],flags[4];} push{};
-    push.sizes[0]=size.width;push.sizes[1]=size.height;
+    push.sizes[0]=region.size.x;push.sizes[1]=region.size.y;
+    push.flags[2]=region.position.x;push.flags[3]=region.position.y;
     if(input) {
         const auto &t=input->item_transform;const auto &r=input->item_rect;
         const Vector2 origin=t.xform(r.position);
@@ -657,7 +696,7 @@ bool HCSRNewestSceneRenderer::snapshot_document(RenderingDevice *device, RID pre
     device->compute_list_bind_compute_pipeline(list,document_pipeline);
     device->compute_list_bind_uniform_set(list,bindings,0);
     device->compute_list_set_push_constant(list,&push,sizeof(push));
-    device->compute_list_dispatch(list,(size.width+7)/8,(size.height+7)/8,1);
+    device->compute_list_dispatch(list,(uint32_t(region.size.x)+7)/8,(uint32_t(region.size.y)+7)/8,1);
     device->compute_list_end();device->free_rid(bindings);
     return true;
 }
@@ -778,9 +817,44 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
         const struct { uint32_t first,gpu_geometry; float width,height,target_width,target_height,padding[2],region[4]; } push{batch.first,
             gpu_geometry ? 1u : 0u,logical_width,logical_height,float(size.x),float(size.y),{0,batch.backdrop_mask?1.f:0.f},
             {float(region.position.x),float(region.position.y),float(region.get_end().x),float(region.get_end().y)}};
-        device->draw_list_set_push_constant(list,&push,sizeof(push));
-        device->draw_list_draw(list,false,gpu_geometry ? batch.count : 1,gpu_geometry ? 6 : batch.count);
-        ++last_draw_calls;
+        if (batch.backdrop_mask) {
+            // Keep fullscreen interpolation identical to the reference path.
+            // Restrict each slice with scissor state inside this shared pass;
+            // changing its quad can move an exact mask edge across a pixel.
+            for (uint32_t instance=0;instance<batch.count;++instance) {
+                const auto &vertex=vertices[primitives[batch.first+instance].first];
+                const uint32_t parameters=uint32_t(vertex.bounds[1])/4;
+                const auto *rect=vertices[parameters+1].position_uv;
+                const uint32_t state=uint32_t(vertices[parameters+3].position_uv[0])-1;
+                const auto *m=gpu_states[state].transform;
+                Vector2 low(INFINITY,INFINITY),high(-INFINITY,-INFINITY);
+                bool bounded=rect[2]>0 && rect[3]>0;
+                for (uint32_t corner=0;corner<4;++corner) {
+                    const float x=rect[0]+(corner&1?rect[2]:0),y=rect[1]+(corner&2?rect[3]:0);
+                    const float w=x*m[3]+y*m[7]+m[15];
+                    const Vector2 point((x*m[0]+y*m[4]+m[12])/w,(x*m[1]+y*m[5]+m[13])/w);
+                    if (w<=0.000001f || !point.is_finite()) bounded=false;
+                    low=low.min(point);high=high.max(point);
+                }
+                Rect2 scissor=region_for(batch);
+                if (bounded) {
+                    const Vector2 density(size.x/logical_width,size.y/logical_height);
+                    const Vector2 first=(low*density).floor()-Vector2(1,1);
+                    const Vector2 end=(high*density).ceil()+Vector2(1,1);
+                    scissor=scissor.intersection(Rect2(first,end-first));
+                }
+                if (!scissor.has_area()) continue;
+                device->draw_list_enable_scissor(list,scissor);
+                auto slice_push=push;slice_push.first=batch.first+instance;
+                device->draw_list_set_push_constant(list,&slice_push,sizeof(slice_push));
+                device->draw_list_draw(list,false,1,6);
+                ++last_draw_calls;
+            }
+        } else {
+            device->draw_list_set_push_constant(list,&push,sizeof(push));
+            device->draw_list_draw(list,false,gpu_geometry ? batch.count : 1,gpu_geometry ? 6 : batch.count);
+            ++last_draw_calls;
+        }
     };
     std::vector<std::vector<size_t>> passes;
     // Process-wide diagnostic override for paired profiling and pixel checks.
@@ -828,7 +902,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
         if (batch.kind) {
             resume_foreground_depth=0;
             device->draw_list_end();
-            if(batch.document_source && !snapshot_document(device,target,group_targets[group_depth+2].texture,input)){device->free_rid(framebuffer);return false;}
+            if(batch.document_source && !snapshot_document(device,target,group_targets[group_depth+2].texture,batch.backdrop_prefix?Rect2(Vector2(),size):region_for(batch),input)){device->free_rid(framebuffer);return false;}
             const Color transparent(0,0,0,0);
             const Rect2 region=region_for(batch);
             if(batch.blend_mode) {

@@ -310,7 +310,8 @@ void HCSRNewestRasterResources::ensure_sampling_page() {} // Page zero is the pe
 
 Dictionary HCSRNewestRasterResources::get_statistics() const {
     Dictionary result;
-	result["pages"] = page_count();
+	// Diagnostics count appearance pages; the permanent empty sampler is not an atlas page.
+	result["pages"] = MAX(0, hcsr_atlas_page_count(atlas));
 	result["sources"] = entries.size() + glyph_entries.size() + surface_entries.size();
 	result["decoded_images"] = decoded_images;
     result["reused_surface_slots"] = hcsr_atlas_reused_slots(atlas);

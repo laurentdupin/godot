@@ -31,6 +31,8 @@ class HCSRNewestSceneRenderer {
         size_t backdrop_source_event=SIZE_MAX;
         bool backdrop=false,backdrop_mask=false,backdrop_merge=false,backdrop_first=false;
 		bool document_source=false, backdrop_prefix=false;
+        Vector2 backdrop_blur_sigma;
+        uint32_t backdrop_blur_state=0, backdrop_blur_passes=0;
 	};
     struct GroupTarget { RID texture, framebuffer, uniform; Size2i size; };
     struct GroupPool { RID output,blend_texture,blend_uniform; Vector<GroupTarget> targets,underlays; };
@@ -40,7 +42,7 @@ class HCSRNewestSceneRenderer {
     bool ordered_backdrops=false;
 	bool document_backdrops=false, snapshot_target=false;
 	RID document_shader, document_pipeline;
-	bool snapshot_document(RenderingDevice *, RID prefix, RID snapshot, const CanvasRenderTargetPreparation::Input *);
+	bool snapshot_document(RenderingDevice *, RID prefix, RID snapshot, const Rect2 &region, const CanvasRenderTargetPreparation::Input *);
     uint64_t group_allocations = 0;
     uint32_t last_render_passes = 0;
     bool last_disjoint_groups = false;
