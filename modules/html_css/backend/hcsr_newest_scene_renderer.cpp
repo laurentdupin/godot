@@ -53,6 +53,8 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
     if(gpu_geometry && !hcsr::render::plan_ordered_backdrops(packet,group_plan,backdrop,backdrop_plan,group_error))return false;
     ordered_backdrops=gpu_geometry && !backdrop_plan.empty();
     document_backdrops=gpu_geometry && std::any_of(backdrop_plan.begin(),backdrop_plan.end(),[](const auto &op){return op.document_input;});
+    const bool prefix_snapshots=std::any_of(backdrop_plan.begin(),backdrop_plan.end(),[](const auto &op){return !op.prefix_events.empty();});
+    snapshot_target=document_backdrops || prefix_snapshots;
     bounds_program.build(packet,group_plan,gpu_geometry?&backdrop:nullptr);
     HashSet<uint64_t> live_surfaces;
     for (size_t i=0; i<packet.draw_item_count; ++i) {
@@ -88,6 +90,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
         if (emitted_count > INT32_MAX/sizeof(Vertex)) return false;
     }
     for(const auto &op:backdrop_plan)if(gpu_geometry) {const auto &effect=backdrop.effects[op.effect];
+        emitted_count+=6*(op.prefix_events.size()+(op.prefix_events.empty() || op.document_input?0:1));
         emitted_count+=uint64_t(effect.surface_count)*(14+effect.operation_count)+uint64_t(effect.operation_count)*20+6;
         if(emitted_count>INT32_MAX/sizeof(Vertex))return false;
     }
@@ -109,8 +112,23 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
         const bool spatial=std::any_of(filter_passes.begin(),filter_passes.end(),[](const auto &pass){return pass.axis!=0;});
         size_t intermediates=spatial?filter_passes.size():0;
         if(intermediates && filter_passes.back().axis==0)--intermediates;
-        uint32_t source=op.document_input?group_plan.depth+2:op.source_depth-1;
+        const bool snapshot=op.document_input || !op.prefix_events.empty();
+        uint32_t source=snapshot?group_plan.depth+2:op.source_depth-1;
         bool document_source=op.document_input;
+        auto prefix=[&](uint32_t layer,size_t event,bool clear) {
+            Batch batch{0,uint32_t(primitives.size()),1,6,op.destination_depth,1,Rect2(0,0,1,1),event};
+            batch.backdrop=true;batch.backdrop_prefix=true;batch.backdrop_first=clear;
+            batch.document_source=document_source;batch.backdrop_source=layer;
+            batch.backdrop_source_event=event;batch.backdrop_destination=group_plan.depth+2;
+            batches.push_back(batch);primitives.push_back({written,2,UINT32_MAX});
+            constexpr float corners[][2]={{0,0},{1,0},{1,1},{0,0},{1,1},{0,1}};
+            for(const auto &c:corners){Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=c[0]*2-1;v.position_uv[1]=c[1]*2-1;v.position_uv[2]=c[0];v.position_uv[3]=c[1];v.tint[3]=1;v.bounds[0]=-3;vertex_data[written++]=v;}
+            document_source=false;
+        };
+        if(!op.prefix_events.empty()) {
+            if(!op.document_input)prefix(op.source_depth-1,op.source_event,true);
+            for(const size_t event:op.prefix_events)prefix(group_plan.events[event].depth-1,event,false);
+        }
         auto emit=[&](hcsr::render::filter_program colors,float sigma,uint32_t axis,const hcsr_backdrop_surface_t *surface,uint32_t destination) {
             const uint32_t parameters=written*4;
             auto parameter=[&](float x,float y,float z,float w){Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=x;v.position_uv[1]=y;v.position_uv[2]=z;v.position_uv[3]=w;vertex_data[written++]=v;};
@@ -401,7 +419,7 @@ void HCSRNewestSceneRenderer::update_compositing_bounds(const hcsr_draw_packet_v
     if (!group_depth) return;
     bounds_program.update(packet);
     for (auto &batch:batches) {
-        if (batch.kind && !batch.backdrop) {
+        if (batch.kind && (!batch.backdrop || (batch.backdrop_prefix && !batch.backdrop_first))) {
             const auto &b=bounds_program.bounds(batch.event_index);
             batch.bounds=Rect2(b.x/logical_width,b.y/logical_height,b.width/logical_width,b.height/logical_height);
         }
@@ -729,7 +747,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
         group.uniform=device->uniform_set_create(VectorView(uniforms.ptr(),uniforms.size()),shader,0);++group_allocations;
         return group.framebuffer.is_valid() && group.uniform.is_valid();
     };
-    while(group_targets.size()<int(group_depth)+(ordered_backdrops?(document_backdrops?3:2):spatial_filters?1:0)) {
+    while(group_targets.size()<int(group_depth)+(ordered_backdrops?(snapshot_target?3:2):spatial_filters?1:0)) {
         group_targets.push_back({});
         if(!ensure_group_target(group_targets.write[group_targets.size()-1])){release_groups(device);device->free_rid(framebuffer);return false;}
     }
@@ -815,7 +833,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
             RID destination = batch.backdrop?(batch.backdrop_mask || batch.backdrop_merge?pool.underlays[batch.backdrop_destination].framebuffer:group_targets[batch.backdrop_destination].framebuffer) : (batch.kind==hcsr::render::group_filter_pass || batch.kind==hcsr::render::group_shadow_blur) ? group_targets[group_depth].framebuffer
                     : (batch.kind==HCSR_GROUP_BEGIN || batch.kind==hcsr::render::group_shadow_apply) ? group_targets[batch.depth-1].framebuffer
                     : batch.depth==1 ? framebuffer : group_targets[batch.depth-2].framebuffer;
-            const bool clear=batch.backdrop?batch.backdrop_first || (!batch.backdrop_mask && !batch.backdrop_merge):batch.kind!=HCSR_GROUP_END && batch.kind!=hcsr::render::group_shadow_apply;
+            const bool clear=batch.backdrop?(batch.backdrop_prefix?batch.backdrop_first:batch.backdrop_first || (!batch.backdrop_mask && !batch.backdrop_merge)):batch.kind!=HCSR_GROUP_END && batch.kind!=hcsr::render::group_shadow_apply;
             list=device->draw_list_begin(destination,clear ? RD::DRAW_CLEAR_COLOR_ALL : 0,VectorView(&transparent,1),1,0,clear ? region : Rect2());
             ++last_render_passes;
             device->draw_list_set_viewport(list,Rect2i(Vector2i(),size));

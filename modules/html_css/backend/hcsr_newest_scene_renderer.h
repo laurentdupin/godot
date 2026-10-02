@@ -30,7 +30,7 @@ class HCSRNewestSceneRenderer {
         uint32_t backdrop_source=0,backdrop_destination=0;
         size_t backdrop_source_event=SIZE_MAX;
         bool backdrop=false,backdrop_mask=false,backdrop_merge=false,backdrop_first=false;
-		bool document_source=false;
+		bool document_source=false, backdrop_prefix=false;
 	};
     struct GroupTarget { RID texture, framebuffer, uniform; Size2i size; };
     struct GroupPool { RID output,blend_texture,blend_uniform; Vector<GroupTarget> targets,underlays; };
@@ -38,7 +38,7 @@ class HCSRNewestSceneRenderer {
     hcsr::render::compositing_bounds_program bounds_program;
     uint32_t group_depth = 0;
     bool ordered_backdrops=false;
-	bool document_backdrops=false;
+	bool document_backdrops=false, snapshot_target=false;
 	RID document_shader, document_pipeline;
 	bool snapshot_document(RenderingDevice *, RID prefix, RID snapshot, const CanvasRenderTargetPreparation::Input *);
     uint64_t group_allocations = 0;
