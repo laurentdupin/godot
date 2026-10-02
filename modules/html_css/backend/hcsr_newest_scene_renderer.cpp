@@ -8,11 +8,13 @@
 #include "core/os/os.h"
 #include <cmath>
 
-bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale, const hcsr_backdrop_view_t &backdrop,const hcsr_hierarchy_view_t &local) {
+bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, const Ref<HTMLDocument> &document, float output_scale, const hcsr_backdrop_view_t &backdrop,const hcsr_hierarchy_view_t &local) {
+    auto packet=submitted;
+    std::vector<hcsr_gpu_state_t> appearance_reference;
     const bool had_pending = resources.has_pending_glyphs();
     const bool next_gpu = packet.format == HCSR_DRAW_PACKET_FORMAT_GPU;
-    if (!hcsr::render::validate_gpu_packet(packet)) return false;
     const bool next_hierarchy=next_gpu && local.revision!=0;
+    if (!hcsr::render::validate_gpu_packet(packet,next_hierarchy)) return false;
     if(next_hierarchy && hierarchy.geometry!=local.geometry_generation)hierarchy_uploaded_revision=0;
     if(next_hierarchy && !hierarchy.prepare(local,packet.gpu.geometry_generation,packet.gpu.state_count,packet.gpu.clip_count))return false;
     if(!next_hierarchy) {hierarchy.clear();hierarchy_uploaded_revision=0;}
@@ -31,6 +33,11 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
         }
     } else { gpu_states.clear(); gpu_clips.clear(); gpu_planes.clear(); }
     logical_width=packet.viewport_width; logical_height=packet.viewport_height;
+    if(next_hierarchy && !packet.gpu.states && (!gpu_geometry || geometry_generation!=packet.gpu.geometry_generation
+        || prepared_scale!=output_scale || had_pending)) {
+        hcsr::render::resolve_reference_states(hierarchy,appearance_reference);
+        packet.gpu.states=appearance_reference.data();
+    }
     Vector<uint64_t> next_backdrop_identities;
     if(backdrop.surface_count && (!next_gpu || !backdrop.surfaces))return false;
     if(next_backdrop_identities.resize(int(backdrop.surface_count))!=OK)return false;
@@ -42,6 +49,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
     if(next_gpu && gpu_geometry && geometry_generation==packet.gpu.geometry_generation && prepared_scale==output_scale
         && !had_pending && next_backdrop_identities==backdrop_identities) {
         uploaded=false; geometry_dirty=false;
+        if(next_gpu && packet.gpu.state_count && !packet.gpu.states && group_depth)return false;
         update_compositing_bounds(packet);
         return true;
     }
@@ -56,7 +64,8 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
 	batches.clear();
 	hcsr::render::compositing_plan group_plan;
     std::string group_error;
-    if (!hcsr::render::plan_compositing(packet, group_plan, group_error)) return false;
+    if (!hcsr::render::plan_compositing(packet, group_plan, group_error,next_hierarchy)) return false;
+    if(next_gpu && packet.gpu.state_count && !packet.gpu.states && (group_plan.depth || backdrop.effect_count))return false;
     std::vector<hcsr::render::ordered_backdrop> backdrop_plan;
     if(gpu_geometry && !hcsr::render::plan_ordered_backdrops(packet,group_plan,backdrop,backdrop_plan,group_error))return false;
     ordered_backdrops=gpu_geometry && !backdrop_plan.empty();
