@@ -18,9 +18,11 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
         return true;
     };
     if(next_gpu) {
-        if(!copy_table(gpu_states,packet.gpu.states,packet.gpu.state_count)
-            || !copy_table(gpu_clips,packet.gpu.clips,packet.gpu.clip_count)
-            || !copy_table(gpu_planes,packet.gpu.planes,packet.gpu.plane_count)) return false;
+        if(!copy_table(gpu_states,packet.gpu.states,packet.gpu.state_count)) return false;
+        if(!gpu_geometry || geometry_generation!=packet.gpu.geometry_generation) {
+            if(!copy_table(gpu_clips,packet.gpu.clips,packet.gpu.clip_count)
+                || !copy_table(gpu_planes,packet.gpu.planes,packet.gpu.plane_count)) return false;
+        }
     } else { gpu_states.clear(); gpu_clips.clear(); gpu_planes.clear(); }
     logical_width=packet.viewport_width; logical_height=packet.viewport_height;
     Vector<uint64_t> next_backdrop_identities;
@@ -524,9 +526,12 @@ bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {
         if(device->buffer_update(primitive_buffer,0,instance_bytes,primitives.ptr())!=OK) return false;
         instance_uploaded_bytes+=instance_bytes;
     }
-    if(!update(state_buffer,gpu_states.size()*sizeof(hcsr_gpu_state_t),gpu_states.ptr(),false)
-        || !update(clip_buffer,gpu_clips.size()*sizeof(hcsr_gpu_clip_t),gpu_clips.ptr(),false)
-        || !update(plane_buffer,gpu_planes.size()*sizeof(hcsr_gpu_plane_t),gpu_planes.ptr(),false)) return false;
+    if(!update(state_buffer,gpu_states.size()*sizeof(hcsr_gpu_state_t),gpu_states.ptr(),false)) return false;
+    if(geometry_dirty) {
+        if(!update(clip_buffer,gpu_clips.size()*sizeof(hcsr_gpu_clip_t),gpu_clips.ptr(),false)
+            || !update(plane_buffer,gpu_planes.size()*sizeof(hcsr_gpu_plane_t),gpu_planes.ptr(),false)) return false;
+        clip_definition_uploaded_bytes+=gpu_clips.size()*sizeof(hcsr_gpu_clip_t)+gpu_planes.size()*sizeof(hcsr_gpu_plane_t);
+    }
     geometry_dirty=false;
     auto rgba_upload = [&](int page, const Rect2i &rect) {
         Vector<uint8_t> pixels = resources.page_pixels(page, rect);
@@ -1075,6 +1080,7 @@ Dictionary HCSRNewestSceneRenderer::get_statistics() const {
     result["geometry_uploaded_bytes"] = geometry_uploaded_bytes;
     result["instance_uploaded_bytes"] = instance_uploaded_bytes;
     result["state_uploaded_bytes"] = state_uploaded_bytes;
+    result["clip_definition_uploaded_bytes"] = clip_definition_uploaded_bytes;
     result["geometry_generation"] = geometry_generation;
 	result["uploaded_bytes"] = uploaded_bytes;
 	result["draw_batches"] = batches.size();
