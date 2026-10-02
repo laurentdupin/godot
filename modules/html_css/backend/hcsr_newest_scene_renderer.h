@@ -2,7 +2,7 @@
 
 #include "hcsr_newest_raster_resources.h"
 #include "hcsr_scene_submission.h"
-#include "hcsr_compositing.h"
+#include "hcsr_backdrop_submission.h"
 #include "servers/rendering/rendering_device.h"
 
 // Submits prepared scene drawing. Raster resource lifetime is owned by the view,
@@ -26,12 +26,16 @@ class HCSRNewestSceneRenderer {
         int mask_page=0;
         uint32_t blend_mode=0;
         bool source_scratch=false;
+        uint32_t backdrop_source=0,backdrop_destination=0;
+        size_t backdrop_source_event=SIZE_MAX;
+        bool backdrop=false,backdrop_mask=false,backdrop_merge=false,backdrop_first=false;
 	};
     struct GroupTarget { RID texture, framebuffer, uniform; Size2i size; };
-    struct GroupPool { RID output,blend_texture,blend_uniform; Vector<GroupTarget> targets; };
+    struct GroupPool { RID output,blend_texture,blend_uniform; Vector<GroupTarget> targets,underlays; };
     Vector<GroupPool> group_pools;
     hcsr::render::compositing_bounds_program bounds_program;
     uint32_t group_depth = 0;
+    bool ordered_backdrops=false;
     uint64_t group_allocations = 0;
     uint32_t last_render_passes = 0;
     bool last_disjoint_groups = false;

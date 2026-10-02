@@ -38,8 +38,9 @@ const HTMLGPUBackdropFrame &HCSRNewestBackdrop::update(hcsr_draw_packet_t packet
     for(size_t i=0;i<view.effect_count;++i) {
         auto effect=view.effects[i];
         // Sampling root/order describe compositing, not coverage appearance.
-        // Their changes must not invalidate an otherwise identical mask.
-        effect.sampling_root_id=0;effect.before_draw_index=0;effect.flags=0;
+        // Root/order changes preserve coverage; document-input membership
+        // changes which effects this embedding mask actually contains.
+        effect.sampling_root_id=0;effect.before_draw_index=0;effect.flags&=1;
         append(&effect,sizeof(effect));
     }
 	append(view.operations, view.operation_count * sizeof(hcsr_backdrop_operation_t));
