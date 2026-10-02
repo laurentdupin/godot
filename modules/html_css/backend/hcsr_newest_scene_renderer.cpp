@@ -33,7 +33,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
     if(next_gpu && gpu_geometry && geometry_generation==packet.gpu.geometry_generation && prepared_scale==output_scale
         && !had_pending && next_backdrop_identities==backdrop_identities) {
         uploaded=false; geometry_dirty=false;
-        update_visible_instances(packet);
+        update_compositing_bounds(packet);
         return true;
     }
     const Vector<Vertex> previous_vertices = vertices;
@@ -323,31 +323,19 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
     // placeholder satisfies the shader interface without inventing a second
     // renderer for clears or for missing image resources.
     resources.ensure_sampling_page();
-    if(gpu_geometry) { all_primitives=primitives; all_batches=batches; update_visible_instances(packet); }
+    if(gpu_geometry) update_compositing_bounds(packet);
 	return true;
 }
 
-void HCSRNewestSceneRenderer::update_visible_instances(const hcsr_draw_packet_view_t &packet) {
-    // Coarse CPU visibility only. Precise element clipping stays in the shader.
+void HCSRNewestSceneRenderer::update_compositing_bounds(const hcsr_draw_packet_view_t &packet) {
+    if (!group_depth) return;
     hcsr::render::compositing_plan plan; std::string error;
-    if(group_depth && !hcsr::render::plan_compositing(packet,plan,error)) return;
-    primitives.clear(); batches.clear();
-    for(const auto &original:all_batches) {
-        Batch batch=original; batch.first=primitives.size(); batch.count=0;
-        if(batch.kind) {
-            if(batch.event_index<plan.events.size()) {
-                const auto &b=plan.events[batch.event_index].bounds;
-                batch.bounds=Rect2(b.x/logical_width,b.y/logical_height,b.width/logical_width,b.height/logical_height);
-            }
+    if (!hcsr::render::plan_compositing(packet,plan,error)) return;
+    for (auto &batch:batches) {
+        if (batch.kind && batch.event_index<plan.events.size()) {
+            const auto &b=plan.events[batch.event_index].bounds;
+            batch.bounds=Rect2(b.x/logical_width,b.y/logical_height,b.width/logical_width,b.height/logical_height);
         }
-        for(uint32_t j=0;j<original.count;j++) {
-            const auto &primitive=all_primitives[original.first+j];
-            if(primitive.draw_index!=UINT32_MAX) {
-                if (!hcsr::render::scene_draw_visible(packet,primitive.draw_index)) continue;
-            }
-            primitives.push_back(primitive); ++batch.count;
-        }
-        if(batch.kind || batch.count) batches.push_back(batch);
     }
 }
 
@@ -442,8 +430,10 @@ bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {
         uploaded_vertices = vertices;
     }
     const uint32_t instance_bytes=primitives.size()*sizeof(Primitive);
-    if(instance_bytes && device->buffer_update(primitive_buffer,0,instance_bytes,primitives.ptr())!=OK) return false;
-    instance_uploaded_bytes+=instance_bytes;
+    if(geometry_dirty && instance_bytes) {
+        if(device->buffer_update(primitive_buffer,0,instance_bytes,primitives.ptr())!=OK) return false;
+        instance_uploaded_bytes+=instance_bytes;
+    }
     if(!update(state_buffer,gpu_states.size()*sizeof(hcsr_gpu_state_t),gpu_states.ptr(),false)
         || !update(clip_buffer,gpu_clips.size()*sizeof(hcsr_gpu_clip_t),gpu_clips.ptr(),false)
         || !update(plane_buffer,gpu_planes.size()*sizeof(hcsr_gpu_plane_t),gpu_planes.ptr(),false)) return false;

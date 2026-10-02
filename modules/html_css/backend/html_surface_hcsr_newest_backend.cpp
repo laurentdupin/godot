@@ -1182,7 +1182,7 @@ HTMLSurfaceHCSRNewestBackend::HTMLSurfaceHCSRNewestBackend(HTMLSurfaceHCSRNewest
 	state = memnew(State);
 	state->renderer = p_renderer;
 	state->texture = texture;
-	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_9 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
+	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_10 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
 		set_terminal(state, "hcsr_newest scene ABI initialization failed.");
 	}
 }

@@ -43,9 +43,8 @@ class HCSRNewestSceneRenderer {
 	Vector<Batch> batches;
     // Six vertex invocations per instance: triangle (0), quad (1), or triangle pair (2).
     using Primitive = hcsr::render::scene_primitive;
-    Vector<Primitive> primitives, all_primitives;
-    Vector<Batch> all_batches;
-    void update_visible_instances(const hcsr_draw_packet_view_t &packet);
+    Vector<Primitive> primitives;
+    void update_compositing_bounds(const hcsr_draw_packet_view_t &packet);
     Vector<hcsr_gpu_state_t> gpu_states;
     Vector<hcsr_gpu_clip_t> gpu_clips;
     Vector<hcsr_gpu_plane_t> gpu_planes;
