@@ -270,6 +270,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
             if(group.kind==HCSR_GROUP_BEGIN) {
                 underlay[group.depth]=false;
                 batches.push_back({0,gpu_geometry?uint32_t(primitives.size()):written,0,group.kind,group.depth,group.opacity,region,i});
+                batches.write[batches.size()-1].opacity_state_plus_one=group.opacity_state_plus_one;
                 continue;
             }
             // Descendant sampling sees the root's foreground, excluding its
@@ -921,11 +922,15 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
         for(const auto &batch:batches)if(batch.backdrop_mask || batch.backdrop_merge)
             if(!ensure_group_target(pool.underlays.write[batch.backdrop_destination])){release_groups(device);device->free_rid(framebuffer);return false;}
     }
+    hcsr::render::transparent_group_submission visibility;
+    auto opacity=[&](uint32_t index) {return local_hierarchy?hierarchy.reference_opacity(index):hcsr::render::decode_opacity(gpu_states[index].reserved[0]);};
+    for(auto &batch:batches)batch.hidden=visibility.skip(batch.kind,batch.depth,batch.opacity,batch.opacity_state_plus_one,opacity);
     auto region_for = [&](const Batch &batch) {
         const auto area=hcsr::render::group_region({batch.bounds.position.x,batch.bounds.position.y,batch.bounds.size.x,batch.bounds.size.y},1,1,size.x,size.y);
         return Rect2(area.x,area.y,area.width,area.height);
     };
     auto emit = [&](RD::DrawListID list, const Batch &batch) {
+        if(batch.hidden)return;
         const bool gpu_region=gpu_geometry && batch.kind && !batch.backdrop;
         if(batch.kind && !gpu_region) device->draw_list_enable_scissor(list,region_for(batch));
         else device->draw_list_disable_scissor(list);
@@ -958,10 +963,11 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
     last_render_passes=0; last_draw_calls=0;
     if(last_disjoint_groups) {
         for(int depth=int(group_depth);depth>=0;--depth) {
+            if(depth && std::none_of(passes[depth].begin(),passes[depth].end(),[&](size_t i){return !batches[i].hidden;}))continue;
             const Color clear=depth ? Color(0,0,0,0) : background;
             Rect2 region;
             bool first=true;
-            if(depth) for(const auto &batch:batches) if(batch.kind==HCSR_GROUP_BEGIN && batch.depth==uint32_t(depth)) {
+            if(depth) for(const auto &batch:batches) if(!batch.hidden && batch.kind==HCSR_GROUP_BEGIN && batch.depth==uint32_t(depth)) {
                 const Rect2 next=region_for(batch);
                 region=first ? next : region.merge(next); first=false;
             }
@@ -981,6 +987,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
 	device->draw_list_bind_render_pipeline(list, pipeline);
     uint32_t resume_foreground_depth=0;
 	for (const Batch &batch : batches) {
+        if(batch.hidden)continue;
         if (!batch.kind && resume_foreground_depth) {
             // Backdrop pixels belong to the underlay. Ordinary node painting
             // must resume in the foreground sampled by descendant roots.

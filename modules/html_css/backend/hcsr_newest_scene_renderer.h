@@ -33,6 +33,8 @@ class HCSRNewestSceneRenderer {
         size_t backdrop_source_event=SIZE_MAX;
         bool backdrop=false,backdrop_mask=false,backdrop_merge=false,backdrop_first=false;
 		bool document_source=false, backdrop_prefix=false;
+        uint32_t opacity_state_plus_one=0;
+        bool hidden=false;
 	};
     struct GroupTarget { RID texture, framebuffer, uniform; Size2i size; };
     struct GroupPool { RID output,blend_texture,blend_uniform; Vector<GroupTarget> targets,underlays; };
