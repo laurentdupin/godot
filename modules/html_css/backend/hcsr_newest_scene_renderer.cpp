@@ -145,7 +145,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
 	batches.clear();
 	hcsr::render::compositing_plan group_plan;
     std::string group_error;
-    if (!hcsr::render::plan_compositing(packet, group_plan, group_error,next_hierarchy,next_hierarchy?&hierarchy:nullptr)) return false;
+    if (!hcsr::render::plan_compositing(packet, group_plan, group_error,next_hierarchy,next_hierarchy?&hierarchy:nullptr,true,gpu_geometry)) return false;
     std::vector<hcsr::render::ordered_backdrop> backdrop_plan;
     if(gpu_geometry && !hcsr::render::plan_ordered_backdrops(packet,group_plan,backdrop,backdrop_plan,group_error))return false;
     ordered_backdrops=gpu_geometry && !backdrop_plan.empty();
@@ -326,7 +326,8 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
                 for (const auto &corner: corners) {
                     Vertex v={}; v.position_uv[0]=corner.x*2-1; v.position_uv[1]=corner.y*2-1;
                     v.position_uv[2]=corner.x; v.position_uv[3]=corner.y;
-                    v.tint[3]=opacity; v.state=UINT32_MAX;
+                    v.tint[3]=kind==HCSR_GROUP_END && group.opacity_state_plus_one ? -float(group.opacity_state_plus_one) : opacity; v.state=UINT32_MAX;
+                    if(kind==HCSR_GROUP_END && group.opacity_state_plus_one)memcpy(&v.pad[0],&opacity,4);
                     v.bounds[0]=masked?-6.0f:kind==hcsr::render::group_shadow_apply?-7.0f:axis?-5.0f:colors.empty()?-3.0f:-4.0f;
                     v.bounds[1]=float(masked?mask_first:parameters_first);v.bounds[2]=float(colors.size());v.bounds[3]=4;
                     vertex_data[written++]=v;
@@ -551,8 +552,8 @@ bool HCSRNewestSceneRenderer::draw_backdrop_mask(RenderingDevice *device,RID tar
             device->draw_list_bind_uniform_set(list,gpu_pages[page].blend_uniform,2);
             const struct {
                 uint32_t first,mode;
-                float width,height,target_width,target_height,padding[2],group_bounds[4];
-            } push{backdrop_first_vertex+first*4,2,float(logical.x),float(logical.y),float(physical.x),float(physical.y),{float(i+1),0},{}};
+                float width,height,target_width,target_height;uint32_t region;float mask_mode,group_bounds[4];
+            } push{backdrop_first_vertex+first*4,2,float(logical.x),float(logical.y),float(physical.x),float(physical.y),uint32_t(i+1),0,{}};
             device->draw_list_set_push_constant(list,&push,sizeof(push));
             device->draw_list_draw(list,false,count,6);
             first+=count;
@@ -752,6 +753,9 @@ bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {
 			uniforms.push_back(storage);
             const RID extra[]={state_buffer,clip_buffer,plane_buffer,primitive_buffer};
             for(int i=0;i<4;i++) { RD::Uniform u; u.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER; u.binding=2+i; u.append_id(extra[i]); uniforms.push_back(u); }
+            // Ordinary draws never read regions; the state buffer satisfies the
+            // common shader interface without allocating another placeholder.
+            RD::Uniform region;region.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER;region.binding=6;region.append_id(state_buffer);uniforms.push_back(region);
 			page.uniform = device->uniform_set_create(VectorView(uniforms.ptr(), uniforms.size()), shader, 0);
 	        if(!page.blend_uniform.is_valid()) {
             RD::Uniform backdrop;backdrop.uniform_type=RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;backdrop.binding=0;backdrop.append_id(sampler);backdrop.append_id(page.texture);
@@ -904,6 +908,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
         RD::Uniform storage;storage.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER;storage.binding=1;storage.append_id(buffer);uniforms.push_back(storage);
         const RID extra[]={state_buffer,clip_buffer,plane_buffer,primitive_buffer};
         for(int i=0;i<4;++i){RD::Uniform u;u.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER;u.binding=2+i;u.append_id(extra[i]);uniforms.push_back(u);}
+        RD::Uniform region;region.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER;region.binding=6;region.append_id(gpu_geometry && coverage.controls.is_valid()?coverage.controls:state_buffer);uniforms.push_back(region);
         group.uniform=device->uniform_set_create(VectorView(uniforms.ptr(),uniforms.size()),shader,0);++group_allocations;
         return group.framebuffer.is_valid() && group.uniform.is_valid();
     };
@@ -921,17 +926,23 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
         return Rect2(area.x,area.y,area.width,area.height);
     };
     auto emit = [&](RD::DrawListID list, const Batch &batch) {
-        if(batch.kind) device->draw_list_enable_scissor(list,region_for(batch));
+        const bool gpu_region=gpu_geometry && batch.kind && !batch.backdrop;
+        if(batch.kind && !gpu_region) device->draw_list_enable_scissor(list,region_for(batch));
         else device->draw_list_disable_scissor(list);
         device->draw_list_bind_uniform_set(list,batch.kind ? group_targets[batch.backdrop?batch.backdrop_source:batch.source_scratch?group_depth:batch.depth-1].uniform : gpu_pages[batch.page].uniform,0);
         device->draw_list_bind_uniform_set(list,gpu_pages[batch.mask_page].mask_uniform,1);
         device->draw_list_bind_uniform_set(list,blending?pool.blend_uniform:gpu_pages[0].blend_uniform,2);
-        Rect2 region=region_for(batch);
-        if(batch.backdrop && batch.backdrop_source_event!=SIZE_MAX) {const auto &b=bounds_program.bounds(batch.backdrop_source_event);
+        Rect2 region;
+        uint32_t source_region=0;
+        if(gpu_region)source_region=uint32_t(bounds_program.group_index(batch.event_index))+1;
+        else if(gpu_geometry && batch.backdrop && batch.backdrop_source_event!=SIZE_MAX)
+            source_region=0x80000000u|(uint32_t(bounds_program.group_index(batch.backdrop_source_event))+1);
+        else region=region_for(batch);
+        if(!gpu_geometry && batch.backdrop && batch.backdrop_source_event!=SIZE_MAX) {const auto &b=bounds_program.bounds(batch.backdrop_source_event);
             const auto area=hcsr::render::group_region(b,logical_width,logical_height,size.x,size.y);region=Rect2(area.x,area.y,area.width,area.height);
-}
-        const struct { uint32_t first,gpu_geometry; float width,height,target_width,target_height,padding[2],region[4]; } push{batch.first,
-            gpu_geometry ? 1u : 0u,logical_width,logical_height,float(size.x),float(size.y),{0,batch.backdrop_mask?1.f:0.f},
+        }
+        const struct { uint32_t first,gpu_geometry; float width,height,target_width,target_height;uint32_t source_region;float mask_mode,region[4]; } push{batch.first,
+            gpu_geometry ? 1u : 0u,logical_width,logical_height,float(size.x),float(size.y),source_region,batch.backdrop_mask?1.f:0.f,
             {float(region.position.x),float(region.position.y),float(region.get_end().x),float(region.get_end().y)}};
         device->draw_list_set_push_constant(list,&push,sizeof(push));
         device->draw_list_draw(list,false,gpu_geometry ? batch.count : 1,gpu_geometry ? 6 : batch.count);
