@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "servers/rendering/canvas_render_target_preparation.h"
 #include "servers/rendering/rendering_server_enums.h"
 #include "servers/rendering/rendering_server_types.h"
 
@@ -355,6 +356,7 @@ public:
 			bool full;
 		};
 		CopyBackBuffer *copy_back_buffer = nullptr;
+		Ref<CanvasRenderTargetPreparation> render_target_preparation;
 
 		Color final_modulate;
 		Transform2D final_transform;

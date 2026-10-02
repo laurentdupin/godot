@@ -1942,6 +1942,12 @@ void RendererCanvasCull::canvas_item_set_copy_to_backbuffer(RID p_item, bool p_e
 	}
 }
 
+void RendererCanvasCull::canvas_item_set_render_target_preparation(RID p_item, const Ref<CanvasRenderTargetPreparation> &p_preparation) {
+	Item *canvas_item = canvas_item_owner.get_or_null(p_item);
+	ERR_FAIL_NULL(canvas_item);
+	canvas_item->render_target_preparation = p_preparation;
+}
+
 void RendererCanvasCull::canvas_item_clear(RID p_item) {
 	Item *canvas_item = canvas_item_owner.get_or_null(p_item);
 	ERR_FAIL_NULL(canvas_item);

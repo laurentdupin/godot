@@ -866,6 +866,36 @@ void RendererCanvasRenderRD::canvas_render_items(RID p_to_render_target, Item *p
 			ci->use_canvas_group = false;
 		}
 
+		if (!skip_item && ci->render_target_preparation.is_valid()) {
+			// Finish the current canvas prefix before the item samples it. Unlike
+			// a frame-pre-draw callback, this sees this frame's world/canvas input.
+			if (update_skeletons) {
+				mesh_storage->update_mesh_instances();
+				update_skeletons = false;
+			}
+			_render_batch_items(to_render_target, item_count, canvas_transform_inverse, p_light_list, r_sdf_used, canvas_group_owner != nullptr, r_render_info);
+			item_count = 0;
+			if (canvas_group_owner == nullptr) {
+				texture_storage->render_target_do_clear_request(p_to_render_target);
+			}
+			if (canvas_group_owner == nullptr && texture_storage->render_target_get_msaa_needs_resolve(p_to_render_target)) {
+				texture_storage->render_target_do_msaa_resolve(p_to_render_target);
+			}
+			CanvasRenderTargetPreparation::Input input;
+			input.canvas_group = canvas_group_owner != nullptr;
+			input.color_texture = input.canvas_group ? texture_storage->render_target_get_rd_backbuffer(p_to_render_target) : texture_storage->render_target_get_rd_texture(p_to_render_target);
+			input.size = texture_storage->render_target_get_size(p_to_render_target);
+			input.item_transform = ci->final_transform;
+			input.item_rect = ci->get_rect();
+			input.clip_rect = ci->final_clip_owner != nullptr ? ci->final_clip_owner->final_clip_rect : Rect2();
+			input.clipped = ci->final_clip_owner != nullptr;
+			input.modulation = ci->final_modulate;
+			input.linear_colors = use_linear_colors;
+			if (input.color_texture.is_valid()) {
+				ci->render_target_preparation->prepare(input);
+			}
+		}
+
 		if (backbuffer_copy) {
 			//render anything pending, including clearing if no items
 			if (update_skeletons) {

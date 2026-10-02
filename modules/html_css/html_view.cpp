@@ -579,6 +579,7 @@ void HTMLView::_notification(int p_what) {
 		} break;
 
 		case NOTIFICATION_EXIT_TREE: {
+			RS::get_singleton()->canvas_item_set_render_target_preparation(get_canvas_item(), Ref<CanvasRenderTargetPreparation>());
 #ifdef HTML_CSS_USE_HCSR_NEWEST
 			RenderingServer::get_singleton()->disconnect(SNAME("frame_pre_draw"), callable_mp(this, &HTMLView::_frame_pre_draw));
 #endif
@@ -602,6 +603,7 @@ void HTMLView::_notification(int p_what) {
 		} break;
 
 		case NOTIFICATION_DRAW: {
+			RS::get_singleton()->canvas_item_set_render_target_preparation(get_canvas_item(), surface->get_canvas_render_target_preparation());
 			_update_backdrop_filter_canvas();
 			Ref<Texture2D> texture = surface->get_texture();
 			if (texture.is_valid() && texture->get_width() > 0 && texture->get_height() > 0) {

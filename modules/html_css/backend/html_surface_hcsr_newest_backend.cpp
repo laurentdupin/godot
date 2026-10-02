@@ -8,6 +8,7 @@
 #include "hcsr_newest_scene_renderer.h"
 #include "hcsr_newest_text.h"
 #include "hcsr_newest_backdrop.h"
+#include "hcsr_newest_canvas_input_probe.h"
 
 #include "../bridge/html_asset_provider.h"
 #include "core/io/file_access.h"
@@ -34,6 +35,7 @@ struct HCSRNewestPresentationOutput {
 
 struct HTMLSurfaceHCSRNewestBackend::State : HCSRNewestPresentationOutput {
 	mutable Mutex mutex;
+	Ref<HCSRCanvasInputProbe> canvas_input_probe;
 	HCSRNewestRasterResources raster_resources;
     Vector<uint8_t> borrowed_image_pixels;
 	HCSRNewestSceneRenderer scene_renderer{raster_resources};
@@ -670,9 +672,14 @@ Error HTMLSurfaceHCSRNewestBackend::prepare_host_frame(uint64_t p_host_frame, do
 	return OK;
 }
 
+Ref<CanvasRenderTargetPreparation> HTMLSurfaceHCSRNewestBackend::get_canvas_render_target_preparation() const {
+	return state->canvas_input_probe;
+}
+
 Dictionary HTMLSurfaceHCSRNewestBackend::get_frame_synchronization() const {
 	MutexLock lock(state->mutex);
 	Dictionary result;
+	if (state->canvas_input_probe.is_valid()) result["canvas_input_probe"] = state->canvas_input_probe->get_diagnostics();
 	const char *renderer_names[] = { "cpu", "d3d12", "vulkan", "metal" };
 	result["renderer"] = renderer_names[state->renderer];
 	result["prepared_host_frame"] = state->prepared.host_frame;
@@ -1180,6 +1187,9 @@ uint64_t HTMLSurfaceHCSRNewestBackend::get_presentation_output_generation(uint64
 HTMLSurfaceHCSRNewestBackend::HTMLSurfaceHCSRNewestBackend(HTMLSurfaceHCSRNewestRenderer p_renderer) {
 	texture.instantiate();
 	state = memnew(State);
+	if (p_renderer != HTML_SURFACE_HCSR_NEWEST_CPU && OS::get_singleton()->get_environment("HCSR_CANVAS_INPUT_TEST") == "1") {
+		state->canvas_input_probe = Ref<HCSRCanvasInputProbe>(memnew(HCSRCanvasInputProbe));
+	}
 	state->renderer = p_renderer;
 	state->texture = texture;
 	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_11 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
@@ -1189,6 +1199,7 @@ HTMLSurfaceHCSRNewestBackend::HTMLSurfaceHCSRNewestBackend(HTMLSurfaceHCSRNewest
 
 void HTMLSurfaceHCSRNewestBackend::_destroy_state_on_render_thread(uint64_t p_state_pointer) {
 	State *state = (State *)(uintptr_t)p_state_pointer;
+	if (state->canvas_input_probe.is_valid()) state->canvas_input_probe->disconnect();
 	RenderingServer *server = RenderingServer::get_singleton();
 	RenderingDevice *device = server != nullptr ? server->get_rendering_device() : nullptr;
 	{

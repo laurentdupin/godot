@@ -33,6 +33,7 @@
 #include "../bridge/html_frame_types.h"
 #include "../html_document.h"
 #include "../html_texture.h"
+#include "servers/rendering/canvas_render_target_preparation.h"
 
 enum HTMLSurfaceMouseButton {
 	HTML_SURFACE_MOUSE_BUTTON_NONE,
@@ -97,6 +98,7 @@ public:
 	// Backends without an explicit host-frame contract retain their own scheduler.
 	virtual Error prepare_host_frame(uint64_t p_host_frame, double p_time_seconds) { return OK; }
 	virtual Dictionary get_frame_synchronization() const { return Dictionary(); }
+	virtual Ref<CanvasRenderTargetPreparation> get_canvas_render_target_preparation() const { return Ref<CanvasRenderTargetPreparation>(); }
 	virtual bool poll_pending_output(bool *r_waiting_for_completion = nullptr) {
 		if (r_waiting_for_completion != nullptr) {
 			*r_waiting_for_completion = false;

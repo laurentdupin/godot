@@ -666,6 +666,10 @@ uint64_t HTMLRenderSurface::get_presentation_output_generation(uint64_t p_output
 			: 0;
 }
 
+Ref<CanvasRenderTargetPreparation> HTMLRenderSurface::get_canvas_render_target_preparation() const {
+	return backend != nullptr ? backend->get_canvas_render_target_preparation() : Ref<CanvasRenderTargetPreparation>();
+}
+
 Dictionary HTMLRenderSurface::get_frame_synchronization() const {
 	return backend != nullptr ? backend->get_frame_synchronization() : Dictionary();
 }

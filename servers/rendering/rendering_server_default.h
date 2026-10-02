@@ -1061,6 +1061,7 @@ public:
 	FUNC2(canvas_item_set_z_index, RID, int)
 	FUNC2(canvas_item_set_z_as_relative_to_parent, RID, bool)
 	FUNC3(canvas_item_set_copy_to_backbuffer, RID, bool, const Rect2 &)
+	FUNC2(canvas_item_set_render_target_preparation, RID, const Ref<CanvasRenderTargetPreparation> &)
 	FUNC2(canvas_item_attach_skeleton, RID, RID)
 
 	FUNC1(canvas_item_clear, RID)

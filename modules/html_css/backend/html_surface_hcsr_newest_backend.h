@@ -47,6 +47,7 @@ public:
 	virtual Error update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame) override;
 	virtual Error prepare_host_frame(uint64_t p_host_frame, double p_time_seconds) override;
 	virtual Dictionary get_frame_synchronization() const override;
+	virtual Ref<CanvasRenderTargetPreparation> get_canvas_render_target_preparation() const override;
 	virtual void render_placeholder(const String &p_marker) override;
 	virtual bool poll_pending_output(bool *r_waiting_for_completion = nullptr) override;
 	virtual bool has_pending_output() const override;

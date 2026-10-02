@@ -99,6 +99,7 @@ public:
 	uint64_t get_active_frame_generation() const;
 	bool uses_generation_bound_input() const;
 	Dictionary get_frame_synchronization() const;
+	Ref<CanvasRenderTargetPreparation> get_canvas_render_target_preparation() const;
 	uint64_t get_active_host_frame_number() const;
 	Error update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame = nullptr);
 	void render_now(const String &p_marker);

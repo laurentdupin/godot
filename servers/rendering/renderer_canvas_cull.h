@@ -284,6 +284,7 @@ public:
 	void canvas_item_set_z_index(RID p_item, int p_z);
 	void canvas_item_set_z_as_relative_to_parent(RID p_item, bool p_enable);
 	void canvas_item_set_copy_to_backbuffer(RID p_item, bool p_enable, const Rect2 &p_rect);
+	void canvas_item_set_render_target_preparation(RID p_item, const Ref<CanvasRenderTargetPreparation> &p_preparation);
 	void canvas_item_attach_skeleton(RID p_item, RID p_skeleton);
 
 	void canvas_item_clear(RID p_item);

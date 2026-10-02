@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "servers/rendering/canvas_render_target_preparation.h"
 #include "core/io/image.h"
 #include "core/os/mutex.h"
 #include "core/templates/hash_set.h"
@@ -860,6 +861,7 @@ public:
 	virtual void canvas_item_set_z_index(RID p_item, int p_z) = 0;
 	virtual void canvas_item_set_z_as_relative_to_parent(RID p_item, bool p_enable) = 0;
 	virtual void canvas_item_set_copy_to_backbuffer(RID p_item, bool p_enable, const Rect2 &p_rect) = 0;
+	virtual void canvas_item_set_render_target_preparation(RID p_item, const Ref<CanvasRenderTargetPreparation> &p_preparation) = 0;
 
 	virtual void canvas_item_attach_skeleton(RID p_item, RID p_skeleton) = 0;
 
