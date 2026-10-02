@@ -3,6 +3,7 @@
 #include "hcsr_newest_raster_resources.h"
 #include "hcsr_scene_submission.h"
 #include "hcsr_backdrop_submission.h"
+#include "hcsr_scene_hierarchy.h"
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/canvas_render_target_preparation.h"
 
@@ -60,6 +61,11 @@ class HCSRNewestSceneRenderer {
     Vector<hcsr_gpu_clip_t> gpu_clips;
     Vector<hcsr_gpu_plane_t> gpu_planes;
     RID state_buffer, clip_buffer, plane_buffer, primitive_buffer;
+    hcsr::render::hierarchy_input hierarchy;
+    RID hierarchy_buffer,hierarchy_shader,hierarchy_pipeline,hierarchy_uniform;
+    uint32_t hierarchy_capacity=0,gpu_state_count=0;
+    uint64_t hierarchy_uploaded_revision=0,hierarchy_uploaded_bytes=0,hierarchy_evaluations=0,resolved_state_uploaded_bytes=0;
+    bool local_hierarchy=false;
     uint32_t state_capacity=0, clip_capacity=0, plane_capacity=0, primitive_capacity=0;
     uint64_t geometry_generation=0, geometry_uploaded_bytes=0, state_uploaded_bytes=0, instance_uploaded_bytes=0, clip_definition_uploaded_bytes=0;
     bool gpu_geometry=false, geometry_dirty=true;
@@ -76,7 +82,7 @@ class HCSRNewestSceneRenderer {
 
 public:
     explicit HCSRNewestSceneRenderer(HCSRNewestRasterResources &p_resources) : resources(p_resources) {}
-	bool prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale = 1, const hcsr_backdrop_view_t &backdrop = {});
+	bool prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale = 1, const hcsr_backdrop_view_t &backdrop = {},const hcsr_hierarchy_view_t &local = {});
     // Borrowed atlas bindings: lifetime and upload remain with this renderer.
     HCSRNewestRasterResources::Entry backdrop_entry(uint32_t index) const { return backdrop_entries[index]; }
     bool draw_backdrop_mask(RenderingDevice *device,RID target,const hcsr_backdrop_view_t &view,const Size2i &logical,const Size2i &physical);

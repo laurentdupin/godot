@@ -8,17 +8,23 @@
 #include "core/os/os.h"
 #include <cmath>
 
-bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale, const hcsr_backdrop_view_t &backdrop) {
+bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale, const hcsr_backdrop_view_t &backdrop,const hcsr_hierarchy_view_t &local) {
     const bool had_pending = resources.has_pending_glyphs();
     const bool next_gpu = packet.format == HCSR_DRAW_PACKET_FORMAT_GPU;
     if (!hcsr::render::validate_gpu_packet(packet)) return false;
+    const bool next_hierarchy=next_gpu && local.revision!=0;
+    if(next_hierarchy && hierarchy.geometry!=local.geometry_generation)hierarchy_uploaded_revision=0;
+    if(next_hierarchy && !hierarchy.prepare(local,packet.gpu.geometry_generation,packet.gpu.state_count,packet.gpu.clip_count))return false;
+    if(!next_hierarchy) {hierarchy.clear();hierarchy_uploaded_revision=0;}
+    local_hierarchy=next_hierarchy;gpu_state_count=next_gpu?packet.gpu.state_count:0;
     auto copy_table = [](auto &destination, const auto *source, size_t count) {
         if(destination.resize(int(count))!=OK) return false;
         if (count) memcpy(destination.ptrw(),source,count*sizeof(*source));
         return true;
     };
     if(next_gpu) {
-        if(!copy_table(gpu_states,packet.gpu.states,packet.gpu.state_count)) return false;
+        if(local_hierarchy)gpu_states.clear();
+        else if(!copy_table(gpu_states,packet.gpu.states,packet.gpu.state_count)) return false;
         if(!gpu_geometry || geometry_generation!=packet.gpu.geometry_generation) {
             if(!copy_table(gpu_clips,packet.gpu.clips,packet.gpu.clip_count)
                 || !copy_table(gpu_planes,packet.gpu.planes,packet.gpu.plane_count)) return false;
@@ -487,6 +493,8 @@ bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {
     auto ensure_buffer = [&](RID &rid,uint32_t &capacity,uint32_t bytes) {
         bytes=MAX(bytes,16u);
         if(bytes<=capacity) return;
+        if(hierarchy_uniform.is_valid())device->free_rid(hierarchy_uniform);
+        hierarchy_uniform=RID();hierarchy_uploaded_revision=0;
         for(GpuPage &page:gpu_pages) { if(page.uniform.is_valid()) device->free_rid(page.uniform); page.uniform=RID(); }
         release_groups(device);
         if(rid.is_valid()) device->free_rid(rid);
@@ -495,7 +503,8 @@ bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {
     };
     const uint32_t bytes=vertices.size()*sizeof(Vertex);
     ensure_buffer(buffer,buffer_capacity,bytes);
-    ensure_buffer(state_buffer,state_capacity,gpu_states.size()*sizeof(hcsr_gpu_state_t));
+    ensure_buffer(state_buffer,state_capacity,gpu_state_count*sizeof(hcsr_gpu_state_t));
+    if(local_hierarchy)ensure_buffer(hierarchy_buffer,hierarchy_capacity,hierarchy.nodes.size()*sizeof(hcsr_hierarchy_node_t));
     ensure_buffer(clip_buffer,clip_capacity,gpu_clips.size()*sizeof(hcsr_gpu_clip_t));
     ensure_buffer(plane_buffer,plane_capacity,gpu_planes.size()*sizeof(hcsr_gpu_plane_t));
     ensure_buffer(primitive_buffer,primitive_capacity,primitives.size()*sizeof(Primitive));
@@ -526,7 +535,52 @@ bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {
         if(device->buffer_update(primitive_buffer,0,instance_bytes,primitives.ptr())!=OK) return false;
         instance_uploaded_bytes+=instance_bytes;
     }
-    if(!update(state_buffer,gpu_states.size()*sizeof(hcsr_gpu_state_t),gpu_states.ptr(),false)) return false;
+    if(local_hierarchy) {
+        if(!hierarchy_shader.is_valid()) {
+            RD::ShaderStageSPIRVData stage;stage.shader_stage=RD::SHADER_STAGE_COMPUTE;
+            String error;stage.spirv=device->shader_compile_spirv_from_source(stage.shader_stage,hcsr::shaders::hierarchy_glsl,RD::SHADER_LANGUAGE_GLSL,&error);
+            if(stage.spirv.is_empty()){ERR_PRINT(error);return false;}
+            Vector<RD::ShaderStageSPIRVData> stages;stages.push_back(stage);
+            hierarchy_shader=device->shader_create_from_spirv(stages,"HCSR local scene hierarchy");
+            if(!hierarchy_shader.is_valid())return false;
+            hierarchy_pipeline=device->compute_pipeline_create(hierarchy_shader);
+        }
+        if(!hierarchy_pipeline.is_valid())return false;
+        if(!hierarchy_uniform.is_valid()) {
+            Vector<RD::Uniform> uniforms;
+            for(int i=0;i<2;++i) {RD::Uniform uniform;uniform.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER;uniform.binding=i;
+                uniform.append_id(i?state_buffer:hierarchy_buffer);uniforms.push_back(uniform);}
+            hierarchy_uniform=device->uniform_set_create(uniforms,hierarchy_shader,0);
+        }
+        if(!hierarchy_uniform.is_valid())return false;
+        if(hierarchy_uploaded_revision!=hierarchy.revision) {
+            auto upload_nodes=[&](size_t first,size_t count) {
+                const auto bytes=count*sizeof(hcsr_hierarchy_node_t);
+                if(bytes && device->buffer_update(hierarchy_buffer,first*sizeof(hcsr_hierarchy_node_t),bytes,hierarchy.nodes.data()+first)!=OK)return false;
+                hierarchy_uploaded_bytes+=bytes;state_uploaded_bytes+=bytes;return true;
+            };
+            if(hierarchy.full_update || hierarchy_uploaded_revision==0 || hierarchy_uploaded_revision!=hierarchy.base_revision) {
+                if(!upload_nodes(0,hierarchy.nodes.size()))return false;
+            } else {
+                for(size_t i=0;i<hierarchy.changed.size();) {
+                    size_t first=hierarchy.changed[i],last=first;
+                    while(++i<hierarchy.changed.size() && hierarchy.changed[i]==last+1)last=hierarchy.changed[i];
+                    if(!upload_nodes(first,last-first+1))return false;
+                }
+            }
+            const uint32_t push[4]={uint32_t(hierarchy.nodes.size()),0,0,0};
+            auto list=device->compute_list_begin();
+            device->compute_list_bind_compute_pipeline(list,hierarchy_pipeline);
+            device->compute_list_bind_uniform_set(list,hierarchy_uniform,0);
+            device->compute_list_set_push_constant(list,push,sizeof(push));
+            device->compute_list_dispatch(list,(hierarchy.nodes.size()+63)/64,1,1);
+            device->compute_list_end();
+            hierarchy_uploaded_revision=hierarchy.revision;++hierarchy_evaluations;
+        }
+    } else {
+        if(!update(state_buffer,gpu_states.size()*sizeof(hcsr_gpu_state_t),gpu_states.ptr(),false))return false;
+        resolved_state_uploaded_bytes+=gpu_states.size()*sizeof(hcsr_gpu_state_t);
+    }
     if(geometry_dirty) {
         if(!update(clip_buffer,gpu_clips.size()*sizeof(hcsr_gpu_clip_t),gpu_clips.ptr(),false)
             || !update(plane_buffer,gpu_planes.size()*sizeof(hcsr_gpu_plane_t),gpu_planes.ptr(),false)) return false;
@@ -877,7 +931,7 @@ void HCSRNewestSceneRenderer::release(RenderingDevice *device) {
 				device->free_rid(page.texture);
 			}
 		}
-		for (RID rid : { pipeline, shadow_pipeline, document_pipeline, buffer, sampler, shader, document_shader, state_buffer,clip_buffer,plane_buffer,primitive_buffer }) {
+		for (RID rid : { hierarchy_uniform,hierarchy_pipeline,hierarchy_shader,hierarchy_buffer,pipeline, shadow_pipeline, document_pipeline, buffer, sampler, shader, document_shader, state_buffer,clip_buffer,plane_buffer,primitive_buffer }) {
 			if (rid.is_valid()) {
 				device->free_rid(rid);
 			}
@@ -890,6 +944,8 @@ void HCSRNewestSceneRenderer::release(RenderingDevice *device) {
 	buffer_capacity = 0;
     state_buffer=clip_buffer=plane_buffer=primitive_buffer=RID();
     state_capacity=clip_capacity=plane_capacity=primitive_capacity=0;
+    hierarchy_uniform=hierarchy_pipeline=hierarchy_shader=hierarchy_buffer=RID();
+    hierarchy_capacity=gpu_state_count=0;hierarchy_uploaded_revision=0;local_hierarchy=false;hierarchy.clear();
     geometry_generation=0; gpu_geometry=false; primitives.clear();
     uploaded_vertices.clear();
     prepared_meshes.clear(); prepared_source.clear(); prepared_states.clear();
@@ -1080,6 +1136,11 @@ Dictionary HCSRNewestSceneRenderer::get_statistics() const {
     result["geometry_uploaded_bytes"] = geometry_uploaded_bytes;
     result["instance_uploaded_bytes"] = instance_uploaded_bytes;
     result["state_uploaded_bytes"] = state_uploaded_bytes;
+    result["local_hierarchy"] = local_hierarchy;
+    result["hierarchy_nodes"] = hierarchy.nodes.size();
+    result["hierarchy_uploaded_bytes"] = hierarchy_uploaded_bytes;
+    result["hierarchy_evaluations"] = hierarchy_evaluations;
+    result["resolved_state_uploaded_bytes"] = resolved_state_uploaded_bytes;
     result["clip_definition_uploaded_bytes"] = clip_definition_uploaded_bytes;
     result["geometry_generation"] = geometry_generation;
 	result["uploaded_bytes"] = uploaded_bytes;
