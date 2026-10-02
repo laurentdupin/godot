@@ -4,6 +4,7 @@
 #include "hcsr_scene_submission.h"
 #include "hcsr_backdrop_submission.h"
 #include "servers/rendering/rendering_device.h"
+#include "servers/rendering/canvas_render_target_preparation.h"
 
 // Submits prepared scene drawing. Raster resource lifetime is owned by the view,
 // not by this renderer. The remaining packet/mesh preparation is transitional.
@@ -29,6 +30,7 @@ class HCSRNewestSceneRenderer {
         uint32_t backdrop_source=0,backdrop_destination=0;
         size_t backdrop_source_event=SIZE_MAX;
         bool backdrop=false,backdrop_mask=false,backdrop_merge=false,backdrop_first=false;
+		bool document_source=false;
 	};
     struct GroupTarget { RID texture, framebuffer, uniform; Size2i size; };
     struct GroupPool { RID output,blend_texture,blend_uniform; Vector<GroupTarget> targets,underlays; };
@@ -36,6 +38,9 @@ class HCSRNewestSceneRenderer {
     hcsr::render::compositing_bounds_program bounds_program;
     uint32_t group_depth = 0;
     bool ordered_backdrops=false;
+	bool document_backdrops=false;
+	RID document_shader, document_pipeline;
+	bool snapshot_document(RenderingDevice *, RID prefix, RID snapshot, const CanvasRenderTargetPreparation::Input *);
     uint64_t group_allocations = 0;
     uint32_t last_render_passes = 0;
     bool last_disjoint_groups = false;
@@ -74,8 +79,10 @@ public:
 	bool prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale = 1, const hcsr_backdrop_view_t &backdrop = {});
     // Borrowed atlas bindings: lifetime and upload remain with this renderer.
     HCSRNewestRasterResources::Entry backdrop_entry(uint32_t index) const { return backdrop_entries[index]; }
-    bool draw_backdrop_mask(RenderingDevice *device,RID target,const hcsr_backdrop_view_t &view,const Size2i &logical,const Size2i &physical) const;
-	bool draw(RenderingDevice *device, RID target, const Color &background);
+    bool draw_backdrop_mask(RenderingDevice *device,RID target,const hcsr_backdrop_view_t &view,const Size2i &logical,const Size2i &physical);
+	bool prepare_gpu_resources(RenderingDevice *device);
+	bool has_document_backdrops() const { return document_backdrops; }
+	bool draw(RenderingDevice *device, RID target, const Color &background, const CanvasRenderTargetPreparation::Input *input = nullptr);
 	void draw_cpu(Ref<Image> target, const Color &background);
 	void release(RenderingDevice *device);
 	Dictionary get_statistics() const;

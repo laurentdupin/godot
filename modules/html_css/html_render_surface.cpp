@@ -670,6 +670,10 @@ Ref<CanvasRenderTargetPreparation> HTMLRenderSurface::get_canvas_render_target_p
 	return backend != nullptr ? backend->get_canvas_render_target_preparation() : Ref<CanvasRenderTargetPreparation>();
 }
 
+bool HTMLRenderSurface::uses_ordered_backdrop_submission() const {
+	return backend != nullptr && backend->uses_ordered_backdrop_submission();
+}
+
 Dictionary HTMLRenderSurface::get_frame_synchronization() const {
 	return backend != nullptr ? backend->get_frame_synchronization() : Dictionary();
 }

@@ -2,6 +2,7 @@
 #include "hcsr_prepared_drawing.h"
 #include "hcsr_shader_sources.h"
 #include "hcsr_compositing.h"
+#include "hcsr_document_input_shader.h"
 #include "hcsr_newest_scene_renderer.h"
 #include "hcsr_image_codec.h"
 #include "core/os/os.h"
@@ -50,7 +51,8 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
     if (!hcsr::render::plan_compositing(packet, group_plan, group_error)) return false;
     std::vector<hcsr::render::ordered_backdrop> backdrop_plan;
     if(gpu_geometry && !hcsr::render::plan_ordered_backdrops(packet,group_plan,backdrop,backdrop_plan,group_error))return false;
-    ordered_backdrops=std::any_of(backdrop_plan.begin(),backdrop_plan.end(),[](const auto &op){return !op.document_input;});
+    ordered_backdrops=gpu_geometry && !backdrop_plan.empty();
+    document_backdrops=gpu_geometry && std::any_of(backdrop_plan.begin(),backdrop_plan.end(),[](const auto &op){return op.document_input;});
     bounds_program.build(packet,group_plan,gpu_geometry?&backdrop:nullptr);
     HashSet<uint64_t> live_surfaces;
     for (size_t i=0; i<packet.draw_item_count; ++i) {
@@ -85,7 +87,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
         if (group_plan.events[i].kind == HCSR_GROUP_END) emitted_count += 6 + 14 * group_plan.events[i].filters.size() + ((group_plan.events[i].mask.kind || group_plan.events[i].blend_mode)?8:0);
         if (emitted_count > INT32_MAX/sizeof(Vertex)) return false;
     }
-    for(const auto &op:backdrop_plan)if(!op.document_input) {const auto &effect=backdrop.effects[op.effect];
+    for(const auto &op:backdrop_plan)if(gpu_geometry) {const auto &effect=backdrop.effects[op.effect];
         emitted_count+=uint64_t(effect.surface_count)*(14+effect.operation_count)+uint64_t(effect.operation_count)*20+6;
         if(emitted_count>INT32_MAX/sizeof(Vertex))return false;
     }
@@ -96,7 +98,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
     size_t backdrop_cursor=0;
     std::vector<bool> underlay(group_plan.depth+1,false);
     auto emit_backdrop=[&](const hcsr::render::ordered_backdrop &op) {
-        if(op.document_input)return;
+        if(!gpu_geometry)return;
         const auto &effect=backdrop.effects[op.effect];
         if(!effect.surface_count)return;
         underlay[op.destination_depth]=true;
@@ -107,7 +109,8 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
         const bool spatial=std::any_of(filter_passes.begin(),filter_passes.end(),[](const auto &pass){return pass.axis!=0;});
         size_t intermediates=spatial?filter_passes.size():0;
         if(intermediates && filter_passes.back().axis==0)--intermediates;
-        uint32_t source=op.source_depth-1;
+        uint32_t source=op.document_input?group_plan.depth+2:op.source_depth-1;
+        bool document_source=op.document_input;
         auto emit=[&](hcsr::render::filter_program colors,float sigma,uint32_t axis,const hcsr_backdrop_surface_t *surface,uint32_t destination) {
             const uint32_t parameters=written*4;
             auto parameter=[&](float x,float y,float z,float w){Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=x;v.position_uv[1]=y;v.position_uv[2]=z;v.position_uv[3]=w;vertex_data[written++]=v;};
@@ -131,12 +134,13 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
             Batch batch{0,primitive,1,6,op.destination_depth,1,Rect2(0,0,1,1),effect.before_draw_index};
             batch.mask_page=mask_page;batch.backdrop=true;batch.backdrop_mask=surface!=nullptr;
             batch.backdrop_first=surface && surface==&backdrop.surfaces[effect.first_surface];
+            batch.document_source=document_source;
             batch.backdrop_source=source;batch.backdrop_destination=destination;batch.backdrop_source_event=source<group_plan.depth?op.source_event:SIZE_MAX;batches.push_back(batch);
         };
         for(size_t i=0;i<intermediates;++i){const auto &pass=filter_passes[i];const uint32_t destination=group_plan.depth+uint32_t(i%2);
-            emit(pass.colors,pass.sigma,pass.axis,nullptr,destination);source=destination;}
+            emit(pass.colors,pass.sigma,pass.axis,nullptr,destination);source=destination;document_source=false;}
         const auto colors=spatial?(intermediates<filter_passes.size()?filter_passes.back().colors:hcsr::render::filter_program{}):program;
-        for(uint32_t i=0;i<effect.surface_count;++i)emit(colors,0,0,&backdrop.surfaces[effect.first_surface+i],op.destination_depth-1);
+        for(uint32_t i=0;i<effect.surface_count;++i){emit(colors,0,0,&backdrop.surfaces[effect.first_surface+i],op.destination_depth-1);document_source=false;}
     };
 	for (size_t i = 0; i < packet.draw_item_count; i++) {
         while(backdrop_cursor<backdrop_plan.size() && backdrop_plan[backdrop_cursor].before_draw==i)emit_backdrop(backdrop_plan[backdrop_cursor++]);
@@ -404,12 +408,15 @@ void HCSRNewestSceneRenderer::update_compositing_bounds(const hcsr_draw_packet_v
     }
 }
 
-bool HCSRNewestSceneRenderer::draw_backdrop_mask(RenderingDevice *device,RID target,const hcsr_backdrop_view_t &view,const Size2i &logical,const Size2i &physical) const {
+bool HCSRNewestSceneRenderer::draw_backdrop_mask(RenderingDevice *device,RID target,const hcsr_backdrop_view_t &view,const Size2i &logical,const Size2i &physical) {
     using RD=RenderingDevice;
-    if(!uploaded || !pipeline.is_valid())return false;
+    if(!prepare_gpu_resources(device))return false;
     Vector<RID> attachments;attachments.push_back(target);
     RID framebuffer=device->framebuffer_create(attachments);
     if(!framebuffer.is_valid())return false;
+    if(!pipeline.is_valid()) {auto blend=RD::PipelineColorBlendState::create_blend();blend.attachments.write[0].src_alpha_blend_factor=RD::BLEND_FACTOR_ONE;
+        pipeline=device->render_pipeline_create(shader,device->framebuffer_get_format(framebuffer),RD::INVALID_ID,RD::RENDER_PRIMITIVE_TRIANGLES,RD::PipelineRasterizationState(),RD::PipelineMultisampleState(),RD::PipelineDepthStencilState(),blend);}
+    if(!pipeline.is_valid()){device->free_rid(framebuffer);return false;}
     const Color clear(0,0,0,1);
     auto list=device->draw_list_begin(framebuffer,RD::DRAW_CLEAR_COLOR_ALL,VectorView(&clear,1));
     device->draw_list_bind_render_pipeline(list,pipeline);
@@ -590,7 +597,49 @@ bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {
 	return true;
 }
 
-bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Color &background) {
+bool HCSRNewestSceneRenderer::prepare_gpu_resources(RenderingDevice *device) {
+    if (!uploaded && !upload(device)) return false;
+    uploaded = true;
+    return true;
+}
+
+bool HCSRNewestSceneRenderer::snapshot_document(RenderingDevice *device, RID prefix, RID snapshot, const CanvasRenderTargetPreparation::Input *input) {
+    using RD=RenderingDevice;
+    if (!document_shader.is_valid()) {
+        RD::ShaderStageSPIRVData stage;stage.shader_stage=RD::SHADER_STAGE_COMPUTE;
+        String error;stage.spirv=device->shader_compile_spirv_from_source(stage.shader_stage,hcsr::shaders::document_input_compute,RD::SHADER_LANGUAGE_GLSL,&error);
+        if(stage.spirv.is_empty()){ERR_PRINT(error);return false;}
+        Vector<RD::ShaderStageSPIRVData> stages;stages.push_back(stage);
+        document_shader=device->shader_create_from_spirv(stages,"HCSR ordered document input");
+        if(!document_shader.is_valid())return false;
+        document_pipeline=device->compute_pipeline_create(document_shader);
+    }
+    if(!document_pipeline.is_valid())return false;
+    Vector<RD::Uniform> uniforms;
+    for(uint32_t i=0;i<2;++i){RD::Uniform u;u.uniform_type=RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;u.binding=i;u.append_id(sampler);u.append_id(i && input?input->color_texture:prefix);uniforms.push_back(u);}
+    RD::Uniform destination;destination.uniform_type=RD::UNIFORM_TYPE_IMAGE;destination.binding=2;destination.append_id(snapshot);uniforms.push_back(destination);
+    RID bindings=device->uniform_set_create(uniforms,document_shader,0);
+    if(!bindings.is_valid())return false;
+    const auto size=device->texture_get_format(snapshot);
+    struct {float row_x[4],row_y[4],sizes[4],flags[4];} push{};
+    push.sizes[0]=size.width;push.sizes[1]=size.height;
+    if(input) {
+        const auto &t=input->item_transform;const auto &r=input->item_rect;
+        const Vector2 origin=t.xform(r.position);
+        push.row_x[0]=t[0].x*r.size.x/size.width;push.row_x[1]=t[1].x*r.size.y/size.height;push.row_x[2]=origin.x;
+        push.row_y[0]=t[0].y*r.size.x/size.width;push.row_y[1]=t[1].y*r.size.y/size.height;push.row_y[2]=origin.y;
+        push.sizes[2]=input->size.x;push.sizes[3]=input->size.y;push.flags[0]=1;push.flags[1]=input->linear_colors;
+    }
+    auto list=device->compute_list_begin();
+    device->compute_list_bind_compute_pipeline(list,document_pipeline);
+    device->compute_list_bind_uniform_set(list,bindings,0);
+    device->compute_list_set_push_constant(list,&push,sizeof(push));
+    device->compute_list_dispatch(list,(size.width+7)/8,(size.height+7)/8,1);
+    device->compute_list_end();device->free_rid(bindings);
+    return true;
+}
+
+bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Color &background, const CanvasRenderTargetPreparation::Input *input) {
 	using RD = RenderingDevice;
     // Optional timestamps: no profiling queries in normal application runs.
     const bool profile_gpu=OS::get_singleton()->get_environment("HCSR_GPU_PROFILE")=="1";
@@ -668,7 +717,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
     auto ensure_group_target=[&](GroupTarget &group) {
         if(group.texture.is_valid())return true;
         auto layer_format=format;
-        layer_format.usage_bits=RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT;
+        layer_format.usage_bits=RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT | RD::TEXTURE_USAGE_STORAGE_BIT;
         group.texture=device->texture_create(layer_format,RD::TextureView());group.size=size;
         if(!group.texture.is_valid())return false;
         Vector<RID> layers;layers.push_back(group.texture);group.framebuffer=device->framebuffer_create(layers);
@@ -680,7 +729,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
         group.uniform=device->uniform_set_create(VectorView(uniforms.ptr(),uniforms.size()),shader,0);++group_allocations;
         return group.framebuffer.is_valid() && group.uniform.is_valid();
     };
-    while(group_targets.size()<int(group_depth)+(ordered_backdrops?2:spatial_filters?1:0)) {
+    while(group_targets.size()<int(group_depth)+(ordered_backdrops?(document_backdrops?3:2):spatial_filters?1:0)) {
         group_targets.push_back({});
         if(!ensure_group_target(group_targets.write[group_targets.size()-1])){release_groups(device);device->free_rid(framebuffer);return false;}
     }
@@ -756,6 +805,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
         if (batch.kind) {
             resume_foreground_depth=0;
             device->draw_list_end();
+            if(batch.document_source && !snapshot_document(device,target,group_targets[group_depth+2].texture,input)){device->free_rid(framebuffer);return false;}
             const Color transparent(0,0,0,0);
             const Rect2 region=region_for(batch);
             if(batch.blend_mode) {
@@ -804,7 +854,7 @@ void HCSRNewestSceneRenderer::release(RenderingDevice *device) {
 				device->free_rid(page.texture);
 			}
 		}
-		for (RID rid : { pipeline, shadow_pipeline, buffer, sampler, shader, state_buffer,clip_buffer,plane_buffer,primitive_buffer }) {
+		for (RID rid : { pipeline, shadow_pipeline, document_pipeline, buffer, sampler, shader, document_shader, state_buffer,clip_buffer,plane_buffer,primitive_buffer }) {
 			if (rid.is_valid()) {
 				device->free_rid(rid);
 			}
@@ -813,7 +863,7 @@ void HCSRNewestSceneRenderer::release(RenderingDevice *device) {
 	gpu_pages.clear();
 	vertices.clear();
 	batches.clear();
-	pipeline = shadow_pipeline = buffer = sampler = shader = RID();
+	pipeline = shadow_pipeline = buffer = sampler = shader = document_shader = document_pipeline = RID();
 	buffer_capacity = 0;
     state_buffer=clip_buffer=plane_buffer=primitive_buffer=RID();
     state_capacity=clip_capacity=plane_capacity=primitive_capacity=0;

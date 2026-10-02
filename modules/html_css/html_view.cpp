@@ -835,7 +835,7 @@ void HTMLView::_update_backdrop_filter_canvas() {
 	ERR_FAIL_NULL(backdrop_filter_rect);
 
 	const Size2 control_size = get_size();
-	if (!backdrop_filter_enabled || control_size.x <= 0.0 || control_size.y <= 0.0) {
+	if (surface->uses_ordered_backdrop_submission() || !backdrop_filter_enabled || control_size.x <= 0.0 || control_size.y <= 0.0) {
 		backdrop_filter_rect->hide();
 		RS::get_singleton()->canvas_item_set_copy_to_backbuffer(backdrop_filter_rect->get_canvas_item(), false, Rect2());
 		return;
