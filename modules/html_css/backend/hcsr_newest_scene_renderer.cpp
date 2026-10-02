@@ -48,6 +48,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
 	hcsr::render::compositing_plan group_plan;
     std::string group_error;
     if (!hcsr::render::plan_compositing(packet, group_plan, group_error)) return false;
+    bounds_program.build(packet,group_plan);
     HashSet<uint64_t> live_surfaces;
     for (size_t i=0; i<packet.draw_item_count; ++i) {
         const auto &material=packet.materials[packet.draw_items[i].material_index];
@@ -329,11 +330,10 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
 
 void HCSRNewestSceneRenderer::update_compositing_bounds(const hcsr_draw_packet_view_t &packet) {
     if (!group_depth) return;
-    hcsr::render::compositing_plan plan; std::string error;
-    if (!hcsr::render::plan_compositing(packet,plan,error)) return;
+    bounds_program.update(packet);
     for (auto &batch:batches) {
-        if (batch.kind && batch.event_index<plan.events.size()) {
-            const auto &b=plan.events[batch.event_index].bounds;
+        if (batch.kind) {
+            const auto &b=bounds_program.bounds(batch.event_index);
             batch.bounds=Rect2(b.x/logical_width,b.y/logical_height,b.width/logical_width,b.height/logical_height);
         }
     }

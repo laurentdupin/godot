@@ -35,7 +35,13 @@ const HTMLGPUBackdropFrame &HCSRNewestBackdrop::update(hcsr_draw_packet_t packet
 		}
 	};
 	append(&logical, sizeof(logical));
-	append(view.effects, view.effect_count * sizeof(hcsr_backdrop_effect_t));
+    for(size_t i=0;i<view.effect_count;++i) {
+        auto effect=view.effects[i];
+        // Sampling root/order describe compositing, not coverage appearance.
+        // Their changes must not invalidate an otherwise identical mask.
+        effect.sampling_root_id=0;effect.before_draw_index=0;effect.flags=0;
+        append(&effect,sizeof(effect));
+    }
 	append(view.operations, view.operation_count * sizeof(hcsr_backdrop_operation_t));
 	append(view.vertices, view.vertex_count * sizeof(hcsr_backdrop_vertex_t));
     for(size_t i=0;i<view.surface_count;++i) {
