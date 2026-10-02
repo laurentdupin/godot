@@ -687,6 +687,15 @@ Error HTMLSurfaceHCSRNewestBackend::prepare_host_frame(uint64_t p_host_frame, do
 	step.viewport_width = state->logical_size.x;
 	step.viewport_height = state->logical_size.y;
 	step.device_scale = state->device_scale;
+    // Gather physical output demand before source painting. Device scale remains
+    // a layout/metadata input; explicit output sizes can be independent of it.
+    float raster_density = MAX(float(state->physical_size.x) / state->logical_size.x,
+            float(state->physical_size.y) / state->logical_size.y);
+    for (const KeyValue<uint64_t, HCSRNewestPresentationOutput *> &entry : state->outputs)
+        if (!entry.value->closing) raster_density = MAX(raster_density,
+                MAX(float(entry.value->physical_size.x) / state->logical_size.x,
+                        float(entry.value->physical_size.y) / state->logical_size.y));
+    step.raster_density = CLAMP(raster_density, 0.01f, 16.0f);
 	hcsr_step_result_t result;
 	initialize_abi(result);
 	if (hcsr_scene_step(state->scene, &step, &result, &state->pending_packet) != HCSR_OK || state->pending_packet == 0) {
@@ -1257,7 +1266,7 @@ HTMLSurfaceHCSRNewestBackend::HTMLSurfaceHCSRNewestBackend(HTMLSurfaceHCSRNewest
 	}
 	state->renderer = p_renderer;
 	state->texture = texture;
-	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_14 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
+	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_15 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
 		set_terminal(state, "hcsr_newest scene ABI initialization failed.");
 	}
 }
