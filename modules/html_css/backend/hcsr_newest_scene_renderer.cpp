@@ -132,7 +132,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
         auto emit=[&](hcsr::render::filter_program colors,float sigma,uint32_t axis,const hcsr_backdrop_surface_t *surface,uint32_t destination) {
             const uint32_t parameters=written*4;
             auto parameter=[&](float x,float y,float z,float w){Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=x;v.position_uv[1]=y;v.position_uv[2]=z;v.position_uv[3]=w;vertex_data[written++]=v;};
-            if(axis)parameter(0,sigma,axis==1,axis==2);
+            if(axis)parameter(float(backdrop.surfaces[effect.first_surface].gpu_state+1),sigma,axis==1,axis==2);
             for(const auto &color:colors){Vertex v={};v.state=UINT32_MAX;memcpy(v.position_uv,&color,sizeof(color));vertex_data[written++]=v;}
             uint32_t mask_parameters=0;int mask_page=0;
             if(surface) {
@@ -919,6 +919,8 @@ static Vector4 mask_transform(const hcsr_gpu_state_t *states,int index,Vector4 p
 #define HCSR_LOOP
 #define HCSR_GROUP_SIZE(tint) Vector2(atlas->get_size())
 #define HCSR_BLUR_SCALE(operation) ((operation).z>0?tint.x:tint.y)
+#define HCSR_BLUR_DIRECTION(operation) Vector2((operation).z,(operation).w)
+#define HCSR_LENGTH(v) ((v).length())
 #define HCSR_OFFSET_SCALE(offset) ((offset)*Vector2(tint.x,tint.y))
 #define HCSR_DISCARD return Vector4()
 static Vector4 read_effect(const hcsr::render::scene_vertex *effects,int index) {
@@ -937,6 +939,8 @@ static Vector4 read_effect(const hcsr::render::scene_vertex *effects,int index) 
 #undef HCSR_ARGS
 #undef HCSR_GROUP_SIZE
 #undef HCSR_BLUR_SCALE
+#undef HCSR_BLUR_DIRECTION
+#undef HCSR_LENGTH
 #undef HCSR_OFFSET_SCALE
 #undef HCSR_CLAMP
 #undef HCSR_MIN
