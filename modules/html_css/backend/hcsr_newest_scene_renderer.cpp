@@ -12,6 +12,90 @@ hcsr_gpu_state_t HCSRNewestSceneRenderer::reference_state(const hcsr_draw_packet
     return hcsr::render::query_reference_state(packet,index,local_hierarchy?&hierarchy:nullptr);
 }
 
+bool HCSRNewestSceneRenderer::prepare_coverage(RenderingDevice *device,const Size2i &size) {
+    using RD=RenderingDevice;
+    if(coverage.program.groups.empty())return true;
+    const char *sources[]={hcsr::shaders::coverage_glsl,hcsr::shaders::region_glsl,hcsr::shaders::region_vertex_glsl,hcsr::shaders::region_fragment_glsl};
+    for(int i=0;i<3;i++)if(!coverage.shaders[i].is_valid()) {
+        Vector<RD::ShaderStageSPIRVData> stages;
+        for(int j=0;j<(i==2?2:1);j++) {
+            RD::ShaderStageSPIRVData stage;String error;
+            stage.shader_stage=i==2?(j==0?RD::SHADER_STAGE_VERTEX:RD::SHADER_STAGE_FRAGMENT):RD::SHADER_STAGE_COMPUTE;
+            stage.spirv=device->shader_compile_spirv_from_source(stage.shader_stage,sources[i+j],RD::SHADER_LANGUAGE_GLSL,&error);
+            if(stage.spirv.is_empty()){ERR_PRINT(error);return false;}
+            stages.push_back(stage);
+        }
+        coverage.shaders[i]=device->shader_create_from_spirv(stages,"HCSR GPU compositing regions");
+        if(!coverage.shaders[i].is_valid())return false;
+        if(i<2) {
+            coverage.pipelines[i]=device->compute_pipeline_create(coverage.shaders[i]);
+            if(!coverage.pipelines[i].is_valid())return false;
+        }
+    }
+    const uint32_t bytes[]={uint32_t(coverage.words.size()*4),uint32_t(coverage.program.groups.size()*16),uint32_t(coverage.program.groups.size()*48),uint32_t(coverage.program.groups.size()*12)};
+    RID *buffers[]={&coverage.data,&coverage.output,&coverage.controls,&coverage.arguments};
+    for(int i=0;i<4;i++)if(bytes[i]>coverage.capacities[i]) {
+        for(RID rid:{coverage.uniform,coverage.region_uniform,coverage.clear_uniform})if(rid.is_valid())device->free_rid(rid);
+        coverage.uniform=coverage.region_uniform=coverage.clear_uniform=RID();coverage.dirty=true;coverage.revision=0;coverage.target=Size2i();
+        release_groups(device);
+        if(buffers[i]->is_valid())device->free_rid(*buffers[i]);
+        coverage.capacities[i]=MAX(bytes[i],65536u);
+        BitField<RD::StorageBufferUsage> usage;if(i==3)usage=RD::STORAGE_BUFFER_USAGE_DISPATCH_INDIRECT;
+        *buffers[i]=device->storage_buffer_create(coverage.capacities[i],{},usage);
+        if(!buffers[i]->is_valid())return false;
+    }
+    auto bindings=[&](RID &rid,int shader_index,const Vector<RID> &resources) {
+        if(rid.is_valid())return true;
+        Vector<RD::Uniform> uniforms;
+        for(int i=0;i<resources.size();i++){RD::Uniform u;u.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER;u.binding=i;u.append_id(resources[i]);uniforms.push_back(u);}
+        rid=device->uniform_set_create(uniforms,coverage.shaders[shader_index],0);return rid.is_valid();
+    };
+    Vector<RID> inputs;inputs.push_back(coverage.data);inputs.push_back(state_buffer);inputs.push_back(coverage.output);
+    if(!bindings(coverage.uniform,0,inputs))return false;
+    inputs.clear();inputs.push_back(coverage.output);inputs.push_back(coverage.controls);inputs.push_back(coverage.arguments);
+    if(!bindings(coverage.region_uniform,1,inputs))return false;
+    inputs.clear();inputs.push_back(coverage.controls);
+    if(!bindings(coverage.clear_uniform,2,inputs))return false;
+    const Vector2 logical(logical_width,logical_height);
+    const bool evaluate=coverage.dirty || coverage.logical!=logical || !local_hierarchy || coverage.revision!=hierarchy.revision;
+    if(coverage.dirty) {
+        if(device->buffer_update(coverage.data,0,bytes[0],coverage.words.data())!=OK)return false;
+        coverage.uploaded_bytes+=bytes[0];
+    }
+    if(evaluate) {
+        auto list=device->compute_list_begin();device->compute_list_bind_compute_pipeline(list,coverage.pipelines[0]);
+        device->compute_list_bind_uniform_set(list,coverage.uniform,0);
+        for(const auto &level:coverage.program.levels) {
+            const struct {uint32_t first,count,offset,reserved;float width,height,padding[2];} push{level.first,level.count,0,0,logical_width,logical_height,{0,0}};
+            device->compute_list_set_push_constant(list,&push,sizeof(push));device->compute_list_dispatch(list,level.count,1,1);
+            device->compute_list_add_barrier(list);
+        }
+        device->compute_list_end();coverage.revision=hierarchy.revision;coverage.logical=logical;++coverage.evaluations;
+    }
+    if(evaluate || coverage.target!=size) {
+        const struct {uint32_t count;float width,height;uint32_t target_width,target_height,padding[3];} push{uint32_t(coverage.program.groups.size()),logical_width,logical_height,uint32_t(size.x),uint32_t(size.y),{0,0,0}};
+        auto list=device->compute_list_begin();device->compute_list_bind_compute_pipeline(list,coverage.pipelines[1]);
+        device->compute_list_bind_uniform_set(list,coverage.region_uniform,0);device->compute_list_set_push_constant(list,&push,sizeof(push));
+        device->compute_list_dispatch(list,(coverage.program.groups.size()+63)/64,1,1);device->compute_list_end();
+        coverage.target=size;
+    }
+    coverage.dirty=false;return true;
+}
+
+bool HCSRNewestSceneRenderer::clear_group(RenderingDevice *device,RenderingDevice::DrawListID list,RID framebuffer,const Size2i &size,size_t event) {
+    using RD=RenderingDevice;
+    if(!coverage.pipelines[2].is_valid()) {
+        RD::PipelineColorBlendState blend;blend.attachments.resize(1);
+        coverage.pipelines[2]=device->render_pipeline_create(coverage.shaders[2],device->framebuffer_get_format(framebuffer),RD::INVALID_ID,RD::RENDER_PRIMITIVE_TRIANGLES,RD::PipelineRasterizationState(),RD::PipelineMultisampleState(),RD::PipelineDepthStencilState(),blend);
+        if(!coverage.pipelines[2].is_valid())return false;
+    }
+    const struct {uint32_t region;float width,height;uint32_t reserved;} push{uint32_t(bounds_program.group_index(event)),float(size.x),float(size.y),0};
+    device->draw_list_bind_render_pipeline(list,coverage.pipelines[2]);
+    device->draw_list_bind_uniform_set(list,coverage.clear_uniform,0);
+    device->draw_list_set_push_constant(list,&push,sizeof(push));
+    device->draw_list_draw(list,false,1,6);++coverage.clears;++last_draw_calls;return true;
+}
+
 bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, const Ref<HTMLDocument> &document, float output_scale, const hcsr_backdrop_view_t &backdrop,const hcsr_hierarchy_view_t &local) {
     const auto &packet=submitted;
     const bool had_pending = resources.has_pending_glyphs();
@@ -69,6 +153,9 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
     const bool prefix_snapshots=std::any_of(backdrop_plan.begin(),backdrop_plan.end(),[](const auto &op){return !op.prefix_events.empty();});
     snapshot_target=document_backdrops || prefix_snapshots;
     bounds_program.build(packet,group_plan,gpu_geometry?&backdrop:nullptr);
+    if(gpu_geometry) {
+        coverage.program.build(packet,bounds_program);coverage.words=coverage.program.words();coverage.dirty=true;coverage.target=Size2i();
+    } else {coverage.program={};coverage.words.clear();}
     HashSet<uint64_t> live_surfaces;
     for (size_t i=0; i<packet.draw_item_count; ++i) {
         const auto &material=packet.materials[packet.draw_items[i].material_index];
@@ -503,6 +590,8 @@ bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {
         if(bytes<=capacity) return;
         if(hierarchy_uniform.is_valid())device->free_rid(hierarchy_uniform);
         hierarchy_uniform=RID();hierarchy_uploaded_revision=0;
+        for(RID uniform:{coverage.uniform,coverage.region_uniform,coverage.clear_uniform})if(uniform.is_valid())device->free_rid(uniform);
+        coverage.uniform=coverage.region_uniform=coverage.clear_uniform=RID();coverage.revision=0;coverage.target=Size2i();
         for(GpuPage &page:gpu_pages) { if(page.uniform.is_valid()) device->free_rid(page.uniform); page.uniform=RID(); }
         release_groups(device);
         if(rid.is_valid()) device->free_rid(rid);
@@ -763,6 +852,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
 	}
     const auto format = device->texture_get_format(target);
     const Size2i size(format.width,format.height);
+    if(!prepare_coverage(device,size)){device->free_rid(framebuffer);return false;}
     int pool_index=-1;
     for(int i=group_pools.size()-1;i>=0;--i) {
         if(!device->texture_is_valid(group_pools[i].output)) {
@@ -802,9 +892,12 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
     auto ensure_group_target=[&](GroupTarget &group) {
         if(group.texture.is_valid())return true;
         auto layer_format=format;
-        layer_format.usage_bits=RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT | RD::TEXTURE_USAGE_STORAGE_BIT;
+        layer_format.usage_bits=RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT | RD::TEXTURE_USAGE_STORAGE_BIT;
         group.texture=device->texture_create(layer_format,RD::TextureView());group.size=size;
         if(!group.texture.is_valid())return false;
+        // Bounded compute clears preserve pixels outside the current group.
+        // New targets must start defined, including filter sampling beyond it.
+        if(device->texture_clear(group.texture,Color(0,0,0,0),0,1,0,1)!=OK)return false;
         Vector<RID> layers;layers.push_back(group.texture);group.framebuffer=device->framebuffer_create(layers);
         Vector<RD::Uniform> uniforms;
         RD::Uniform image;image.uniform_type=RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;image.binding=0;image.append_id(sampler);image.append_id(group.texture);uniforms.push_back(image);
@@ -901,9 +994,13 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
                     : (batch.kind==HCSR_GROUP_BEGIN || batch.kind==hcsr::render::group_shadow_apply) ? group_targets[batch.depth-1].framebuffer
                     : batch.depth==1 ? framebuffer : group_targets[batch.depth-2].framebuffer;
             const bool clear=batch.backdrop?(batch.backdrop_prefix?batch.backdrop_first:batch.backdrop_first || (!batch.backdrop_mask && !batch.backdrop_merge)):batch.kind!=HCSR_GROUP_END && batch.kind!=hcsr::render::group_shadow_apply;
-            list=device->draw_list_begin(destination,clear ? RD::DRAW_CLEAR_COLOR_ALL : 0,VectorView(&transparent,1),1,0,clear ? region : Rect2());
+            const bool gpu_clear=clear && gpu_geometry && !batch.backdrop;
+            list=device->draw_list_begin(destination,clear && !gpu_clear ? RD::DRAW_CLEAR_COLOR_ALL : 0,VectorView(&transparent,1),1,0,clear && !gpu_clear ? region : Rect2());
             ++last_render_passes;
             device->draw_list_set_viewport(list,Rect2i(Vector2i(),size));
+            if(gpu_clear && !clear_group(device,list,destination,size,batch.event_index)) {
+                device->draw_list_end();device->free_rid(framebuffer);return false;
+            }
             device->draw_list_bind_render_pipeline(list,batch.kind==hcsr::render::group_shadow_apply?shadow_pipeline:pipeline);
             if (batch.kind==HCSR_GROUP_BEGIN) continue;
         }
@@ -929,6 +1026,12 @@ void HCSRNewestSceneRenderer::release_groups(RenderingDevice *device) {
 void HCSRNewestSceneRenderer::release(RenderingDevice *device) {
     release_groups(device);
 	if (device) {
+        for(RID rid:{coverage.uniform,coverage.region_uniform,coverage.clear_uniform,coverage.data,coverage.output,coverage.controls,coverage.arguments})
+            if(rid.is_valid())device->free_rid(rid);
+        for(int i=0;i<3;i++) {
+            if(coverage.pipelines[i].is_valid())device->free_rid(coverage.pipelines[i]);
+            if(coverage.shaders[i].is_valid())device->free_rid(coverage.shaders[i]);
+        }
 		for (const GpuPage &page : gpu_pages) {
 			if (page.uniform.is_valid()) {
 				device->free_rid(page.uniform);
@@ -945,6 +1048,7 @@ void HCSRNewestSceneRenderer::release(RenderingDevice *device) {
 			}
 		}
 	}
+	coverage=CoverageGpu();
 	gpu_pages.clear();
 	vertices.clear();
 	batches.clear();
@@ -1146,6 +1250,11 @@ Dictionary HCSRNewestSceneRenderer::get_statistics() const {
     result["state_uploaded_bytes"] = state_uploaded_bytes;
     result["local_hierarchy"] = local_hierarchy;
     result["hierarchy_nodes"] = hierarchy.nodes.size();
+    result["coverage_groups"] = coverage.program.groups.size();
+    result["coverage_evaluations"] = coverage.evaluations;
+    result["coverage_uploaded_bytes"] = coverage.uploaded_bytes;
+    result["coverage_buffer_bytes"] = uint64_t(coverage.capacities[0])+coverage.capacities[1]+coverage.capacities[2]+coverage.capacities[3];
+    result["gpu_group_clears"] = coverage.clears;
     result["hierarchy_uploaded_bytes"] = hierarchy_uploaded_bytes;
     result["hierarchy_evaluations"] = hierarchy_evaluations;
     result["resolved_state_uploaded_bytes"] = resolved_state_uploaded_bytes;

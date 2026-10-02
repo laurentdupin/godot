@@ -4,6 +4,7 @@
 #include "hcsr_scene_submission.h"
 #include "hcsr_backdrop_submission.h"
 #include "hcsr_scene_hierarchy.h"
+#include "hcsr_gpu_coverage.h"
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/canvas_render_target_preparation.h"
 
@@ -37,6 +38,18 @@ class HCSRNewestSceneRenderer {
     struct GroupPool { RID output,blend_texture,blend_uniform; Vector<GroupTarget> targets,underlays; };
     Vector<GroupPool> group_pools;
     hcsr::render::compositing_bounds_program bounds_program;
+    struct CoverageGpu {
+        hcsr::render::gpu_coverage_program program;
+        std::vector<uint32_t> words;
+        RID data,output,controls,arguments,uniform,region_uniform,clear_uniform,shaders[3],pipelines[3];
+        uint32_t capacities[4]{};
+        uint64_t revision=0,evaluations=0,uploaded_bytes=0,clears=0;
+        Size2i target;
+        Vector2 logical;
+        bool dirty=true;
+    } coverage;
+    bool prepare_coverage(RenderingDevice *,const Size2i &);
+    bool clear_group(RenderingDevice *,RenderingDevice::DrawListID,RID,const Size2i &,size_t event);
     uint32_t group_depth = 0;
     bool ordered_backdrops=false;
 	bool document_backdrops=false, snapshot_target=false;
