@@ -7,7 +7,7 @@
 #include "core/os/os.h"
 #include <cmath>
 
-bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale) {
+bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale, const hcsr_backdrop_view_t &backdrop) {
     const bool had_pending = resources.has_pending_glyphs();
     const bool next_gpu = packet.format == HCSR_DRAW_PACKET_FORMAT_GPU;
     if (!hcsr::render::validate_gpu_packet(packet)) return false;
@@ -22,8 +22,16 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
             || !copy_table(gpu_planes,packet.gpu.planes,packet.gpu.plane_count)) return false;
     } else { gpu_states.clear(); gpu_clips.clear(); gpu_planes.clear(); }
     logical_width=packet.viewport_width; logical_height=packet.viewport_height;
+    Vector<uint64_t> next_backdrop_identities;
+    if(backdrop.surface_count && (!next_gpu || !backdrop.surfaces))return false;
+    if(next_backdrop_identities.resize(int(backdrop.surface_count))!=OK)return false;
+    for(size_t i=0;i<backdrop.surface_count;++i) {
+        const auto &surface=backdrop.surfaces[i];
+        if(surface.gpu_state>=packet.gpu.state_count || !surface.appearance.raster.identity)return false;
+        next_backdrop_identities.write[i]=surface.appearance.raster.identity;
+    }
     if(next_gpu && gpu_geometry && geometry_generation==packet.gpu.geometry_generation && prepared_scale==output_scale
-        && !had_pending) {
+        && !had_pending && next_backdrop_identities==backdrop_identities) {
         uploaded=false; geometry_dirty=false;
         update_visible_instances(packet);
         return true;
@@ -52,13 +60,22 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
         memcpy(&raster,packet.material_payload+material.payload_offset,sizeof(raster));
         live_surfaces.insert(raster.identity);
     }
+    for(uint64_t identity:next_backdrop_identities)live_surfaces.insert(identity);
     resources.retain_surfaces(live_surfaces);
+    if(backdrop_entries.resize(int(backdrop.surface_count))!=OK)return false;
+    for(size_t i=0;i<backdrop.surface_count;++i) {
+        const auto &raster=backdrop.surfaces[i].appearance.raster;
+        auto entry=resources.resolve_raster(raster,Vector2(raster.width,raster.height));
+        if(entry.page<0 || entry.rect.size!=Size2i(raster.width,raster.height))return false;
+        backdrop_entries.write[i]=entry;
+    }
+    backdrop_identities=next_backdrop_identities;
     group_depth = group_plan.depth;
 	uploaded = false;
     // Draws may reuse index ranges, so size by emitted indices rather than the
     // packet index buffer. Acquire the writable pointer once; per-vertex push_back
     // repeats CowData resize/write checks across the entire mesh on every update.
-    uint64_t emitted_count = 0;
+    uint64_t emitted_count = backdrop.surface_count*4;
     for (size_t i = 0; i < packet.draw_item_count; i++) {
         emitted_count += packet.draw_items[i].index_count;
         if (group_plan.events[i].kind == HCSR_GROUP_END) emitted_count += 6 + 14 * group_plan.events[i].filters.size() + ((group_plan.events[i].mask.kind || group_plan.events[i].blend_mode)?8:0);
@@ -276,6 +293,27 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &packet, con
                 material.kind == HCSR_MATERIAL_VERTEX_COLOR,textured ? &resolved : nullptr);
         }
 	}
+    // Backdrop quads belong to the same prepared scene geometry. The host
+    // mask pass borrows these buffers, rather than owning another placement
+    // table or rebuilding mask vertices when transforms change.
+    backdrop_first_vertex=written;
+    for(size_t i=0;i<backdrop.surface_count;++i) {
+        const auto &surface=backdrop.surfaces[i];const auto entry=backdrop_entries[i];
+        const auto &source=surface.appearance.source_rect;const auto &r=surface.appearance.raster.local_rect;
+        if(source.x<0 || source.y<0 || source.width<=0 || source.height<=0
+            || source.x+source.width>entry.rect.size.x || source.y+source.height>entry.rect.size.y)return false;
+        const Vector2 corners[]={{0,0},{1,0},{1,1},{0,1}};
+        for(const auto &c:corners) {
+            Vertex v={};
+            v.position_uv[0]=r.x+c.x*r.width;v.position_uv[1]=r.y+c.y*r.height;
+            v.position_uv[2]=entry.rect.position.x+source.x+c.x*source.width;
+            v.position_uv[3]=entry.rect.position.y+source.y+c.y*source.height;
+            v.tint[0]=v.tint[1]=v.tint[2]=1;v.tint[3]=surface.appearance.raster.opacity;
+            v.bounds[0]=entry.rect.position.x+source.x;v.bounds[1]=entry.rect.position.y+source.y;
+            v.bounds[2]=v.bounds[0]+source.width;v.bounds[3]=v.bounds[1]+source.height;
+            v.state=surface.gpu_state;vertex_data[written++]=v;
+        }
+    }
     vertices.resize(written);
     if (gpu_geometry) {
         if (!copy_table(prepared_source, packet.vertices, packet.vertex_count)
@@ -311,6 +349,35 @@ void HCSRNewestSceneRenderer::update_visible_instances(const hcsr_draw_packet_vi
         }
         if(batch.kind || batch.count) batches.push_back(batch);
     }
+}
+
+bool HCSRNewestSceneRenderer::draw_backdrop_mask(RenderingDevice *device,RID target,const hcsr_backdrop_view_t &view,const Size2i &logical,const Size2i &physical) const {
+    using RD=RenderingDevice;
+    if(!uploaded || !pipeline.is_valid())return false;
+    Vector<RID> attachments;attachments.push_back(target);
+    RID framebuffer=device->framebuffer_create(attachments);
+    if(!framebuffer.is_valid())return false;
+    const Color clear(0,0,0,1);
+    auto list=device->draw_list_begin(framebuffer,RD::DRAW_CLEAR_COLOR_ALL,VectorView(&clear,1));
+    device->draw_list_bind_render_pipeline(list,pipeline);
+    for(size_t i=0;i<view.effect_count;++i) {
+        const auto &effect=view.effects[i];uint32_t first=effect.first_surface;
+        while(first<effect.first_surface+effect.surface_count) {
+            const int page=backdrop_entries[first].page;uint32_t count=1;
+            while(first+count<effect.first_surface+effect.surface_count && backdrop_entries[first+count].page==page)++count;
+            device->draw_list_bind_uniform_set(list,gpu_pages[page].uniform,0);
+            device->draw_list_bind_uniform_set(list,gpu_pages[page].mask_uniform,1);
+            device->draw_list_bind_uniform_set(list,gpu_pages[page].blend_uniform,2);
+            const struct {
+                uint32_t first,mode;
+                float width,height,target_width,target_height,padding[2],group_bounds[4];
+            } push{backdrop_first_vertex+first*4,2,float(logical.x),float(logical.y),float(physical.x),float(physical.y),{float(i+1),0},{}};
+            device->draw_list_set_push_constant(list,&push,sizeof(push));
+            device->draw_list_draw(list,false,count,6);
+            first+=count;
+        }
+    }
+    device->draw_list_end();device->free_rid(framebuffer);return true;
 }
 
 bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {

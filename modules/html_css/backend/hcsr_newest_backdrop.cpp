@@ -4,7 +4,7 @@
 #include "scene/resources/image_texture.h"
 #include "servers/rendering/rendering_server.h"
 
-const HTMLGPUBackdropFrame &HCSRNewestBackdrop::update(hcsr_draw_packet_t packet, const Size2i &logical, const Size2i &physical) {
+const HTMLGPUBackdropFrame &HCSRNewestBackdrop::update(hcsr_draw_packet_t packet, const Size2i &logical, const Size2i &physical, HCSRNewestSceneRenderer &renderer) {
 	hcsr_backdrop_view_t view = {};
 	view.struct_size = sizeof(view);
 	if (hcsr_draw_packet_get_backdrop_view(packet, &view) != HCSR_OK || view.effect_count == 0) {
@@ -38,12 +38,20 @@ const HTMLGPUBackdropFrame &HCSRNewestBackdrop::update(hcsr_draw_packet_t packet
 	append(view.effects, view.effect_count * sizeof(hcsr_backdrop_effect_t));
 	append(view.operations, view.operation_count * sizeof(hcsr_backdrop_operation_t));
 	append(view.vertices, view.vertex_count * sizeof(hcsr_backdrop_vertex_t));
+    for(size_t i=0;i<view.surface_count;++i) {
+        auto surface=view.surfaces[i];
+        // Pinned addresses are transport lifetime, never appearance validity.
+        surface.appearance.raster.pixels=nullptr;
+        append(&surface,sizeof(surface));
+        const auto entry=renderer.backdrop_entry(i);
+        append(&entry.page,sizeof(entry.page));append(&entry.rect,sizeof(entry.rect));
+    }
 	if (local) {
 		// Only actual mask dependencies affect validity. Ordinary scene motion
 		// must not redraw an unrelated stationary filter mask.
 		HashSet<uint32_t> states, clips;
-		for (size_t i = 0; i < view.vertex_count; ++i) {
-			const uint32_t state = view.vertices[i].gpu_state;
+		for (size_t i = 0; i < view.surface_count; ++i) {
+			const uint32_t state = view.surfaces[i].gpu_state;
 			if (states.has(state)) {
 				continue;
 			}
@@ -61,7 +69,7 @@ const HTMLGPUBackdropFrame &HCSRNewestBackdrop::update(hcsr_draw_packet_t packet
 	}
 	if (signature != previous || physical != previous_size) {
 		if (local) {
-			if (!draw_gpu(view, packet_view, logical, physical)) {
+			if (!draw_gpu(view, packet_view, logical, physical, renderer)) {
 				frame.clear();
 				previous.clear();
 				return frame;
@@ -150,7 +158,7 @@ const HTMLGPUBackdropFrame &HCSRNewestBackdrop::update(hcsr_draw_packet_t packet
 	}
 	return frame;
 }
-#include "hcsr_shader_sources.h"
+
 
 HCSRNewestBackdrop::~HCSRNewestBackdrop() {
 	release_gpu();
@@ -162,51 +170,17 @@ void HCSRNewestBackdrop::release_gpu() {
 	if (gpu_texture.is_valid()) {
 		gpu_texture->set_texture_rd_rid(RID());
 	}
-	if (device) {
-		for (RID rid : { uniform, pipeline, shader, target }) {
-			if (rid.is_valid()) {
-				device->free_rid(rid);
-			}
-		}
-		for (RID rid : buffers) {
-			if (rid.is_valid()) {
-				device->free_rid(rid);
-			}
-		}
-	}
-	uniform = pipeline = shader = target = RID();
-	for (int i = 0; i < 4; ++i) {
-		buffers[i] = RID();
-		capacities[i] = 0;
-	}
-	geometry_signature.clear();
+    if(device && target.is_valid())device->free_rid(target);
+    target=RID();
+
 }
 
-bool HCSRNewestBackdrop::draw_gpu(const hcsr_backdrop_view_t &view, const hcsr_draw_packet_view_t &packet, const Size2i &logical, const Size2i &physical) {
+bool HCSRNewestBackdrop::draw_gpu(const hcsr_backdrop_view_t &view, const hcsr_draw_packet_view_t &packet, const Size2i &logical, const Size2i &physical, HCSRNewestSceneRenderer &renderer) {
 	using RD = RenderingDevice;
 	auto server = RenderingServer::get_singleton();
 	auto device = server ? server->get_rendering_device() : nullptr;
 	if (!device || !packet.gpu.state_count || !packet.gpu.clip_count) {
 		return false;
-	}
-	if (!shader.is_valid()) {
-		const char *sources[] = { hcsr::shaders::godot_backdrop_vertex, hcsr::shaders::godot_backdrop_fragment };
-		Vector<RD::ShaderStageSPIRVData> stages;
-		for (int i = 0; i < 2; ++i) {
-			RD::ShaderStageSPIRVData stage;
-			stage.shader_stage = i == 0 ? RD::SHADER_STAGE_VERTEX : RD::SHADER_STAGE_FRAGMENT;
-			String error;
-			stage.spirv = device->shader_compile_spirv_from_source(stage.shader_stage, sources[i], RD::SHADER_LANGUAGE_GLSL, &error);
-			if (stage.spirv.is_empty()) {
-				ERR_PRINT(error);
-				return false;
-			}
-			stages.push_back(stage);
-		}
-		shader = device->shader_create_from_spirv(stages, "HCSR backdrop local coverage");
-		if (!shader.is_valid()) {
-			return false;
-		}
 	}
 	if (!target.is_valid() || physical != previous_size) {
 		if (gpu_texture.is_valid()) {
@@ -229,85 +203,11 @@ bool HCSRNewestBackdrop::draw_gpu(const hcsr_backdrop_view_t &view, const hcsr_d
 		}
 		gpu_texture->_set_texture_rd_rid(target);
 	}
-	Vector<uint8_t> geometry;
-	geometry.resize(view.vertex_count * sizeof(hcsr_backdrop_vertex_t));
-	if (!geometry.is_empty()) {
-		memcpy(geometry.ptrw(), view.vertices, geometry.size());
-	}
-	bool geometry_changed = geometry != geometry_signature;
-	const void *data[] = { view.vertices, packet.gpu.states, packet.gpu.clips, packet.gpu.planes };
-	const uint32_t sizes[] = { uint32_t(geometry.size()), uint32_t(packet.gpu.state_count * sizeof(hcsr_gpu_state_t)), uint32_t(packet.gpu.clip_count * sizeof(hcsr_gpu_clip_t)), uint32_t(packet.gpu.plane_count * sizeof(hcsr_gpu_plane_t)) };
-	for (int i = 0; i < 4; ++i) {
-		uint32_t bytes = MAX(sizes[i], 16u);
-		if (!buffers[i].is_valid() || capacities[i] < bytes) {
-			if (uniform.is_valid()) {
-				device->free_rid(uniform);
-			}
-			uniform = RID();
-			if (buffers[i].is_valid()) {
-				device->free_rid(buffers[i]);
-			}
-			capacities[i] = MAX(bytes, 4096u);
-			buffers[i] = device->storage_buffer_create(capacities[i]);
-			if (i == 0) {
-				geometry_changed = true;
-			}
-		}
-		if (!buffers[i].is_valid()) {
-			return false;
-		}
-		if (sizes[i] && (i != 0 || geometry_changed) && device->buffer_update(buffers[i], 0, sizes[i], static_cast<const uint8_t *>(data[i])) != OK) {
-			return false;
-		}
-	}
-	if (geometry_changed) {
-		geometry_uploaded_bytes += sizes[0];
-	}
-	geometry_signature = geometry;
-	if (!uniform.is_valid()) {
-		Vector<RD::Uniform> uniforms;
-		for (int i = 0; i < 4; ++i) {
-			RD::Uniform entry;
-			entry.uniform_type = RD::UNIFORM_TYPE_STORAGE_BUFFER;
-			entry.binding = i;
-			entry.append_id(buffers[i]);
-			uniforms.push_back(entry);
-		}
-		uniform = device->uniform_set_create(VectorView(uniforms.ptr(), uniforms.size()), shader, 0);
-		if (!uniform.is_valid()) {
-			return false;
-		}
-	}
-	Vector<RID> attachments;
-	attachments.push_back(target);
-	RID framebuffer = device->framebuffer_create(attachments);
-	if (!framebuffer.is_valid()) {
-		return false;
-	}
-	if (!pipeline.is_valid()) {
-		RD::PipelineColorBlendState blend;
-		blend.attachments.push_back(RD::PipelineColorBlendState::Attachment());
-		pipeline = device->render_pipeline_create(shader, device->framebuffer_get_format(framebuffer), RD::INVALID_ID, RD::RENDER_PRIMITIVE_TRIANGLES, RD::PipelineRasterizationState(), RD::PipelineMultisampleState(), RD::PipelineDepthStencilState(), blend);
-	}
-	if (!pipeline.is_valid()) {
-		device->free_rid(framebuffer);
-		return false;
-	}
-	const Color clear(0, 0, 0, 1);
-	auto list = device->draw_list_begin(framebuffer, RD::DRAW_CLEAR_COLOR_ALL, VectorView(&clear, 1));
-	device->draw_list_bind_render_pipeline(list, pipeline);
-	device->draw_list_bind_uniform_set(list, uniform, 0);
+    if(!renderer.draw_backdrop_mask(device,target,view,logical,physical))return false;
+    surface_instances=view.surface_count;
 	frame.clear();
 	for (size_t i = 0; i < view.effect_count; ++i) {
 		const auto &source = view.effects[i];
-		const struct {
-			uint32_t first, id;
-			float width, height, target_width, target_height, padding[2];
-		} push{ source.first_vertex, uint32_t(i + 1), float(logical.x), float(logical.y), float(physical.x), float(physical.y), {} };
-		device->draw_list_set_push_constant(list, &push, sizeof(push));
-		if (source.vertex_count) {
-			device->draw_list_draw(list, false, 1, source.vertex_count);
-		}
 		HTMLGPUBackdropEffect effect;
 		effect.id = i + 1;
 		for (uint32_t op = 0; op < source.operation_count; ++op) {
@@ -321,23 +221,21 @@ bool HCSRNewestBackdrop::draw_gpu(const hcsr_backdrop_view_t &view, const hcsr_d
 			}
 		}
 		bool first = true;
-		for (uint32_t j = 0; j < source.vertex_count; ++j) {
-			const auto &vertex = view.vertices[source.first_vertex + j];
-			const auto &m = packet.gpu.states[vertex.gpu_state].transform;
-			float w = m[3] * vertex.x + m[7] * vertex.y + m[15];
-			Vector2 point((m[0] * vertex.x + m[4] * vertex.y + m[12]) / w, (m[1] * vertex.x + m[5] * vertex.y + m[13]) / w);
-			if (first) {
-				effect.bounds.position = point;
-				first = false;
-			} else {
-				effect.bounds.expand_to(point);
-			}
-		}
+        for(uint32_t j=0;j<source.surface_count;++j) {
+            const auto &surface=view.surfaces[source.first_surface+j];
+            const auto &r=surface.appearance.raster.local_rect;
+            const auto &m=packet.gpu.states[surface.gpu_state].transform;
+            const Vector2 corners[]={{r.x,r.y},{r.x+r.width,r.y},{r.x+r.width,r.y+r.height},{r.x,r.y+r.height}};
+            for(const auto &local:corners) {
+                float w=m[3]*local.x+m[7]*local.y+m[15];
+                if(Math::abs(w)<.000001f)w=1;
+                Vector2 point((m[0]*local.x+m[4]*local.y+m[12])/w,(m[1]*local.x+m[5]*local.y+m[13])/w);
+                if(first) {effect.bounds.position=point;first=false;}else effect.bounds.expand_to(point);
+            }
+        }
 		effect.bounds = effect.bounds.intersection(Rect2(Vector2(), logical));
 		frame.effects.push_back(effect);
 	}
-	device->draw_list_end();
-	device->free_rid(framebuffer);
 	++redraws;
 	frame.mask_texture = gpu_texture;
 	frame.logical_size = logical;
@@ -350,7 +248,7 @@ bool HCSRNewestBackdrop::draw_gpu(const hcsr_backdrop_view_t &view, const hcsr_d
 
 Dictionary HCSRNewestBackdrop::get_statistics() const {
 	Dictionary result;
-	result["backdrop_geometry_uploaded_bytes"] = int64_t(geometry_uploaded_bytes);
+	result["backdrop_surface_instances"] = surface_instances;
 	result["backdrop_gpu_redraws"] = int64_t(redraws);
 	return result;
 }

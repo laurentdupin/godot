@@ -293,14 +293,16 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 			? Size2i(Math::ceil(packet.viewport_width), Math::ceil(packet.viewport_height))
 			: Size2i();
 	const uint64_t record_start_usec = OS::get_singleton()->get_ticks_usec();
-	if (rendered) state->prepared_backdrop = state->backdrop.update(packet_handle, rendered_logical_size, physical_size);
+	hcsr_backdrop_view_t backdrop_view = {};
+    backdrop_view.struct_size = sizeof(backdrop_view);
+    rendered = rendered && hcsr_draw_packet_get_backdrop_view(packet_handle, &backdrop_view) == HCSR_OK;
 	float output_scale = rendered ? MAX(float(physical_size.x) / packet.viewport_width, float(physical_size.y) / packet.viewport_height) : 1;
     { MutexLock lock(state->mutex);
         for (const KeyValue<uint64_t, HCSRNewestPresentationOutput *> &entry : state->outputs)
             if (!entry.value->closing && rendered) output_scale = MAX(output_scale, MAX(float(entry.value->physical_size.x) / packet.viewport_width, float(entry.value->physical_size.y) / packet.viewport_height));
     }
     const uint64_t atlas_start_usec = OS::get_singleton()->get_ticks_usec();
-    const bool textured = rendered && state->scene_renderer.prepare(packet, state->document, output_scale);
+    const bool textured = rendered && state->scene_renderer.prepare(packet, state->document, output_scale, backdrop_view);
     const uint64_t atlas_end_usec = OS::get_singleton()->get_ticks_usec();
 	if (textured) {
 		RenderingServer *server = RenderingServer::get_singleton();
@@ -339,6 +341,8 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 	} else {
 		rendered = false;
 	}
+    // Ordinary drawing uploads the shared atlas before the mask borrows it.
+    if(rendered)state->prepared_backdrop=state->backdrop.update(packet_handle,rendered_logical_size,physical_size,state->scene_renderer);
     static const bool record_profile = OS::get_singleton()->get_environment("HCSR_RECORD_PROFILE") == "1";
     if (record_profile) {
         const uint64_t now = OS::get_singleton()->get_ticks_usec();
@@ -1178,7 +1182,7 @@ HTMLSurfaceHCSRNewestBackend::HTMLSurfaceHCSRNewestBackend(HTMLSurfaceHCSRNewest
 	state = memnew(State);
 	state->renderer = p_renderer;
 	state->texture = texture;
-	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_8 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
+	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_9 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
 		set_terminal(state, "hcsr_newest scene ABI initialization failed.");
 	}
 }
@@ -1192,6 +1196,7 @@ void HTMLSurfaceHCSRNewestBackend::_destroy_state_on_render_thread(uint64_t p_st
 		if (state->pending_packet != 0) hcsr_draw_packet_destroy(state->pending_packet);
 		for (const KeyValue<uint64_t, HCSRNewestPresentationOutput *> &entry : state->outputs) release_output(entry.value, server, device);
 		state->outputs.clear();
+        state->backdrop.release();
 		state->scene_renderer.release(device);
 		release_gpu_target(state, server, device);
 		if (state->scene != 0) hcsr_scene_destroy(state->scene);

@@ -11,6 +11,9 @@ class HCSRNewestSceneRenderer {
     using Entry = HCSRNewestRasterResources::Entry;
     struct GpuPage { RID texture, uniform, mask_uniform,blend_uniform; };
     Vector<GpuPage> gpu_pages;
+    Vector<Entry> backdrop_entries;
+    Vector<uint64_t> backdrop_identities;
+    uint32_t backdrop_first_vertex=0;
     using Vertex = hcsr::render::scene_vertex;
 	struct Batch {
 		int page;
@@ -63,7 +66,10 @@ class HCSRNewestSceneRenderer {
 
 public:
     explicit HCSRNewestSceneRenderer(HCSRNewestRasterResources &p_resources) : resources(p_resources) {}
-	bool prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale = 1);
+	bool prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale = 1, const hcsr_backdrop_view_t &backdrop = {});
+    // Borrowed atlas bindings: lifetime and upload remain with this renderer.
+    HCSRNewestRasterResources::Entry backdrop_entry(uint32_t index) const { return backdrop_entries[index]; }
+    bool draw_backdrop_mask(RenderingDevice *device,RID target,const hcsr_backdrop_view_t &view,const Size2i &logical,const Size2i &physical) const;
 	bool draw(RenderingDevice *device, RID target, const Color &background);
 	void draw_cpu(Ref<Image> target, const Color &background);
 	void release(RenderingDevice *device);
