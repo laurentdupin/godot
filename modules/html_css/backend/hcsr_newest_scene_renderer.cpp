@@ -241,6 +241,9 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
     for(const auto &op:backdrop_plan)if(gpu_geometry) {const auto &effect=backdrop.effects[op.effect];
         emitted_count+=24*(op.prefix_events.size()+(op.prefix_events.empty() || op.document_input?0:1));
         emitted_count+=4*(uint64_t(effect.surface_count)*(14+effect.operation_count)+uint64_t(effect.operation_count)*20+6);
+        // Each spatial operation emits at most two blur passes. Each pass
+        // carries a header plus local bounds/binding pairs for every patch.
+        emitted_count+=8*uint64_t(effect.operation_count)*(2+2*uint64_t(effect.surface_count));
         if(emitted_count>INT32_MAX/sizeof(hcsr::render::scene_word))return false;
     }
     if (vertices.resize(int(emitted_count)) != OK) return false;
@@ -264,6 +267,15 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
         size_t intermediates=spatial?filter_passes.size():0;
         if(intermediates && filter_passes.back().axis==0)--intermediates;
         const bool snapshot=op.document_input || !op.prefix_events.empty();
+        // Local appearance bounds are immutable inputs. Projection and the
+        // physical-pixel blur halo are evaluated by the vertex shader.
+        const uint32_t blur_state=backdrop.surfaces[effect.first_surface].gpu_state;
+        float blur_halo_x=0,blur_halo_y=0,blur_rounding=0;
+        for(const auto &pass:filter_passes) {
+            if(pass.axis==1)blur_halo_x+=3*pass.sigma;
+            if(pass.axis==2)blur_halo_y+=3*pass.sigma;
+            if(pass.axis)++blur_rounding;
+        }
         uint32_t source=snapshot?group_plan.depth+2:op.source_depth-1;
         bool document_source=op.document_input;
         auto prefix=[&](uint32_t layer,size_t event,bool clear) {
@@ -280,6 +292,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
             if(!op.document_input)prefix(op.source_depth-1,op.source_event,true);
             for(const size_t event:op.prefix_events)prefix(group_plan.events[event].depth-1,event,false);
         }
+        size_t mask_batch_begin=SIZE_MAX;
         auto emit=[&](hcsr::render::filter_program colors,float sigma,uint32_t axis,const hcsr_backdrop_surface_t *surface,uint32_t destination) {
             const uint32_t parameters=written;
             auto parameter=[&](float x,float y,float z,float w){Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=x;v.position_uv[1]=y;v.position_uv[2]=z;v.position_uv[3]=w;append_vertex(v);};
@@ -296,19 +309,40 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
                 parameter(surface->gpu_state+1,logical_width,logical_height,0);
                 for(int row=0;row<4;++row)parameter(0,0,0,0);
             }
+            uint32_t blur_parameters=0;
+            if(axis) {
+                blur_parameters=written;
+                parameter(effect.surface_count,blur_state+1,blur_halo_x,blur_halo_y);
+                parameter(blur_rounding,0,0,0);
+                // Each nine-slice patch can have its own placement binding.
+                // Pass local rectangles and let the GPU form their union.
+                for(uint32_t i=0;i<effect.surface_count;++i) {
+                    const auto &patch=backdrop.surfaces[effect.first_surface+i];
+                    const auto &r=patch.appearance.raster.local_rect;
+                    parameter(r.x,r.y,r.width,r.height);
+                    parameter(patch.gpu_state+1,0,0,0);
+                }
+            }
             const uint32_t primitive=uint32_t(primitives.size());primitives.push_back({written,2,UINT32_MAX});
             constexpr float corners[][2]={{0,0},{1,0},{1,1},{0,0},{1,1},{0,1}};
             for(const auto &c:corners){Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=c[0]*2-1;v.position_uv[1]=c[1]*2-1;v.position_uv[2]=c[0];v.position_uv[3]=c[1];v.tint[3]=1;
-                v.bounds[0]=surface?-6.f:axis?-5.f:colors.empty()?-3.f:-4.f;v.bounds[1]=surface?mask_parameters:parameters;v.bounds[2]=colors.size();v.bounds[3]=4;append_vertex(v);}
+                v.bounds[0]=surface?-6.f:axis?-5.f:colors.empty()?-3.f:-4.f;v.bounds[1]=surface?mask_parameters:parameters;v.bounds[2]=axis?blur_parameters:colors.size();v.bounds[3]=4;append_vertex(v);}
             Batch batch{0,primitive,1,6,op.destination_depth,1,Rect2(0,0,1,1),effect.before_draw_index};
             batch.mask_page=mask_page;batch.backdrop=true;batch.backdrop_mask=surface!=nullptr;
             batch.backdrop_first=surface && surface==&backdrop.surfaces[effect.first_surface];
             batch.document_source=document_source;
-            batch.backdrop_source=source;batch.backdrop_destination=destination;batch.backdrop_source_event=source<group_plan.depth?op.source_event:SIZE_MAX;batches.push_back(batch);
+            batch.backdrop_source=source;batch.backdrop_destination=destination;batch.backdrop_source_event=source<group_plan.depth?op.source_event:SIZE_MAX;
+            // Only combine adjacent mask slices within this effect. The first
+            // batch retains its clear/snapshot flags; atlas changes still split.
+            if(surface && size_t(batches.size())>mask_batch_begin && batches[batches.size()-1].mask_page==batch.mask_page &&
+                    batches[batches.size()-1].first+batches.write[batches.size()-1].count==primitive) {
+                ++batches.write[batches.size()-1].count;
+            } else batches.push_back(batch);
         };
         for(size_t i=0;i<intermediates;++i){const auto &pass=filter_passes[i];const uint32_t destination=group_plan.depth+uint32_t(i%2);
             emit(pass.colors,pass.sigma,pass.axis,nullptr,destination);source=destination;document_source=false;}
         const auto colors=spatial?(intermediates<filter_passes.size()?filter_passes.back().colors:hcsr::render::filter_program{}):program;
+        mask_batch_begin=batches.size();
         for(uint32_t i=0;i<effect.surface_count;++i){emit(colors,0,0,&backdrop.surfaces[effect.first_surface+i],op.destination_depth-1);document_source=false;}
     };
 	for (size_t i = 0; i < packet.draw_item_count; i++) {
@@ -999,7 +1033,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
             const auto area=hcsr::render::group_region(b,logical_width,logical_height,size.x,size.y);region=Rect2(area.x,area.y,area.width,area.height);
         }
         const struct { uint32_t first,gpu_geometry; float width,height,target_width,target_height;uint32_t source_region;float mask_mode,region[4]; } push{batch.first,
-            gpu_geometry ? 1u : 0u,logical_width,logical_height,float(size.x),float(size.y),source_region,batch.backdrop_mask?1.f:0.f,
+            gpu_geometry ? 1u : 0u,logical_width,logical_height,float(size.x),float(size.y),source_region,batch.backdrop_mask?1.f:batch.backdrop?2.f:0.f,
             {float(region.position.x),float(region.position.y),float(region.get_end().x),float(region.get_end().y)}};
         device->draw_list_set_push_constant(list,&push,sizeof(push));
         device->draw_list_draw(list,false,gpu_geometry ? batch.count : 1,gpu_geometry ? 6 : batch.count);
