@@ -50,7 +50,7 @@ private:
 
     HashMap<GlyphKey, Entry, GlyphHasher> glyph_entries;
 	HashMap<String, Entry> entries;
-	Mutex image_mutex;
+	mutable Mutex image_mutex;
 	HashMap<String, Ref<Image>> decoded_sources;
 	HashMap<String, Size2i> source_sizes;
 	Ref<Image> load_image(const Ref<HTMLDocument> &document, const String &source, int width = 0, int height = 0, float content_width = 0, float content_height = 0);

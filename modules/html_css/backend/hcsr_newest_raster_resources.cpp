@@ -141,13 +141,22 @@ bool HCSRNewestRasterResources::copy_tile_pixels(const Ref<HTMLDocument> &docume
 bool HCSRNewestRasterResources::copy_source_pixels(const Ref<HTMLDocument> &document, const String &source,
         int width, int height, Vector<uint8_t> &pixels, hcsr_image_pixels_t &output) {
     MutexLock lock(image_mutex);
-    Ref<Image> image = load_image(document, source);
-    if (image.is_null()) return false;
     // Generated appearances have an explicit requested raster size. Do not
     // substitute the ordinary image atlas's power-of-two upgrade buckets.
     const int raster_width=CLAMP(width,1,2048),raster_height=CLAMP(height,1,2048);
-    const bool rerasterize=image->get_width()!=raster_width || image->get_height()!=raster_height;
+    const String source_key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source;
+    Ref<Image> image;
+    Size2i natural;
+    if (const Size2i *metadata=source_sizes.getptr(source_key)) natural=*metadata;
+    else {
+        image=load_image(document,source);
+        if(image.is_null())return false;
+        natural=image->get_size();
+    }
+    if(natural.x<=0 || natural.y<=0)return false;
+    const bool rerasterize=natural!=Size2i(raster_width,raster_height);
     if(rerasterize)image=load_image(document,source,raster_width,raster_height);
+    else if(image.is_null())image=load_image(document,source);
     if (image.is_null()) return false;
     if (image->get_format() != Image::FORMAT_RGBA8) {
         image = image->duplicate();
@@ -164,11 +173,10 @@ bool HCSRNewestRasterResources::copy_source_pixels(const Ref<HTMLDocument> &docu
     }
     output.width = image->get_width(); output.height = image->get_height();
     output.stride = output.width * 4; output.pixels = pixels.ptr(); output.length = pixels.size();
-    if (rerasterize) {
-        const String key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String())
-                + "\n" + source + "\nraster:" + itos(raster_width) + ":" + itos(raster_height);
-        decoded_sources.erase(key); // The scene asset owner now owns the copied pixels.
-    }
+    // The scene asset owner now owns the copied pixels. Intrinsic metadata
+    // survives, so another size request need not decode an unused base raster.
+    decoded_sources.erase(source_key);
+    if(rerasterize)decoded_sources.erase(source_key + "\nraster:" + itos(raster_width) + ":" + itos(raster_height));
     return true;
 }
 
@@ -312,7 +320,13 @@ Dictionary HCSRNewestRasterResources::get_statistics() const {
     Dictionary result;
 	result["pages"] = page_count();
 	result["sources"] = entries.size() + glyph_entries.size() + surface_entries.size();
-	result["decoded_images"] = decoded_images;
+    {
+        MutexLock lock(image_mutex);
+        result["decoded_images"] = decoded_images;
+        uint64_t decoded_bytes=0;
+        for(const auto &source:decoded_sources)if(source.value.is_valid())decoded_bytes+=source.value->get_data_size();
+        result["decoded_source_pixel_bytes"] = decoded_bytes;
+    }
     result["reused_surface_slots"] = hcsr_atlas_reused_slots(atlas);
     result["raster_surfaces"] = surface_entries.size();
     result["rasterized_glyphs"] = rasterized_glyphs;
