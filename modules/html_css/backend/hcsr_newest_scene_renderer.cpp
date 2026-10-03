@@ -535,11 +535,11 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
     // placeholder satisfies the shader interface without inventing a second
     // renderer for clears or for missing image resources.
     resources.ensure_sampling_page();
-    // Spatial foreground passes use GPU region controls for clears, sampling
-    // and composition, and cannot take the disjoint-group scheduling path.
-    // Keep CPU coverage only while host copies/scheduling still consume it.
-    host_coverage_required = !gpu_geometry || ordered_backdrops
-        || (!std::any_of(batches.begin(),batches.end(),[](const Batch &batch){return batch.blend_mode!=0;})
+    // Copies, foreground passes and ordered prefixes consume GPU coverage.
+    // Only ordinary disjoint-group scheduling still needs host bounds;
+    // reference geometry retains its CPU coverage path.
+    host_coverage_required = !gpu_geometry
+        || (!ordered_backdrops && !std::any_of(batches.begin(),batches.end(),[](const Batch &batch){return batch.blend_mode!=0;})
             && !std::any_of(batches.begin(),batches.end(),[](const Batch &batch){return batch.kind>=hcsr::render::group_filter_pass;}));
     if(gpu_geometry) update_compositing_bounds(packet);
 	return true;
@@ -973,7 +973,11 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
     };
     auto emit = [&](RD::DrawListID list, const Batch &batch) {
         if(batch.hidden)return;
-        const bool gpu_region=gpu_geometry && batch.kind && !batch.backdrop;
+        // Prefix copies need bounded placement as well as bounded sampling.
+        // Their first pass still clears the complete snapshot below; later
+        // prefixes preserve pixels outside this GPU-selected source region.
+        const bool gpu_prefix=gpu_geometry && batch.backdrop_prefix && batch.backdrop_source_event!=SIZE_MAX;
+        const bool gpu_region=gpu_geometry && batch.kind && (!batch.backdrop || gpu_prefix);
         if(batch.kind && !gpu_region) device->draw_list_enable_scissor(list,region_for(batch));
         else device->draw_list_disable_scissor(list);
         device->draw_list_bind_uniform_set(list,batch.kind ? group_targets[batch.backdrop?batch.backdrop_source:batch.source_scratch?group_depth:batch.depth-1].uniform : gpu_pages[batch.page].uniform,0);
@@ -981,7 +985,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
         device->draw_list_bind_uniform_set(list,blending?pool.blend_uniform:gpu_pages[0].blend_uniform,2);
         Rect2 region;
         uint32_t source_region=0;
-        if(gpu_region)source_region=uint32_t(bounds_program.group_index(batch.event_index))+1;
+        if(gpu_region)source_region=uint32_t(bounds_program.group_index(gpu_prefix?batch.backdrop_source_event:batch.event_index))+1;
         else if(gpu_geometry && batch.backdrop && batch.backdrop_source_event!=SIZE_MAX)
             source_region=0x80000000u|(uint32_t(bounds_program.group_index(batch.backdrop_source_event))+1);
         else region=region_for(batch);
@@ -993,6 +997,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
             {float(region.position.x),float(region.position.y),float(region.get_end().x),float(region.get_end().y)}};
         device->draw_list_set_push_constant(list,&push,sizeof(push));
         device->draw_list_draw(list,false,gpu_geometry ? batch.count : 1,gpu_geometry ? 6 : batch.count);
+        if(gpu_prefix)++gpu_backdrop_prefix_draws;
         ++last_draw_calls;
     };
     std::vector<std::vector<size_t>> passes;
@@ -1343,5 +1348,6 @@ Dictionary HCSRNewestSceneRenderer::get_statistics() const {
     result["cpu_compositing_bounds_evaluations"] = cpu_compositing_bounds_evaluations;
     result["host_compositing_bounds_required"] = host_coverage_required;
     result["gpu_blend_region_copies"] = gpu_blend_region_copies;
+    result["gpu_backdrop_prefix_draws"] = gpu_backdrop_prefix_draws;
 	return result;
 }

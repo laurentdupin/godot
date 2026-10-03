@@ -58,6 +58,7 @@ class HCSRNewestSceneRenderer {
     bool clear_group(RenderingDevice *,RenderingDevice::DrawListID,RID,const Size2i &,size_t event);
     RID blend_copy_shader,blend_copy_pipeline;
     uint64_t gpu_blend_region_copies=0;
+    uint64_t gpu_backdrop_prefix_draws=0;
     bool copy_group_region(RenderingDevice *,GroupPool &,RID source,size_t event,uint32_t depth);
     uint32_t group_depth = 0;
     bool host_coverage_required = true;
