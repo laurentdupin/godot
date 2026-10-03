@@ -64,8 +64,20 @@ func run():
 		return
 	await settle()
 	var blending := stats()
-	if not blending.get("host_compositing_bounds_required", false) or int(blending.get("cpu_compositing_bounds_evaluations", 0)) == 0:
-		fail("Host blend copy lost its coverage dependency: " + str(blending))
+	if blending.get("host_compositing_bounds_required", true) or int(blending.get("cpu_compositing_bounds_evaluations", -1)) != 0 or int(blending.get("gpu_blend_region_copies", 0)) == 0:
+		fail("Blend copy did not consume GPU-only coverage: " + str(blending))
+		return
+	# Multiply over white preserves these pixels. This checks copied content,
+	# rather than merely checking that a compute dispatch was recorded.
+	if view.get_texture().get_image().get_data() != original:
+		fail("GPU blend copy changed multiply-over-white pixels")
+		return
+	if view.set_element_attribute("fx", "style", "mix-blend-mode:multiply;transform:translate(40px,10px)") != OK:
+		fail("Blended movement rejected")
+		return
+	await settle()
+	if view.get_texture().get_image().get_data() == original or int(stats().get("cpu_compositing_bounds_evaluations", -1)) != 0:
+		fail("Blended movement lost GPU coverage")
 		return
 	if view.set_element_attribute("fx", "style", "") != OK:
 		fail("Blend reset rejected")
@@ -74,5 +86,25 @@ func run():
 	if stats().get("host_compositing_bounds_required", true) or view.get_texture().get_image().get_data() != original:
 		fail("Coverage dependency did not reset with pass topology")
 		return
-	print("GPU_GROUP_COVERAGE_OK cycles=3 spatial_cpu_evaluations=0 blend_dependency=true pixels_restored=true")
+	if view.set_element_attribute("fx", "style", "mix-blend-mode:multiply") != OK:
+		fail("Multiple-output blend mutation rejected")
+		return
+	var large = view.create_output(Vector2i(640, 360), false)
+	var small = view.create_output(Vector2i(160, 90), false)
+	await settle()
+	var large_pixels: PackedByteArray = large.texture.get_image().get_data()
+	var small_pixels: PackedByteArray = small.texture.get_image().get_data()
+	view.logical_size = Vector2i(640, 360)
+	await settle()
+	if large.texture.get_image().get_data() == large_pixels or small.texture.get_image().get_data() == small_pixels:
+		fail("Output-specific GPU region did not follow logical resize")
+		return
+	view.logical_size = Vector2i(320, 180)
+	await settle()
+	if large.texture.get_image().get_data() != large_pixels or small.texture.get_image().get_data() != small_pixels or int(stats().get("cpu_compositing_bounds_evaluations", -1)) != 0:
+		fail("Multiple-output blend copy did not restore density/regions")
+		return
+	large.release()
+	small.release()
+	print("GPU_GROUP_COVERAGE_OK cycles=3 spatial_cpu_evaluations=0 blend_cpu_evaluations=0 indirect_blend_copy=true pixels_restored=true outputs=3 logical_resize=true")
 	quit()

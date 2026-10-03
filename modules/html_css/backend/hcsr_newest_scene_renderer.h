@@ -40,7 +40,8 @@ class HCSRNewestSceneRenderer {
         bool hidden=false;
 	};
     struct GroupTarget { RID texture, framebuffer, uniform; Size2i size; };
-    struct GroupPool { RID output,blend_texture,blend_uniform; Vector<GroupTarget> targets,underlays; };
+    struct BlendCopy { RID source,uniform; };
+    struct GroupPool { RID output,blend_texture,blend_uniform; Vector<GroupTarget> targets,underlays; Vector<BlendCopy> blend_copies; };
     Vector<GroupPool> group_pools;
     hcsr::render::compositing_bounds_program bounds_program;
     struct CoverageGpu {
@@ -55,6 +56,9 @@ class HCSRNewestSceneRenderer {
     } coverage;
     bool prepare_coverage(RenderingDevice *,const Size2i &);
     bool clear_group(RenderingDevice *,RenderingDevice::DrawListID,RID,const Size2i &,size_t event);
+    RID blend_copy_shader,blend_copy_pipeline;
+    uint64_t gpu_blend_region_copies=0;
+    bool copy_group_region(RenderingDevice *,GroupPool &,RID source,size_t event,uint32_t depth);
     uint32_t group_depth = 0;
     bool host_coverage_required = true;
     uint64_t cpu_compositing_bounds_evaluations = 0;

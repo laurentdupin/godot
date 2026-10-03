@@ -82,6 +82,48 @@ bool HCSRNewestSceneRenderer::prepare_coverage(RenderingDevice *device,const Siz
     coverage.dirty=false;return true;
 }
 
+bool HCSRNewestSceneRenderer::copy_group_region(RenderingDevice *device,GroupPool &pool,RID source,size_t event,uint32_t depth) {
+    using RD=RenderingDevice;
+    if(!blend_copy_shader.is_valid()) {
+        RD::ShaderStageSPIRVData stage;stage.shader_stage=RD::SHADER_STAGE_COMPUTE;String error;
+        stage.spirv=device->shader_compile_spirv_from_source(stage.shader_stage,hcsr::shaders::region_copy_glsl,RD::SHADER_LANGUAGE_GLSL,&error);
+        if(stage.spirv.is_empty()){ERR_PRINT(error);return false;}
+        Vector<RD::ShaderStageSPIRVData> stages;stages.push_back(stage);
+        blend_copy_shader=device->shader_create_from_spirv(stages,"HCSR GPU blend region copy");
+        if(!blend_copy_shader.is_valid())return false;
+        blend_copy_pipeline=device->compute_pipeline_create(blend_copy_shader);
+    }
+    if(!blend_copy_pipeline.is_valid() || !depth)return false;
+    if(pool.blend_copies.size()<int(depth) && pool.blend_copies.resize(depth)!=OK)return false;
+    auto &copy=pool.blend_copies.write[depth-1];
+    // RenderingDevice invalidates dependent uniform sets when an output/source
+    // texture is destroyed. A nonzero RID alone does not prove it is still live.
+    if(copy.uniform.is_valid() && !device->uniform_set_is_valid(copy.uniform))copy.uniform=RID();
+    // Filter/underlay swaps can change a depth's source texture. These are GPU
+    // descriptors owned by the output, not a scene/transform validity cache.
+    if(copy.source!=source) {
+        if(copy.uniform.is_valid())device->free_rid(copy.uniform);
+        copy.uniform=RID();copy.source=source;
+    }
+    if(!copy.uniform.is_valid()) {
+        Vector<RD::Uniform> bindings;
+        RD::Uniform controls;controls.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER;controls.binding=0;controls.append_id(coverage.controls);bindings.push_back(controls);
+        RD::Uniform destination;destination.uniform_type=RD::UNIFORM_TYPE_IMAGE;destination.binding=1;destination.append_id(pool.blend_texture);bindings.push_back(destination);
+        RD::Uniform texture;texture.uniform_type=RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;texture.binding=2;texture.append_id(sampler);texture.append_id(source);bindings.push_back(texture);
+        copy.uniform=device->uniform_set_create(VectorView(bindings.ptr(),bindings.size()),blend_copy_shader,0);
+        if(!copy.uniform.is_valid())return false;
+    }
+    const uint32_t index=uint32_t(bounds_program.group_index(event));
+    const uint32_t push[]={index,0,0,0};
+    auto list=device->compute_list_begin();
+    device->compute_list_bind_compute_pipeline(list,blend_copy_pipeline);
+    device->compute_list_bind_uniform_set(list,copy.uniform,0);
+    device->compute_list_set_push_constant(list,push,sizeof(push));
+    device->compute_list_dispatch_indirect(list,coverage.arguments,index*12);
+    device->compute_list_end();++gpu_blend_region_copies;
+    return true;
+}
+
 bool HCSRNewestSceneRenderer::clear_group(RenderingDevice *device,RenderingDevice::DrawListID list,RID framebuffer,const Size2i &size,size_t event) {
     using RD=RenderingDevice;
     if(!coverage.pipelines[2].is_valid()) {
@@ -497,8 +539,8 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
     // and composition, and cannot take the disjoint-group scheduling path.
     // Keep CPU coverage only while host copies/scheduling still consume it.
     host_coverage_required = !gpu_geometry || ordered_backdrops
-        || std::any_of(batches.begin(),batches.end(),[](const Batch &batch){return batch.blend_mode!=0;})
-        || !std::any_of(batches.begin(),batches.end(),[](const Batch &batch){return batch.kind>=hcsr::render::group_filter_pass;});
+        || (!std::any_of(batches.begin(),batches.end(),[](const Batch &batch){return batch.blend_mode!=0;})
+            && !std::any_of(batches.begin(),batches.end(),[](const Batch &batch){return batch.kind>=hcsr::render::group_filter_pass;}));
     if(gpu_geometry) update_compositing_bounds(packet);
 	return true;
 }
@@ -860,6 +902,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
     int pool_index=-1;
     for(int i=group_pools.size()-1;i>=0;--i) {
         if(!device->texture_is_valid(group_pools[i].output)) {
+            for(const auto &copy:group_pools[i].blend_copies)if(copy.uniform.is_valid() && device->uniform_set_is_valid(copy.uniform))device->free_rid(copy.uniform);
             for(RID rid:{group_pools[i].blend_uniform,group_pools[i].blend_texture})if(rid.is_valid())device->free_rid(rid);
             for(const auto &group:group_pools[i].targets)
                 for(RID rid:{group.uniform,group.framebuffer,group.texture}) if(rid.is_valid()) device->free_rid(rid);
@@ -874,7 +917,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
     auto &group_targets=pool.targets;
     const bool blending=std::any_of(batches.begin(),batches.end(),[](const Batch &batch){return batch.blend_mode!=0;});
     if(blending && !pool.blend_texture.is_valid()) {
-        auto copy_format=format;copy_format.usage_bits=RD::TEXTURE_USAGE_SAMPLING_BIT|RD::TEXTURE_USAGE_CAN_COPY_TO_BIT;
+        auto copy_format=format;copy_format.usage_bits=RD::TEXTURE_USAGE_SAMPLING_BIT|RD::TEXTURE_USAGE_CAN_COPY_TO_BIT|RD::TEXTURE_USAGE_STORAGE_BIT;
         pool.blend_texture=device->texture_create(copy_format,RD::TextureView());
         if(!pool.blend_texture.is_valid()){device->free_rid(framebuffer);return false;}
         RD::Uniform backdrop;backdrop.uniform_type=RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;backdrop.binding=0;backdrop.append_id(sampler);backdrop.append_id(pool.blend_texture);
@@ -1005,7 +1048,9 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
             const Rect2 region=region_for(batch);
             if(batch.blend_mode) {
                 const RID source=batch.depth==1?target:group_targets[batch.depth-2].texture;
-                if(device->texture_copy(source,pool.blend_texture,Vector3(region.position.x,region.position.y,0),Vector3(region.position.x,region.position.y,0),Vector3(region.size.x,region.size.y,1),0,0,0,0)!=OK) {device->free_rid(framebuffer);return false;}
+                if(gpu_geometry) {
+                    if(!copy_group_region(device,pool,source,batch.event_index,batch.depth)){device->free_rid(framebuffer);return false;}
+                } else if(device->texture_copy(source,pool.blend_texture,Vector3(region.position.x,region.position.y,0),Vector3(region.position.x,region.position.y,0),Vector3(region.size.x,region.size.y,1),0,0,0,0)!=OK) {device->free_rid(framebuffer);return false;}
             }
             RID destination = batch.backdrop?(batch.backdrop_mask || batch.backdrop_merge?pool.underlays[batch.backdrop_destination].framebuffer:group_targets[batch.backdrop_destination].framebuffer) : (batch.kind==hcsr::render::group_filter_pass || batch.kind==hcsr::render::group_shadow_blur) ? group_targets[group_depth].framebuffer
                     : (batch.kind==HCSR_GROUP_BEGIN || batch.kind==hcsr::render::group_shadow_apply) ? group_targets[batch.depth-1].framebuffer
@@ -1033,6 +1078,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
 
 void HCSRNewestSceneRenderer::release_groups(RenderingDevice *device) {
     if(device) for(const auto &pool:group_pools) {
+        for(const auto &copy:pool.blend_copies)if(copy.uniform.is_valid() && device->uniform_set_is_valid(copy.uniform))device->free_rid(copy.uniform);
         for(RID rid:{pool.blend_uniform,pool.blend_texture})if(rid.is_valid())device->free_rid(rid);
         for(const auto &group:pool.targets)for(RID rid:{group.uniform,group.framebuffer,group.texture})if(rid.is_valid())device->free_rid(rid);
         for(const auto &group:pool.underlays)for(RID rid:{group.uniform,group.framebuffer,group.texture})if(rid.is_valid())device->free_rid(rid);
@@ -1056,7 +1102,7 @@ void HCSRNewestSceneRenderer::release(RenderingDevice *device) {
             if(coverage.shaders[i].is_valid())device->free_rid(coverage.shaders[i]);
         }
         for(GpuPage &page:gpu_pages) release_page(device,page);
-		for (RID rid : { hierarchy_uniform,hierarchy_pipeline,hierarchy_shader,hierarchy_buffer,pipeline, shadow_pipeline, document_pipeline, buffer, sampler, shader, document_shader, state_buffer,clip_buffer,plane_buffer,primitive_buffer }) {
+		for (RID rid : { hierarchy_uniform,hierarchy_pipeline,hierarchy_shader,hierarchy_buffer,pipeline, shadow_pipeline, document_pipeline, blend_copy_pipeline,blend_copy_shader,buffer, sampler, shader, document_shader, state_buffer,clip_buffer,plane_buffer,primitive_buffer }) {
 			if (rid.is_valid()) {
 				device->free_rid(rid);
 			}
@@ -1068,6 +1114,7 @@ void HCSRNewestSceneRenderer::release(RenderingDevice *device) {
 	vertices.clear();
 	batches.clear();
 	pipeline = shadow_pipeline = buffer = sampler = shader = document_shader = document_pipeline = RID();
+    blend_copy_shader=blend_copy_pipeline=RID();
 	buffer_capacity = 0;
     state_buffer=clip_buffer=plane_buffer=primitive_buffer=RID();
     state_capacity=clip_capacity=plane_capacity=primitive_capacity=0;
@@ -1295,5 +1342,6 @@ Dictionary HCSRNewestSceneRenderer::get_statistics() const {
     result["disjoint_opacity_groups"] = last_disjoint_groups;
     result["cpu_compositing_bounds_evaluations"] = cpu_compositing_bounds_evaluations;
     result["host_compositing_bounds_required"] = host_coverage_required;
+    result["gpu_blend_region_copies"] = gpu_blend_region_copies;
 	return result;
 }
