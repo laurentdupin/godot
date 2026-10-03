@@ -99,9 +99,11 @@ bool HCSRNewestSceneRenderer::clear_group(RenderingDevice *device,RenderingDevic
 bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, const Ref<HTMLDocument> &document, float output_scale, const hcsr_backdrop_view_t &backdrop,const hcsr_hierarchy_view_t &local) {
     const auto &packet=submitted;
     const bool had_pending = resources.has_pending_glyphs();
-    const bool next_gpu = packet.format == HCSR_DRAW_PACKET_FORMAT_GPU;
+    const bool next_gpu = hcsr::render::gpu_drawing(packet.format);
     const bool next_hierarchy=next_gpu && local.revision!=0;
-    if (!hcsr::render::validate_gpu_packet(packet,next_hierarchy)) return false;
+    const bool retained_surfaces=packet.struct_size>=sizeof(packet) && packet.format==HCSR_DRAW_PACKET_FORMAT_SURFACES
+        && gpu_geometry && geometry_generation==packet.gpu.geometry_generation;
+    if (!hcsr::render::validate_gpu_packet(packet,next_hierarchy,!retained_surfaces)) return false;
     if(next_hierarchy && hierarchy.geometry!=local.geometry_generation)hierarchy_uploaded_revision=0;
     if(next_hierarchy && !hierarchy.prepare(local,packet.gpu.geometry_generation,packet.gpu.state_count,packet.gpu.clip_count))return false;
     if(!next_hierarchy) {hierarchy.clear();hierarchy_uploaded_revision=0;}
@@ -352,13 +354,13 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
             destination = Rect2(raster.local_rect.x, raster.local_rect.y, raster.local_rect.width, raster.local_rect.height);
             float transform_scale = 1;
             if (gpu_geometry && draw.index_count) {
-                const auto state=hcsr::render::query_reference_state(packet,packet.gpu.vertex_states[packet.indices[draw.first_index]],local_hierarchy?&hierarchy:nullptr);
+                const auto state=hcsr::render::query_reference_state(packet,hcsr::render::drawing_state(packet,hcsr::render::draw_vertex_index(packet,draw,0)),local_hierarchy?&hierarchy:nullptr);
                 const auto &m = state.transform;
                 transform_scale = MAX(Vector2(m[0],m[1]).length(),Vector2(m[4],m[5]).length());
             } else if (draw.index_count) {
-                const auto &a = packet.vertices[packet.indices[draw.first_index]];
+                const auto a = hcsr::render::drawing_vertex(packet,hcsr::render::draw_vertex_index(packet,draw,0));
                 for (uint32_t j=1; j<draw.index_count; ++j) {
-                    const auto &b = packet.vertices[packet.indices[draw.first_index+j]];
+                    const auto b = hcsr::render::drawing_vertex(packet,hcsr::render::draw_vertex_index(packet,draw,j));
                     const float local = Vector2(b.local_x-a.local_x,b.local_y-a.local_y).length();
                     if (local > .001f) transform_scale = MAX(transform_scale,Vector2(b.screen_x-a.screen_x,b.screen_y-a.screen_y).length()/local);
                 }
@@ -395,14 +397,14 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
                     }
 				}
                 float transform_scale = 1;
-                for (uint32_t j = 1; j < draw.index_count; j++) {
-                    const auto &a = packet.vertices[packet.indices[draw.first_index]];
-                    const auto &b = packet.vertices[packet.indices[draw.first_index + j]];
+                for (uint32_t j = 1; !gpu_geometry && j < draw.index_count; j++) {
+                    const auto a = hcsr::render::drawing_vertex(packet,hcsr::render::draw_vertex_index(packet,draw,0));
+                    const auto b = hcsr::render::drawing_vertex(packet,hcsr::render::draw_vertex_index(packet,draw,j));
                     const float local = Vector2(b.local_x - a.local_x, b.local_y - a.local_y).length();
                     if (local > .001f) transform_scale = MAX(transform_scale, Vector2(b.screen_x - a.screen_x, b.screen_y - a.screen_y).length() / local);
                 }
                 if(gpu_geometry && draw.index_count) {
-                    const auto state=hcsr::render::query_reference_state(packet,packet.gpu.vertex_states[packet.indices[draw.first_index]],local_hierarchy?&hierarchy:nullptr);
+                    const auto state=hcsr::render::query_reference_state(packet,hcsr::render::drawing_state(packet,hcsr::render::draw_vertex_index(packet,draw,0)),local_hierarchy?&hierarchy:nullptr);
                     const auto &m=state.transform;
                     transform_scale=MAX(Vector2(m[0],m[1]).length(),Vector2(m[4],m[5]).length());
                 }
@@ -414,14 +416,14 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
         if (is_glyph) {
             memcpy(&glyph, packet.material_payload + material.payload_offset, sizeof(glyph));
             float transform_scale = 1;
-            for (uint32_t j = 1; j < draw.index_count; j++) {
-                const auto &a = packet.vertices[packet.indices[draw.first_index]];
-                const auto &b = packet.vertices[packet.indices[draw.first_index + j]];
+            for (uint32_t j = 1; !gpu_geometry && j < draw.index_count; j++) {
+                const auto a = hcsr::render::drawing_vertex(packet,hcsr::render::draw_vertex_index(packet,draw,0));
+                const auto b = hcsr::render::drawing_vertex(packet,hcsr::render::draw_vertex_index(packet,draw,j));
                 float local = Vector2(b.local_x - a.local_x, b.local_y - a.local_y).length();
                 if (local > .001f) transform_scale = MAX(transform_scale, Vector2(b.screen_x - a.screen_x, b.screen_y - a.screen_y).length() / local);
             }
             if(gpu_geometry && draw.index_count) {
-                const auto state=hcsr::render::query_reference_state(packet,packet.gpu.vertex_states[packet.indices[draw.first_index]],local_hierarchy?&hierarchy:nullptr);
+                const auto state=hcsr::render::query_reference_state(packet,hcsr::render::drawing_state(packet,hcsr::render::draw_vertex_index(packet,draw,0)),local_hierarchy?&hierarchy:nullptr);
                 const auto &m=state.transform;
                 transform_scale=MAX(Vector2(m[0],m[1]).length(),Vector2(m[4],m[5]).length());
             }

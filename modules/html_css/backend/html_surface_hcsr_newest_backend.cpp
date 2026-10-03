@@ -337,7 +337,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
     rendered = rendered && hcsr_draw_packet_get_backdrop_view(packet_handle, &backdrop_view) == HCSR_OK;
     hcsr_hierarchy_view_t hierarchy_view={};hierarchy_view.struct_size=sizeof(hierarchy_view);
     rendered=rendered && hcsr_draw_packet_get_hierarchy_view(packet_handle,&hierarchy_view)==HCSR_OK;
-    if(rendered && packet.format==HCSR_DRAW_PACKET_FORMAT_GPU && hierarchy_view.revision==0)rendered=false;
+    if(rendered && packet.format==HCSR_DRAW_PACKET_FORMAT_SURFACES && hierarchy_view.revision==0)rendered=false;
 	float output_scale = rendered ? MAX(float(physical_size.x) / packet.viewport_width, float(physical_size.y) / packet.viewport_height) : 1;
     { MutexLock lock(state->mutex);
         for (const KeyValue<uint64_t, HCSRNewestPresentationOutput *> &entry : state->outputs)
@@ -680,7 +680,7 @@ Error HTMLSurfaceHCSRNewestBackend::prepare_host_frame(uint64_t p_host_frame, do
 	// Keep the screen-space packet as an explicit diagnostic/CPU reference.
     const bool gpu_geometry = state->renderer != HTML_SURFACE_HCSR_NEWEST_CPU
         && OS::get_singleton()->get_environment("HCSR_CPU_GEOMETRY") != "1";
-    step.packet_format = gpu_geometry ? HCSR_DRAW_PACKET_FORMAT_GPU : HCSR_DRAW_PACKET_FORMAT_1;
+    step.packet_format = gpu_geometry ? HCSR_DRAW_PACKET_FORMAT_SURFACES : HCSR_DRAW_PACKET_FORMAT_1;
     if(gpu_geometry)step.flags|=HCSR_STEP_LOCAL_HIERARCHY;
 	step.paint_mode = state->text_enabled ? HCSR_PAINT_MODE_DIRECT : HCSR_PAINT_MODE_DIRECT_IMAGES;
 	step.time_seconds = p_timeline_time_seconds;
@@ -1266,7 +1266,7 @@ HTMLSurfaceHCSRNewestBackend::HTMLSurfaceHCSRNewestBackend(HTMLSurfaceHCSRNewest
 	}
 	state->renderer = p_renderer;
 	state->texture = texture;
-	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_16 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
+	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_17 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
 		set_terminal(state, "hcsr_newest scene ABI initialization failed.");
 	}
 }
