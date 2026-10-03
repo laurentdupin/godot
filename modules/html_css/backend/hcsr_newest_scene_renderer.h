@@ -56,6 +56,8 @@ class HCSRNewestSceneRenderer {
     bool prepare_coverage(RenderingDevice *,const Size2i &);
     bool clear_group(RenderingDevice *,RenderingDevice::DrawListID,RID,const Size2i &,size_t event);
     uint32_t group_depth = 0;
+    bool host_coverage_required = true;
+    uint64_t cpu_compositing_bounds_evaluations = 0;
     bool ordered_backdrops=false;
 	bool document_backdrops=false, snapshot_target=false;
 	RID document_shader, document_pipeline;

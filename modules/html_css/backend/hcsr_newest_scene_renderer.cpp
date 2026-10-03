@@ -148,7 +148,9 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
 	batches.clear();
 	hcsr::render::compositing_plan group_plan;
     std::string group_error;
-    if (!hcsr::render::plan_compositing(packet, group_plan, group_error,next_hierarchy,next_hierarchy?&hierarchy:nullptr,true,gpu_geometry)) return false;
+    // GPU pass topology needs no projected coordinates. The coverage program
+    // supplies them once below for the remaining host scheduling consumers.
+    if (!hcsr::render::plan_compositing(packet, group_plan, group_error,next_hierarchy,next_hierarchy?&hierarchy:nullptr,!gpu_geometry,gpu_geometry)) return false;
     std::vector<hcsr::render::ordered_backdrop> backdrop_plan;
     if(gpu_geometry && !hcsr::render::plan_ordered_backdrops(packet,group_plan,backdrop,backdrop_plan,group_error))return false;
     ordered_backdrops=gpu_geometry && !backdrop_plan.empty();
@@ -491,12 +493,19 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
     // placeholder satisfies the shader interface without inventing a second
     // renderer for clears or for missing image resources.
     resources.ensure_sampling_page();
+    // Spatial foreground passes use GPU region controls for clears, sampling
+    // and composition, and cannot take the disjoint-group scheduling path.
+    // Keep CPU coverage only while host copies/scheduling still consume it.
+    host_coverage_required = !gpu_geometry || ordered_backdrops
+        || std::any_of(batches.begin(),batches.end(),[](const Batch &batch){return batch.blend_mode!=0;})
+        || !std::any_of(batches.begin(),batches.end(),[](const Batch &batch){return batch.kind>=hcsr::render::group_filter_pass;});
     if(gpu_geometry) update_compositing_bounds(packet);
 	return true;
 }
 
 void HCSRNewestSceneRenderer::update_compositing_bounds(const hcsr_draw_packet_view_t &packet) {
-    if (!group_depth) return;
+    if (!group_depth || !host_coverage_required) return;
+    ++cpu_compositing_bounds_evaluations;
     bounds_program.update(packet,local_hierarchy?&hierarchy:nullptr);
     for (auto &batch:batches) {
         if (batch.kind && (!batch.backdrop || (batch.backdrop_prefix && !batch.backdrop_first))) {
@@ -1284,5 +1293,7 @@ Dictionary HCSRNewestSceneRenderer::get_statistics() const {
     result["opacity_target_allocations"] = group_allocations;
     result["render_passes"] = last_render_passes;
     result["disjoint_opacity_groups"] = last_disjoint_groups;
+    result["cpu_compositing_bounds_evaluations"] = cpu_compositing_bounds_evaluations;
+    result["host_compositing_bounds_required"] = host_coverage_required;
 	return result;
 }
