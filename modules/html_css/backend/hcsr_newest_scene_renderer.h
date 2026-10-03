@@ -96,7 +96,7 @@ class HCSRNewestSceneRenderer {
 
 public:
     explicit HCSRNewestSceneRenderer(HCSRNewestRasterResources &p_resources) : resources(p_resources) {}
-	bool prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale = 1, const hcsr_backdrop_view_t &backdrop = {},const hcsr_hierarchy_view_t &local = {});
+	bool prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale = 1, const hcsr_backdrop_view_t &backdrop = {},const hcsr_hierarchy_view_t &local = {},const hcsr_raster_demand_view_t &raster_demand = {});
     hcsr_gpu_state_t reference_state(const hcsr_draw_packet_view_t &packet,uint32_t index) const;
     // Borrowed atlas bindings: lifetime and upload remain with this renderer.
     HCSRNewestRasterResources::Entry backdrop_entry(uint32_t index) const { return backdrop_entries[index]; }

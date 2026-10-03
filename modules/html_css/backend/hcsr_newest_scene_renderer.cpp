@@ -96,10 +96,15 @@ bool HCSRNewestSceneRenderer::clear_group(RenderingDevice *device,RenderingDevic
     device->draw_list_draw(list,false,1,6);++coverage.clears;++last_draw_calls;return true;
 }
 
-bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, const Ref<HTMLDocument> &document, float output_scale, const hcsr_backdrop_view_t &backdrop,const hcsr_hierarchy_view_t &local) {
+bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, const Ref<HTMLDocument> &document, float output_scale, const hcsr_backdrop_view_t &backdrop,const hcsr_hierarchy_view_t &local,const hcsr_raster_demand_view_t &raster_demand) {
     const auto &packet=submitted;
     const bool had_pending = resources.has_pending_glyphs();
     const bool next_gpu = hcsr::render::gpu_drawing(packet.format);
+    if(next_gpu && (raster_demand.count!=packet.gpu.state_count || (raster_demand.count && !raster_demand.scales)))return false;
+    const auto appearance_scale = [&](const hcsr_draw_item_t &draw) {
+        const auto index=hcsr::render::drawing_state(packet,hcsr::render::draw_vertex_index(packet,draw,0));
+        return raster_demand.scales[index];
+    };
     const bool next_hierarchy=next_gpu && local.revision!=0;
     const bool retained_surfaces=packet.struct_size>=sizeof(packet) && packet.format==HCSR_DRAW_PACKET_FORMAT_SURFACES
         && gpu_geometry && geometry_generation==packet.gpu.geometry_generation;
@@ -359,9 +364,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
             destination = Rect2(raster.local_rect.x, raster.local_rect.y, raster.local_rect.width, raster.local_rect.height);
             float transform_scale = 1;
             if (gpu_geometry && draw.index_count) {
-                const auto state=hcsr::render::query_reference_state(packet,hcsr::render::drawing_state(packet,hcsr::render::draw_vertex_index(packet,draw,0)),local_hierarchy?&hierarchy:nullptr);
-                const auto &m = state.transform;
-                transform_scale = MAX(Vector2(m[0],m[1]).length(),Vector2(m[4],m[5]).length());
+                transform_scale = appearance_scale(draw);
             } else if (draw.index_count) {
                 const auto a = hcsr::render::drawing_vertex(packet,hcsr::render::draw_vertex_index(packet,draw,0));
                 for (uint32_t j=1; j<draw.index_count; ++j) {
@@ -409,9 +412,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
                     if (local > .001f) transform_scale = MAX(transform_scale, Vector2(b.screen_x - a.screen_x, b.screen_y - a.screen_y).length() / local);
                 }
                 if(gpu_geometry && draw.index_count) {
-                    const auto state=hcsr::render::query_reference_state(packet,hcsr::render::drawing_state(packet,hcsr::render::draw_vertex_index(packet,draw,0)),local_hierarchy?&hierarchy:nullptr);
-                    const auto &m=state.transform;
-                    transform_scale=MAX(Vector2(m[0],m[1]).length(),Vector2(m[4],m[5]).length());
+                    transform_scale = appearance_scale(draw);
                 }
                 entry = resources.resolve_image(document, source, natural, destination.size * (output_scale * transform_scale));
 			}
@@ -428,9 +429,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
                 if (local > .001f) transform_scale = MAX(transform_scale, Vector2(b.screen_x - a.screen_x, b.screen_y - a.screen_y).length() / local);
             }
             if(gpu_geometry && draw.index_count) {
-                const auto state=hcsr::render::query_reference_state(packet,hcsr::render::drawing_state(packet,hcsr::render::draw_vertex_index(packet,draw,0)),local_hierarchy?&hierarchy:nullptr);
-                const auto &m=state.transform;
-                transform_scale=MAX(Vector2(m[0],m[1]).length(),Vector2(m[4],m[5]).length());
+                transform_scale = appearance_scale(draw);
             }
             entry = resources.resolve_glyph(glyph, output_scale * transform_scale);
             if (entry.page >= 0) {
