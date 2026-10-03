@@ -321,5 +321,6 @@ Dictionary HCSRNewestRasterResources::get_statistics() const {
     const int glyph_pages=glyph_page_ids.size();
     result["glyph_pages"] = glyph_pages;
     result["page_size"] = PAGE_SIZE;
+    result["atlas_cpu_pixel_bytes"] = hcsr_atlas_resident_bytes(atlas);
     return result;
 }

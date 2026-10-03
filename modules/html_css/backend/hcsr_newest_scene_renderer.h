@@ -15,6 +15,9 @@ class HCSRNewestSceneRenderer {
     using Entry = HCSRNewestRasterResources::Entry;
     struct GpuPage { RID texture, uniform, mask_uniform,blend_uniform; };
     Vector<GpuPage> gpu_pages;
+    static void release_page(RenderingDevice *,GpuPage &);
+    uint64_t retired_atlas_pages=0;
+    uint64_t uploaded_atlas_revision=UINT64_MAX;
     Vector<Entry> backdrop_entries;
     Vector<uint64_t> backdrop_identities;
     uint32_t backdrop_first_primitive=0;

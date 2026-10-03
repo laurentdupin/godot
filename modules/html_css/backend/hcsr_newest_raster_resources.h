@@ -81,6 +81,8 @@ public:
     void advance_rasterization();
     void ensure_sampling_page();
     int page_count() const { return MAX(0,hcsr_atlas_page_count(atlas))+1; }
+    int page_live_allocations(int page) const { return page==0 ? 1 : hcsr_atlas_live_allocations(atlas,page-1); }
+    uint64_t atlas_revision() const { return hcsr_atlas_revision(atlas); }
     Size2i page_size(int page) const { return page==0 ? Size2i(1,1) : Size2i(PAGE_SIZE,PAGE_SIZE); }
     Vector<uint8_t> page_pixels(int page,const Rect2i &region) const;
     Vector<Rect2i> page_updates(int page) const;
