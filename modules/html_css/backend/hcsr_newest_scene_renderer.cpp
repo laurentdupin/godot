@@ -535,12 +535,18 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
     // placeholder satisfies the shader interface without inventing a second
     // renderer for clears or for missing image resources.
     resources.ensure_sampling_page();
+    const bool ordinary_groups = !ordered_backdrops
+        && !std::any_of(batches.begin(),batches.end(),[](const Batch &batch){return batch.blend_mode!=0 || batch.kind>=hcsr::render::group_filter_pass;});
+    nested_group_passes.clear();
+    if(gpu_geometry && ordinary_groups && group_depth)
+        hcsr::render::schedule_nested_groups(batches.size(),[&](size_t i) {
+            const auto &b=batches[i];
+            return hcsr::render::group_event{b.kind,b.depth};
+        },group_depth,nested_group_passes);
     // Copies, foreground passes and ordered prefixes consume GPU coverage.
     // Only ordinary disjoint-group scheduling still needs host bounds;
     // reference geometry retains its CPU coverage path.
-    host_coverage_required = !gpu_geometry
-        || (!ordered_backdrops && !std::any_of(batches.begin(),batches.end(),[](const Batch &batch){return batch.blend_mode!=0;})
-            && !std::any_of(batches.begin(),batches.end(),[](const Batch &batch){return batch.kind>=hcsr::render::group_filter_pass;}));
+    host_coverage_required = !gpu_geometry || (ordinary_groups && nested_group_passes.empty());
     if(gpu_geometry) update_compositing_bounds(packet);
 	return true;
 }
@@ -1000,13 +1006,15 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
         if(gpu_prefix)++gpu_backdrop_prefix_draws;
         ++last_draw_calls;
     };
-    std::vector<std::vector<size_t>> passes;
+    std::vector<std::vector<size_t>> dynamic_passes;
     // Process-wide diagnostic override for paired profiling and pixel checks.
     static const bool sequential_groups = OS::get_singleton()->get_environment("HCSR_SEQUENTIAL_OPACITY_GROUPS") == "1";
-    last_disjoint_groups=!ordered_backdrops && !sequential_groups && !blending && !spatial_filters && group_depth && hcsr::render::schedule_disjoint_groups(batches.size(),[&](size_t i) {
+    const bool nested_groups=!sequential_groups && !nested_group_passes.empty();
+    last_disjoint_groups=nested_groups || (!ordered_backdrops && !sequential_groups && !blending && !spatial_filters && group_depth && host_coverage_required && hcsr::render::schedule_disjoint_groups(batches.size(),[&](size_t i) {
         const auto &b=batches[i];
         return hcsr::render::group_event{b.kind,b.depth,b.opacity,{b.bounds.position.x,b.bounds.position.y,b.bounds.size.x,b.bounds.size.y}};
-    },group_depth,1,1,size.x,size.y,passes);
+    },group_depth,1,1,size.x,size.y,dynamic_passes));
+    const auto &passes=nested_groups?nested_group_passes:dynamic_passes;
     last_render_passes=0; last_draw_calls=0;
     if(last_disjoint_groups) {
         for(int depth=int(group_depth);depth>=0;--depth) {
@@ -1014,7 +1022,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
             const Color clear=depth ? Color(0,0,0,0) : background;
             Rect2 region;
             bool first=true;
-            if(depth) for(const auto &batch:batches) if(!batch.hidden && batch.kind==HCSR_GROUP_BEGIN && batch.depth==uint32_t(depth)) {
+            if(depth && !nested_groups) for(const auto &batch:batches) if(!batch.hidden && batch.kind==HCSR_GROUP_BEGIN && batch.depth==uint32_t(depth)) {
                 const Rect2 next=region_for(batch);
                 region=first ? next : region.merge(next); first=false;
             }
@@ -1347,6 +1355,7 @@ Dictionary HCSRNewestSceneRenderer::get_statistics() const {
     result["disjoint_opacity_groups"] = last_disjoint_groups;
     result["cpu_compositing_bounds_evaluations"] = cpu_compositing_bounds_evaluations;
     result["host_compositing_bounds_required"] = host_coverage_required;
+    result["nested_group_passes"] = int64_t(nested_group_passes.size());
     result["gpu_blend_region_copies"] = gpu_blend_region_copies;
     result["gpu_backdrop_prefix_draws"] = gpu_backdrop_prefix_draws;
 	return result;

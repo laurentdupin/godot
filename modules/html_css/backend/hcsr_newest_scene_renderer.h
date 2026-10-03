@@ -62,6 +62,7 @@ class HCSRNewestSceneRenderer {
     bool copy_group_region(RenderingDevice *,GroupPool &,RID source,size_t event,uint32_t depth);
     uint32_t group_depth = 0;
     bool host_coverage_required = true;
+    std::vector<std::vector<size_t>> nested_group_passes;
     uint64_t cpu_compositing_bounds_evaluations = 0;
     bool ordered_backdrops=false;
 	bool document_backdrops=false, snapshot_target=false;
