@@ -178,23 +178,27 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
     backdrop_identities=next_backdrop_identities;
     group_depth = group_plan.depth;
 	uploaded = false;
-    // Draws may reuse index ranges, so size by emitted indices rather than the
-    // packet index buffer. Acquire the writable pointer once; per-vertex push_back
-    // repeats CowData resize/write checks across the entire mesh on every update.
+    // Reserve by emitted records in 16-byte words, including compositor support.
+    // Compact surfaces need four words, regardless of their six shader vertices.
+    // Acquire writable storage once rather than repeating CowData checks.
     uint64_t emitted_count = backdrop.surface_count*4;
     for (size_t i = 0; i < packet.draw_item_count; i++) {
-        emitted_count += packet.draw_items[i].index_count;
-        if (group_plan.events[i].kind == HCSR_GROUP_END) emitted_count += 6 + 14 * group_plan.events[i].filters.size() + ((group_plan.events[i].mask.kind || group_plan.events[i].blend_mode)?8:0);
-        if (emitted_count > INT32_MAX/sizeof(Vertex)) return false;
+        const auto &draw=packet.draw_items[i];
+        emitted_count += packet.format==HCSR_DRAW_PACKET_FORMAT_SURFACES ? (draw.index_count?4:0)
+            : uint64_t(hcsr::render::scene_quad(packet,draw)?4:draw.index_count)*4;
+        if (group_plan.events[i].kind == HCSR_GROUP_END) emitted_count += 4*(6 + 14 * group_plan.events[i].filters.size() + ((group_plan.events[i].mask.kind || group_plan.events[i].blend_mode)?8:0));
+        if (emitted_count > INT32_MAX/sizeof(hcsr::render::scene_word)) return false;
     }
     for(const auto &op:backdrop_plan)if(gpu_geometry) {const auto &effect=backdrop.effects[op.effect];
-        emitted_count+=6*(op.prefix_events.size()+(op.prefix_events.empty() || op.document_input?0:1));
-        emitted_count+=uint64_t(effect.surface_count)*(14+effect.operation_count)+uint64_t(effect.operation_count)*20+6;
-        if(emitted_count>INT32_MAX/sizeof(Vertex))return false;
+        emitted_count+=24*(op.prefix_events.size()+(op.prefix_events.empty() || op.document_input?0:1));
+        emitted_count+=4*(uint64_t(effect.surface_count)*(14+effect.operation_count)+uint64_t(effect.operation_count)*20+6);
+        if(emitted_count>INT32_MAX/sizeof(hcsr::render::scene_word))return false;
     }
     if (vertices.resize(int(emitted_count)) != OK) return false;
-    Vertex *vertex_data = vertices.ptrw();
+    auto *vertex_data = vertices.ptrw();
     uint32_t written = 0;
+    auto append_vertex=[&](const Vertex &v){memcpy(vertex_data+written,&v,sizeof(v));written+=4;};
+    auto append_surface=[&](const hcsr::render::scene_surface &v){memcpy(vertex_data+written,&v,sizeof(v));written+=4;};
     std::vector<hcsr::render::filter_pass> filter_passes;
     size_t backdrop_cursor=0;
     std::vector<bool> underlay(group_plan.depth+1,false);
@@ -220,7 +224,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
             batch.backdrop_source_event=event;batch.backdrop_destination=group_plan.depth+2;
             batches.push_back(batch);primitives.push_back({written,2,UINT32_MAX});
             constexpr float corners[][2]={{0,0},{1,0},{1,1},{0,0},{1,1},{0,1}};
-            for(const auto &c:corners){Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=c[0]*2-1;v.position_uv[1]=c[1]*2-1;v.position_uv[2]=c[0];v.position_uv[3]=c[1];v.tint[3]=1;v.bounds[0]=-3;vertex_data[written++]=v;}
+            for(const auto &c:corners){Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=c[0]*2-1;v.position_uv[1]=c[1]*2-1;v.position_uv[2]=c[0];v.position_uv[3]=c[1];v.tint[3]=1;v.bounds[0]=-3;append_vertex(v);}
             document_source=false;
         };
         if(!op.prefix_events.empty()) {
@@ -228,15 +232,15 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
             for(const size_t event:op.prefix_events)prefix(group_plan.events[event].depth-1,event,false);
         }
         auto emit=[&](hcsr::render::filter_program colors,float sigma,uint32_t axis,const hcsr_backdrop_surface_t *surface,uint32_t destination) {
-            const uint32_t parameters=written*4;
-            auto parameter=[&](float x,float y,float z,float w){Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=x;v.position_uv[1]=y;v.position_uv[2]=z;v.position_uv[3]=w;vertex_data[written++]=v;};
+            const uint32_t parameters=written;
+            auto parameter=[&](float x,float y,float z,float w){Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=x;v.position_uv[1]=y;v.position_uv[2]=z;v.position_uv[3]=w;append_vertex(v);};
             if(axis)parameter(float(backdrop.surfaces[effect.first_surface].gpu_state+1),sigma,axis==1,axis==2);
-            for(const auto &color:colors){Vertex v={};v.state=UINT32_MAX;memcpy(v.position_uv,&color,sizeof(color));vertex_data[written++]=v;}
+            for(const auto &color:colors){Vertex v={};v.state=UINT32_MAX;memcpy(v.position_uv,&color,sizeof(color));append_vertex(v);}
             uint32_t mask_parameters=0;int mask_page=0;
             if(surface) {
                 const size_t surface_index=size_t(surface-backdrop.surfaces);const auto &entry=backdrop_entries[surface_index];
                 const auto &r=surface->appearance.raster.local_rect,&crop=surface->appearance.source_rect;
-                mask_page=entry.page;mask_parameters=written*4;
+                mask_page=entry.page;mask_parameters=written;
                 parameter(parameters,colors.size(),4,0);
                 parameter(r.x,r.y,r.width,r.height);
                 parameter(entry.rect.position.x+crop.x,entry.rect.position.y+crop.y,crop.width,crop.height);
@@ -246,7 +250,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
             const uint32_t primitive=uint32_t(primitives.size());primitives.push_back({written,2,UINT32_MAX});
             constexpr float corners[][2]={{0,0},{1,0},{1,1},{0,0},{1,1},{0,1}};
             for(const auto &c:corners){Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=c[0]*2-1;v.position_uv[1]=c[1]*2-1;v.position_uv[2]=c[0];v.position_uv[3]=c[1];v.tint[3]=1;
-                v.bounds[0]=surface?-6.f:axis?-5.f:colors.empty()?-3.f:-4.f;v.bounds[1]=surface?mask_parameters:parameters;v.bounds[2]=colors.size();v.bounds[3]=4;vertex_data[written++]=v;}
+                v.bounds[0]=surface?-6.f:axis?-5.f:colors.empty()?-3.f:-4.f;v.bounds[1]=surface?mask_parameters:parameters;v.bounds[2]=colors.size();v.bounds[3]=4;append_vertex(v);}
             Batch batch{0,primitive,1,6,op.destination_depth,1,Rect2(0,0,1,1),effect.before_draw_index};
             batch.mask_page=mask_page;batch.backdrop=true;batch.backdrop_mask=surface!=nullptr;
             batch.backdrop_first=surface && surface==&backdrop.surfaces[effect.first_surface];
@@ -279,7 +283,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
                 merge.backdrop_source=merge.backdrop_destination=group.depth-1;merge.backdrop_source_event=i;
                 batches.push_back(merge);primitives.push_back({written,2,UINT32_MAX});
                 constexpr float corners[][2]={{0,0},{1,0},{1,1},{0,0},{1,1},{0,1}};
-                for(const auto &c:corners){Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=c[0]*2-1;v.position_uv[1]=c[1]*2-1;v.position_uv[2]=c[0];v.position_uv[3]=c[1];v.tint[3]=1;v.bounds[0]=-3;vertex_data[written++]=v;}
+                for(const auto &c:corners){Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=c[0]*2-1;v.position_uv[1]=c[1]*2-1;v.position_uv[2]=c[0];v.position_uv[3]=c[1];v.tint[3]=1;v.bounds[0]=-3;append_vertex(v);}
             }
             Entry mask_entry;hcsr_raster_material_t mask={};
             if(group.mask.kind) {
@@ -295,23 +299,23 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
             auto emit_group=[&](uint32_t kind,hcsr::render::filter_program colors,float sigma,uint32_t axis,float opacity,const hcsr_filter_operation_t &shadow) {
                 batches.push_back({0,gpu_geometry?uint32_t(primitives.size()):written,gpu_geometry?1u:6u,kind,group.depth,opacity,region,i});
                 batches.write[batches.size()-1].source_scratch=kind==hcsr::render::group_shadow_apply;
-                const uint32_t parameters_first=written*4;
+                const uint32_t parameters_first=written;
                 if(axis) {
                     Vertex v={};v.state=UINT32_MAX;v.position_uv[1]=sigma;v.position_uv[2]=axis==1?1:0;v.position_uv[3]=axis==2?1:0;
                     if(kind==hcsr::render::group_shadow_apply) {memcpy(v.tint,shadow.color,sizeof(shadow.color));v.bounds[0]=shadow.reserved[0];v.bounds[1]=shadow.reserved[1];}
-                    vertex_data[written++]=v;
+                    append_vertex(v);
                 }
                 for(const auto &op:colors) {
                     Vertex v={};v.state=UINT32_MAX;memcpy(v.position_uv,&op,sizeof(op));
-                    vertex_data[written++]=v;
+                    append_vertex(v);
                 }
                 const bool masked=kind==HCSR_GROUP_END && (group.mask.kind || group.blend_mode);
                 uint32_t mask_first=0;
                 if(masked) {
                     batches.write[batches.size()-1].mask_page=group.mask.kind?mask_entry.page:0;
                     batches.write[batches.size()-1].blend_mode=group.blend_mode;
-                    mask_first=written*4;
-                    auto parameter=[&](float x,float y,float z,float w) {Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=x;v.position_uv[1]=y;v.position_uv[2]=z;v.position_uv[3]=w;vertex_data[written++]=v;};
+                    mask_first=written;
+                    auto parameter=[&](float x,float y,float z,float w) {Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=x;v.position_uv[1]=y;v.position_uv[2]=z;v.position_uv[3]=w;append_vertex(v);};
                     parameter(float(parameters_first),float(colors.size()),4,0);
                     parameter(mask.local_rect.x,mask.local_rect.y,mask.local_rect.width,mask.local_rect.height);
                     parameter(mask_entry.rect.position.x,mask_entry.rect.position.y,mask_entry.rect.size.x,mask_entry.rect.size.y);
@@ -329,7 +333,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
                     if(kind==HCSR_GROUP_END && group.opacity_state_plus_one)memcpy(&v.pad[0],&opacity,4);
                     v.bounds[0]=masked?-6.0f:kind==hcsr::render::group_shadow_apply?-7.0f:axis?-5.0f:colors.empty()?-3.0f:-4.0f;
                     v.bounds[1]=float(masked?mask_first:parameters_first);v.bounds[2]=float(colors.size());v.bounds[3]=4;
-                    vertex_data[written++]=v;
+                    append_vertex(v);
                 }
             };
             for(size_t step=0;step<intermediates;++step) {
@@ -339,6 +343,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
             emit_group(HCSR_GROUP_END,spatial?(intermediates<filter_passes.size()?filter_passes.back().colors:hcsr::render::filter_program{}):group.filters,0,0,group.opacity,{});
             continue;
         }
+        if(!draw.index_count)continue;
 		if (material.payload_size < sizeof(hcsr_area_grayscale_material_t) || material.payload_offset > packet.material_payload_size || material.payload_size > packet.material_payload_size - material.payload_offset) {
 			return false;
 		}
@@ -441,7 +446,8 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
 		const bool quad = hcsr::render::scene_quad(packet,draw);
         batches.write[batches.size() - 1].count += gpu_geometry ? (quad ? 1 : (draw.index_count+5)/6) : draw.index_count;
         if(gpu_geometry) {
-            hcsr::render::append_scene_primitives(written,draw.index_count,quad,uint32_t(i),
+            if(packet.format==HCSR_DRAW_PACKET_FORMAT_SURFACES)primitives.push_back({written,3,uint32_t(i),packet.gpu.surfaces[draw.first_index/6].state});
+            else hcsr::render::append_scene_primitives(written,draw.index_count,quad,uint32_t(i),
                 [&](Primitive primitive) { primitives.push_back(primitive); });
         }
         hcsr_atlas_glyph_material_t resolved = {};
@@ -454,32 +460,32 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
             resolved.blue = is_glyph && !entry.color_glyph ? glyph.blue : 1;
             resolved.alpha = area.opacity * (is_glyph ? glyph.alpha : 1);
         }
-        for (uint32_t j = 0; j < (quad ? 4u : draw.index_count); j++) {
-            vertex_data[written++] = hcsr::render::prepare_scene_vertex(packet,draw,j,area,
-                material.kind == HCSR_MATERIAL_VERTEX_COLOR,textured ? &resolved : nullptr);
+        if(packet.format==HCSR_DRAW_PACKET_FORMAT_SURFACES) {
+            if(material.kind==HCSR_MATERIAL_VERTEX_COLOR)return false;
+            const bool geometry_coverage=material.kind==HCSR_MATERIAL_RASTER || material.kind==HCSR_MATERIAL_RASTER_SLICE
+                || (material.kind==HCSR_MATERIAL_ATLAS_GLYPH && (material.flags&HCSR_ATLAS_GEOMETRY_COVERAGE));
+            append_surface(hcsr::render::prepare_scene_surface(packet.gpu.surfaces[draw.first_index/6],area,textured?&resolved:nullptr,geometry_coverage));
+        } else for (uint32_t j = 0; j < (quad ? 4u : draw.index_count); j++) {
+            append_vertex(hcsr::render::prepare_scene_vertex(packet,draw,j,area,
+                material.kind == HCSR_MATERIAL_VERTEX_COLOR,textured ? &resolved : nullptr));
         }
 	}
     while(backdrop_cursor<backdrop_plan.size())emit_backdrop(backdrop_plan[backdrop_cursor++]);
     // Backdrop quads belong to the same prepared scene geometry. The host
     // mask pass borrows these buffers, rather than owning another placement
     // table or rebuilding mask vertices when transforms change.
-    backdrop_first_vertex=written;
+    backdrop_first_primitive=primitives.size();
     for(size_t i=0;i<backdrop.surface_count;++i) {
         const auto &surface=backdrop.surfaces[i];const auto entry=backdrop_entries[i];
         const auto &source=surface.appearance.source_rect;const auto &r=surface.appearance.raster.local_rect;
         if(source.x<0 || source.y<0 || source.width<=0 || source.height<=0
             || source.x+source.width>entry.rect.size.x || source.y+source.height>entry.rect.size.y)return false;
-        const Vector2 corners[]={{0,0},{1,0},{1,1},{0,1}};
-        for(const auto &c:corners) {
-            Vertex v={};
-            v.position_uv[0]=r.x+c.x*r.width;v.position_uv[1]=r.y+c.y*r.height;
-            v.position_uv[2]=entry.rect.position.x+source.x+c.x*source.width;
-            v.position_uv[3]=entry.rect.position.y+source.y+c.y*source.height;
-            v.tint[0]=v.tint[1]=v.tint[2]=1;v.tint[3]=surface.appearance.raster.opacity;
-            v.bounds[0]=entry.rect.position.x+source.x;v.bounds[1]=entry.rect.position.y+source.y;
-            v.bounds[2]=v.bounds[0]+source.width;v.bounds[3]=v.bounds[1]+source.height;
-            v.state=surface.gpu_state;vertex_data[written++]=v;
-        }
+        hcsr_atlas_glyph_material_t mask{};
+        mask.local_rect=r;
+        mask.atlas_rect={float(entry.rect.position.x)+source.x,float(entry.rect.position.y)+source.y,source.width,source.height};
+        mask.red=mask.green=mask.blue=1;mask.alpha=surface.appearance.raster.opacity;
+        primitives.push_back({written,3,UINT32_MAX,surface.gpu_state});
+        append_surface(hcsr::render::prepare_scene_surface({r,surface.gpu_state},{1,mask.alpha},&mask,false));
     }
     vertices.resize(written);
     // Empty and solid-only scenes use the same submission path. A bound
@@ -524,7 +530,7 @@ bool HCSRNewestSceneRenderer::draw_backdrop_mask(RenderingDevice *device,RID tar
             const struct {
                 uint32_t first,mode;
                 float width,height,target_width,target_height;uint32_t region;float mask_mode,group_bounds[4];
-            } push{backdrop_first_vertex+first*4,2,float(logical.x),float(logical.y),float(physical.x),float(physical.y),uint32_t(i+1),0,{}};
+            } push{backdrop_first_primitive+first,2,float(logical.x),float(logical.y),float(physical.x),float(physical.y),uint32_t(i+1),0,{}};
             device->draw_list_set_push_constant(list,&push,sizeof(push));
             device->draw_list_draw(list,false,count,6);
             first+=count;
@@ -570,7 +576,7 @@ bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {
         capacity=MAX(bytes,65536u); rid=device->storage_buffer_create(capacity);
         if (&rid == &buffer) { geometry_dirty=true; uploaded_vertices.clear(); }
     };
-    const uint32_t bytes=vertices.size()*sizeof(Vertex);
+    const uint32_t bytes=vertices.size()*sizeof(hcsr::render::scene_word);
     ensure_buffer(buffer,buffer_capacity,bytes);
     ensure_buffer(state_buffer,state_capacity,gpu_state_count*sizeof(hcsr_gpu_state_t));
     if(local_hierarchy)ensure_buffer(hierarchy_buffer,hierarchy_capacity,hierarchy.nodes.size()*sizeof(hcsr_hierarchy_node_t));
@@ -1061,7 +1067,7 @@ static Vector4 read_atlas(const Ref<Image> &atlas, const Vector2i &p) {
 #define HCSR_F4 Vector4
 #define HCSR_I2 Vector2i
 #define HCSR_INLINE inline
-#define HCSR_CONTEXT const Ref<Image> &atlas, const hcsr::render::scene_vertex *effects, const Ref<Image> &mask_atlas, const hcsr_gpu_state_t *states,const Ref<Image> &blend_atlas,
+#define HCSR_CONTEXT const Ref<Image> &atlas, const hcsr::render::scene_word *effects, const Ref<Image> &mask_atlas, const hcsr_gpu_state_t *states,const Ref<Image> &blend_atlas,
 #define HCSR_ARGS atlas,effects,mask_atlas,states,blend_atlas,
 #define HCSR_CLAMP CLAMP
 #define HCSR_MIN MIN
@@ -1083,7 +1089,7 @@ static Vector4 mask_transform(const hcsr_gpu_state_t *states,int index,Vector4 p
 #define HCSR_LENGTH(v) ((v).length())
 #define HCSR_OFFSET_SCALE(offset) ((offset)*Vector2(tint.x,tint.y))
 #define HCSR_DISCARD return Vector4()
-static Vector4 read_effect(const hcsr::render::scene_vertex *effects,int index) {
+static Vector4 read_effect(const hcsr::render::scene_word *effects,int index) {
     const float *value=reinterpret_cast<const float *>(effects)+index*4;
     return Vector4(value[0],value[1],value[2],value[3]);
 }
@@ -1138,7 +1144,7 @@ void HCSRNewestSceneRenderer::draw_cpu(Ref<Image> target, const Color &backgroun
             else {parent=Image::create_empty(int(size.x),int(size.y),false,Image::FORMAT_RGBA8);parent->fill(Color(0,0,0,0));}
             for (int y=0;y<int(size.y);++y) for(int x=0;x<int(size.x);++x) {
                 Color color=source->get_pixel(x,y)*batch.opacity;
-                const Vertex &parameters=vertices[batch.first];
+                Vertex parameters;memcpy(&parameters,vertices.ptr()+batch.first,sizeof(parameters));
                 if(parameters.bounds[0]<=-4) {
                     const Vector2 uv((x+.5f)/size.x,(y+.5f)/size.y);
                     const Vector4 tint(size.x/logical_width,size.y/logical_height,0,batch.opacity);
@@ -1172,8 +1178,8 @@ void HCSRNewestSceneRenderer::draw_cpu(Ref<Image> target, const Color &backgroun
             }
             atlas_image = Image::create_from_data(atlas_size.x, atlas_size.y, false, Image::FORMAT_RGBA8, atlas_pixels);
         }
-		for (uint32_t i = batch.first; i < batch.first + batch.count; i += 3) {
-			const Vertex &a = vertices[i], &b = vertices[i + 1], &c = vertices[i + 2];
+		for (uint32_t i = batch.first; i < batch.first + batch.count*4; i += 12) {
+			Vertex a,b,c;memcpy(&a,vertices.ptr()+i,sizeof(a));memcpy(&b,vertices.ptr()+i+4,sizeof(b));memcpy(&c,vertices.ptr()+i+8,sizeof(c));
 			auto position = [&](const Vertex &v) { return (Vector2(v.position_uv[0], v.position_uv[1]) + Vector2(1, 1)) * .5f * size; };
 			const Vector2 p = position(a), q = position(b), r = position(c);
             // Quantize once to a common subpixel grid. Exact edge equations make
@@ -1226,7 +1232,8 @@ void HCSRNewestSceneRenderer::draw_cpu(Ref<Image> target, const Color &backgroun
 
 Dictionary HCSRNewestSceneRenderer::get_statistics() const {
 	Dictionary result = resources.get_statistics();
-    result["vertices"] = vertices.size();
+    result["geometry_words"] = vertices.size();
+    result["prepared_geometry_bytes"] = vertices.size()*sizeof(hcsr::render::scene_word);
     result["gpu_geometry"] = gpu_geometry;
     result["instances"] = primitives.size();
     result["draw_calls"] = last_draw_calls;

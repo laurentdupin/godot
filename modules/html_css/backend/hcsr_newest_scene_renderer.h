@@ -17,7 +17,7 @@ class HCSRNewestSceneRenderer {
     Vector<GpuPage> gpu_pages;
     Vector<Entry> backdrop_entries;
     Vector<uint64_t> backdrop_identities;
-    uint32_t backdrop_first_vertex=0;
+    uint32_t backdrop_first_primitive=0;
     using Vertex = hcsr::render::scene_vertex;
 	struct Batch {
 		int page;
@@ -61,8 +61,8 @@ class HCSRNewestSceneRenderer {
     uint32_t last_render_passes = 0;
     bool last_disjoint_groups = false;
     void release_groups(RenderingDevice *device);
-	Vector<Vertex> vertices;
-    Vector<Vertex> uploaded_vertices;
+	Vector<hcsr::render::scene_word> vertices;
+    Vector<hcsr::render::scene_word> uploaded_vertices;
 	Vector<Batch> batches;
     // Six vertex invocations per instance: triangle (0), quad (1), or triangle pair (2).
     using Primitive = hcsr::render::scene_primitive;
