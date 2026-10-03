@@ -134,10 +134,6 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
         update_compositing_bounds(packet);
         return true;
     }
-    const Vector<Vertex> previous_vertices = vertices;
-    const Vector<PreparedMesh> previous_meshes = prepared_meshes;
-    prepared_meshes.clear();
-    if (next_gpu && prepared_meshes.resize(int(packet.draw_item_count)) != OK) return false;
     gpu_geometry=next_gpu; geometry_generation=next_gpu ? packet.gpu.geometry_generation : 0;
     geometry_dirty=true; prepared_scale=output_scale; primitives.clear();
     resources.advance_rasterization();
@@ -456,30 +452,6 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
             resolved.blue = is_glyph && !entry.color_glyph ? glyph.blue : 1;
             resolved.alpha = area.opacity * (is_glyph ? glyph.alpha : 1);
         }
-        // Direct-color meshes have no atlas-dependent preparation. Compare their
-        // explicit immutable inputs and bulk-copy unchanged encoded vertices.
-        if (gpu_geometry && material.kind == HCSR_MATERIAL_VERTEX_COLOR && draw.index_count && !quad) {
-            const uint32_t first = packet.indices[draw.first_index];
-            bool contiguous = draw.index_count <= packet.vertex_count - first;
-            for (uint32_t j = 0; contiguous && j < draw.index_count; ++j)
-                contiguous = packet.indices[draw.first_index+j] == first+j;
-            if (contiguous) {
-                prepared_meshes.write[i] = {first, written, draw.index_count};
-                if (i < size_t(previous_meshes.size())) {
-                    const auto &old = previous_meshes[i];
-                    if (old.count == draw.index_count
-                        && old.source_first + old.count <= uint32_t(prepared_source.size())
-                        && old.source_first + old.count <= uint32_t(prepared_states.size())
-                        && old.prepared_first + old.count <= uint32_t(previous_vertices.size())
-                        && memcmp(prepared_source.ptr()+old.source_first, packet.vertices+first, old.count*sizeof(hcsr_paint_vertex_t)) == 0
-                        && memcmp(prepared_states.ptr()+old.source_first, packet.gpu.vertex_states+first, old.count*sizeof(uint32_t)) == 0) {
-                        memcpy(vertex_data+written, previous_vertices.ptr()+old.prepared_first, old.count*sizeof(Vertex));
-                        written += old.count;
-                        continue;
-                    }
-                }
-            }
-        }
         for (uint32_t j = 0; j < (quad ? 4u : draw.index_count); j++) {
             vertex_data[written++] = hcsr::render::prepare_scene_vertex(packet,draw,j,area,
                 material.kind == HCSR_MATERIAL_VERTEX_COLOR,textured ? &resolved : nullptr);
@@ -508,10 +480,6 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
         }
     }
     vertices.resize(written);
-    if (gpu_geometry) {
-        if (!copy_table(prepared_source, packet.vertices, packet.vertex_count)
-            || !copy_table(prepared_states, packet.gpu.vertex_states, packet.vertex_count)) return false;
-    } else { prepared_source.clear(); prepared_states.clear(); }
     // Empty and solid-only scenes use the same submission path. A bound
     // placeholder satisfies the shader interface without inventing a second
     // renderer for clears or for missing image resources.
@@ -1078,7 +1046,6 @@ void HCSRNewestSceneRenderer::release(RenderingDevice *device) {
     hierarchy_capacity=gpu_state_count=0;hierarchy_uploaded_revision=0;local_hierarchy=false;hierarchy.clear();
     geometry_generation=0; gpu_geometry=false; primitives.clear();
     uploaded_vertices.clear();
-    prepared_meshes.clear(); prepared_source.clear(); prepared_states.clear();
 }
 
 // Compile the same paint program used by the GPU adapters for the CPU path.

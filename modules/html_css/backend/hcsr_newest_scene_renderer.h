@@ -63,10 +63,6 @@ class HCSRNewestSceneRenderer {
     void release_groups(RenderingDevice *device);
 	Vector<Vertex> vertices;
     Vector<Vertex> uploaded_vertices;
-    struct PreparedMesh { uint32_t source_first=0, prepared_first=0, count=0; };
-    Vector<PreparedMesh> prepared_meshes;
-    Vector<hcsr_paint_vertex_t> prepared_source;
-    Vector<uint32_t> prepared_states;
 	Vector<Batch> batches;
     // Six vertex invocations per instance: triangle (0), quad (1), or triangle pair (2).
     using Primitive = hcsr::render::scene_primitive;
