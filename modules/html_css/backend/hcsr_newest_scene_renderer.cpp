@@ -838,16 +838,6 @@ bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {
             // common shader interface without allocating another placeholder.
             RD::Uniform region;region.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER;region.binding=6;region.append_id(state_buffer);uniforms.push_back(region);
 			page.uniform = device->uniform_set_create(VectorView(uniforms.ptr(), uniforms.size()), shader, 0);
-	        if(!page.blend_uniform.is_valid()) {
-            RD::Uniform backdrop;backdrop.uniform_type=RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;backdrop.binding=0;backdrop.append_id(sampler);backdrop.append_id(page.texture);
-            page.blend_uniform=device->uniform_set_create(VectorView(&backdrop,1),shader,2);
-            if(!page.blend_uniform.is_valid())return false;
-        }
-        if(!page.mask_uniform.is_valid()) {
-            RD::Uniform mask;mask.uniform_type=RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;mask.binding=0;mask.append_id(sampler);mask.append_id(page.texture);
-            page.mask_uniform=device->uniform_set_create(VectorView(&mask,1),shader,1);
-            if(!page.mask_uniform.is_valid())return false;
-        }
 		if (!page.uniform.is_valid()) {
 				return false;
 			}
