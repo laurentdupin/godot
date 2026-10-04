@@ -185,7 +185,6 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
     }
     gpu_geometry=next_gpu; geometry_generation=next_gpu ? packet.gpu.geometry_generation : 0;
     geometry_dirty=true; prepared_scale=output_scale; primitives.clear();
-    resources.advance_rasterization();
 	vertices.clear();
 	batches.clear();
     document_regions.clear();document_regions_dirty=true;
@@ -205,9 +204,26 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
         coverage.program.build(packet,bounds_program);coverage.words=coverage.program.words();coverage.dirty=true;coverage.target=Size2i();
     } else {coverage.program={};coverage.words.clear();}
     HashSet<uint64_t> live_surfaces;
+    Vector<String> image_sources;
+    resources.begin_asset_retention(document);
     for (size_t i=0; i<packet.draw_item_count; ++i) {
-        const auto &material=packet.materials[packet.draw_items[i].material_index];
+        const auto &draw=packet.draw_items[i];
+        const auto &material=packet.materials[draw.material_index];
         if(group_plan.events[i].mask.kind==1) {hcsr_raster_material_t mask;memcpy(&mask,group_plan.events[i].mask.data,sizeof(mask));live_surfaces.insert(mask.identity);}
+        if(draw.index_count && (material.kind==HCSR_MATERIAL_IMAGE || material.kind==HCSR_MATERIAL_GLYPH)) {
+            if(material.payload_offset>packet.material_payload_size || material.payload_size>packet.material_payload_size-material.payload_offset)return false;
+            if(material.kind==HCSR_MATERIAL_IMAGE) {
+                if(material.payload_size<sizeof(hcsr_image_material_t))return false;
+                hcsr_image_material_t image;memcpy(&image,packet.material_payload+material.payload_offset,sizeof(image));
+                if(image.source_length>material.payload_size-sizeof(image))return false;
+                const String source=String::utf8((const char *)(packet.material_payload+material.payload_offset+sizeof(image)),image.source_length);
+                image_sources.push_back(source);resources.retain_image_source(source);
+            } else {
+                if(material.payload_size<sizeof(hcsr_glyph_material_t))return false;
+                hcsr_glyph_material_t glyph;memcpy(&glyph,packet.material_payload+material.payload_offset,sizeof(glyph));
+                resources.retain_glyph(glyph);
+            }
+        }
         if (material.kind!=HCSR_MATERIAL_RASTER && material.kind!=HCSR_MATERIAL_RASTER_SLICE) continue;
         const size_t expected = material.kind==HCSR_MATERIAL_RASTER_SLICE ? sizeof(hcsr_raster_slice_material_t) : sizeof(hcsr_raster_material_t);
         if (material.payload_size!=expected || material.payload_offset>packet.material_payload_size
@@ -217,7 +233,10 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
         live_surfaces.insert(raster.identity);
     }
     for(uint64_t identity:next_backdrop_identities)live_surfaces.insert(identity);
+    resources.end_asset_retention();
     resources.retain_surfaces(live_surfaces);
+    resources.advance_rasterization();
+    int next_image_source=0;
     if(backdrop_entries.resize(int(backdrop.surface_count))!=OK)return false;
     for(size_t i=0;i<backdrop.surface_count;++i) {
         const auto &raster=backdrop.surfaces[i].appearance.raster;
@@ -472,7 +491,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
 			hcsr_image_material_t image;
 			memcpy(&image, packet.material_payload + material.payload_offset, sizeof(image));
 			if (image.source_length <= material.payload_size - sizeof(image)) {
-				const String source = String::utf8((const char *)(packet.material_payload + material.payload_offset + sizeof(image)), image.source_length);
+                const String &source=image_sources[next_image_source++];
 				const Size2i natural = resources.resolve_size(document, source);
 				destination = Rect2(image.local_rect.x, image.local_rect.y, image.local_rect.width, image.local_rect.height);
 				if (natural.x > 0 && natural.y > 0 && image.object_fit != 0) {

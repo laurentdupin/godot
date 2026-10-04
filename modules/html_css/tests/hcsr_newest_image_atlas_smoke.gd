@@ -62,14 +62,15 @@ func run() -> void:
     if not stats.has("decoded_images"):
         quit(1)
         return
-    require(int(stats.decoded_images) == 2 and int(stats.pages) == 1, "repeated PNG shares allocation: " + str(stats))
+    # Page zero is the permanent empty sampler; assets share one packed page.
+    require(int(stats.decoded_images) == 2 and int(stats.pages) == 2, "repeated PNG shares allocation: " + str(stats))
     var uploaded := int(stats.uploaded_bytes)
     require(view.set_element_attribute("first", "src", blue) == OK, "source mutation")
     await settle()
     check_pixels(large.texture.get_image(), true)
     check_pixels(small.texture.get_image(), true)
     stats = view.get_frame_scheduler_diagnostics().frame_synchronization.image_atlas
-    require(int(stats.decoded_images) == 3 and int(stats.pages) == 1, "new source allocation")
+    require(int(stats.decoded_images) == 3 and int(stats.pages) == 2, "new source allocation")
     if not cpu:
         require(int(stats.uploaded_bytes)-uploaded == 18*10*4, "only new padded region uploaded: " + str(stats))
     # Removing CSS image declarations must restore defaults, not retain typed state.
@@ -110,7 +111,9 @@ func run() -> void:
         require(magenta.r > .9 and magenta.b > .9 and magenta.g < .1, "third atlas page sampling")
         require(reused.r > .9 and reused.g < .1, "switch back to original atlas page")
         stats = view.get_frame_scheduler_diagnostics().frame_synchronization.image_atlas
-        require(int(stats.pages) == 3 and int(stats.draw_batches) >= 3, "page overflow and ordered batches: " + str(stats))
+        require(int(stats.pages) == 4 and int(stats.gpu_atlas_pages) == 4, "three packed pages plus the empty sampler: " + str(stats))
+        if not cpu:
+            require(int(stats.draw_batches) == 3, "ordered atlas page bindings: " + str(stats))
     stats = view.get_frame_scheduler_diagnostics().frame_synchronization.image_atlas
     large.texture.get_image().save_png("user://image-atlas-smoke.png")
     large.release()

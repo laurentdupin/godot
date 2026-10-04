@@ -192,7 +192,7 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_image(const 
 	// Cache power-of-two reductions, not a new raster for every animated size.
 	const int level = hcsr_atlas_image_level(natural.x,natural.y,physical_size.x,physical_size.y);
 	const String source_key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source;
-	const String key = source_key + "\nminification:" + itos(level);
+    const ImageKey key{source_key,level};
 	if (const Entry *existing = entries.getptr(key)) {
 		return *existing;
 	}
@@ -205,20 +205,73 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_image(const 
     Entry entry = pack_image(image, level);
     if (entry.page < 0) WARN_PRINT("hcsr_newest image unavailable or atlas capacity exceeded: " + source.left(100));
     entries.insert(key, entry);
+    if(entry.atlas_failed)++failed_allocation_count;
     return entry;
 }
 
 void HCSRNewestRasterResources::retain_surfaces(const HashSet<uint64_t> &live) {
     Vector<SurfaceKey> retired;
     for (const auto &item : surface_entries) if (!live.has(item.key.identity)) retired.push_back(item.key);
+    bool released=false;
     for (const auto &key : retired) {
         const Entry entry = surface_entries[key];
-        if (entry.page>0) {
-            const hcsr_atlas_entry_t allocation{entry.page-1,{entry.rect.position.x,entry.rect.position.y,entry.rect.size.x,entry.rect.size.y}};
-            hcsr_atlas_release(atlas,&allocation);
-        }
+        released=release_entry(entry) || released;
         surface_entries.erase(key);
     }
+    if(released)retry_failed_allocations();
+}
+
+bool HCSRNewestRasterResources::release_entry(const Entry &entry) {
+    if(entry.atlas_failed)--failed_allocation_count;
+    if(entry.page<=0)return false;
+    const hcsr_atlas_entry_t allocation{entry.page-1,{entry.rect.position.x,entry.rect.position.y,entry.rect.size.x,entry.rect.size.y}};
+    return hcsr_atlas_release(atlas,&allocation)==HCSR_OK;
+}
+
+void HCSRNewestRasterResources::begin_asset_retention(const Ref<HTMLDocument> &document) {
+    retention_prefix=(document.is_valid()?document->get_html_file()+"|"+document->get_resource_root():String())+"\n";
+    live_images.clear();live_glyphs.clear();
+}
+void HCSRNewestRasterResources::retain_image_source(const String &source) {live_images.insert(retention_prefix+source);}
+void HCSRNewestRasterResources::retain_glyph(const hcsr_glyph_material_t &glyph) {live_glyphs.insert({glyph.face,glyph.glyph,0});}
+void HCSRNewestRasterResources::end_asset_retention() {
+    bool released=false;
+    for(const auto &item:entries)if(!live_images.has(item.key.source))retired_images.push_back(item.key);
+    for(const auto &key:retired_images){released=release_entry(entries[key]) || released;entries.erase(key);}
+    retired_images.clear();
+    for(const auto &item:glyph_entries)if(!live_glyphs.has({item.key.face,item.key.glyph,0}))retired_glyphs.push_back(item.key);
+    for(const auto &key:retired_glyphs){released=release_entry(glyph_entries[key]) || released;glyph_entries.erase(key);}
+    retired_glyphs.clear();
+    for(const auto &item:last_glyphs)if(!live_glyphs.has(item.key))retired_glyphs.push_back(item.key);
+    for(const auto &key:retired_glyphs)last_glyphs.erase(key);
+    retired_glyphs.clear();
+    for(const auto &item:glyph_levels)if(!live_glyphs.has({item.key.face,item.key.glyph,0}))retired_glyphs.push_back(item.key);
+    for(const auto &key:retired_glyphs)glyph_levels.erase(key);
+    retired_glyphs.clear();
+    int kept=0;
+    for(int i=0;i<pending_glyphs.size();i++) {
+        const PendingGlyph pending=pending_glyphs[i];
+        if(live_glyphs.has({pending.key.face,pending.key.glyph,0}))pending_glyphs.write[kept++]=pending;
+        else queued_glyphs.erase(pending.key);
+    }
+    pending_glyphs.resize(kept);
+    live_images.clear();live_glyphs.clear();retention_prefix=String();
+    if(released)retry_failed_allocations();
+}
+
+void HCSRNewestRasterResources::retry_failed_allocations() {
+    // Capacity failure belongs to atlas residency, not asset validity. Retry
+    // only after space is reclaimed; missing/empty assets stay cached.
+    for(const auto &item:entries)if(item.value.atlas_failed)retired_images.push_back(item.key);
+    for(const auto &key:retired_images)entries.erase(key);
+    retired_images.clear();
+    for(const auto &item:glyph_entries)if(item.value.atlas_failed)retired_glyphs.push_back(item.key);
+    for(const auto &key:retired_glyphs)glyph_entries.erase(key);
+    retired_glyphs.clear();
+    Vector<SurfaceKey> retired;
+    for(const auto &item:surface_entries)if(item.value.atlas_failed)retired.push_back(item.key);
+    for(const auto &key:retired)surface_entries.erase(key);
+    failed_allocation_count=0;
 }
 
 HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_raster(const hcsr_raster_material_t &raster, const Vector2 &physical_size) {
@@ -233,8 +286,9 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_raster(const
     if(hcsr_atlas_pack(atlas,reinterpret_cast<const uint32_t *>(raster.pixels),raster.width,raster.height,level,0,&allocation)==HCSR_OK) {
         entry.page=allocation.page+1;entry.rect=Rect2i(allocation.rect.x,allocation.rect.y,allocation.rect.width,allocation.rect.height);
         entry.natural_size=Size2i(raster.width,raster.height);
-    }
+    } else entry.atlas_failed=true;
     surface_entries.insert(key, entry);
+    if(entry.atlas_failed)++failed_allocation_count;
     return entry;
 }
 
@@ -245,7 +299,7 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::pack_image(Ref<Image
     const Vector<uint8_t> pixels=image->get_data();hcsr_atlas_entry_t allocation{};
     if(hcsr_atlas_pack(atlas,reinterpret_cast<const uint32_t *>(pixels.ptr()),image->get_width(),image->get_height(),level,2u|(glyph?1u:0u),&allocation)==HCSR_OK) {
         entry.page=allocation.page+1;entry.rect=Rect2i(allocation.rect.x,allocation.rect.y,allocation.rect.width,allocation.rect.height);
-    }
+    } else entry.atlas_failed=true;
     return entry;
 }
 
@@ -294,12 +348,14 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::rasterize_glyph(cons
     const Entry allocation = pack_image(image, 0, true);
     entry.page = allocation.page;
     entry.rect = allocation.rect;
+    entry.atlas_failed=allocation.atlas_failed;
     const Vector2 padding = entry.glyph_size / Vector2(entry.natural_size) * HCSR_ATLAS_GLYPH_PADDING;
     entry.glyph_offset -= padding;
     entry.glyph_size += padding * 2;
     if (entry.page >= 0) ++rasterized_glyphs;
 	if (entry.page < 0) WARN_PRINT("HCSR glyph atlas capacity exceeded");
 	glyph_entries.insert(key, entry);
+    if(entry.atlas_failed)++failed_allocation_count;
     if (entry.page >= 0) last_glyphs.insert(face_glyph, entry);
 	return entry;
 }
@@ -320,6 +376,9 @@ Dictionary HCSRNewestRasterResources::get_statistics() const {
     Dictionary result;
 	result["pages"] = page_count();
 	result["sources"] = entries.size() + glyph_entries.size() + surface_entries.size();
+    result["image_entries"] = entries.size();
+    result["glyph_entries"] = glyph_entries.size();
+    result["failed_allocations"] = failed_allocation_count;
     {
         MutexLock lock(image_mutex);
         result["decoded_images"] = decoded_images;

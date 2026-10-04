@@ -24,6 +24,7 @@ public:
         Vector2 glyph_offset, glyph_size;
         int raster_size = 0;
         bool color_glyph = false;
+        bool atlas_failed = false;
 	};
 private:
     uint64_t atlas = 0;
@@ -48,8 +49,24 @@ private:
     HashMap<SurfaceKey, Entry, SurfaceHasher> surface_entries;
     Entry pack_image(Ref<Image> image, int level, bool glyph = false);
 
+    struct ImageKey {
+        String source;
+        int level;
+        bool operator==(const ImageKey &other) const { return source == other.source && level == other.level; }
+    };
+    struct ImageHasher {
+        static uint32_t hash(const ImageKey &key) { return hash_fmix32(hash_murmur3_one_32(key.level,key.source.hash())); }
+    };
     HashMap<GlyphKey, Entry, GlyphHasher> glyph_entries;
-	HashMap<String, Entry> entries;
+    HashMap<ImageKey, Entry, ImageHasher> entries;
+    HashSet<String> live_images;
+    HashSet<GlyphKey, GlyphHasher> live_glyphs;
+    Vector<ImageKey> retired_images;
+    Vector<GlyphKey> retired_glyphs;
+    String retention_prefix;
+    int failed_allocation_count = 0;
+    bool release_entry(const Entry &entry);
+    void retry_failed_allocations();
 	mutable Mutex image_mutex;
 	HashMap<String, Ref<Image>> decoded_sources;
 	HashMap<String, Size2i> source_sizes;
@@ -63,6 +80,10 @@ public:
     HCSRNewestRasterResources &operator=(const HCSRNewestRasterResources &) = delete;
 	Entry resolve_image(const Ref<HTMLDocument> &document, const String &source, const Size2i &natural, const Vector2 &physical_size);
     void retain_surfaces(const HashSet<uint64_t> &live);
+    void begin_asset_retention(const Ref<HTMLDocument> &document);
+    void retain_image_source(const String &source);
+    void retain_glyph(const hcsr_glyph_material_t &glyph);
+    void end_asset_retention();
     Entry resolve_raster(const hcsr_raster_material_t &raster, const Vector2 &physical_size);
     Entry resolve_glyph(const hcsr_glyph_material_t &glyph, float scale);
 private:
