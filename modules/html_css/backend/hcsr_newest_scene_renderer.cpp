@@ -188,6 +188,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
     resources.advance_rasterization();
 	vertices.clear();
 	batches.clear();
+    document_regions.clear();document_regions_dirty=true;
 	hcsr::render::compositing_plan group_plan;
     std::string group_error;
     // GPU pass topology needs no projected coordinates. The coverage program
@@ -241,9 +242,9 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
     for(const auto &op:backdrop_plan)if(gpu_geometry) {const auto &effect=backdrop.effects[op.effect];
         emitted_count+=24*(op.prefix_events.size()+(op.prefix_events.empty() || op.document_input?0:1));
         emitted_count+=4*(uint64_t(effect.surface_count)*(14+effect.operation_count)+uint64_t(effect.operation_count)*20+6);
-        // Each spatial operation emits at most two blur passes. Each pass
-        // carries a header plus local bounds/binding pairs for every patch.
-        emitted_count+=8*uint64_t(effect.operation_count)*(2+2*uint64_t(effect.surface_count));
+        // One immutable support descriptor per effect, shared by its blur
+        // passes and document snapshot, with each patch placement binding.
+        emitted_count+=4*(2+2*uint64_t(effect.surface_count));
         if(emitted_count>INT32_MAX/sizeof(hcsr::render::scene_word))return false;
     }
     if (vertices.resize(int(emitted_count)) != OK) return false;
@@ -276,12 +277,24 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
             if(pass.axis==2)blur_halo_y+=3*pass.sigma;
             if(pass.axis)++blur_rounding;
         }
+        const uint32_t effect_region=written;
+        auto region_parameter=[&](float x,float y,float z,float w){Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=x;v.position_uv[1]=y;v.position_uv[2]=z;v.position_uv[3]=w;append_vertex(v);};
+        region_parameter(effect.surface_count,blur_state+1,blur_halo_x,blur_halo_y);
+        region_parameter(blur_rounding,0,0,0);
+        for(uint32_t i=0;i<effect.surface_count;++i) {
+            const auto &patch=backdrop.surfaces[effect.first_surface+i];
+            const auto &r=patch.appearance.raster.local_rect;
+            region_parameter(r.x,r.y,r.width,r.height);
+            region_parameter(patch.gpu_state+1,0,0,0);
+        }
+        const uint32_t document_region=document_regions.size();
+        if(op.document_input)document_regions.push_back(effect_region);
         uint32_t source=snapshot?group_plan.depth+2:op.source_depth-1;
         bool document_source=op.document_input;
         auto prefix=[&](uint32_t layer,size_t event,bool clear) {
             Batch batch{0,uint32_t(primitives.size()),1,6,op.destination_depth,1,Rect2(0,0,1,1),event};
             batch.backdrop=true;batch.backdrop_prefix=true;batch.backdrop_first=clear;
-            batch.document_source=document_source;batch.backdrop_source=layer;
+            batch.document_source=document_source;batch.document_region=document_region;batch.backdrop_source=layer;
             batch.backdrop_source_event=event;batch.backdrop_destination=group_plan.depth+2;
             batches.push_back(batch);primitives.push_back({written,2,UINT32_MAX});
             constexpr float corners[][2]={{0,0},{1,0},{1,1},{0,0},{1,1},{0,1}};
@@ -309,20 +322,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
                 parameter(surface->gpu_state+1,logical_width,logical_height,0);
                 for(int row=0;row<4;++row)parameter(0,0,0,0);
             }
-            uint32_t blur_parameters=0;
-            if(axis) {
-                blur_parameters=written;
-                parameter(effect.surface_count,blur_state+1,blur_halo_x,blur_halo_y);
-                parameter(blur_rounding,0,0,0);
-                // Each nine-slice patch can have its own placement binding.
-                // Pass local rectangles and let the GPU form their union.
-                for(uint32_t i=0;i<effect.surface_count;++i) {
-                    const auto &patch=backdrop.surfaces[effect.first_surface+i];
-                    const auto &r=patch.appearance.raster.local_rect;
-                    parameter(r.x,r.y,r.width,r.height);
-                    parameter(patch.gpu_state+1,0,0,0);
-                }
-            }
+            const uint32_t blur_parameters=axis?effect_region:0;
             const uint32_t primitive=uint32_t(primitives.size());primitives.push_back({written,2,UINT32_MAX});
             constexpr float corners[][2]={{0,0},{1,0},{1,1},{0,0},{1,1},{0,1}};
             for(const auto &c:corners){Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=c[0]*2-1;v.position_uv[1]=c[1]*2-1;v.position_uv[2]=c[0];v.position_uv[3]=c[1];v.tint[3]=1;
@@ -330,7 +330,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
             Batch batch{0,primitive,1,6,op.destination_depth,1,Rect2(0,0,1,1),effect.before_draw_index};
             batch.mask_page=mask_page;batch.backdrop=true;batch.backdrop_mask=surface!=nullptr;
             batch.backdrop_first=surface && surface==&backdrop.surfaces[effect.first_surface];
-            batch.document_source=document_source;
+            batch.document_source=document_source;batch.document_region=document_region;
             batch.backdrop_source=source;batch.backdrop_destination=destination;batch.backdrop_source_event=source<group_plan.depth?op.source_event:SIZE_MAX;
             // Only combine adjacent mask slices within this effect. The first
             // batch retains its clear/snapshot flags; atlas changes still split.
@@ -863,7 +863,57 @@ bool HCSRNewestSceneRenderer::prepare_gpu_resources(RenderingDevice *device) {
     return true;
 }
 
-bool HCSRNewestSceneRenderer::snapshot_document(RenderingDevice *device, RID prefix, RID snapshot, const CanvasRenderTargetPreparation::Input *input) {
+bool HCSRNewestSceneRenderer::prepare_document_regions(RenderingDevice *device,const Size2i &size) {
+    using RD=RenderingDevice;
+    if(document_regions.is_empty())return true;
+    if(!document_region_shader.is_valid()) {
+        RD::ShaderStageSPIRVData stage;stage.shader_stage=RD::SHADER_STAGE_COMPUTE;String error;
+        stage.spirv=device->shader_compile_spirv_from_source(stage.shader_stage,hcsr::shaders::document_region_glsl,RD::SHADER_LANGUAGE_GLSL,&error);
+        if(stage.spirv.is_empty()){ERR_PRINT(error);return false;}
+        Vector<RD::ShaderStageSPIRVData> stages;stages.push_back(stage);
+        document_region_shader=device->shader_create_from_spirv(stages,"HCSR document snapshot region");
+        if(!document_region_shader.is_valid())return false;
+        document_region_pipeline=device->compute_pipeline_create(document_region_shader);
+    }
+    if(!document_region_pipeline.is_valid())return false;
+    // Output submission scratch, not an appearance or placement cache. Resolve
+    // every document effect together against current GPU states once per draw.
+    const uint32_t count=document_regions.size();
+    if(count>document_region_capacity) {
+        if(document_region_uniform.is_valid() && device->uniform_set_is_valid(document_region_uniform))device->free_rid(document_region_uniform);
+        document_region_uniform=RID();
+        for(RID rid:{document_region_buffer,document_arguments,document_descriptors})if(rid.is_valid())device->free_rid(rid);
+        document_region_buffer=device->storage_buffer_create(count*16);
+        document_arguments=device->storage_buffer_create(count*12,{},RD::STORAGE_BUFFER_USAGE_DISPATCH_INDIRECT);
+        document_descriptors=device->storage_buffer_create(count*4);
+        document_region_capacity=count;document_regions_dirty=true;
+    }
+    if(document_regions_dirty) {
+        if(device->buffer_update(document_descriptors,0,count*4,document_regions.ptr())!=OK)return false;
+        document_regions_dirty=false;
+    }
+    if(!document_region_buffer.is_valid() || !document_arguments.is_valid() || !document_descriptors.is_valid())return false;
+    // RenderingDevice owns descriptor dependency invalidation. Buffer growth
+    // invalidates this set; placement revisions do not change its resources.
+    if(document_region_uniform.is_valid() && !device->uniform_set_is_valid(document_region_uniform))document_region_uniform=RID();
+    if(!document_region_uniform.is_valid()) {
+        Vector<RD::Uniform> region_uniforms;
+        const RID region_resources[]={buffer,state_buffer,document_region_buffer,document_arguments,document_descriptors};
+        for(uint32_t i=0;i<5;++i){RD::Uniform u;u.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER;u.binding=i;u.append_id(region_resources[i]);region_uniforms.push_back(u);}
+        document_region_uniform=device->uniform_set_create(region_uniforms,document_region_shader,0);
+    }
+    if(!document_region_uniform.is_valid())return false;
+    const struct {uint32_t count,stride;float width,height,target_width,target_height;uint32_t padding[2];} region_push{count,4,logical_width,logical_height,float(size.x),float(size.y),{0,0}};
+    auto list=device->compute_list_begin();
+    device->compute_list_bind_compute_pipeline(list,document_region_pipeline);
+    device->compute_list_bind_uniform_set(list,document_region_uniform,0);
+    device->compute_list_set_push_constant(list,&region_push,sizeof(region_push));
+    device->compute_list_dispatch(list,count,1,1);
+    device->compute_list_end();
+    return true;
+}
+
+bool HCSRNewestSceneRenderer::snapshot_document(RenderingDevice *device,GroupPool &pool, RID prefix, RID snapshot, uint32_t region, const CanvasRenderTargetPreparation::Input *input) {
     using RD=RenderingDevice;
     if (!document_shader.is_valid()) {
         RD::ShaderStageSPIRVData stage;stage.shader_stage=RD::SHADER_STAGE_COMPUTE;
@@ -875,11 +925,23 @@ bool HCSRNewestSceneRenderer::snapshot_document(RenderingDevice *device, RID pre
         document_pipeline=device->compute_pipeline_create(document_shader);
     }
     if(!document_pipeline.is_valid())return false;
-    Vector<RD::Uniform> uniforms;
-    for(uint32_t i=0;i<2;++i){RD::Uniform u;u.uniform_type=RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;u.binding=i;u.append_id(sampler);u.append_id(i && input?input->color_texture:prefix);uniforms.push_back(u);}
-    RD::Uniform destination;destination.uniform_type=RD::UNIFORM_TYPE_IMAGE;destination.binding=2;destination.append_id(snapshot);uniforms.push_back(destination);
-    RID bindings=device->uniform_set_create(uniforms,document_shader,0);
-    if(!bindings.is_valid())return false;
+    const RID host=input?input->color_texture:prefix;
+    auto &entry=pool.document_bindings;
+    if(entry.uniform.is_valid() && !device->uniform_set_is_valid(entry.uniform))entry.uniform=RID();
+    if(entry.prefix!=prefix || entry.host!=host || entry.snapshot!=snapshot) {
+        if(entry.uniform.is_valid())device->free_rid(entry.uniform);
+        entry=DocumentBindings{prefix,host,snapshot,RID()};
+    }
+    RID bindings=entry.uniform;
+    if(!bindings.is_valid()) {
+        Vector<RD::Uniform> uniforms;
+        for(uint32_t i=0;i<2;++i){RD::Uniform u;u.uniform_type=RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;u.binding=i;u.append_id(sampler);u.append_id(i?host:prefix);uniforms.push_back(u);}
+        RD::Uniform destination;destination.uniform_type=RD::UNIFORM_TYPE_IMAGE;destination.binding=2;destination.append_id(snapshot);uniforms.push_back(destination);
+        RD::Uniform rectangle;rectangle.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER;rectangle.binding=3;rectangle.append_id(document_region_buffer);uniforms.push_back(rectangle);
+        bindings=device->uniform_set_create(uniforms,document_shader,0);
+        if(!bindings.is_valid())return false;
+        entry=DocumentBindings{prefix,host,snapshot,bindings};
+    }
     const auto size=device->texture_get_format(snapshot);
     struct {float row_x[4],row_y[4],sizes[4],flags[4];} push{};
     push.sizes[0]=size.width;push.sizes[1]=size.height;
@@ -890,12 +952,13 @@ bool HCSRNewestSceneRenderer::snapshot_document(RenderingDevice *device, RID pre
         push.row_y[0]=t[0].y*r.size.x/size.width;push.row_y[1]=t[1].y*r.size.y/size.height;push.row_y[2]=origin.y;
         push.sizes[2]=input->size.x;push.sizes[3]=input->size.y;push.flags[0]=1;push.flags[1]=input->linear_colors;
     }
+    push.flags[2]=float(region);
     auto list=device->compute_list_begin();
     device->compute_list_bind_compute_pipeline(list,document_pipeline);
     device->compute_list_bind_uniform_set(list,bindings,0);
     device->compute_list_set_push_constant(list,&push,sizeof(push));
-    device->compute_list_dispatch(list,(size.width+7)/8,(size.height+7)/8,1);
-    device->compute_list_end();device->free_rid(bindings);
+    device->compute_list_dispatch_indirect(list,document_arguments,region*12);
+    device->compute_list_end();++gpu_document_snapshots;
     return true;
 }
 
@@ -938,7 +1001,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
 	}
     const auto format = device->texture_get_format(target);
     const Size2i size(format.width,format.height);
-    if(!prepare_coverage(device,size)){device->free_rid(framebuffer);return false;}
+    if(!prepare_coverage(device,size) || !prepare_document_regions(device,size)){device->free_rid(framebuffer);return false;}
     int pool_index=-1;
     for(int i=group_pools.size()-1;i>=0;--i) {
         if(!device->texture_is_valid(group_pools[i].output)) {
@@ -1090,7 +1153,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
         if (batch.kind) {
             resume_foreground_depth=0;
             device->draw_list_end();
-            if(batch.document_source && !snapshot_document(device,target,group_targets[group_depth+2].texture,input)){device->free_rid(framebuffer);return false;}
+            if(batch.document_source && !snapshot_document(device,pool,target,group_targets[group_depth+2].texture,batch.document_region,input)){device->free_rid(framebuffer);return false;}
             const Color transparent(0,0,0,0);
             const Rect2 region=region_for(batch);
             if(batch.blend_mode) {
@@ -1125,6 +1188,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
 
 void HCSRNewestSceneRenderer::release_groups(RenderingDevice *device) {
     if(device) for(const auto &pool:group_pools) {
+        if(pool.document_bindings.uniform.is_valid() && device->uniform_set_is_valid(pool.document_bindings.uniform))device->free_rid(pool.document_bindings.uniform);
         for(const auto &copy:pool.blend_copies)if(copy.uniform.is_valid() && device->uniform_set_is_valid(copy.uniform))device->free_rid(copy.uniform);
         for(RID rid:{pool.blend_uniform,pool.blend_texture})if(rid.is_valid())device->free_rid(rid);
         for(const auto &group:pool.targets)for(RID rid:{group.uniform,group.framebuffer,group.texture})if(rid.is_valid())device->free_rid(rid);
@@ -1149,7 +1213,8 @@ void HCSRNewestSceneRenderer::release(RenderingDevice *device) {
             if(coverage.shaders[i].is_valid())device->free_rid(coverage.shaders[i]);
         }
         for(GpuPage &page:gpu_pages) release_page(device,page);
-		for (RID rid : { hierarchy_uniform,hierarchy_pipeline,hierarchy_shader,hierarchy_buffer,pipeline, shadow_pipeline, document_pipeline, blend_copy_pipeline,blend_copy_shader,buffer, sampler, shader, document_shader, state_buffer,clip_buffer,plane_buffer,primitive_buffer }) {
+        if(document_region_uniform.is_valid() && device->uniform_set_is_valid(document_region_uniform))device->free_rid(document_region_uniform);
+		for (RID rid : { hierarchy_uniform,hierarchy_pipeline,hierarchy_shader,hierarchy_buffer,pipeline, shadow_pipeline, document_pipeline,document_region_pipeline,document_region_shader,document_region_buffer,document_arguments,document_descriptors, blend_copy_pipeline,blend_copy_shader,buffer, sampler, shader, document_shader, state_buffer,clip_buffer,plane_buffer,primitive_buffer }) {
 			if (rid.is_valid()) {
 				device->free_rid(rid);
 			}
@@ -1162,6 +1227,8 @@ void HCSRNewestSceneRenderer::release(RenderingDevice *device) {
 	batches.clear();
 	pipeline = shadow_pipeline = buffer = sampler = shader = document_shader = document_pipeline = RID();
     blend_copy_shader=blend_copy_pipeline=RID();
+    document_region_pipeline=document_region_shader=document_region_buffer=document_arguments=document_region_uniform=document_descriptors=RID();
+    document_region_capacity=0;document_regions.clear();document_regions_dirty=true;
 	buffer_capacity = 0;
     state_buffer=clip_buffer=plane_buffer=primitive_buffer=RID();
     state_capacity=clip_capacity=plane_capacity=primitive_capacity=0;
@@ -1392,5 +1459,6 @@ Dictionary HCSRNewestSceneRenderer::get_statistics() const {
     result["nested_group_passes"] = int64_t(nested_group_passes.size());
     result["gpu_blend_region_copies"] = gpu_blend_region_copies;
     result["gpu_backdrop_prefix_draws"] = gpu_backdrop_prefix_draws;
+    result["gpu_document_snapshots"] = gpu_document_snapshots;
 	return result;
 }

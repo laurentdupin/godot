@@ -36,12 +36,14 @@ class HCSRNewestSceneRenderer {
         size_t backdrop_source_event=SIZE_MAX;
         bool backdrop=false,backdrop_mask=false,backdrop_merge=false,backdrop_first=false;
 		bool document_source=false, backdrop_prefix=false;
+        uint32_t document_region=0;
         uint32_t opacity_state_plus_one=0;
         bool hidden=false;
 	};
     struct GroupTarget { RID texture, framebuffer, uniform; Size2i size; };
     struct BlendCopy { RID source,uniform; };
-    struct GroupPool { RID output,blend_texture,blend_uniform; Vector<GroupTarget> targets,underlays; Vector<BlendCopy> blend_copies; };
+    struct DocumentBindings {RID prefix,host,snapshot,uniform;};
+    struct GroupPool { RID output,blend_texture,blend_uniform; DocumentBindings document_bindings; Vector<GroupTarget> targets,underlays; Vector<BlendCopy> blend_copies; };
     Vector<GroupPool> group_pools;
     hcsr::render::compositing_bounds_program bounds_program;
     struct CoverageGpu {
@@ -66,8 +68,14 @@ class HCSRNewestSceneRenderer {
     uint64_t cpu_compositing_bounds_evaluations = 0;
     bool ordered_backdrops=false;
 	bool document_backdrops=false, snapshot_target=false;
-	RID document_shader, document_pipeline;
-	bool snapshot_document(RenderingDevice *, RID prefix, RID snapshot, const CanvasRenderTargetPreparation::Input *);
+	RID document_shader, document_pipeline,document_region_shader,document_region_pipeline;
+    RID document_region_buffer,document_arguments,document_region_uniform,document_descriptors;
+    Vector<uint32_t> document_regions;
+    uint32_t document_region_capacity=0;
+    bool document_regions_dirty=true;
+    bool prepare_document_regions(RenderingDevice *,const Size2i &);
+    uint64_t gpu_document_snapshots=0;
+	bool snapshot_document(RenderingDevice *,GroupPool &, RID prefix, RID snapshot, uint32_t region, const CanvasRenderTargetPreparation::Input *);
     uint64_t group_allocations = 0;
     uint32_t last_render_passes = 0;
     bool last_disjoint_groups = false;
