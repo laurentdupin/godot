@@ -34,7 +34,7 @@ func run() -> void:
 	var image := Image.create(12, 6, false, Image.FORMAT_RGBA8)
 	image.fill(Color.RED)
 	var image_source := "data:image/png;base64," + Marshalls.raw_to_base64(image.save_png_to_buffer())
-	var html := "<style>html,body{margin:0;font:16px Arial}#scroll{position:absolute;left:10px;top:10px;width:100px;height:120px;overflow:auto;background:#123456}.row{height:40px;background:#789abc}#scroll.changed{background:green}#group{position:absolute;left:150px;top:20px;width:150px;height:70px;opacity:.6;mask-image:linear-gradient(90deg,transparent,black)}#label{color:red}#label.changed{color:blue}#image{position:absolute;left:150px;top:110px;width:60px;height:60px;object-fit:contain}#image.changed{object-fit:cover}#check{position:absolute;left:250px;top:110px;width:24px;height:24px;accent-color:#00aaff}</style><div id='scroll'>"
+	var html := "<style>html,body{margin:0;font:16px Arial}#scroll{position:absolute;left:10px;top:10px;width:100px;height:120px;overflow:auto;background:#123456}.row{height:40px;background:#789abc}#scroll.changed{background:green;box-shadow:3px 4px 2px red}#group{position:absolute;left:150px;top:20px;width:150px;height:70px;opacity:.6;mask-image:linear-gradient(90deg,transparent,black)}#label{color:red}#label.changed{color:blue}#image{position:absolute;left:150px;top:110px;width:60px;height:60px;object-fit:contain}#image.changed{object-fit:cover;box-shadow:2px 3px 2px blue}#check{position:absolute;left:250px;top:110px;width:24px;height:24px;accent-color:#00aaff}</style><div id='scroll'>"
 	for i in 20:
 		html += "<div class='row' id='row%d'></div>" % i
 	html += "</div><div id='group'><span id='label'>Caption</span></div><img id='image' src='%s'><input id='check' type='checkbox'>" % image_source
