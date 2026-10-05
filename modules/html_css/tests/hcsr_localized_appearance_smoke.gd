@@ -34,10 +34,10 @@ func run() -> void:
 	var image := Image.create(12, 6, false, Image.FORMAT_RGBA8)
 	image.fill(Color.RED)
 	var image_source := "data:image/png;base64," + Marshalls.raw_to_base64(image.save_png_to_buffer())
-	var html := "<style>html,body{margin:0;font:16px Arial}#scroll{position:absolute;left:10px;top:10px;width:100px;height:120px;overflow:auto;background:#123456}.row{height:40px;background:#789abc}#scroll.changed{background:green;box-shadow:3px 4px 2px red}#group{position:absolute;left:150px;top:20px;width:150px;height:70px;opacity:.6;mask-image:linear-gradient(90deg,transparent,black)}#label{color:red}#label.changed{color:blue}#image{position:absolute;left:150px;top:110px;width:60px;height:60px;object-fit:contain}#image.changed{object-fit:cover;box-shadow:2px 3px 2px blue}#check{position:absolute;left:250px;top:110px;width:24px;height:24px;accent-color:#00aaff}</style><div id='scroll'>"
+	var html := "<style>html,body{margin:0;font:16px Arial}#scroll{position:absolute;left:10px;top:10px;width:100px;height:120px;overflow:auto;background:#123456;border:2px solid white;border-radius:13px}.row{height:40px;background:#789abc}#scroll.changed{border-image-source:linear-gradient(30deg,blue,yellow);background:green;box-shadow:3px 4px 2px red}#group{position:absolute;left:150px;top:20px;width:150px;height:70px;opacity:.6;mask-image:linear-gradient(90deg,transparent,black)}#label{color:red}#label.changed{color:blue}#image{position:absolute;left:150px;top:110px;width:60px;height:60px;object-fit:contain}#image.changed{object-fit:cover;box-shadow:2px 3px 2px blue}#check{position:absolute;left:250px;top:110px;width:24px;height:24px;accent-color:#00aaff}#progress{position:absolute;left:150px;top:170px;width:100px;height:25px}</style><div id='scroll'>"
 	for i in 20:
-		html += "<div class='row' id='row%d'></div>" % i
-	html += "</div><div id='group'><span id='label'>Caption</span></div><img id='image' src='%s'><input id='check' type='checkbox'>" % image_source
+		html += "<div class='row' id='row%d'>%s</div>" % [i, "<progress id='inner-progress' max='100' value='5' style='width:80px;height:25px'></progress>" if i == 10 else ""]
+	html += "</div><div id='group'><span id='label'>Caption</span></div><img id='image' src='%s'><input id='check' type='checkbox'><progress id='progress' max='100' value='5'></progress>" % image_source
 	var actual := make_view(html)
 	var output := actual.create_output(Vector2i(320, 200), true)
 	await settle()
@@ -48,9 +48,11 @@ func run() -> void:
 		var css_class := "changed" if changed else ""
 		for id in ["scroll", "label", "image"]:
 			require(actual.set_element_attribute(id, "class", css_class) == OK, "class " + id)
+		for id in ["progress", "inner-progress"]:
+			require(actual.set_form_control_value(id, str(20 + cycle * 20)) == OK, "progress value " + id)
 		require(actual.set_form_control_checked("check", changed) == OK, "checked state")
 		await settle()
-		var expected_html := html
+		var expected_html := html.replace("value='5'", "value='%d'" % (20 + cycle * 20))
 		if changed:
 			for id in ["scroll", "label", "image"]:
 				expected_html = expected_html.replace("id='%s'" % id, "id='%s' class='changed'" % id)
@@ -67,8 +69,11 @@ func run() -> void:
 			for x in 320:
 				if a.get_pixel(x, y) != b.get_pixel(x, y):
 					different += 1
+		if different != 0:
+			a.save_png("user://localized-appearance-actual-%d.png" % cycle)
+			b.save_png("user://localized-appearance-expected-%d.png" % cycle)
 		require(different == 0, "fresh pixels cycle=%d different=%d" % [cycle, different])
 		expected.queue_free()
 		await settle()
-	print("LOCAL_APPEARANCE_SMOKE ", "FAIL" if failed else "OK", " cycles=4 text=true images=true checkbox=true mask_opacity=true scrolled_thumb=true")
+	print("LOCAL_APPEARANCE_SMOKE ", "FAIL" if failed else "OK", " cycles=4 text=true images=true checkbox=true mask_opacity=true scrolled_thumb=true border_image=true progress_clips=true")
 	quit(1 if failed else 0)
