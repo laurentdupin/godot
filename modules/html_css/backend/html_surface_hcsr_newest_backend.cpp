@@ -354,7 +354,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
     }
     const uint64_t atlas_start_usec = OS::get_singleton()->get_ticks_usec();
     const bool valid_packet = rendered;
-    const bool textured = rendered && !inject_failure && state->scene_renderer.prepare(packet, state->document, output_scale, backdrop_view,hierarchy_view,raster_demand);
+    const bool textured = rendered && !inject_failure && state->scene_renderer.prepare(packet, state->document, output_scale, backdrop_view,hierarchy_view,raster_demand,renderer!=HTML_SURFACE_HCSR_NEWEST_CPU);
 	const bool canvas_required = textured && renderer != HTML_SURFACE_HCSR_NEWEST_CPU && prepared.canvas_enabled && state->scene_renderer.has_document_backdrops();
     const uint64_t atlas_end_usec = OS::get_singleton()->get_ticks_usec();
 	if (textured) {

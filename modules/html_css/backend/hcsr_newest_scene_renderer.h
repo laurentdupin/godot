@@ -35,12 +35,13 @@ class HCSRNewestSceneRenderer {
         uint32_t backdrop_source=0,backdrop_destination=0;
         size_t backdrop_source_event=SIZE_MAX;
         bool backdrop=false,backdrop_mask=false,backdrop_merge=false,backdrop_first=false;
+        bool backdrop_fused=false;
 		bool document_source=false, backdrop_prefix=false;
         uint32_t document_region=0;
         uint32_t opacity_state_plus_one=0;
         bool hidden=false;
 	};
-    struct GroupTarget { RID texture, framebuffer, uniform; Size2i size; };
+    struct GroupTarget { RID texture, framebuffer, uniform,foreground_uniform; Size2i size; };
     struct BlendCopy { RID source,uniform; };
     struct DocumentBindings {RID prefix,host,snapshot,uniform;};
     struct GroupPool { RID output,blend_texture,blend_uniform; Size2i blend_size; DocumentBindings document_bindings; Vector<GroupTarget> targets,underlays; Vector<BlendCopy> blend_copies; };
@@ -69,8 +70,10 @@ class HCSRNewestSceneRenderer {
     bool ordered_backdrops=false;
 	bool document_backdrops=false, snapshot_target=false;
 	RID document_shader, document_pipeline,document_region_shader,document_region_pipeline;
-    RID document_region_buffer,document_arguments,document_region_uniform,document_descriptors;
-    Vector<uint32_t> document_regions;
+    RID document_region_buffer,document_arguments,document_region_uniform,document_descriptors,document_mapping;
+    struct DocumentRegion { uint32_t geometry,coverage,first,count; };
+    Vector<DocumentRegion> document_regions;
+    uint32_t document_snapshot_cohorts=0;
     uint32_t document_region_capacity=0;
     bool document_regions_dirty=true;
     bool prepare_document_regions(RenderingDevice *,const Size2i &);
@@ -107,7 +110,7 @@ class HCSRNewestSceneRenderer {
     double last_gpu_ms=0;
     uint64_t last_gpu_frame=0;
 
-	RID shader, sampler, buffer, pipeline, shadow_pipeline;
+	RID shader, sampler, buffer, pipeline, fused_pipeline, shadow_pipeline;
 	uint32_t buffer_capacity = 0;
 	bool uploaded = false;
 	uint64_t uploaded_bytes = 0;
@@ -115,7 +118,7 @@ class HCSRNewestSceneRenderer {
 
 public:
     explicit HCSRNewestSceneRenderer(HCSRNewestRasterResources &p_resources) : resources(p_resources) {}
-	bool prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale = 1, const hcsr_backdrop_view_t &backdrop = {},const hcsr_hierarchy_view_t &local = {},const hcsr_raster_demand_view_t &raster_demand = {});
+    bool prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale = 1, const hcsr_backdrop_view_t &backdrop = {},const hcsr_hierarchy_view_t &local = {},const hcsr_raster_demand_view_t &raster_demand = {},bool gpu_compositing=true);
     hcsr_gpu_state_t reference_state(const hcsr_draw_packet_view_t &packet,uint32_t index) const;
     // Borrowed atlas bindings: lifetime and upload remain with this renderer.
     HCSRNewestRasterResources::Entry backdrop_entry(uint32_t index) const { return backdrop_entries[index]; }

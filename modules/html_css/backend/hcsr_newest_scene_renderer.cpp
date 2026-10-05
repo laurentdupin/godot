@@ -143,7 +143,7 @@ bool HCSRNewestSceneRenderer::clear_group(RenderingDevice *device,RenderingDevic
     device->draw_list_draw(list,false,1,6);++coverage.clears;++last_draw_calls;return true;
 }
 
-bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, const Ref<HTMLDocument> &document, float output_scale, const hcsr_backdrop_view_t &backdrop,const hcsr_hierarchy_view_t &local,const hcsr_raster_demand_view_t &raster_demand) {
+bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, const Ref<HTMLDocument> &document, float output_scale, const hcsr_backdrop_view_t &backdrop,const hcsr_hierarchy_view_t &local,const hcsr_raster_demand_view_t &raster_demand,bool gpu_compositing) {
     const auto &packet=submitted;
     const bool had_pending = resources.has_pending_glyphs();
     const bool next_gpu = hcsr::render::gpu_drawing(packet.format);
@@ -192,7 +192,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
     geometry_dirty=true; prepared_scale=output_scale; primitives.clear();
 	vertices.clear();
 	batches.clear();
-    document_regions.clear();document_regions_dirty=true;
+    document_regions.clear();document_regions_dirty=true;document_snapshot_cohorts=0;
 	hcsr::render::compositing_plan group_plan;
     std::string group_error;
     // GPU pass topology needs no projected coordinates. The coverage program
@@ -280,11 +280,24 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
     std::vector<hcsr::render::filter_pass> filter_passes;
     size_t backdrop_cursor=0;
     std::vector<bool> underlay(group_plan.depth+1,false);
-    auto emit_backdrop=[&](const hcsr::render::ordered_backdrop &op) {
+    std::vector<size_t> fused_at_end(group_plan.events.size(),SIZE_MAX);
+    static const bool diagnostic_sequential_backdrops=OS::get_singleton()->get_environment("HCSR_SEQUENTIAL_BACKDROP_COMPOSITES")=="1";
+    const bool sequential_backdrops=diagnostic_sequential_backdrops || !gpu_compositing;
+    auto fusion_end=[&](const hcsr::render::ordered_backdrop &op) {
+        // A direct enclosing-root source is also the final attachment. Keep
+        // that case ordered rather than introducing a texture feedback loop.
+        return op.document_input || !op.prefix_events.empty()?hcsr::render::backdrop_leaf_end(op,group_plan,backdrop):SIZE_MAX;
+    };
+    if(!sequential_backdrops)for(size_t n=0;n<backdrop_plan.size();++n) {
+        const size_t end=fusion_end(backdrop_plan[n]);
+        if(end!=SIZE_MAX)fused_at_end[end]=n;
+    }
+    auto emit_backdrop=[&](const hcsr::render::ordered_backdrop &op,size_t fused_end=SIZE_MAX) {
+        const bool fused=fused_end!=SIZE_MAX;
         if(!gpu_geometry)return;
         const auto &effect=backdrop.effects[op.effect];
         if(!effect.surface_count)return;
-        underlay[op.destination_depth]=true;
+        underlay[op.destination_depth]=!fused;
         std::vector<hcsr_filter_operation_t> operations;
         for(uint32_t i=0;i<effect.operation_count;++i){const auto &src=backdrop.operations[effect.first_operation+i];hcsr_filter_operation_t value{};value.kind=src.kind;value.amount=src.amount;operations.push_back(value);}
         hcsr::render::filter_program program{reinterpret_cast<const uint8_t *>(operations.data()),uint32_t(operations.size())};
@@ -313,7 +326,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
             region_parameter(patch.gpu_state+1,0,0,0);
         }
         const uint32_t document_region=document_regions.size();
-        if(op.document_input)document_regions.push_back(effect_region);
+        if(op.document_input)document_regions.push_back({effect_region,uint32_t(bounds_program.group_index(op.destination_event)),document_region,1});
         uint32_t source=snapshot?group_plan.depth+2:op.source_depth-1;
         bool document_source=op.document_input;
         auto prefix=[&](uint32_t layer,size_t event,bool clear) {
@@ -338,22 +351,31 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
             for(const auto &color:colors){Vertex v={};v.state=UINT32_MAX;memcpy(v.position_uv,&color,sizeof(color));append_vertex(v);}
             uint32_t mask_parameters=0;int mask_page=0;
             if(surface) {
-                const size_t surface_index=size_t(surface-backdrop.surfaces);const auto &entry=backdrop_entries[surface_index];
-                const auto &r=surface->appearance.raster.local_rect,&crop=surface->appearance.source_rect;
-                mask_page=entry.page;mask_parameters=written;
+                mask_page=backdrop_entries[size_t(surface-backdrop.surfaces)].page;mask_parameters=written;
+                for(uint32_t patch_index=0;patch_index<(fused?effect.surface_count:1);++patch_index) {
+                const auto &patch=fused?backdrop.surfaces[effect.first_surface+patch_index]:*surface;
+                const auto &entry=backdrop_entries[size_t(&patch-backdrop.surfaces)];
+                const auto &r=patch.appearance.raster.local_rect,&crop=patch.appearance.source_rect;
                 parameter(parameters,colors.size(),4,0);
                 parameter(r.x,r.y,r.width,r.height);
                 parameter(entry.rect.position.x+crop.x,entry.rect.position.y+crop.y,crop.width,crop.height);
-                parameter(surface->gpu_state+1,logical_width,logical_height,0);
+                parameter(patch.gpu_state+1,logical_width,logical_height,0);
                 for(int row=0;row<4;++row)parameter(0,0,0,0);
+                }
             }
             const uint32_t blur_parameters=axis?effect_region:0;
             const uint32_t primitive=uint32_t(primitives.size());primitives.push_back({written,2,UINT32_MAX});
             constexpr float corners[][2]={{0,0},{1,0},{1,1},{0,0},{1,1},{0,1}};
             for(const auto &c:corners){Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=c[0]*2-1;v.position_uv[1]=c[1]*2-1;v.position_uv[2]=c[0];v.position_uv[3]=c[1];v.tint[3]=1;
-                v.bounds[0]=surface?-6.f:axis?-5.f:colors.empty()?-3.f:-4.f;v.bounds[1]=surface?mask_parameters:parameters;v.bounds[2]=axis?blur_parameters:colors.size();v.bounds[3]=4;append_vertex(v);}
-            Batch batch{0,primitive,1,6,op.destination_depth,1,Rect2(0,0,1,1),op.destination_event};
+                if(surface && fused) {
+                    const auto &end=group_plan.events[fused_end];
+                    v.tint[3]=end.opacity_state_plus_one?-float(end.opacity_state_plus_one):end.opacity;
+                    if(end.opacity_state_plus_one)memcpy(&v.pad[0],&end.opacity,4);
+                }
+                v.bounds[0]=surface?(fused?-8.f:-6.f):axis?-5.f:colors.empty()?-3.f:-4.f;v.bounds[1]=surface?mask_parameters:parameters;v.bounds[2]=surface && fused?effect.surface_count:axis?blur_parameters:colors.size();v.bounds[3]=4;append_vertex(v);}
+            Batch batch{0,primitive,1,surface && fused?HCSR_GROUP_END:6,op.destination_depth,1,Rect2(0,0,1,1),surface && fused?fused_end:op.destination_event};
             batch.mask_page=mask_page;batch.backdrop=true;batch.backdrop_mask=surface!=nullptr;
+            batch.backdrop_fused=surface && fused;
             batch.backdrop_first=surface && surface==&backdrop.surfaces[effect.first_surface];
             batch.document_source=document_source;batch.document_region=document_region;
             batch.backdrop_source=source;batch.backdrop_destination=destination;batch.backdrop_source_event=source<group_plan.depth?op.source_event:SIZE_MAX;
@@ -368,14 +390,21 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
             emit(pass.colors,pass.sigma,pass.axis,nullptr,destination);source=destination;document_source=false;}
         const auto colors=spatial?(intermediates<filter_passes.size()?filter_passes.back().colors:hcsr::render::filter_program{}):program;
         mask_batch_begin=batches.size();
-        for(uint32_t i=0;i<effect.surface_count;++i){emit(colors,0,0,&backdrop.surfaces[effect.first_surface+i],op.destination_depth-1);document_source=false;}
+        for(uint32_t i=0;i<(fused?1:effect.surface_count);++i){emit(colors,0,0,&backdrop.surfaces[effect.first_surface+i],op.destination_depth-1);document_source=false;}
     };
 	for (size_t i = 0; i < packet.draw_item_count; i++) {
-        while(backdrop_cursor<backdrop_plan.size() && backdrop_plan[backdrop_cursor].before_draw==i)emit_backdrop(backdrop_plan[backdrop_cursor++]);
+        while(backdrop_cursor<backdrop_plan.size() && backdrop_plan[backdrop_cursor].before_draw==i) {
+            const auto &op=backdrop_plan[backdrop_cursor++];
+            if(sequential_backdrops || fusion_end(op)==SIZE_MAX)emit_backdrop(op);
+        }
 		const hcsr_draw_item_t &draw = packet.draw_items[i];
 		const hcsr_material_t &material = packet.materials[draw.material_index];
         const auto group = group_plan.events[i];
         if (group.kind) {
+            if(group.kind==HCSR_GROUP_END && fused_at_end[i]!=SIZE_MAX) {
+                emit_backdrop(backdrop_plan[fused_at_end[i]],i);
+                continue;
+            }
             const Rect2 region(group.bounds.x/packet.viewport_width,group.bounds.y/packet.viewport_height,group.bounds.width/packet.viewport_width,group.bounds.height/packet.viewport_height);
             if(group.kind==HCSR_GROUP_BEGIN) {
                 underlay[group.depth]=false;
@@ -590,6 +619,28 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
         append_surface(hcsr::render::prepare_scene_surface({r,surface.gpu_state},{1,mask.alpha},&mask,false));
     }
     vertices.resize(written);
+    // Consecutive top-level pointwise leaves have no intervening root paint.
+    // Prepare only index ranges here. Sampling separation and prefix hazards
+    // are evaluated from current GPU rectangles, including physical resolution.
+    struct Candidate { uint32_t region;size_t begin,end; };
+    std::vector<Candidate> candidates;
+    for(const auto &batch:batches)if(batch.backdrop_fused && batch.document_source && batch.depth==1) {
+        const auto &descriptor=document_regions[batch.document_region];
+        candidates.push_back({batch.document_region,bounds_program.groups[descriptor.coverage].begin,batch.event_index});
+    }
+    for(size_t first=0;first<candidates.size();) {
+        size_t end=first+1;
+        while(end<candidates.size() && end-first<16 && candidates[end].region==candidates[end-1].region+1
+                && candidates[end].begin==candidates[end-1].end+1)++end;
+        if(end-first>1) {
+            ++document_snapshot_cohorts;
+            for(size_t i=first;i<end;++i) {
+                auto &descriptor=document_regions.write[candidates[i].region];
+                descriptor.first=candidates[first].region;descriptor.count=uint32_t(end-first);
+            }
+        }
+        first=end;
+    }
     // Empty and solid-only scenes use the same submission path. A bound
     // placeholder satisfies the shader interface without inventing a second
     // renderer for clears or for missing image resources.
@@ -906,18 +957,19 @@ bool HCSRNewestSceneRenderer::prepare_document_regions(RenderingDevice *device,c
     // Output submission scratch, not an appearance or placement cache. Resolve
     // every document effect together against current GPU states once per draw.
     const uint32_t count=document_regions.size();
-    if(count>document_region_capacity || !document_region_buffer.is_valid() || !document_arguments.is_valid() || !document_descriptors.is_valid()) {
+    if(count>document_region_capacity || !document_region_buffer.is_valid() || !document_arguments.is_valid() || !document_descriptors.is_valid() || !document_mapping.is_valid()) {
         if(document_region_uniform.is_valid() && device->uniform_set_is_valid(document_region_uniform))device->free_rid(document_region_uniform);
         document_region_uniform=RID();
-        for(RID rid:{document_region_buffer,document_arguments,document_descriptors})if(rid.is_valid())device->free_rid(rid);
+        for(RID rid:{document_region_buffer,document_arguments,document_descriptors,document_mapping})if(rid.is_valid())device->free_rid(rid);
         document_region_buffer=device->storage_buffer_create(count*16);
         document_arguments=device->storage_buffer_create(count*12,{},RD::STORAGE_BUFFER_USAGE_DISPATCH_INDIRECT);
-        document_descriptors=device->storage_buffer_create(count*4);
+        document_descriptors=device->storage_buffer_create(count*sizeof(DocumentRegion));
+        document_mapping=device->storage_buffer_create(count*4);
         document_region_capacity=count;document_regions_dirty=true;
     }
-    if(!document_region_buffer.is_valid() || !document_arguments.is_valid() || !document_descriptors.is_valid())return false;
+    if(!document_region_buffer.is_valid() || !document_arguments.is_valid() || !document_descriptors.is_valid() || !document_mapping.is_valid())return false;
     if(document_regions_dirty) {
-        if(device->buffer_update(document_descriptors,0,count*4,document_regions.ptr())!=OK)return false;
+        if(device->buffer_update(document_descriptors,0,count*sizeof(DocumentRegion),document_regions.ptr())!=OK)return false;
         document_regions_dirty=false;
     }
     if(!document_region_buffer.is_valid() || !document_arguments.is_valid() || !document_descriptors.is_valid())return false;
@@ -926,17 +978,23 @@ bool HCSRNewestSceneRenderer::prepare_document_regions(RenderingDevice *device,c
     if(document_region_uniform.is_valid() && !device->uniform_set_is_valid(document_region_uniform))document_region_uniform=RID();
     if(!document_region_uniform.is_valid()) {
         Vector<RD::Uniform> region_uniforms;
-        const RID region_resources[]={buffer,state_buffer,document_region_buffer,document_arguments,document_descriptors};
-        for(uint32_t i=0;i<5;++i){RD::Uniform u;u.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER;u.binding=i;u.append_id(region_resources[i]);region_uniforms.push_back(u);}
+        const RID region_resources[]={buffer,state_buffer,document_region_buffer,document_arguments,document_descriptors,coverage.controls,document_mapping};
+        for(uint32_t i=0;i<7;++i){RD::Uniform u;u.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER;u.binding=i;u.append_id(region_resources[i]);region_uniforms.push_back(u);}
         document_region_uniform=device->uniform_set_create(region_uniforms,document_region_shader,0);
     }
     if(!document_region_uniform.is_valid())return false;
-    const struct {uint32_t count,stride;float width,height,target_width,target_height;uint32_t padding[2];} region_push{count,4,logical_width,logical_height,float(size.x),float(size.y),{0,0}};
+    struct {uint32_t count,stride;float width,height,target_width,target_height;uint32_t padding[2];} region_push{count,4,logical_width,logical_height,float(size.x),float(size.y),{0,0}};
     auto list=device->compute_list_begin();
     device->compute_list_bind_compute_pipeline(list,document_region_pipeline);
     device->compute_list_bind_uniform_set(list,document_region_uniform,0);
     device->compute_list_set_push_constant(list,&region_push,sizeof(region_push));
     device->compute_list_dispatch(list,count,1,1);
+    if(document_snapshot_cohorts) {
+        device->compute_list_add_barrier(list);
+        region_push.padding[0]=1;
+        device->compute_list_set_push_constant(list,&region_push,sizeof(region_push));
+        device->compute_list_dispatch(list,count,1,1);
+    }
     device->compute_list_end();
     return true;
 }
@@ -967,6 +1025,7 @@ bool HCSRNewestSceneRenderer::snapshot_document(RenderingDevice *device,GroupPoo
         for(uint32_t i=0;i<2;++i){RD::Uniform u;u.uniform_type=RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;u.binding=i;u.append_id(sampler);u.append_id(i?host:prefix);uniforms.push_back(u);}
         RD::Uniform destination;destination.uniform_type=RD::UNIFORM_TYPE_IMAGE;destination.binding=2;destination.append_id(snapshot);uniforms.push_back(destination);
         RD::Uniform rectangle;rectangle.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER;rectangle.binding=3;rectangle.append_id(document_region_buffer);uniforms.push_back(rectangle);
+        RD::Uniform mapping;mapping.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER;mapping.binding=4;mapping.append_id(document_mapping);uniforms.push_back(mapping);
         bindings=device->uniform_set_create(uniforms,document_shader,0);
         if(!bindings.is_valid())return false;
         entry=DocumentBindings{prefix,host,snapshot,bindings};
@@ -982,6 +1041,7 @@ bool HCSRNewestSceneRenderer::snapshot_document(RenderingDevice *device,GroupPoo
         push.sizes[2]=input->size.x;push.sizes[3]=input->size.y;push.flags[0]=1;push.flags[1]=input->linear_colors;
     }
     push.flags[2]=float(region);
+    push.flags[3]=document_regions[region].count>1 && document_regions[region].first==region?1.f:0.f;
     auto list=device->compute_list_begin();
     device->compute_list_bind_compute_pipeline(list,document_pipeline);
     device->compute_list_bind_uniform_set(list,bindings,0);
@@ -1018,13 +1078,19 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
 	if (!framebuffer.is_valid()) {
 		return false;
 	}
-	if (!pipeline.is_valid()) {
+    const bool fused=std::any_of(batches.begin(),batches.end(),[](const Batch &batch){return batch.backdrop_fused;});
+    RID &draw_pipeline=fused?fused_pipeline:pipeline;
+	if (!draw_pipeline.is_valid()) {
 		auto blend = RD::PipelineColorBlendState::create_blend();
 		blend.attachments.write[0].src_alpha_blend_factor = RD::BLEND_FACTOR_ONE;
-		pipeline = device->render_pipeline_create(shader, device->framebuffer_get_format(framebuffer), RD::INVALID_ID,
-				RD::RENDER_PRIMITIVE_TRIANGLES, RD::PipelineRasterizationState(), RD::PipelineMultisampleState(), RD::PipelineDepthStencilState(), blend);
+        Vector<RD::PipelineSpecializationConstant> constants;
+        RD::PipelineSpecializationConstant enabled;
+        enabled.constant_id=0;enabled.type=RD::PIPELINE_SPECIALIZATION_CONSTANT_TYPE_BOOL;enabled.bool_value=fused;
+        constants.push_back(enabled);
+		draw_pipeline = device->render_pipeline_create(shader, device->framebuffer_get_format(framebuffer), RD::INVALID_ID,
+				RD::RENDER_PRIMITIVE_TRIANGLES, RD::PipelineRasterizationState(), RD::PipelineMultisampleState(), RD::PipelineDepthStencilState(), blend,0,0,constants);
 	}
-	if (!pipeline.is_valid()) {
+	if (!draw_pipeline.is_valid()) {
 		device->free_rid(framebuffer);
 		return false;
 	}
@@ -1068,7 +1134,9 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
         release_group_target(device,group_targets.write[group_targets.size()-1]);
         group_targets.resize(group_targets.size()-1);++retired_group_targets;
     }
-    const int required_underlays=ordered_backdrops?int(group_depth):0;
+    int required_underlays=0;
+    for(const auto &batch:batches)if((batch.backdrop_mask && !batch.backdrop_fused) || batch.backdrop_merge)
+        required_underlays=MAX(required_underlays,int(batch.backdrop_destination)+1);
     while(pool.underlays.size()>required_underlays) {
         release_group_target(device,pool.underlays.write[pool.underlays.size()-1]);
         pool.underlays.resize(pool.underlays.size()-1);++retired_group_targets;
@@ -1089,7 +1157,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
     }
     // A single scratch target is shared across all depths in the ordered path.
     auto ensure_group_target=[&](GroupTarget &group) {
-        if(group.texture.is_valid() && group.framebuffer.is_valid() && group.uniform.is_valid())return true;
+        if(group.texture.is_valid() && group.framebuffer.is_valid() && group.uniform.is_valid() && group.foreground_uniform.is_valid())return true;
         release_group_target(device,group);
         auto layer_format=format;
         layer_format.usage_bits=RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT | RD::TEXTURE_USAGE_STORAGE_BIT;
@@ -1106,15 +1174,16 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
         for(int i=0;i<4;++i){RD::Uniform u;u.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER;u.binding=2+i;u.append_id(extra[i]);uniforms.push_back(u);}
         RD::Uniform region;region.uniform_type=RD::UNIFORM_TYPE_STORAGE_BUFFER;region.binding=6;region.append_id(gpu_geometry && coverage.controls.is_valid()?coverage.controls:state_buffer);uniforms.push_back(region);
         group.uniform=device->uniform_set_create(VectorView(uniforms.ptr(),uniforms.size()),shader,0);++group_allocations;
-        return group.framebuffer.is_valid() && group.uniform.is_valid();
+        group.foreground_uniform=device->uniform_set_create(VectorView(&image,1),shader,2);
+        return group.framebuffer.is_valid() && group.uniform.is_valid() && group.foreground_uniform.is_valid();
     };
     while(group_targets.size()<required_targets) {
         group_targets.push_back({});
         if(!ensure_group_target(group_targets.write[group_targets.size()-1])){release_groups(device);device->free_rid(framebuffer);return false;}
     }
     if(ordered_backdrops) {
-        if(pool.underlays.size()<int(group_depth) && pool.underlays.resize(group_depth)!=OK){device->free_rid(framebuffer);return false;}
-        for(const auto &batch:batches)if(batch.backdrop_mask || batch.backdrop_merge)
+        if(pool.underlays.size()<required_underlays && pool.underlays.resize(required_underlays)!=OK){device->free_rid(framebuffer);return false;}
+        for(const auto &batch:batches)if((batch.backdrop_mask && !batch.backdrop_fused) || batch.backdrop_merge)
             if(!ensure_group_target(pool.underlays.write[batch.backdrop_destination])){release_groups(device);device->free_rid(framebuffer);return false;}
     }
     hcsr::render::transparent_group_submission visibility;
@@ -1130,12 +1199,12 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
         // Their first pass still clears the complete snapshot below; later
         // prefixes preserve pixels outside this GPU-selected source region.
         const bool gpu_prefix=gpu_geometry && batch.backdrop_prefix && batch.backdrop_source_event!=SIZE_MAX;
-        const bool gpu_region=gpu_geometry && batch.kind && (!batch.backdrop || gpu_prefix);
+        const bool gpu_region=gpu_geometry && batch.kind && (!batch.backdrop || gpu_prefix || batch.backdrop_fused);
         if(batch.kind && !gpu_region) device->draw_list_enable_scissor(list,region_for(batch));
         else device->draw_list_disable_scissor(list);
         device->draw_list_bind_uniform_set(list,batch.kind ? group_targets[batch.backdrop?batch.backdrop_source:batch.source_scratch?group_depth:batch.depth-1].uniform : gpu_pages[batch.page].uniform,0);
         device->draw_list_bind_uniform_set(list,gpu_pages[batch.mask_page].mask_uniform,1);
-        device->draw_list_bind_uniform_set(list,blending?pool.blend_uniform:gpu_pages[0].blend_uniform,2);
+        device->draw_list_bind_uniform_set(list,batch.backdrop_fused?group_targets[batch.depth-1].foreground_uniform:blending?pool.blend_uniform:gpu_pages[0].blend_uniform,2);
         Rect2 region;
         uint32_t source_region=0;
         if(gpu_region)source_region=uint32_t(bounds_program.group_index(gpu_prefix?batch.backdrop_source_event:batch.event_index))+1;
@@ -1176,7 +1245,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
             auto list=device->draw_list_begin(depth ? group_targets[depth-1].framebuffer : framebuffer,
                 RD::DRAW_CLEAR_COLOR_ALL,VectorView(&clear,1),1,0,region);
             device->draw_list_set_viewport(list,Rect2i(Vector2i(),size));
-            device->draw_list_bind_render_pipeline(list,pipeline);
+            device->draw_list_bind_render_pipeline(list,draw_pipeline);
             for(size_t i:passes[depth]) emit(list,batches[i]);
             device->draw_list_end();
             ++last_render_passes;
@@ -1186,10 +1255,24 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
     }
 	RD::DrawListID list = device->draw_list_begin(framebuffer, RD::DRAW_CLEAR_COLOR_ALL, VectorView(&background, 1));
     ++last_render_passes;
-	device->draw_list_bind_render_pipeline(list, pipeline);
+	device->draw_list_bind_render_pipeline(list, draw_pipeline);
     uint32_t resume_foreground_depth=0;
 	for (const Batch &batch : batches) {
-        if(batch.hidden)continue;
+        if(batch.hidden) {
+            // A zero-opacity head still supplies the current-frame input for
+            // visible siblings. Cohorts are top-level, so resume the root.
+            if(batch.document_source) {
+                const auto &descriptor=document_regions[batch.document_region];
+                if(descriptor.count>1 && descriptor.first==batch.document_region) {
+                    device->draw_list_end();
+                    if(!snapshot_document(device,pool,target,group_targets[group_depth+2].texture,batch.document_region,input)){device->free_rid(framebuffer);return false;}
+                    list=device->draw_list_begin(framebuffer);++last_render_passes;
+                    device->draw_list_set_viewport(list,Rect2i(Vector2i(),size));
+                    device->draw_list_bind_render_pipeline(list,draw_pipeline);
+                }
+            }
+            continue;
+        }
         if (!batch.kind && resume_foreground_depth) {
             // Backdrop pixels belong to the underlay. Ordinary node painting
             // must resume in the foreground sampled by descendant roots.
@@ -1197,7 +1280,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
             list=device->draw_list_begin(group_targets[resume_foreground_depth-1].framebuffer);
             ++last_render_passes;
             device->draw_list_set_viewport(list,Rect2i(Vector2i(),size));
-            device->draw_list_bind_render_pipeline(list,pipeline);
+            device->draw_list_bind_render_pipeline(list,draw_pipeline);
             resume_foreground_depth=0;
         }
         if (batch.kind) {
@@ -1212,10 +1295,10 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
                     if(!copy_group_region(device,pool,source,batch.event_index,batch.depth)){device->free_rid(framebuffer);return false;}
                 } else if(device->texture_copy(source,pool.blend_texture,Vector3(region.position.x,region.position.y,0),Vector3(region.position.x,region.position.y,0),Vector3(region.size.x,region.size.y,1),0,0,0,0)!=OK) {device->free_rid(framebuffer);return false;}
             }
-            RID destination = batch.backdrop?(batch.backdrop_mask || batch.backdrop_merge?pool.underlays[batch.backdrop_destination].framebuffer:group_targets[batch.backdrop_destination].framebuffer) : (batch.kind==hcsr::render::group_filter_pass || batch.kind==hcsr::render::group_shadow_blur) ? group_targets[group_depth].framebuffer
+            RID destination = batch.backdrop_fused?(batch.depth==1?framebuffer:group_targets[batch.depth-2].framebuffer):batch.backdrop?(batch.backdrop_mask || batch.backdrop_merge?pool.underlays[batch.backdrop_destination].framebuffer:group_targets[batch.backdrop_destination].framebuffer) : (batch.kind==hcsr::render::group_filter_pass || batch.kind==hcsr::render::group_shadow_blur) ? group_targets[group_depth].framebuffer
                     : (batch.kind==HCSR_GROUP_BEGIN || batch.kind==hcsr::render::group_shadow_apply) ? group_targets[batch.depth-1].framebuffer
                     : batch.depth==1 ? framebuffer : group_targets[batch.depth-2].framebuffer;
-            const bool clear=batch.backdrop?(batch.backdrop_prefix?batch.backdrop_first:batch.backdrop_first || (!batch.backdrop_mask && !batch.backdrop_merge)):batch.kind!=HCSR_GROUP_END && batch.kind!=hcsr::render::group_shadow_apply;
+            const bool clear=batch.backdrop_fused?false:batch.backdrop?(batch.backdrop_prefix?batch.backdrop_first:batch.backdrop_first || (!batch.backdrop_mask && !batch.backdrop_merge)):batch.kind!=HCSR_GROUP_END && batch.kind!=hcsr::render::group_shadow_apply;
             const bool gpu_clear=clear && gpu_geometry && !batch.backdrop;
             list=device->draw_list_begin(destination,clear && !gpu_clear ? RD::DRAW_CLEAR_COLOR_ALL : 0,VectorView(&transparent,1),1,0,clear && !gpu_clear ? region : Rect2());
             ++last_render_passes;
@@ -1223,11 +1306,11 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
             if(gpu_clear && !clear_group(device,list,destination,size,batch.event_index)) {
                 device->draw_list_end();device->free_rid(framebuffer);return false;
             }
-            device->draw_list_bind_render_pipeline(list,batch.kind==hcsr::render::group_shadow_apply?shadow_pipeline:pipeline);
+            device->draw_list_bind_render_pipeline(list,batch.kind==hcsr::render::group_shadow_apply?shadow_pipeline:draw_pipeline);
             if (batch.kind==HCSR_GROUP_BEGIN) continue;
         }
         emit(list,batch);
-        if(batch.backdrop_mask)resume_foreground_depth=batch.depth;
+        if(batch.backdrop_mask && !batch.backdrop_fused)resume_foreground_depth=batch.depth;
         if(batch.backdrop_merge)SWAP(group_targets.write[batch.backdrop_destination],pool.underlays.write[batch.backdrop_destination]);
         if(!batch.backdrop && batch.kind==hcsr::render::group_filter_pass) SWAP(group_targets.write[batch.depth-1],group_targets.write[group_depth]);
 	}
@@ -1242,7 +1325,7 @@ void HCSRNewestSceneRenderer::release_groups(RenderingDevice *device) {
 }
 
 void HCSRNewestSceneRenderer::release_group_target(RenderingDevice *device,GroupTarget &group) {
-    for(RID rid:{group.uniform,group.framebuffer,group.texture})if(rid.is_valid())device->free_rid(rid);
+    for(RID rid:{group.foreground_uniform,group.uniform,group.framebuffer,group.texture})if(rid.is_valid())device->free_rid(rid);
     group=GroupTarget();
 }
 
@@ -1272,7 +1355,7 @@ void HCSRNewestSceneRenderer::release(RenderingDevice *device) {
         }
         for(GpuPage &page:gpu_pages) release_page(device,page);
         if(document_region_uniform.is_valid() && device->uniform_set_is_valid(document_region_uniform))device->free_rid(document_region_uniform);
-		for (RID rid : { hierarchy_uniform,hierarchy_pipeline,hierarchy_shader,hierarchy_buffer,pipeline, shadow_pipeline, document_pipeline,document_region_pipeline,document_region_shader,document_region_buffer,document_arguments,document_descriptors, blend_copy_pipeline,blend_copy_shader,buffer, sampler, shader, document_shader, state_buffer,clip_buffer,plane_buffer,primitive_buffer }) {
+		for (RID rid : { hierarchy_uniform,hierarchy_pipeline,hierarchy_shader,hierarchy_buffer,pipeline,fused_pipeline, shadow_pipeline, document_pipeline,document_region_pipeline,document_region_shader,document_region_buffer,document_arguments,document_descriptors,document_mapping, blend_copy_pipeline,blend_copy_shader,buffer, sampler, shader, document_shader, state_buffer,clip_buffer,plane_buffer,primitive_buffer }) {
 			if (rid.is_valid()) {
 				device->free_rid(rid);
 			}
@@ -1283,10 +1366,10 @@ void HCSRNewestSceneRenderer::release(RenderingDevice *device) {
     uploaded_atlas_revision=UINT64_MAX;
 	vertices.clear();
 	batches.clear();
-	pipeline = shadow_pipeline = buffer = sampler = shader = document_shader = document_pipeline = RID();
+	pipeline = fused_pipeline = shadow_pipeline = buffer = sampler = shader = document_shader = document_pipeline = RID();
     blend_copy_shader=blend_copy_pipeline=RID();
-    document_region_pipeline=document_region_shader=document_region_buffer=document_arguments=document_region_uniform=document_descriptors=RID();
-    document_region_capacity=0;document_regions.clear();document_regions_dirty=true;
+    document_region_pipeline=document_region_shader=document_region_buffer=document_arguments=document_region_uniform=document_descriptors=document_mapping=RID();
+    document_region_capacity=0;document_regions.clear();document_regions_dirty=true;document_snapshot_cohorts=0;
 	buffer_capacity = 0;
     state_buffer=clip_buffer=plane_buffer=primitive_buffer=RID();
     state_capacity=clip_capacity=plane_capacity=primitive_capacity=0;
@@ -1519,7 +1602,7 @@ Dictionary HCSRNewestSceneRenderer::get_statistics() const {
     result["compositing_scratch_bytes"]=bytes+underlay_bytes+blend_bytes;
     result["retired_compositing_targets"]=retired_group_targets;
     const uint64_t buffers=uint64_t(buffer_capacity)+state_capacity+clip_capacity+plane_capacity+primitive_capacity+hierarchy_capacity
-        +coverage.capacities[0]+coverage.capacities[1]+coverage.capacities[2]+coverage.capacities[3]+uint64_t(document_region_capacity)*32;
+        +coverage.capacities[0]+coverage.capacities[1]+coverage.capacities[2]+coverage.capacities[3]+uint64_t(document_region_capacity)*48;
     result["gpu_buffer_reserved_bytes"]=buffers;
     result["owned_gpu_pixel_and_buffer_bytes"]=atlas_bytes+bytes+underlay_bytes+blend_bytes+buffers;
     result["opacity_target_allocations"] = group_allocations;
@@ -1528,6 +1611,10 @@ Dictionary HCSRNewestSceneRenderer::get_statistics() const {
     result["cpu_compositing_bounds_evaluations"] = cpu_compositing_bounds_evaluations;
     result["host_compositing_bounds_required"] = host_coverage_required;
     result["nested_group_passes"] = int64_t(nested_group_passes.size());
+    int64_t fused_count=0;
+    for(const auto &batch:batches)if(batch.backdrop_fused)++fused_count;
+    result["fused_backdrop_composites"] = fused_count;
+    result["document_snapshot_cohorts"] = int64_t(document_snapshot_cohorts);
     result["gpu_blend_region_copies"] = gpu_blend_region_copies;
     result["gpu_backdrop_prefix_draws"] = gpu_backdrop_prefix_draws;
     result["gpu_document_snapshots"] = gpu_document_snapshots;
