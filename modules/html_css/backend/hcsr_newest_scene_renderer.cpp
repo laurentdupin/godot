@@ -352,7 +352,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
             constexpr float corners[][2]={{0,0},{1,0},{1,1},{0,0},{1,1},{0,1}};
             for(const auto &c:corners){Vertex v={};v.state=UINT32_MAX;v.position_uv[0]=c[0]*2-1;v.position_uv[1]=c[1]*2-1;v.position_uv[2]=c[0];v.position_uv[3]=c[1];v.tint[3]=1;
                 v.bounds[0]=surface?-6.f:axis?-5.f:colors.empty()?-3.f:-4.f;v.bounds[1]=surface?mask_parameters:parameters;v.bounds[2]=axis?blur_parameters:colors.size();v.bounds[3]=4;append_vertex(v);}
-            Batch batch{0,primitive,1,6,op.destination_depth,1,Rect2(0,0,1,1),effect.before_draw_index};
+            Batch batch{0,primitive,1,6,op.destination_depth,1,Rect2(0,0,1,1),op.destination_event};
             batch.mask_page=mask_page;batch.backdrop=true;batch.backdrop_mask=surface!=nullptr;
             batch.backdrop_first=surface && surface==&backdrop.surfaces[effect.first_surface];
             batch.document_source=document_source;batch.document_region=document_region;

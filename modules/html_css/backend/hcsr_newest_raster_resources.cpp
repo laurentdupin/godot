@@ -422,7 +422,8 @@ void HCSRNewestRasterResources::end_resolution_requests() {
 
 Dictionary HCSRNewestRasterResources::get_statistics() const {
     Dictionary result;
-	result["pages"] = page_count();
+	// Diagnostics count appearance pages; the permanent empty sampler is not an atlas page.
+	result["pages"] = MAX(0, hcsr_atlas_page_count(atlas));
 	result["sources"] = entries.size() + glyph_entries.size() + surface_entries.size();
     result["image_entries"] = entries.size();
     result["glyph_entries"] = glyph_entries.size();

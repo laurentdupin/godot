@@ -64,7 +64,7 @@ func _run() -> void:
 		<div class='slot'><article><button data-godot-action='select-mode:fourth'><span class='copy'>Fourth</span></button></article></div>
 	</section></body></html>"""
 	var view := HTMLView.new()
-	view.backend_preference = HTMLView.BACKEND_VULKAN if OS.get_cmdline_user_args().has("--vulkan") else HTMLView.BACKEND_D3D12
+	view.backend_preference = HTMLView.BACKEND_VULKAN if OS.get_cmdline_user_args().has("--vulkan") else HTMLView.BACKEND_GPU_AUTO
 	view.viewport_size_mode = HTMLView.VIEWPORT_SIZE_CONTROL_PHYSICAL_ADJUSTED
 	view.logical_size = LOGICAL_SIZE
 	view.size = LOGICAL_SIZE

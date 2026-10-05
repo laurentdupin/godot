@@ -18,7 +18,11 @@ func run():
 	var document = HTMLDocument.new()
 	document.html = "<style>body{margin:0;background:white;font:20px/20px Arial}fieldset{margin:0;width:300px;padding:20px;border:10px solid red;border-radius:16px;background:lime}legend{padding:0 5px}#content{height:30px}input{position:absolute;left:20px;top:120px;width:200px;height:40px;padding:4px;border:1px solid black;font:20px/30px Arial} .font{position:absolute;left:0;width:600px;height:40px;font-size:26px;line-height:40px}</style><fieldset id='field'><legend id='legend'>Legend</legend><div id='content'></div></fieldset><input id='rtl' dir='rtl' value='אבג'><div class='font' style='top:200px;font-family:system-ui'>Hamburgefonts 012345</div><div class='font' style='top:240px;font-family:Segoe UI'>Hamburgefonts 012345</div>"
 	var view = HTMLView.new()
-	view.backend_preference = HTMLView.BACKEND_VULKAN if OS.get_environment("HCSR_TEST_GPU") == "vulkan" else HTMLView.BACKEND_D3D12
+	match OS.get_environment("HCSR_TEST_GPU"):
+		"vulkan": view.backend_preference = HTMLView.BACKEND_VULKAN
+		"d3d12": view.backend_preference = HTMLView.BACKEND_D3D12
+		"metal": view.backend_preference = HTMLView.BACKEND_METAL
+		_: view.backend_preference = HTMLView.BACKEND_GPU_AUTO
 	view.size = Vector2(640, 480)
 	view.logical_size = Vector2i(640, 480)
 	view.viewport_size_mode = HTMLView.VIEWPORT_SIZE_FIXED

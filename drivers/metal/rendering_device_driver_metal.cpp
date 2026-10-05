@@ -1492,13 +1492,12 @@ RDD::UniformSetID RenderingDeviceDriverMetal::uniform_set_create(VectorView<Boun
 				*sru |= stage_resource_usage(RDD::SHADER_STAGE_COMPUTE, usage);
 			}
 		};
-		// A texture view referenced indirectly by an argument buffer needs its own
-		// residency declaration even when its parent heap is resident. Without it,
-		// proxy/mipmap views can sample zero in barrier mode (notably on Apple M1).
+		// Declare indirect texture access even when the parent heap is resident.
+		// Metal shader validation needs the individual texture's usage; relying
+		// on useHeaps alone can make instrumented document-input compute shaders
+		// sample zero. Texture views also need their own residency declaration.
 		auto add_texture_usage = [&](MTL::Texture *p_texture, BitField<RDD::ShaderStage> p_stages, MTL::ResourceUsage p_usage) {
-			if (sync_mode == HazardTracking || p_texture->parentTexture()) {
-				add_usage(p_texture, p_stages, p_usage);
-			}
+			add_usage(p_texture, p_stages, p_usage);
 		};
 #define ADD_USAGE(res, stage, usage) \
 	if (sync_mode == HazardTracking) { \

@@ -24,19 +24,23 @@ func _run() -> void:
 	var view := HTMLView.new()
 	var arguments := OS.get_cmdline_user_args()
 	view.backend_preference = HTMLView.BACKEND_VULKAN if arguments.has("--vulkan") else \
-			(HTMLView.BACKEND_D3D12 if arguments.has("--d3d12") else HTMLView.BACKEND_CPU)
+			(HTMLView.BACKEND_D3D12 if arguments.has("--d3d12") else \
+			(HTMLView.BACKEND_METAL if arguments.has("--metal") else HTMLView.BACKEND_CPU))
 	view.size = Vector2(180, 160)
 	view.document = document
 	view.action_requested.connect(func(action: StringName, _payload: Dictionary) -> void: actions.append(action))
 	root.add_child(view)
 	for _frame in range(8):
 		await process_frame
+		await RenderingServer.frame_post_draw
 
 	_send_button(Vector2(70, 30), true)
 	for _frame in range(3):
 		await process_frame
+		await RenderingServer.frame_post_draw
 	_send_button(Vector2(70, 30), false)
 	await process_frame
+	await RenderingServer.frame_post_draw
 	if actions != [&"activate:action"]:
 		_fail("Nested button content did not resolve to its host action: %s" % [actions])
 		return
@@ -44,8 +48,10 @@ func _run() -> void:
 		_send_button(Vector2(70, 30), true)
 		for _frame in range(1 + click % 3):
 			await process_frame
+			await RenderingServer.frame_post_draw
 		_send_button(Vector2(70, 30), false)
 		await process_frame
+		await RenderingServer.frame_post_draw
 	if actions.count(&"activate:action") != 10:
 		_fail("Repeated press/release cycles lost button actions: %s" % [actions])
 		return
@@ -57,9 +63,11 @@ func _run() -> void:
 	_send_click(Vector2(70, 85))
 	for _frame in range(4):
 		await process_frame
+		await RenderingServer.frame_post_draw
 	_send_click(Vector2(70, 145))
 	for _frame in range(2):
 		await process_frame
+		await RenderingServer.frame_post_draw
 	var after: Dictionary = view.get_form_control_state(&"choice")
 	if after.get("value", "") != "b" or after.get("selected_index", -1) != 1:
 		_fail("Select activation did not update the host-visible state: %s" % after)
@@ -69,8 +77,10 @@ func _run() -> void:
 		return
 	for _frame in range(4):
 		await process_frame
+		await RenderingServer.frame_post_draw
 	_send_click(Vector2(70, 127))
 	await process_frame
+	await RenderingServer.frame_post_draw
 	# Opening the native popup is internal scene state. The host form action is
 	# emitted once, when an option commits a changed value.
 	if actions.count(&"activate:action") != 10 or actions.count(&"form:choice") != 1 or actions.back() != &"navigate:next":
@@ -80,6 +90,7 @@ func _run() -> void:
 	# before SceneTree teardown destroys the embedded GPU resources.
 	for _frame in range(8):
 		await process_frame
+		await RenderingServer.frame_post_draw
 	RenderingServer.force_draw(true)
 	await RenderingServer.frame_post_draw
 	print("HCSR newest interaction and dropdown smoke passed.")
