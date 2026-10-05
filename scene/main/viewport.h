@@ -508,6 +508,7 @@ private:
 	virtual void _mouse_leave_viewport();
 
 	virtual bool _can_consume_input_events() const { return true; }
+	bool presentation_input_enabled = false;
 	uint64_t event_count = 0;
 
 	void _process_dirty_canvas_parent_orders();
@@ -633,6 +634,8 @@ public:
 	void _push_text_input(const String &p_text, bool p_emit_text_changed_signal = false);
 	void push_text_input(const String &p_text);
 	void push_input(RequiredParam<InputEvent> p_event, bool p_local_coords = false);
+	void set_presentation_input_enabled(bool p_enabled);
+	virtual void dispatch_presentation_input(const Ref<InputEvent> &p_event);
 #ifndef DISABLE_DEPRECATED
 	void push_unhandled_input(RequiredParam<InputEvent> p_event, bool p_local_coords = false);
 #endif // DISABLE_DEPRECATED

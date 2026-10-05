@@ -311,6 +311,7 @@ public:
 
 	static void set_root_layout_direction(int p_root_dir);
 	static Window *get_from_id(DisplayServerEnums::WindowID p_window_id);
+	void dispatch_presentation_input(const Ref<InputEvent> &p_event) override;
 
 	RID get_accessibility_element() const override;
 	virtual RID get_focused_accessibility_element() const override;

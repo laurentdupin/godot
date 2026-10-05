@@ -1500,6 +1500,7 @@ Ref<InputEvent> Viewport::_make_input_local(const Ref<InputEvent> &ev) {
 
 Vector2 Viewport::get_mouse_position() const {
 	ERR_READ_THREAD_GUARD_V(Vector2());
+	if (presentation_input_enabled) return gui.last_mouse_pos;
 	if (get_section_root_viewport() != SceneTree::get_singleton()->get_root()) {
 		// Rely on the most recent mouse coordinate from an InputEventMouse in push_input.
 		// In this case get_screen_transform is not applicable, because it is ambiguous.
@@ -3263,6 +3264,10 @@ void Viewport::_window_start_resize(SubWindowResize p_edge, Window *p_window) {
 }
 
 void Viewport::_update_mouse_over(const Ref<InputEventMouse> &p_mm) {
+	if (presentation_input_enabled) {
+		_update_mouse_over(p_mm->get_position());
+		return;
+	}
 	// Update gui.mouse_over and gui.subwindow_over in all Viewports.
 	// Send necessary mouse_enter/mouse_exit signals and the MOUSE_ENTER/MOUSE_EXIT notifications for every Viewport in the SceneTree.
 
@@ -3564,6 +3569,19 @@ void Viewport::push_input(RequiredParam<InputEvent> p_event, bool p_local_coords
 	}
 
 	event_count++;
+}
+
+void Viewport::set_presentation_input_enabled(bool p_enabled) {
+	ERR_MAIN_THREAD_GUARD;
+	if (presentation_input_enabled == p_enabled) return;
+	presentation_input_enabled = p_enabled;
+	if (!p_enabled) _mouse_leave_viewport();
+}
+
+void Viewport::dispatch_presentation_input(const Ref<InputEvent> &p_event) {
+	ERR_MAIN_THREAD_GUARD;
+	ERR_FAIL_COND(!presentation_input_enabled);
+	push_input(p_event, true);
 }
 
 #ifndef DISABLE_DEPRECATED
@@ -5251,6 +5269,8 @@ void Viewport::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("notify_mouse_exited"), &Viewport::notify_mouse_exited);
 
 	ClassDB::bind_method(D_METHOD("get_mouse_position"), &Viewport::get_mouse_position);
+	ClassDB::bind_method(D_METHOD("set_presentation_input_enabled", "enabled"), &Viewport::set_presentation_input_enabled);
+	ClassDB::bind_method(D_METHOD("dispatch_presentation_input", "event"), &Viewport::dispatch_presentation_input);
 	ClassDB::bind_method(D_METHOD("warp_mouse", "position"), &Viewport::warp_mouse);
 	ClassDB::bind_method(D_METHOD("update_mouse_cursor_state"), &Viewport::update_mouse_cursor_state);
 

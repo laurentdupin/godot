@@ -2060,6 +2060,13 @@ void Window::_window_input(const Ref<InputEvent> &p_ev) {
 	}
 }
 
+void Window::dispatch_presentation_input(const Ref<InputEvent> &p_event) {
+	ERR_MAIN_THREAD_GUARD;
+	ERR_FAIL_COND(!presentation_input_enabled || p_event.is_null());
+	// The same window filtering, popup handlers, signals and GUI input path.
+	_window_input(p_event);
+}
+
 void Window::_window_input_text(const String &p_text, bool p_emit_signal) {
 	_push_text_input(p_text, p_emit_signal);
 }

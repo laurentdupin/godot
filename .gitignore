@@ -400,3 +400,9 @@ $RECYCLE.BIN/
 *.msp
 *.lnk
 *.generated.props
+
+# Local benchmark output and imported example caches
+/build/
+/modules/html_css/examples/**/.godot/
+/modules/html_css/examples/**/validation-failure.png
+/modules/html_css/examples/**/validation-failure.png.import
