@@ -6,13 +6,15 @@
 #include "core/object/ref_counted.h"
 #include "core/templates/rid.h"
 
-// Native RD consumers can prepare the texture used by a canvas item after the
+// Native GPU consumers can prepare the texture used by a canvas item after the
 // preceding canvas batches have finished. This is deliberately not script-bound:
 // preparation executes on the rendering thread and must not access scene nodes.
 class CanvasRenderTargetPreparation : public RefCounted {
 public:
 	struct Input {
 		RID color_texture; // Borrowed RD texture; never free, write, or retain it.
+        uint64_t native_color_texture = 0; // Borrowed Compatibility GL texture, same lifetime.
+        bool native_y_flipped = false;
 		Size2i size;
 		Transform2D item_transform;
 		Rect2 item_rect;

@@ -53,7 +53,7 @@ const HTMLGPUBackdropFrame &HCSRNewestBackdrop::update(hcsr_draw_packet_t packet
         const auto entry=renderer.backdrop_entry(i);
         append(&entry.page,sizeof(entry.page));append(&entry.rect,sizeof(entry.rect));
     }
-	if (local) {
+	if (local && !renderer.uses_opengl()) {
 		// Only actual mask dependencies affect validity. Ordinary scene motion
 		// must not redraw an unrelated stationary filter mask.
 		HashSet<uint32_t> states, clips;
@@ -75,6 +75,10 @@ const HTMLGPUBackdropFrame &HCSRNewestBackdrop::update(hcsr_draw_packet_t packet
 			}
 		}
 	}
+    if(local && renderer.uses_opengl()) {
+        const uint64_t revisions[]={renderer.topology_revision(),renderer.placement_revision()};
+        append(revisions,sizeof(revisions));
+    }
 	if (signature != previous || physical != previous_size) {
 		if (local) {
 			if (!draw_gpu(view, packet_view, logical, physical, renderer)) {
@@ -180,6 +184,7 @@ void HCSRNewestBackdrop::release_gpu() {
 	}
     if(device && target.is_valid())device->free_rid(target);
     target=RID();
+    gl_texture.unref();
 
 }
 
@@ -187,9 +192,18 @@ bool HCSRNewestBackdrop::draw_gpu(const hcsr_backdrop_view_t &view, const hcsr_d
 	using RD = RenderingDevice;
 	auto server = RenderingServer::get_singleton();
 	auto device = server ? server->get_rendering_device() : nullptr;
-	if (!device || !packet.gpu.state_count || !packet.gpu.clip_count) {
+	if (!packet.gpu.state_count || !packet.gpu.clip_count) {
 		return false;
 	}
+    if(renderer.uses_opengl()) {
+        if(gl_texture.is_null())gl_texture.instantiate();
+        if(gl_texture->get_width()!=physical.x || gl_texture->get_height()!=physical.y) {
+            if(gl_texture->get_rid().is_valid())renderer.release_gl_output(gl_texture->get_rid());
+            gl_texture->set_image(Image::create_empty(physical.x,physical.y,false,Image::FORMAT_RGBA8));
+        }
+        if(!renderer.draw_gl(gl_texture->get_rid(),physical,Color(0,0,0,1),false,nullptr,&view))return false;
+    } else {
+    if(!device)return false;
 	if (!target.is_valid() || physical != previous_size) {
 		if (gpu_texture.is_valid()) {
 			gpu_texture->set_texture_rd_rid(RID());
@@ -212,6 +226,7 @@ bool HCSRNewestBackdrop::draw_gpu(const hcsr_backdrop_view_t &view, const hcsr_d
 		gpu_texture->_set_texture_rd_rid(target);
 	}
     if(!renderer.draw_backdrop_mask(device,target,view,logical,physical))return false;
+    }
     surface_instances=view.surface_count;
 	frame.clear();
 	for (size_t i = 0; i < view.effect_count; ++i) {
@@ -229,6 +244,8 @@ bool HCSRNewestBackdrop::draw_gpu(const hcsr_backdrop_view_t &view, const hcsr_d
 			}
 		}
 		bool first = true;
+        if(renderer.uses_opengl())effect.bounds=Rect2(Vector2(),logical);
+        else {
         for(uint32_t j=0;j<source.surface_count;++j) {
             const auto &surface=view.surfaces[source.first_surface+j];
             const auto &r=surface.appearance.raster.local_rect;
@@ -243,10 +260,11 @@ bool HCSRNewestBackdrop::draw_gpu(const hcsr_backdrop_view_t &view, const hcsr_d
             }
         }
 		effect.bounds = effect.bounds.intersection(Rect2(Vector2(), logical));
+        }
 		frame.effects.push_back(effect);
 	}
 	++redraws;
-	frame.mask_texture = gpu_texture;
+    frame.mask_texture=renderer.uses_opengl()?Ref<Texture2D>(gl_texture):Ref<Texture2D>(gpu_texture);
 	frame.logical_size = logical;
 	frame.physical_size = physical;
 	frame.device_scale_factor = float(physical.x) / logical.x;

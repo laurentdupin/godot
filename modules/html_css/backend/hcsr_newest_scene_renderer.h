@@ -39,6 +39,7 @@ class HCSRNewestSceneRenderer {
         bool backdrop_fused=false;
 		bool document_source=false, backdrop_prefix=false;
         uint32_t document_region=0;
+        uint32_t backdrop_geometry=0;
         uint32_t opacity_state_plus_one=0;
         bool hidden=false;
 	};
@@ -121,10 +122,15 @@ class HCSRNewestSceneRenderer {
 #ifdef GLES3_ENABLED
     struct GLData {uint32_t texture=0;int width=0,height=0;};
     struct GLTarget {uint32_t texture=0,framebuffer=0;};
-    struct GLPool {RID output;Size2i size;Vector<GLTarget> groups;GLTarget blend;};
+    struct GLPool {RID output;Size2i size;Vector<GLTarget> groups,underlays;GLTarget blend;};
     struct GLResources {
-        uint32_t program=0,hierarchy_program=0,vao=0,framebuffer=0;
+        uint32_t program=0,hierarchy_program=0,document_program=0,backdrop_clear_program=0,coverage_program=0,clear_program=0,copy_program=0,vao=0,framebuffer=0;
+        uint32_t linear_sampler=0;
         GLData geometry,states,clips,planes,primitives,nodes,outputs;
+        GLData coverage_input,coverage_levels,coverage_output[2];
+        uint32_t coverage_front=0;
+        uint64_t coverage_revision=0;
+        Vector2 coverage_logical;
         Vector<uint32_t> pages;
         Vector<GLPool> pools;
         uint64_t hierarchy_geometry=0,hierarchy_revision=0;
@@ -134,7 +140,10 @@ class HCSRNewestSceneRenderer {
 public:
     explicit HCSRNewestSceneRenderer(HCSRNewestRasterResources &p_resources) : resources(p_resources) {}
     bool prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale = 1, const hcsr_backdrop_view_t &backdrop = {},const hcsr_hierarchy_view_t &local = {},const hcsr_raster_demand_view_t &raster_demand = {},bool gpu_compositing=true,bool opengl=false);
-    bool draw_gl(RID target,const Size2i &size,const Color &background,bool mipmaps);
+    bool draw_gl(RID target,const Size2i &size,const Color &background,bool mipmaps,const CanvasRenderTargetPreparation::Input *input=nullptr,const hcsr_backdrop_view_t *mask=nullptr);
+    bool uses_opengl() const {return opengl_submission;}
+    uint64_t placement_revision() const {return hierarchy.revision;}
+    uint64_t topology_revision() const {return geometry_generation;}
     void release_gl_output(RID target);
     hcsr_gpu_state_t reference_state(const hcsr_draw_packet_view_t &packet,uint32_t index) const;
     // Borrowed atlas bindings: lifetime and upload remain with this renderer.

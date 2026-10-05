@@ -5,6 +5,7 @@
 #include "hcsr_newest_scene_renderer.h"
 
 #include "scene/resources/texture_rd.h"
+#include "scene/resources/image_texture.h"
 #include "servers/rendering/rendering_device.h"
 
 // Scene coverage is supplied by HCSR; this adapter submits cached atlas surfaces into the host mask.
@@ -15,6 +16,7 @@ class HCSRNewestBackdrop {
 
 	RID target;
 	Ref<Texture2DRD> gpu_texture;
+    Ref<ImageTexture> gl_texture;
 	uint64_t redraws = 0;
     uint32_t surface_instances=0;
 	bool draw_gpu(const hcsr_backdrop_view_t &view, const hcsr_draw_packet_view_t &packet, const Size2i &logical, const Size2i &physical, HCSRNewestSceneRenderer &renderer);

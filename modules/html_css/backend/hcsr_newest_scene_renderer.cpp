@@ -333,6 +333,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
         auto prefix=[&](uint32_t layer,size_t event,bool clear) {
             Batch batch{0,uint32_t(primitives.size()),1,6,op.destination_depth,1,Rect2(0,0,1,1),event};
             batch.backdrop=true;batch.backdrop_prefix=true;batch.backdrop_first=clear;
+            batch.backdrop_geometry=effect_region;
             batch.document_source=document_source;batch.document_region=document_region;batch.backdrop_source=layer;
             batch.backdrop_source_event=event;batch.backdrop_destination=group_plan.depth+2;
             batches.push_back(batch);primitives.push_back({written,2,UINT32_MAX});
@@ -376,6 +377,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
                 v.bounds[0]=surface?(fused?-8.f:-6.f):axis?-5.f:colors.empty()?-3.f:-4.f;v.bounds[1]=surface?mask_parameters:parameters;v.bounds[2]=surface && fused?effect.surface_count:axis?blur_parameters:colors.size();v.bounds[3]=4;append_vertex(v);}
             Batch batch{0,primitive,1,surface && fused?HCSR_GROUP_END:6,op.destination_depth,1,Rect2(0,0,1,1),surface && fused?fused_end:op.destination_event};
             batch.mask_page=mask_page;batch.backdrop=true;batch.backdrop_mask=surface!=nullptr;
+            batch.backdrop_geometry=effect_region;
             batch.backdrop_fused=surface && fused;
             batch.backdrop_first=surface && surface==&backdrop.surfaces[effect.first_surface];
             batch.document_source=document_source;batch.document_region=document_region;
@@ -1624,11 +1626,12 @@ Dictionary HCSRNewestSceneRenderer::get_statistics() const {
     result["gpu_document_snapshots"] = gpu_document_snapshots;
 #ifdef GLES3_ENABLED
     if(opengl_submission) {
-        uint64_t gl_buffers=0,gl_groups=0,gl_blends=0,gl_atlas=0;
-        for(auto data:{gl.geometry,gl.states,gl.clips,gl.planes,gl.primitives,gl.nodes,gl.outputs})
+        uint64_t gl_buffers=0,gl_groups=0,gl_underlays=0,gl_blends=0,gl_atlas=0;
+        for(auto data:{gl.geometry,gl.states,gl.clips,gl.planes,gl.primitives,gl.nodes,gl.outputs,gl.coverage_input,gl.coverage_levels,gl.coverage_output[0],gl.coverage_output[1]})
             if(data.texture)gl_buffers+=uint64_t(data.width)*data.height*16;
         for(const auto &pool:gl.pools) {
             for(auto target:pool.groups)if(target.texture)gl_groups+=uint64_t(pool.size.x)*pool.size.y*4;
+            for(auto target:pool.underlays)if(target.texture)gl_underlays+=uint64_t(pool.size.x)*pool.size.y*4;
             if(pool.blend.texture)gl_blends+=uint64_t(pool.size.x)*pool.size.y*4;
         }
         int gl_atlas_pages=0;
@@ -1638,10 +1641,11 @@ Dictionary HCSRNewestSceneRenderer::get_statistics() const {
         result["gpu_buffer_reserved_bytes"]=gl_buffers;
         result["opacity_target_bytes"]=gl_groups;
         result["blend_snapshot_bytes"]=gl_blends;
-        result["compositing_scratch_bytes"]=gl_groups+gl_blends;
-        result["owned_gpu_pixel_and_buffer_bytes"]=gl_atlas+gl_buffers+gl_groups+gl_blends;
-        result["opengl_full_target_compositing"]=true;
-        result["ordered_backdrop_supported"]=false;
+        result["underlay_target_bytes"]=gl_underlays;
+        result["compositing_scratch_bytes"]=gl_groups+gl_underlays+gl_blends;
+        result["owned_gpu_pixel_and_buffer_bytes"]=gl_atlas+gl_buffers+gl_groups+gl_underlays+gl_blends;
+        result["opengl_full_target_compositing"]=false;
+        result["ordered_backdrop_supported"]=true;
     }
 #endif
 	return result;

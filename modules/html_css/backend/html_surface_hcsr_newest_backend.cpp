@@ -303,11 +303,13 @@ void HTMLSurfaceHCSRNewestBackend::_prepare_canvas_on_render_thread(uint64_t p_s
 	if (state->closing || state->terminal || !state->canvas_enabled || !state->canvas_required) return;
 	auto server = RenderingServer::get_singleton();
 	auto device = server != nullptr ? server->get_rendering_device() : nullptr;
-	if (!device || !state->rd_texture.is_valid()) return;
+	if (state->renderer==HTML_SURFACE_HCSR_NEWEST_OPENGL ? !state->canvas_texture.is_valid() : (!device || !state->rd_texture.is_valid())) return;
 	const auto c = state->prepared.background;
 	const Color background(c.r*c.a,c.g*c.a,c.b*c.a,c.a);
 	const uint64_t start = OS::get_singleton()->get_ticks_usec();
-	if (!state->scene_renderer.draw(device, state->rd_texture, background, &p_input)) {
+	if (!(state->renderer==HTML_SURFACE_HCSR_NEWEST_OPENGL
+        ?state->scene_renderer.draw_gl(state->canvas_texture,state->prepared.physical_size,background,state->mipmaps,&p_input)
+        :state->scene_renderer.draw(device, state->rd_texture, background, &p_input))) {
 		set_terminal(state,"hcsr_newest could not submit ordered HTML with current canvas input.");
 		return;
 	}
@@ -363,8 +365,8 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
     }
     const uint64_t atlas_start_usec = OS::get_singleton()->get_ticks_usec();
     const bool valid_packet = rendered;
-    const bool textured = rendered && !inject_failure && state->scene_renderer.prepare(packet, state->document, output_scale, backdrop_view,hierarchy_view,raster_demand,renderer!=HTML_SURFACE_HCSR_NEWEST_CPU && renderer!=HTML_SURFACE_HCSR_NEWEST_OPENGL,renderer==HTML_SURFACE_HCSR_NEWEST_OPENGL);
-	const bool canvas_required = textured && renderer != HTML_SURFACE_HCSR_NEWEST_CPU && renderer != HTML_SURFACE_HCSR_NEWEST_OPENGL && prepared.canvas_enabled && state->scene_renderer.has_document_backdrops();
+    const bool textured = rendered && !inject_failure && state->scene_renderer.prepare(packet, state->document, output_scale, backdrop_view,hierarchy_view,raster_demand,renderer!=HTML_SURFACE_HCSR_NEWEST_CPU,renderer==HTML_SURFACE_HCSR_NEWEST_OPENGL);
+	const bool canvas_required = textured && renderer != HTML_SURFACE_HCSR_NEWEST_CPU && prepared.canvas_enabled && state->scene_renderer.has_document_backdrops();
     const uint64_t atlas_end_usec = OS::get_singleton()->get_ticks_usec();
 	if (textured) {
 		RenderingServer *server = RenderingServer::get_singleton();
@@ -396,7 +398,8 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 		};
 		// Main presentation is recorded at the canvas boundary when it needs
 		// current host pixels. Independent outputs keep their explicit clear.
-		if (canvas_required) rendered = device && ensure_gpu_target(state,server,device,physical_size) && state->scene_renderer.prepare_gpu_resources(device);
+		if (canvas_required) rendered = renderer==HTML_SURFACE_HCSR_NEWEST_OPENGL ? ensure_gpu_target(state,server,nullptr,physical_size)
+            :device && ensure_gpu_target(state,server,device,physical_size) && state->scene_renderer.prepare_gpu_resources(device);
 		else rendered = draw_output(state, physical_size, background);
 		MutexLock lock(state->mutex);
 		Vector<uint64_t> retired;
@@ -411,7 +414,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 		rendered = false;
 	}
     // Ordinary drawing uploads the shared atlas before the mask borrows it.
-    if(rendered && renderer!=HTML_SURFACE_HCSR_NEWEST_OPENGL)state->prepared_backdrop=state->backdrop.update(packet_handle,rendered_logical_size,physical_size,state->scene_renderer);
+    if(rendered)state->prepared_backdrop=state->backdrop.update(packet_handle,rendered_logical_size,physical_size,state->scene_renderer);
     static const bool record_profile = OS::get_singleton()->get_environment("HCSR_RECORD_PROFILE") == "1";
     if (record_profile) {
         const uint64_t now = OS::get_singleton()->get_ticks_usec();

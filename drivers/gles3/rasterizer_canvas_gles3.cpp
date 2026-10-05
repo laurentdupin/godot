@@ -516,6 +516,25 @@ void RasterizerCanvasGLES3::canvas_render_items(RID p_to_render_target, Item *p_
 			ci->use_canvas_group = false;
 		}
 
+		if (!skip_item && ci->render_target_preparation.is_valid()) {
+            if(update_skeletons) {mesh_storage->update_mesh_instances();update_skeletons=false;}
+            _render_items(p_to_render_target,item_count,canvas_transform_inverse,p_light_list,r_sdf_used,canvas_group_owner!=nullptr,r_render_info,material_screen_texture_mipmaps_cached);
+            item_count=0;
+            auto *target=texture_storage->get_render_target(p_to_render_target);
+            if(canvas_group_owner==nullptr) {
+                texture_storage->render_target_do_clear_request(p_to_render_target);
+            }
+            CanvasRenderTargetPreparation::Input input;
+            // Borrow the current prefix directly; do not overwrite the shared
+            // screen-texture backbuffer or add another full-window copy.
+            input.native_color_texture=canvas_group_owner?target->backbuffer:target->color;
+            input.native_y_flipped=texture_storage->render_target_get_override_color(p_to_render_target).is_valid();
+            input.canvas_group=canvas_group_owner!=nullptr;input.size=target->size;
+            input.item_transform=ci->final_transform;input.item_rect=ci->get_rect();
+            input.clip_rect=ci->final_clip_owner?ci->final_clip_owner->final_clip_rect:Rect2();
+            input.clipped=ci->final_clip_owner!=nullptr;input.modulation=ci->final_modulate;input.linear_colors=target->hdr;
+            if(input.native_color_texture)ci->render_target_preparation->prepare(input);
+        }
 		if (backbuffer_copy) {
 			if (update_skeletons) {
 				mesh_storage->update_mesh_instances();
