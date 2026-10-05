@@ -104,6 +104,9 @@ struct HTMLSurfaceHCSRNewestBackend::State : HCSRNewestPresentationOutput {
 	uint64_t recorded_count = 0;
 	uint64_t gpu_recorded_count = 0;
 	uint64_t synchronization_failures = 0;
+	uint64_t recoverable_render_failures = 0;
+	String last_render_failure;
+	bool injected_render_failure = false;
 	double preparation_milliseconds = 0.0;
 	double maximum_preparation_milliseconds = 0.0;
 	uint64_t input_queued_usec = 0;
@@ -312,6 +315,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 	Size2i physical_size;
 	Color background;
 	State::PreparedFrame prepared;
+	bool inject_failure = false;
 	{
 		MutexLock lock(state->mutex);
 		if (state->pending_packet == 0) {
@@ -323,6 +327,9 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 		prepared = state->prepared;
 		physical_size = prepared.physical_size;
 		background = Color(prepared.background.r * prepared.background.a, prepared.background.g * prepared.background.a, prepared.background.b * prepared.background.a, prepared.background.a);
+		static const bool inject_once = OS::get_singleton()->get_environment("HCSR_RENDER_FAULT_ONCE") == "1";
+		inject_failure = inject_once && state->recorded_count > 0 && !state->injected_render_failure;
+		if (inject_failure) state->injected_render_failure = true;
 	}
 	hcsr_draw_packet_view_t packet;
 	initialize_abi(packet);
@@ -346,7 +353,8 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
             if (!entry.value->closing && rendered) output_scale = MAX(output_scale, MAX(float(entry.value->physical_size.x) / packet.viewport_width, float(entry.value->physical_size.y) / packet.viewport_height));
     }
     const uint64_t atlas_start_usec = OS::get_singleton()->get_ticks_usec();
-    const bool textured = rendered && state->scene_renderer.prepare(packet, state->document, output_scale, backdrop_view,hierarchy_view,raster_demand);
+    const bool valid_packet = rendered;
+    const bool textured = rendered && !inject_failure && state->scene_renderer.prepare(packet, state->document, output_scale, backdrop_view,hierarchy_view,raster_demand);
 	const bool canvas_required = textured && renderer != HTML_SURFACE_HCSR_NEWEST_CPU && prepared.canvas_enabled && state->scene_renderer.has_document_backdrops();
     const uint64_t atlas_end_usec = OS::get_singleton()->get_ticks_usec();
 	if (textured) {
@@ -411,6 +419,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 		state->canvas_required = rendered && canvas_required;
         state->needs_another_frame |= state->raster_resources.has_pending_glyphs();
 		if (rendered && !state->closing) {
+			state->last_render_failure = String();
 			state->presentation_changed = true;
 			state->metadata.generation = rendered_generation;
 			state->metadata.host_frame_number = prepared.host_frame;
@@ -426,7 +435,16 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 				state->input_queued_usec = 0;
 			}
 		} else if (!state->closing) {
-			set_terminal(state, textured ? "hcsr_newest could not draw the scene through Godot's rendering device." : "hcsr_newest could not prepare the scene for rendering.");
+			if (valid_packet) {
+				// GPU allocation/recording failures do not invalidate the scene or
+				// the last published texture. Retry at the next synchronous frame.
+				const String reason = inject_failure ? "Injected rendering failure." : textured
+					? "HTML GPU recording failed; retrying." : "HTML rendering preparation failed; retrying.";
+				if (state->last_render_failure.is_empty()) ERR_PRINT(reason);
+				state->last_render_failure = reason;
+				state->recoverable_render_failures++;
+				state->needs_another_frame = true;
+			} else set_terminal(state, "hcsr_newest returned an invalid scene publication.");
 		}
 	}
 	HCSRNewestPerformanceMonitor::update_presentation((uint64_t)state, record_seconds, input_to_visible_seconds);
@@ -767,6 +785,8 @@ Dictionary HTMLSurfaceHCSRNewestBackend::get_frame_synchronization() const {
 	result["gpu_recordings"] = state->gpu_recorded_count;
 	result["render_path"] = state->renderer == HTML_SURFACE_HCSR_NEWEST_CPU ? "cpu_reference" : "rendering_device";
 	result["failures"] = state->synchronization_failures;
+	result["recoverable_render_failures"] = state->recoverable_render_failures;
+	result["last_render_failure"] = state->last_render_failure;
 	result["pending"] = state->render_pending;
 	result["pending_startup_mutation_batches"] = state->pending_mutations.size();
 	result["terminal"] = state->terminal;

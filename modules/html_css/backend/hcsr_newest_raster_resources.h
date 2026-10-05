@@ -61,6 +61,12 @@ private:
     HashMap<ImageKey, Entry, ImageHasher> entries;
     HashSet<String> live_images;
     HashSet<GlyphKey, GlyphHasher> live_glyphs;
+    HashSet<ImageKey, ImageHasher> requested_images;
+    HashSet<GlyphKey, GlyphHasher> requested_glyphs;
+    HashSet<GlyphKey, GlyphHasher> requested_glyph_identities;
+    HashSet<SurfaceKey, SurfaceHasher> requested_surfaces;
+    bool resolution_epoch = false;
+    uint64_t retired_resolution_variants = 0;
     Vector<ImageKey> retired_images;
     Vector<GlyphKey> retired_glyphs;
     String retention_prefix;
@@ -84,6 +90,8 @@ public:
     void retain_image_source(const String &source);
     void retain_glyph(const hcsr_glyph_material_t &glyph);
     void end_asset_retention();
+    void begin_resolution_requests();
+    void end_resolution_requests();
     Entry resolve_raster(const hcsr_raster_material_t &raster, const Vector2 &physical_size);
     Entry resolve_glyph(const hcsr_glyph_material_t &glyph, float scale);
 private:

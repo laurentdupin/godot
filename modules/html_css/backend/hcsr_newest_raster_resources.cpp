@@ -193,6 +193,7 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_image(const 
 	const int level = hcsr_atlas_image_level(natural.x,natural.y,physical_size.x,physical_size.y);
 	const String source_key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source;
     const ImageKey key{source_key,level};
+    if(resolution_epoch)requested_images.insert(key);
 	if (const Entry *existing = entries.getptr(key)) {
 		return *existing;
 	}
@@ -281,6 +282,7 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_raster(const
         || uint64_t(raster.stride) * raster.height > INT32_MAX) return entry;
     const int level = hcsr_atlas_image_level(raster.width,raster.height,physical_size.x,physical_size.y);
     const SurfaceKey key{ raster.identity, level };
+    if(resolution_epoch)requested_surfaces.insert(key);
     if (const Entry *cached = surface_entries.getptr(key)) return *cached;
     hcsr_atlas_entry_t allocation{};
     if(hcsr_atlas_pack(atlas,reinterpret_cast<const uint32_t *>(raster.pixels),raster.width,raster.height,level,0,&allocation)==HCSR_OK) {
@@ -307,18 +309,24 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_glyph(const 
 	uint32_t size_bits;
     memcpy(&size_bits, &glyph.font_size, sizeof(size_bits));
     const GlyphKey identity{ glyph.face, glyph.glyph, size_bits };
+    if(resolution_epoch)requested_glyph_identities.insert(identity);
     const int *previous=glyph_levels.getptr(identity);
     const int level=hcsr_atlas_glyph_level(glyph.font_size,scale,previous?*previous:0);
     glyph_levels.insert(identity,level);
 	const GlyphKey key{ glyph.face, glyph.glyph, uint32_t(level) };
+	if(resolution_epoch)requested_glyphs.insert(key);
 	const GlyphKey face_glyph{ glyph.face, glyph.glyph, 0 };
     if (const Entry *existing = glyph_entries.getptr(key)) {
         if (existing->page >= 0) return *existing;
         // A full atlas must not replace a valid lower-resolution glyph with a missing entry.
-        if (const Entry *fallback = last_glyphs.getptr(face_glyph)) return *fallback;
+        if (const Entry *fallback = last_glyphs.getptr(face_glyph)) {
+            if(resolution_epoch)requested_glyphs.insert({glyph.face,glyph.glyph,uint32_t(fallback->raster_size)});
+            return *fallback;
+        }
         return *existing;
     }
     if (const Entry *fallback = last_glyphs.getptr(face_glyph)) {
+        if(resolution_epoch)requested_glyphs.insert({glyph.face,glyph.glyph,uint32_t(fallback->raster_size)});
         if (!queued_glyphs.has(key)) { pending_glyphs.push_back({ glyph, level, key }); queued_glyphs.insert(key, true); }
         return *fallback;
     }
@@ -372,6 +380,46 @@ void HCSRNewestRasterResources::advance_rasterization() {
 
 void HCSRNewestRasterResources::ensure_sampling_page() {} // Page zero is the permanent empty sampler.
 
+void HCSRNewestRasterResources::begin_resolution_requests() {
+    requested_images.clear();requested_glyphs.clear();requested_surfaces.clear();requested_glyph_identities.clear();resolution_epoch=true;
+}
+
+void HCSRNewestRasterResources::end_resolution_requests() {
+    // These are exact active requests, not a last-used timer or another cache.
+    // Keep all simultaneously used sizes and any pending upgrade's fallback.
+    // A successful scene preparation is the retirement boundary: no prepared
+    // primitive may refer to a variant removed here.
+    bool released=false;
+    for(const auto &item:entries)if(!requested_images.has(item.key))retired_images.push_back(item.key);
+    for(const auto &key:retired_images){released=release_entry(entries[key])||released;entries.erase(key);++retired_resolution_variants;}
+    retired_images.clear();
+    for(const auto &item:glyph_entries)if(!requested_glyphs.has(item.key))retired_glyphs.push_back(item.key);
+    for(const auto &key:retired_glyphs){released=release_entry(glyph_entries[key])||released;glyph_entries.erase(key);++retired_resolution_variants;}
+    retired_glyphs.clear();
+    last_glyphs.clear();
+    for(const auto &item:glyph_entries)if(item.value.page>=0) {
+        const GlyphKey key{item.key.face,item.key.glyph,0};
+        const Entry *old=last_glyphs.getptr(key);
+        if(!old || old->raster_size<item.value.raster_size)last_glyphs.insert(key,item.value);
+    }
+    for(const auto &item:glyph_levels)if(!requested_glyph_identities.has(item.key))retired_glyphs.push_back(item.key);
+    for(const auto &key:retired_glyphs)glyph_levels.erase(key);
+    retired_glyphs.clear();
+    int kept=0;
+    for(int i=0;i<pending_glyphs.size();i++) {
+        const PendingGlyph pending=pending_glyphs[i];
+        if(requested_glyphs.has(pending.key))pending_glyphs.write[kept++]=pending;
+        else queued_glyphs.erase(pending.key);
+    }
+    pending_glyphs.resize(kept);
+    Vector<SurfaceKey> retired;
+    for(const auto &item:surface_entries)if(!requested_surfaces.has(item.key))retired.push_back(item.key);
+    for(const auto &key:retired){released=release_entry(surface_entries[key])||released;surface_entries.erase(key);++retired_resolution_variants;}
+    resolution_epoch=false;
+    requested_images.clear();requested_glyphs.clear();requested_surfaces.clear();requested_glyph_identities.clear();
+    if(released)retry_failed_allocations();
+}
+
 Dictionary HCSRNewestRasterResources::get_statistics() const {
     Dictionary result;
 	result["pages"] = page_count();
@@ -379,6 +427,8 @@ Dictionary HCSRNewestRasterResources::get_statistics() const {
     result["image_entries"] = entries.size();
     result["glyph_entries"] = glyph_entries.size();
     result["failed_allocations"] = failed_allocation_count;
+    result["retired_resolution_variants"] = int64_t(retired_resolution_variants);
+    result["atlas_pixel_budget_bytes"] = int64_t(MAX_PAGES-1)*PAGE_SIZE*PAGE_SIZE*4;
     {
         MutexLock lock(image_mutex);
         result["decoded_images"] = decoded_images;

@@ -43,7 +43,7 @@ class HCSRNewestSceneRenderer {
     struct GroupTarget { RID texture, framebuffer, uniform; Size2i size; };
     struct BlendCopy { RID source,uniform; };
     struct DocumentBindings {RID prefix,host,snapshot,uniform;};
-    struct GroupPool { RID output,blend_texture,blend_uniform; DocumentBindings document_bindings; Vector<GroupTarget> targets,underlays; Vector<BlendCopy> blend_copies; };
+    struct GroupPool { RID output,blend_texture,blend_uniform; Size2i blend_size; DocumentBindings document_bindings; Vector<GroupTarget> targets,underlays; Vector<BlendCopy> blend_copies; };
     Vector<GroupPool> group_pools;
     hcsr::render::compositing_bounds_program bounds_program;
     struct CoverageGpu {
@@ -80,6 +80,9 @@ class HCSRNewestSceneRenderer {
     uint32_t last_render_passes = 0;
     bool last_disjoint_groups = false;
     void release_groups(RenderingDevice *device);
+    static void release_group_target(RenderingDevice *,GroupTarget &);
+    static void release_group_pool(RenderingDevice *,GroupPool &);
+    uint64_t retired_group_targets = 0;
 	Vector<hcsr::render::scene_word> vertices;
     Vector<hcsr::render::scene_word> uploaded_vertices;
 	Vector<Batch> batches;
