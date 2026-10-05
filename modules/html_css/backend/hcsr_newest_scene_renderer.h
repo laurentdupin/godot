@@ -8,8 +8,9 @@
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/canvas_render_target_preparation.h"
 
-// Submits prepared scene drawing. Raster resource lifetime is owned by the view,
-// not by this renderer. The remaining packet/mesh preparation is transitional.
+// Shares compact surface submission and local hierarchy across GPU adapters.
+// The view owns raster validity/allocation; this renderer owns GPU mirrors and
+// presentation scratch resources, never a second appearance cache.
 class HCSRNewestSceneRenderer {
     HCSRNewestRasterResources &resources;
     using Entry = HCSRNewestRasterResources::Entry;
@@ -105,6 +106,7 @@ class HCSRNewestSceneRenderer {
     uint32_t state_capacity=0, clip_capacity=0, plane_capacity=0, primitive_capacity=0;
     uint64_t geometry_generation=0, geometry_uploaded_bytes=0, state_uploaded_bytes=0, instance_uploaded_bytes=0, clip_definition_uploaded_bytes=0;
     bool gpu_geometry=false, geometry_dirty=true;
+    bool opengl_submission=false;
     float logical_width=1, logical_height=1, prepared_scale=0;
     uint32_t last_draw_calls=0;
     double last_gpu_ms=0;
@@ -116,9 +118,24 @@ class HCSRNewestSceneRenderer {
 	uint64_t uploaded_bytes = 0;
 	bool upload(RenderingDevice *device);
 
+#ifdef GLES3_ENABLED
+    struct GLData {uint32_t texture=0;int width=0,height=0;};
+    struct GLTarget {uint32_t texture=0,framebuffer=0;};
+    struct GLPool {RID output;Size2i size;Vector<GLTarget> groups;GLTarget blend;};
+    struct GLResources {
+        uint32_t program=0,hierarchy_program=0,vao=0,framebuffer=0;
+        GLData geometry,states,clips,planes,primitives,nodes,outputs;
+        Vector<uint32_t> pages;
+        Vector<GLPool> pools;
+        uint64_t hierarchy_geometry=0,hierarchy_revision=0;
+    } gl;
+    void release_gl();
+#endif
 public:
     explicit HCSRNewestSceneRenderer(HCSRNewestRasterResources &p_resources) : resources(p_resources) {}
-    bool prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale = 1, const hcsr_backdrop_view_t &backdrop = {},const hcsr_hierarchy_view_t &local = {},const hcsr_raster_demand_view_t &raster_demand = {},bool gpu_compositing=true);
+    bool prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale = 1, const hcsr_backdrop_view_t &backdrop = {},const hcsr_hierarchy_view_t &local = {},const hcsr_raster_demand_view_t &raster_demand = {},bool gpu_compositing=true,bool opengl=false);
+    bool draw_gl(RID target,const Size2i &size,const Color &background,bool mipmaps);
+    void release_gl_output(RID target);
     hcsr_gpu_state_t reference_state(const hcsr_draw_packet_view_t &packet,uint32_t index) const;
     // Borrowed atlas bindings: lifetime and upload remain with this renderer.
     HCSRNewestRasterResources::Entry backdrop_entry(uint32_t index) const { return backdrop_entries[index]; }

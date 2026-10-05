@@ -253,6 +253,15 @@ static void release_gpu_target(HCSRNewestPresentationOutput *p_state, RenderingS
 }
 
 static bool ensure_gpu_target(HCSRNewestPresentationOutput *p_state, RenderingServer *p_server, RenderingDevice *p_device, const Size2i &p_physical_size) {
+    if(!p_device) {
+        if(p_state->canvas_texture.is_valid() && p_state->texture->get_width()==p_physical_size.x && p_state->texture->get_height()==p_physical_size.y)return true;
+        release_gpu_target(p_state,p_server,nullptr);
+        Ref<Image> image=Image::create_empty(p_physical_size.x,p_physical_size.y,p_state->mipmaps,Image::FORMAT_RGBA8);
+        p_state->canvas_texture=p_server->texture_2d_create(image);
+        if(!p_state->canvas_texture.is_valid())return false;
+        p_state->texture->set_external_texture(p_state->canvas_texture,p_physical_size,true);
+        return true;
+    }
 	if (p_state->rd_texture.is_valid()) {
 		const RenderingDevice::TextureFormat existing = p_device->texture_get_format(p_state->rd_texture);
 		if ((int)existing.width == p_physical_size.x && (int)existing.height == p_physical_size.y) {
@@ -354,8 +363,8 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
     }
     const uint64_t atlas_start_usec = OS::get_singleton()->get_ticks_usec();
     const bool valid_packet = rendered;
-    const bool textured = rendered && !inject_failure && state->scene_renderer.prepare(packet, state->document, output_scale, backdrop_view,hierarchy_view,raster_demand,renderer!=HTML_SURFACE_HCSR_NEWEST_CPU);
-	const bool canvas_required = textured && renderer != HTML_SURFACE_HCSR_NEWEST_CPU && prepared.canvas_enabled && state->scene_renderer.has_document_backdrops();
+    const bool textured = rendered && !inject_failure && state->scene_renderer.prepare(packet, state->document, output_scale, backdrop_view,hierarchy_view,raster_demand,renderer!=HTML_SURFACE_HCSR_NEWEST_CPU && renderer!=HTML_SURFACE_HCSR_NEWEST_OPENGL,renderer==HTML_SURFACE_HCSR_NEWEST_OPENGL);
+	const bool canvas_required = textured && renderer != HTML_SURFACE_HCSR_NEWEST_CPU && renderer != HTML_SURFACE_HCSR_NEWEST_OPENGL && prepared.canvas_enabled && state->scene_renderer.has_document_backdrops();
     const uint64_t atlas_end_usec = OS::get_singleton()->get_ticks_usec();
 	if (textured) {
 		RenderingServer *server = RenderingServer::get_singleton();
@@ -368,6 +377,10 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 				output->texture->update_from_image(image);
 				return true;
 			}
+            if(renderer==HTML_SURFACE_HCSR_NEWEST_OPENGL) {
+                if(output->canvas_texture.is_valid() && (output->texture->get_width()!=size.x || output->texture->get_height()!=size.y))state->scene_renderer.release_gl_output(output->canvas_texture);
+                return ensure_gpu_target(output,server,nullptr,size) && state->scene_renderer.draw_gl(output->canvas_texture,size,clear,output->mipmaps);
+            }
 			if (!device || !ensure_gpu_target(output, server, device, size)
 					|| !state->scene_renderer.draw(device, output->rd_texture, clear)) return false;
 			if (output->mipmaps) {
@@ -393,12 +406,12 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 			if (rendered) rendered = draw_output(output, output->physical_size, Color(0, 0, 0, 0));
 			if (rendered) output->active_generation = rendered_generation;
 		}
-		for (uint64_t id : retired) { release_output(state->outputs[id], server, device); state->outputs.erase(id); }
+		for (uint64_t id : retired) {state->scene_renderer.release_gl_output(state->outputs[id]->canvas_texture); release_output(state->outputs[id], server, device); state->outputs.erase(id); }
 	} else {
 		rendered = false;
 	}
     // Ordinary drawing uploads the shared atlas before the mask borrows it.
-    if(rendered)state->prepared_backdrop=state->backdrop.update(packet_handle,rendered_logical_size,physical_size,state->scene_renderer);
+    if(rendered && renderer!=HTML_SURFACE_HCSR_NEWEST_OPENGL)state->prepared_backdrop=state->backdrop.update(packet_handle,rendered_logical_size,physical_size,state->scene_renderer);
     static const bool record_profile = OS::get_singleton()->get_environment("HCSR_RECORD_PROFILE") == "1";
     if (record_profile) {
         const uint64_t now = OS::get_singleton()->get_ticks_usec();
@@ -773,7 +786,7 @@ Dictionary HTMLSurfaceHCSRNewestBackend::get_frame_synchronization() const {
 	result["canvas_record_ms"] = state->canvas_record_ms;
 	result["canvas_input_required"] = state->canvas_required;
 	if (state->canvas_input_probe.is_valid()) result["canvas_input_probe"] = state->canvas_input_probe->get_diagnostics();
-	const char *renderer_names[] = { "cpu", "d3d12", "vulkan", "metal" };
+	const char *renderer_names[] = { "cpu", "d3d12", "vulkan", "metal", "opengl3" };
 	result["renderer"] = renderer_names[state->renderer];
 	result["prepared_host_frame"] = state->prepared.host_frame;
 	result["prepared_time_seconds"] = state->prepared.time_seconds;
@@ -783,7 +796,7 @@ Dictionary HTMLSurfaceHCSRNewestBackend::get_frame_synchronization() const {
 	result["preparations"] = state->preparation_count;
 	result["recordings"] = state->recorded_count;
 	result["gpu_recordings"] = state->gpu_recorded_count;
-	result["render_path"] = state->renderer == HTML_SURFACE_HCSR_NEWEST_CPU ? "cpu_reference" : "rendering_device";
+	result["render_path"] = state->renderer == HTML_SURFACE_HCSR_NEWEST_CPU ? "cpu_reference" : state->renderer==HTML_SURFACE_HCSR_NEWEST_OPENGL ? "opengl_surface_instances" : "rendering_device";
 	result["failures"] = state->synchronization_failures;
 	result["recoverable_render_failures"] = state->recoverable_render_failures;
 	result["last_render_failure"] = state->last_render_failure;

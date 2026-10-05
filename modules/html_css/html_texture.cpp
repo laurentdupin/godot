@@ -162,6 +162,9 @@ Ref<Image> HTMLTexture2D::get_image() const {
 	if (external_texture_rid.is_valid()) {
 		RenderingServer *rendering_server = RenderingServer::get_singleton();
 		ERR_FAIL_NULL_V(rendering_server, Ref<Image>());
+        // Compatibility textures already contain raw premultiplied sRGB bytes;
+        // its texture readback does not need RenderingDevice's sampling view copy.
+        if(!rendering_server->get_rendering_device())return rendering_server->texture_2d_get(external_texture_rid);
 		RID readback_texture = rendering_server->texture_drawable_create(
 				size.x, size.y,
 				RenderingServerEnums::TEXTURE_DRAWABLE_FORMAT_RGBA8_SRGB,

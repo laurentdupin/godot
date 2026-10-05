@@ -143,7 +143,8 @@ bool HCSRNewestSceneRenderer::clear_group(RenderingDevice *device,RenderingDevic
     device->draw_list_draw(list,false,1,6);++coverage.clears;++last_draw_calls;return true;
 }
 
-bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, const Ref<HTMLDocument> &document, float output_scale, const hcsr_backdrop_view_t &backdrop,const hcsr_hierarchy_view_t &local,const hcsr_raster_demand_view_t &raster_demand,bool gpu_compositing) {
+bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, const Ref<HTMLDocument> &document, float output_scale, const hcsr_backdrop_view_t &backdrop,const hcsr_hierarchy_view_t &local,const hcsr_raster_demand_view_t &raster_demand,bool gpu_compositing,bool opengl) {
+    opengl_submission=opengl;
     const auto &packet=submitted;
     const bool had_pending = resources.has_pending_glyphs();
     const bool next_gpu = hcsr::render::gpu_drawing(packet.format);
@@ -656,7 +657,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
     // Copies, foreground passes and ordered prefixes consume GPU coverage.
     // Only ordinary disjoint-group scheduling still needs host bounds;
     // reference geometry retains its CPU coverage path.
-    host_coverage_required = !gpu_geometry || (ordinary_groups && nested_group_passes.empty());
+    host_coverage_required = !opengl_submission && (!gpu_geometry || (ordinary_groups && nested_group_passes.empty()));
     if(gpu_geometry) update_compositing_bounds(packet);
 	resources.end_resolution_requests();
 	return true;
@@ -1345,6 +1346,9 @@ void HCSRNewestSceneRenderer::release_page(RenderingDevice *device,GpuPage &page
 }
 
 void HCSRNewestSceneRenderer::release(RenderingDevice *device) {
+#ifdef GLES3_ENABLED
+    if(gl.program || gl.hierarchy_program || gl.vao)release_gl();
+#endif
     release_groups(device);
 	if (device) {
         for(RID rid:{coverage.uniform,coverage.region_uniform,coverage.clear_uniform,coverage.data,coverage.output,coverage.controls,coverage.arguments})
@@ -1618,5 +1622,27 @@ Dictionary HCSRNewestSceneRenderer::get_statistics() const {
     result["gpu_blend_region_copies"] = gpu_blend_region_copies;
     result["gpu_backdrop_prefix_draws"] = gpu_backdrop_prefix_draws;
     result["gpu_document_snapshots"] = gpu_document_snapshots;
+#ifdef GLES3_ENABLED
+    if(opengl_submission) {
+        uint64_t gl_buffers=0,gl_groups=0,gl_blends=0,gl_atlas=0;
+        for(auto data:{gl.geometry,gl.states,gl.clips,gl.planes,gl.primitives,gl.nodes,gl.outputs})
+            if(data.texture)gl_buffers+=uint64_t(data.width)*data.height*16;
+        for(const auto &pool:gl.pools) {
+            for(auto target:pool.groups)if(target.texture)gl_groups+=uint64_t(pool.size.x)*pool.size.y*4;
+            if(pool.blend.texture)gl_blends+=uint64_t(pool.size.x)*pool.size.y*4;
+        }
+        int gl_atlas_pages=0;
+        for(int i=0;i<gl.pages.size();i++)if(gl.pages[i]){auto size=resources.page_size(i);gl_atlas+=uint64_t(size.x)*size.y*4;++gl_atlas_pages;}
+        result["gpu_atlas_pages"]=gl_atlas_pages;
+        result["gpu_atlas_bytes"]=gl_atlas;
+        result["gpu_buffer_reserved_bytes"]=gl_buffers;
+        result["opacity_target_bytes"]=gl_groups;
+        result["blend_snapshot_bytes"]=gl_blends;
+        result["compositing_scratch_bytes"]=gl_groups+gl_blends;
+        result["owned_gpu_pixel_and_buffer_bytes"]=gl_atlas+gl_buffers+gl_groups+gl_blends;
+        result["opengl_full_target_compositing"]=true;
+        result["ordered_backdrop_supported"]=false;
+    }
+#endif
 	return result;
 }

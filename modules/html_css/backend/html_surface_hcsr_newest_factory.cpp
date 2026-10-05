@@ -18,6 +18,10 @@ static int newest_resolve(HTMLSurfaceBackendPreference p_preference) {
 	if (p_preference == HTML_SURFACE_BACKEND_CPU) {
 		return HTML_SURFACE_HCSR_NEWEST_CPU;
 	}
+#ifdef GLES3_ENABLED
+    if((p_preference==HTML_SURFACE_BACKEND_AUTO || p_preference==HTML_SURFACE_BACKEND_GPU_AUTO)
+        && (driver=="opengl3" || driver=="opengl3_angle" || driver=="opengl3_es"))return HTML_SURFACE_HCSR_NEWEST_OPENGL;
+#endif
 #ifdef HTML_CSS_HCSR_NEWEST_D3D12
 	if ((p_preference == HTML_SURFACE_BACKEND_AUTO || p_preference == HTML_SURFACE_BACKEND_GPU_AUTO) && driver == "d3d12") {
 		return HTML_SURFACE_HCSR_NEWEST_D3D12;
