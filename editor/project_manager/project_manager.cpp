@@ -597,6 +597,13 @@ bool ProjectManager::_launch_project(const String &p_project_path, const String 
 	for (const String &argument : Main::get_forwardable_cli_arguments(Main::CLI_SCOPE_PROJECT)) {
 		args.push_back(argument);
 	}
+	const PackedStringArray renderer_override = run_renderer->get_item_metadata(run_renderer->get_selected());
+	if (renderer_override.size() == 2) {
+		args.push_back("--rendering-method");
+		args.push_back(renderer_override[0]);
+		args.push_back("--rendering-driver");
+		args.push_back(renderer_override[1]);
+	}
 	args.push_back("--path");
 	args.push_back(p_project_path);
 	if (!p_scene_path.is_empty()) {
@@ -928,6 +935,7 @@ void ProjectManager::_update_project_buttons() {
 	duplicate_btn->set_disabled(empty_selection || is_missing_project_selected);
 	manage_tags_btn->set_disabled(empty_selection || is_missing_project_selected || selected_projects.size() > 1);
 	run_btn->set_disabled(empty_selection || is_missing_project_selected);
+	run_renderer->set_disabled(empty_selection || is_missing_project_selected);
 
 	erase_missing_btn->set_disabled(!project_list->is_any_project_missing());
 }
@@ -1757,11 +1765,45 @@ ProjectManager::ProjectManager() {
 
 			open_btn_container->set_custom_minimum_size(Size2(120, open_btn->get_combined_minimum_size().y));
 
+			HBoxContainer *run_container = memnew(HBoxContainer);
+			sidebar_buttons_containter->add_child(run_container);
+
 			run_btn = memnew(Button);
 			run_btn->set_text(TTRC("Run"));
 			run_btn->set_shortcut(ED_SHORTCUT("project_manager/run_project", TTRC("Run Project"), KeyModifierMask::CMD_OR_CTRL | Key::R));
 			run_btn->connect(SceneStringName(pressed), callable_mp(this, &ProjectManager::_run_project));
-			sidebar_buttons_containter->add_child(run_btn);
+			run_btn->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+			run_container->add_child(run_btn);
+
+			run_renderer = memnew(OptionButton);
+			run_renderer->set_accessibility_name(TTRC("Run Renderer"));
+			run_renderer->set_tooltip_text(TTRC("Override the renderer for Run and recent scenes without changing project settings."));
+			run_renderer->set_fit_to_longest_item(false);
+			run_renderer->set_clip_text(true);
+			run_renderer->set_text_overrun_behavior(TextServer::OVERRUN_TRIM_ELLIPSIS);
+			run_renderer->set_custom_minimum_size(Size2(90 * EDSCALE, 0));
+			run_renderer->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+			run_renderer->add_item(TTRC("Project Default"));
+			run_renderer->set_item_metadata(0, PackedStringArray());
+			run_container->add_child(run_renderer);
+			for (int display = 0; display < DisplayServer::get_create_function_count(); ++display) {
+				if (String(DisplayServer::get_create_function_name(display)).nocasecmp_to(DisplayServer::get_singleton()->get_name()) != 0) {
+					continue;
+				}
+				for (const String &driver : DisplayServer::get_create_function_rendering_drivers(display)) {
+					if (driver == "vulkan" || driver == "d3d12" || driver == "metal") {
+						for (const String &method : { String("forward_plus"), String("mobile") }) {
+							run_renderer->add_item(vformat("%s (%s)", method == "forward_plus" ? TTRC("Forward+") : TTRC("Mobile"), driver == "d3d12" ? "D3D12" : driver.capitalize()));
+							run_renderer->set_item_metadata(run_renderer->get_item_count() - 1, PackedStringArray({ method, driver }));
+						}
+					} else if (driver == "opengl3" || driver == "opengl3_angle" || driver == "opengl3_es") {
+						run_renderer->add_item(vformat("%s (%s)", TTRC("Compatibility"), driver == "opengl3_angle" ? "ANGLE" : driver == "opengl3_es" ? "OpenGL ES"
+																																					  : "OpenGL"));
+						run_renderer->set_item_metadata(run_renderer->get_item_count() - 1, PackedStringArray({ "gl_compatibility", driver }));
+					}
+				}
+				break;
+			}
 
 			rename_btn = memnew(Button);
 			rename_btn->set_text(TTRC("Rename"));

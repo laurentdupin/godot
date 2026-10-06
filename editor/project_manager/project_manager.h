@@ -162,6 +162,7 @@ class ProjectManager : public Control {
 	Button *open_btn = nullptr;
 	Button *open_options_btn = nullptr;
 	Button *run_btn = nullptr;
+	OptionButton *run_renderer = nullptr;
 	Button *rename_btn = nullptr;
 	Button *duplicate_btn = nullptr;
 	Button *manage_tags_btn = nullptr;
