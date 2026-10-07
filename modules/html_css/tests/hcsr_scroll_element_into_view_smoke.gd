@@ -41,7 +41,7 @@ func _initialize() -> void:
 	root.add_child(fresh)
 	if not await _wait_for_initial_views(mutated, fresh):
 		return
-	if mutated.scroll_element_into_view(&"section-0", &"center") != ERR_INVALID_PARAMETER \
+	if mutated.scroll_element_into_view(&"section-0", &"invalid") != ERR_INVALID_PARAMETER \
 			or mutated.scroll_element_into_view(&"", &"start") != ERR_INVALID_PARAMETER:
 		_fail("%s scroll-into-view smoke did not reject an unsupported alignment or empty id." % backend_name)
 		return

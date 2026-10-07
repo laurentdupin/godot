@@ -552,7 +552,7 @@ Error HTMLRenderSurface::replace_stylesheet_text(const StringName &p_style_id, c
 }
 
 Error HTMLRenderSurface::scroll_element_into_view(const StringName &p_id, const StringName &p_block_alignment) {
-	if (p_id.is_empty() || p_block_alignment != StringName("start")) {
+	if (p_id.is_empty() || (p_block_alignment != StringName("start") && p_block_alignment != StringName("center") && p_block_alignment != StringName("end") && p_block_alignment != StringName("nearest"))) {
 		return ERR_INVALID_PARAMETER;
 	}
 	_ensure_backend();
