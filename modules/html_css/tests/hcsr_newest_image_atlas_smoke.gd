@@ -62,15 +62,21 @@ func run() -> void:
     if not stats.has("decoded_images"):
         quit(1)
         return
-    # Page zero is the permanent empty sampler; assets share one packed page.
-    require(int(stats.decoded_images) == 2 and int(stats.pages) == 2, "repeated PNG shares allocation: " + str(stats))
+    # Appearance pages exclude the permanent empty GPU sampler. Decodes are
+    # cumulative; image_entries counts only currently retained source/level pairs.
+    require(int(stats.decoded_images) == 2, "shared red PNG and green SVG decoded once")
+    require(int(stats.image_entries) == 2, "repeated red PNG shares atlas allocation")
+    require(int(stats.pages) == 1, "images share one appearance page")
+    require(int(stats.gpu_atlas_pages) == (0 if cpu else 2), "GPU page count includes empty sampler")
+    require(int(stats.failed_allocations) == 0, "initial atlas allocations succeed")
     var uploaded := int(stats.uploaded_bytes)
     require(view.set_element_attribute("first", "src", blue) == OK, "source mutation")
     await settle()
     check_pixels(large.texture.get_image(), true)
     check_pixels(small.texture.get_image(), true)
     stats = view.get_frame_scheduler_diagnostics().frame_synchronization.image_atlas
-    require(int(stats.decoded_images) == 3 and int(stats.pages) == 2, "new source allocation")
+    require(int(stats.decoded_images) == 3, "blue PNG decoded once")
+    require(int(stats.image_entries) == 3 and int(stats.pages) == 1, "new source shares appearance page")
     if not cpu:
         require(int(stats.uploaded_bytes)-uploaded == 18*10*4, "only new padded region uploaded: " + str(stats))
     # Removing CSS image declarations must restore defaults, not retain typed state.
@@ -87,8 +93,10 @@ func run() -> void:
     large.size = Vector2i(960,600)
     await settle()
     check_pixels(large.texture.get_image(), true)
-    require(large.generation == view.get_generation() and small.generation == large.generation, "shared packet generation")
+    require(large.generation == view.get_generation() and small.generation == large.generation, "outputs share scene generation")
     require(int(view.get_frame_scheduler_diagnostics().frame_synchronization.failures) == 0, "synchronization")
+    stats = view.get_frame_scheduler_diagnostics().frame_synchronization.image_atlas
+    require(int(stats.decoded_images) == 3, "style changes and output resize reuse decoded assets")
     # Files use the same explicit Godot resource resolver as stylesheets.
     var file_image := Image.create(16, 8, false, Image.FORMAT_RGBA8)
     file_image.fill(Color.GREEN)
@@ -96,6 +104,13 @@ func run() -> void:
     require(view.set_element_attribute("svg", "src", "user://atlas-file.png") == OK, "local image reference")
     await settle()
     check_pixels(large.texture.get_image(), true)
+    stats = view.get_frame_scheduler_diagnostics().frame_synchronization.image_atlas
+    require(int(stats.decoded_images) == 4, "local green PNG is the fourth decoded source")
+    require(int(stats.image_entries) == 3, "replacement retires the green SVG allocation")
+    require(int(stats.pages) == 1 and int(stats.failed_allocations) == 0, "replacement reuses appearance page")
+    await settle()
+    stats = view.get_frame_scheduler_diagnostics().frame_synchronization.image_atlas
+    require(int(stats.decoded_images) == 4, "idle frames do not decode again")
     if "--pages" in OS.get_cmdline_user_args():
         # Keep full-size image geometry inside small clips. Small displayed
         # images legitimately select reduced cache levels and do not fill pages.
@@ -111,7 +126,11 @@ func run() -> void:
         require(magenta.r > .9 and magenta.b > .9 and magenta.g < .1, "third atlas page sampling")
         require(reused.r > .9 and reused.g < .1, "switch back to original atlas page")
         stats = view.get_frame_scheduler_diagnostics().frame_synchronization.image_atlas
-        require(int(stats.pages) == 4 and int(stats.gpu_atlas_pages) == 4, "three packed pages plus the empty sampler: " + str(stats))
+        require(int(stats.decoded_images) == 6, "two large sources decoded once; red PNG remains reused")
+        require(int(stats.image_entries) == 3, "only multi-page fixture sources remain resident")
+        require(int(stats.pages) == 3, "three appearance pages: " + str(stats))
+        require(int(stats.gpu_atlas_pages) == (0 if cpu else 4), "GPU resources include empty sampler")
+        require(int(stats.failed_allocations) == 0, "multi-page allocations succeed")
         if not cpu:
             require(int(stats.draw_batches) == 3, "ordered atlas page bindings: " + str(stats))
     stats = view.get_frame_scheduler_diagnostics().frame_synchronization.image_atlas
