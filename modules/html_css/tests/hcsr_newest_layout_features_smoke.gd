@@ -1,7 +1,7 @@
 extends SceneTree
 var failed := false
 const SIZE := Vector2i(640, 400)
-const CSS := "html,body{margin:0;background:white;color:black;font:16px/20px Arial}#box{position:absolute;left:20px;top:20px;width:260px;height:180px}.sideways{writing-mode:sideways-lr}.rtl{direction:rtl}.upright{writing-mode:vertical-rl;text-orientation:upright}.vertical{writing-mode:vertical-rl}.grid{display:grid;grid-template-columns:70px 90px;grid-template-rows:60px 80px;gap:8px}.grid span{background:#cde;border:1px solid #369}.columns{columns:2;column-gap:20px;column-fill:auto;orphans:3;widows:2}.balance{text-wrap:balance}.pretty{text-wrap:pretty}.hyphen{hyphens:auto;width:70px}.moved{transform:translate(8px,12px)}td{border:1px solid #369;padding:4px}table{border-spacing:3px 7px}"
+const CSS := "html,body{margin:0;background:white;color:black;font:16px/20px Arial}#box{position:absolute;left:20px;top:20px;width:260px;height:180px}.sideways{writing-mode:sideways-lr}.rtl{direction:rtl}.upright{writing-mode:vertical-rl;text-orientation:upright}.vertical{writing-mode:vertical-rl}.grid{display:grid;grid-template-columns:70px 90px;grid-template-rows:60px 80px;gap:8px}.grid span{background:#cde;border:1px solid #369}.columns{columns:2;column-gap:20px;column-fill:auto;orphans:3;widows:2}.balance{text-wrap:balance}.pretty{text-wrap:pretty}#box.hyphen{hyphens:auto;width:70px}.moved{transform:translate(8px,12px)}td{border:1px solid #369;padding:4px}table{border-spacing:3px 7px}"
 func _initialize():
     run.call_deferred()
     create_timer(90).timeout.connect(func(): quit(2))
