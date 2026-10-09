@@ -220,6 +220,10 @@ void HCSRNewestText::cache_font_metrics(const Ref<Font> &font, int weight) {
 	metrics.italic_face = text_server->font_get_style(rid).has_flag(TextServer::FONT_ITALIC) || text_server->font_get_transform(rid) != Transform2D();
 	Ref<FontFile> file = base;
 	if (file.is_valid()) {
+		metrics.source = file;
+		metrics.face_index = text_server->font_get_face_index(rid);
+		metrics.coordinates = text_server->font_get_variation_coordinates(rid);
+		metrics.weight = weight;
 		const PackedByteArray data = file->get_data();
 		hcsr_font_face_id face = 0;
 		TextServer *ts = TextServerManager::get_singleton()->get_primary_interface().ptr();
@@ -380,5 +384,51 @@ int HCSRNewestText::shape(const hcsr_shape_request_t &request, hcsr_shape_result
 	}
 	result = { scratch.ptr(), (size_t)scratch.size(), ascent, descent, gap, x_height, scratch_runs.ptr(), (size_t)scratch_runs.size() };
 	ts->free_rid(shaped);
+	return 1;
+}
+
+HCSRNewestText::~HCSRNewestText() {
+	for (const KeyValue<RID, FontMetrics> &entry : font_metrics) {
+		if (entry.value.caret_face) {
+			hcsr_font_unregister(entry.value.caret_face);
+		}
+	}
+}
+int32_t HCSR_CALL HCSRNewestText::caret_callback(void *user, uint64_t face, uint32_t glyph, float size, uint32_t direction, hcsr_caret_result_t *result) {
+	if (!user || !result || direction > 2) {
+		return 0;
+	}
+	*result = {};
+	HCSRNewestText *owner = static_cast<HCSRNewestText *>(user);
+	FontMetrics *metrics = owner->font_metrics.getptr(RID::from_uint64(face));
+	if (!metrics || metrics->source.is_null()) {
+		return 0;
+	}
+	if (!metrics->caret_face) {
+		const PackedByteArray bytes = metrics->source->get_data();
+		hcsr_font_face_id base = 0;
+		if (!hcsr_font_register(bytes.ptr(), bytes.size(), metrics->face_index, &base)) {
+			return 0;
+		}
+		Vector<hcsr_font_variation> axes;
+		const Array keys = metrics->coordinates.keys();
+		TextServer *ts = TextServerManager::get_singleton()->get_primary_interface().ptr();
+		for (int i = 0; i < keys.size(); i++) {
+			const uint32_t tag = keys[i].get_type() == Variant::INT ? uint32_t(int64_t(keys[i])) : uint32_t(ts->name_to_tag(String(keys[i])));
+			axes.push_back({ tag, float(metrics->coordinates[keys[i]]) });
+		}
+		hcsr_font_create_variation_instance(base, axes.ptr(), axes.size(), &metrics->caret_face);
+		hcsr_font_unregister(base);
+	}
+	int32_t count = 0;
+	if (!hcsr_font_get_ligature_carets(metrics->caret_face, glyph, size, metrics->weight, hcsr_text_direction(direction), nullptr, 0, &count) || count <= 0 || count > 65535) {
+		return 0;
+	}
+	owner->scratch_carets.resize(count);
+	if (!hcsr_font_get_ligature_carets(metrics->caret_face, glyph, size, metrics->weight, hcsr_text_direction(direction), owner->scratch_carets.ptrw(), count, &count)) {
+		return 0;
+	}
+	result->positions = owner->scratch_carets.ptr();
+	result->count = count;
 	return 1;
 }

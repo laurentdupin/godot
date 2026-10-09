@@ -534,7 +534,8 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
 	state->scene = 0;
 	state->source = 0;
     if (state->text_enabled) {
-        if (hcsr_runtime_set_text_shaper(state->runtime, HCSRNewestText::callback, &state->text) != HCSR_OK) {
+        if (hcsr_runtime_set_text_shaper(state->runtime, HCSRNewestText::callback, &state->text) != HCSR_OK
+            || hcsr_runtime_set_ligature_caret_provider(state->runtime,HCSRNewestText::caret_callback,&state->text) != HCSR_OK) {
             set_terminal(state, "hcsr_newest could not install the host font service.");
             return ERR_CANT_CREATE;
         }
@@ -1304,7 +1305,7 @@ HTMLSurfaceHCSRNewestBackend::HTMLSurfaceHCSRNewestBackend(HTMLSurfaceHCSRNewest
 	}
 	state->renderer = p_renderer;
 	state->texture = texture;
-	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_18 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
+	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_19 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
 		set_terminal(state, "hcsr_newest scene ABI initialization failed.");
 	}
 }
