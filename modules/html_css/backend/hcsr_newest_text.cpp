@@ -65,8 +65,25 @@ void HCSRNewestText::add_stylesheet(const String &css, const String &base) {
 	}
 }
 
-Ref<Font> HCSRNewestText::resolve(const String &family, int weight, bool italic) {
+Ref<Font> HCSRNewestText::resolve(const hcsr_shape_request_t &request) {
+	const String family = decode(request.family);
+	const int weight = request.weight;
+	const bool italic = request.italic != 0;
+	Dictionary requested_axes;
+	requested_axes[int64_t(0x77647468)] = request.width_percent;
+	requested_axes[int64_t(0x6974616c)] = italic ? 1.0f : 0.0f;
+	requested_axes[int64_t(0x736c6e74)] = -request.slant_degrees;
+	if (request.optical_sizing) {
+		requested_axes[int64_t(0x6f70737a)] = request.size;
+	}
+	for (size_t i = 0; i < request.variation_count; ++i) {
+		requested_axes[int64_t(request.variations[i].tag)] = request.variations[i].value;
+	}
 	String key = uitos(configuration) + "|" + family + "|" + itos(weight) + "|" + itos(italic);
+	key += "|" + rtos(request.width_percent) + "|" + rtos(request.slant_degrees) + "|" + (request.optical_sizing ? rtos(request.size) : String("none"));
+	for (size_t i = 0; i < request.variation_count; ++i) {
+		key += "|" + uitos(request.variations[i].tag) + ":" + rtos(request.variations[i].value);
+	}
 	for (const AuthorFace &face : authors) {
 		key += "|" + face.family + ":" + face.source + ":" + itos(face.weight) + ":" + itos(face.maximum_weight) + ":" + itos(face.italic);
 	}
@@ -84,9 +101,9 @@ Ref<Font> HCSRNewestText::resolve(const String &family, int weight, bool italic)
 			names.push_back("Segoe UI");
 		} else
 #endif
-		names.push_back(generic == "sans-serif" || generic == "system-ui" ? "Arial" : generic == "serif" ? "Times New Roman"
-						: generic == "monospace"													? "Consolas"
-																								: name);
+			names.push_back(generic == "sans-serif" || generic == "system-ui" ? "Arial" : generic == "serif" ? "Times New Roman"
+							: generic == "monospace"														 ? "Consolas"
+																											 : name);
 		for (const AuthorFace &face : authors) {
 			if (face.family == name.to_lower() && (!selected || weight_rank(weight, face.weight, face.maximum_weight) + (face.italic != italic ? 10000 : 0) <= weight_rank(weight, selected->weight, selected->maximum_weight) + (selected->italic != italic ? 10000 : 0))) {
 				selected = &face;
@@ -132,6 +149,10 @@ Ref<Font> HCSRNewestText::resolve(const String &family, int weight, bool italic)
 		if (variable_italic) {
 			axes[ts->name_to_tag("italic")] = italic ? 1 : 0;
 		}
+		const Array axis_keys = requested_axes.keys();
+		for (int i = 0; i < axis_keys.size(); ++i) {
+			axes[axis_keys[i]] = requested_axes[axis_keys[i]];
+		}
 		variation->set_variation_opentype(axes);
 		// Keep shaping and rasterization on the same synthesized FontVariation RID.
 		// Real bold faces and ranges containing bold must never be emboldened twice.
@@ -143,11 +164,15 @@ Ref<Font> HCSRNewestText::resolve(const String &family, int weight, bool italic)
 		if (!rids.is_empty()) {
 			FontMetrics *metadata = font_metrics.getptr(rids[0]);
 			metadata->authored = true;
-			metadata->italic_face = selected->italic || (variable_italic && italic);
+			metadata->italic_face = metadata->italic_face || selected->italic || (variable_italic && italic);
 		}
 		resolved.push_back(variation);
 	}
-	resolved.push_back(fallback);
+	Ref<FontVariation> fallback_variation;
+	fallback_variation.instantiate();
+	fallback_variation->set_base_font(fallback);
+	fallback_variation->set_variation_opentype(requested_axes);
+	resolved.push_back(fallback_variation);
 	Ref<Font> font = resolved[0];
 	if (resolved.size() > 1) {
 		TypedArray<Font> fallbacks;
@@ -192,21 +217,37 @@ void HCSRNewestText::cache_font_metrics(const Ref<Font> &font, int weight) {
 	}
 	FontMetrics metrics = {};
 	TextServer *text_server = TextServerManager::get_singleton()->get_primary_interface().ptr();
-	metrics.italic_face = text_server->font_get_style(rid).has_flag(TextServer::FONT_ITALIC)
-			|| text_server->font_get_transform(rid) != Transform2D();
+	metrics.italic_face = text_server->font_get_style(rid).has_flag(TextServer::FONT_ITALIC) || text_server->font_get_transform(rid) != Transform2D();
 	Ref<FontFile> file = base;
 	if (file.is_valid()) {
 		const PackedByteArray data = file->get_data();
 		hcsr_font_face_id face = 0;
 		TextServer *ts = TextServerManager::get_singleton()->get_primary_interface().ptr();
 		if (hcsr_font_register(data.ptr(), data.size(), ts->font_get_face_index(rid), &face)) {
-			hcsr_font_get_metrics_variation(face, 1024, weight, &metrics);
+			const Dictionary coordinates = ts->font_get_variation_coordinates(rid);
+			const Array keys = coordinates.keys();
+			Vector<hcsr_font_variation> axes;
+			for (int i = 0; i < keys.size(); ++i) {
+				const uint32_t tag = keys[i].get_type() == Variant::INT ? uint32_t(int64_t(keys[i])) : uint32_t(ts->name_to_tag(String(keys[i])));
+				axes.push_back({ tag, float(coordinates[keys[i]]) });
+			}
+			hcsr_font_face_id instance = 0;
+			if (hcsr_font_create_variation_instance(face, axes.ptr(), axes.size(), &instance)) {
+				hcsr_font_get_metrics_variation(instance, 1024, weight, &metrics);
+				hcsr_font_get_decoration_metrics(instance, 1024, weight, &metrics.decoration);
+				metrics.italic_face = metrics.italic_face || hcsr_font_has_axis(instance, 0x6974616c) || hcsr_font_has_axis(instance, 0x736c6e74);
+				hcsr_font_unregister(instance);
+			}
 			metrics.has_vertical_metrics = hcsr_font_has_vertical_metrics(face) != 0;
 			hcsr_font_unregister(face);
 			metrics.ascent /= 1024;
 			metrics.descent /= 1024;
 			metrics.line_gap /= 1024;
 			metrics.x_height /= 1024;
+			metrics.decoration.underline_offset /= 1024;
+			metrics.decoration.underline_thickness /= 1024;
+			metrics.decoration.normalized_ascent /= 1024;
+			metrics.decoration.normalized_descent /= 1024;
 		}
 	}
 	font_metrics.insert(rid, metrics);
@@ -217,16 +258,22 @@ void HCSRNewestText::cache_font_metrics(const Ref<Font> &font, int weight) {
 
 int HCSRNewestText::shape(const hcsr_shape_request_t &request, hcsr_shape_result_t &result) {
 	TextServer *ts = TextServerManager::get_singleton()->get_primary_interface().ptr();
-	Ref<Font> font = resolve(decode(request.family), request.weight, request.italic != 0);
+	if (request.variation_count > 65535 || (request.variation_count && !request.variations)) {
+		return 0;
+	}
+	Ref<Font> font = resolve(request);
 	const String text = decode(request.text);
 	const float scale = request.size / 64.0f;
+	float glyph_scale = scale;
+	float reference_aspect = request.size_adjust_aspect;
 	RID shaped = ts->create_shaped_text(request.rtl ? TextServer::DIRECTION_RTL : TextServer::DIRECTION_LTR,
 			request.vertical ? TextServer::ORIENTATION_VERTICAL : TextServer::ORIENTATION_HORIZONTAL);
 	Dictionary features;
 	for (size_t i = 0; i < request.feature_count; i++) {
 		features[int64_t(request.features[i].tag)] = request.features[i].value;
 	}
-	bool ok = ts->shaped_text_add_string(shaped, text, font->get_rids(), 64, features, decode(request.language)) && ts->shaped_text_shape(shaped);
+	const char *language_override = request.language_override ? hcsr_font_language_for_tag(request.language_override) : nullptr;
+	bool ok = ts->shaped_text_add_string(shaped, text, font->get_rids(), 64, features, language_override ? String::utf8(language_override) : decode(request.language)) && ts->shaped_text_shape(shaped);
 	if (!ok) {
 		ts->free_rid(shaped);
 		return 0;
@@ -260,41 +307,72 @@ int HCSRNewestText::shape(const hcsr_shape_request_t &request, hcsr_shape_result
 			run_metrics.glyph_start = scratch.size();
 			synthesized_vertical_advance = 0;
 			const FontMetrics *metrics = font_metrics.getptr(g.font_rid);
+			float aspect = .5f;
+			if (request.size_adjust_metric == 0 && metrics && metrics->x_height > 0) {
+				aspect = metrics->x_height;
+			} else if (request.size_adjust_metric != 0) {
+				const char32_t character = request.size_adjust_metric == 1 ? U'H' : request.size_adjust_metric == 2 ? U'0'
+																													: U'\u6c34';
+				const int64_t glyph = ts->font_get_glyph_index(g.font_rid, 64, character, 0);
+				if (glyph) {
+					aspect = (request.size_adjust_metric == 1 || request.size_adjust_metric == 4)
+							? ts->font_get_glyph_size(g.font_rid, Vector2i(64, 0), glyph).y / 64.0f
+							: ts->font_get_glyph_advance(g.font_rid, 64, glyph).x / 64.0f;
+				} else {
+					aspect = request.size_adjust_metric == 1 ? .7f : 1;
+				}
+			}
+			if (request.size_adjust_from_font && !previous_metrics_rid.is_valid()) {
+				reference_aspect = aspect;
+			}
+			const float actual_size = request.size_adjust_enabled
+					? CLAMP(request.size * reference_aspect / MAX(.0001f, aspect), 0.0f, 65536.0f)
+					: request.size;
+			glyph_scale = actual_size / 64.0f;
+			run_metrics.raster_font_size = actual_size;
+			if (metrics) {
+				run_metrics.normalized_ascent = metrics->decoration.normalized_ascent * actual_size;
+				run_metrics.normalized_descent = metrics->decoration.normalized_descent * actual_size;
+			}
+			if (metrics) {
+				run_metrics.underline_offset = metrics->decoration.underline_offset * actual_size;
+				run_metrics.underline_thickness = metrics->decoration.underline_thickness * actual_size;
+			}
 			if (metrics && metrics->ascent + metrics->descent > 0) {
-				run_metrics.ascent = metrics->ascent * request.size;
+				run_metrics.ascent = metrics->ascent * actual_size;
 				if (request.allow_style_synthesis && !metrics->italic_face &&
 						(metrics->authored ? request.slant_degrees >= 14 : request.slant_degrees == 14)) {
 					run_metrics.synthetic_skew = 0.25f;
 				}
 				if (request.vertical && !metrics->has_vertical_metrics) {
-					synthesized_vertical_advance = Math::round(metrics->ascent * request.size) + Math::round(metrics->descent * request.size);
+					synthesized_vertical_advance = Math::round(metrics->ascent * actual_size) + Math::round(metrics->descent * actual_size);
 				}
-				run_metrics.descent = metrics->descent * request.size;
-				run_metrics.line_gap = metrics->line_gap * request.size;
-				run_metrics.x_height = metrics->x_height * request.size;
-				ascent = MAX(ascent, metrics->ascent * request.size);
-				descent = MAX(descent, metrics->descent * request.size);
-				gap = MAX(gap, metrics->line_gap * request.size);
+				run_metrics.descent = metrics->descent * actual_size;
+				run_metrics.line_gap = metrics->line_gap * actual_size;
+				run_metrics.x_height = metrics->x_height * actual_size;
+				ascent = MAX(ascent, metrics->ascent * actual_size);
+				descent = MAX(descent, metrics->descent * actual_size);
+				gap = MAX(gap, metrics->line_gap * actual_size);
 				if (!previous_metrics_rid.is_valid() && metrics->x_height > 0) {
-					x_height = metrics->x_height * request.size;
+					x_height = metrics->x_height * actual_size;
 				}
 			} else {
 				// Godot can select an implicit system fallback whose bytes are not
 				// exposed by Font. Preserve its metrics rather than using another face.
-				run_metrics.ascent = (float)ts->font_get_ascent(g.font_rid, 64) * scale;
-				run_metrics.descent = (float)ts->font_get_descent(g.font_rid, 64) * scale;
-				ascent = MAX(ascent, (float)ts->font_get_ascent(g.font_rid, 64) * scale);
-				descent = MAX(descent, (float)ts->font_get_descent(g.font_rid, 64) * scale);
+				run_metrics.ascent = (float)ts->font_get_ascent(g.font_rid, 64) * glyph_scale;
+				run_metrics.descent = (float)ts->font_get_descent(g.font_rid, 64) * glyph_scale;
+				ascent = MAX(ascent, (float)ts->font_get_ascent(g.font_rid, 64) * glyph_scale);
+				descent = MAX(descent, (float)ts->font_get_descent(g.font_rid, 64) * glyph_scale);
 			}
 			previous_metrics_rid = g.font_rid;
 		}
-		Vector2 origin = ts->font_get_glyph_offset(g.font_rid, Vector2i(64, 0), g.index) * scale;
-		Vector2 size = ts->font_get_glyph_size(g.font_rid, Vector2i(64, 0), g.index) * scale;
+		Vector2 origin = ts->font_get_glyph_offset(g.font_rid, Vector2i(64, 0), g.index) * glyph_scale;
+		Vector2 size = ts->font_get_glyph_size(g.font_rid, Vector2i(64, 0), g.index) * glyph_scale;
 		for (int repeat = 0; repeat < g.repeat; repeat++) {
 			run_metrics.glyph_count++;
 			scratch.push_back({ g.font_rid.get_id(), (uint32_t)g.index, (uint32_t)utf16[CLAMP(g.start, 0, text.length())],
-					g.x_off * scale, g.y_off * scale, request.vertical ? 0 : g.advance * scale,
-					request.vertical ? (synthesized_vertical_advance > 0 && g.advance != 0 ? synthesized_vertical_advance : g.advance * scale) : 0, origin.x, origin.y, size.x, size.y });
+					g.x_off * glyph_scale, g.y_off * glyph_scale, request.vertical ? 0 : g.advance * glyph_scale,
+					request.vertical ? (synthesized_vertical_advance > 0 && g.advance != 0 ? synthesized_vertical_advance : g.advance * glyph_scale) : 0, origin.x, origin.y, size.x, size.y });
 		}
 	}
 	if (run_metrics.glyph_count > 0) {

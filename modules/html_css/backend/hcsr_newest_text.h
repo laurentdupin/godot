@@ -1,8 +1,8 @@
 #pragma once
 
 #include "../html_document.h"
-#include "hcsr_scene.h"
 #include "hcsr_font_engine.h"
+#include "hcsr_scene.h"
 
 #include "scene/resources/font.h"
 
@@ -19,6 +19,7 @@ class HCSRNewestText {
 	HashMap<String, Ref<Font>> fonts;
 	HashMap<String, Ref<FontFile>> face_files;
 	struct FontMetrics : hcsr_font_metrics {
+		hcsr_font_decoration_metrics decoration = {};
 		bool has_vertical_metrics = true;
 		bool authored = false;
 		bool italic_face = false;
@@ -28,7 +29,7 @@ class HCSRNewestText {
 	uint64_t configuration = 0;
 	Vector<hcsr_shaped_glyph_t> scratch;
 	Vector<hcsr_shape_run_t> scratch_runs;
-	Ref<Font> resolve(const String &family, int weight, bool italic);
+	Ref<Font> resolve(const hcsr_shape_request_t &request);
 	int shape(const hcsr_shape_request_t &request, hcsr_shape_result_t &result);
 
 public:
