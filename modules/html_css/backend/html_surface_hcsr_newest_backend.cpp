@@ -11,6 +11,7 @@
 #include "hcsr_newest_canvas_input_probe.h"
 
 #include "../bridge/html_asset_provider.h"
+#include "core/core_bind.h"
 #include "core/io/file_access.h"
 #include "core/math/math_funcs.h"
 #include "core/object/callable_mp.h"
@@ -54,6 +55,7 @@ struct HTMLSurfaceHCSRNewestBackend::State : HCSRNewestPresentationOutput {
 	double canvas_record_ms = 0;
 	HCSRNewestRasterResources raster_resources;
     Vector<uint8_t> borrowed_image_pixels;
+	CharString borrowed_stylesheet_css, borrowed_stylesheet_name, borrowed_stylesheet_base;
 	HCSRNewestSceneRenderer scene_renderer{raster_resources};
 	HCSRNewestText text;
 	HCSRNewestBackdrop backdrop;
@@ -158,7 +160,8 @@ static String html_attribute(const String &p_attributes, const String &p_name) {
 }
 
 static Error append_document_stylesheets(const Ref<HTMLDocument> &p_document, const String &p_html,
-		Vector<CharString> &r_stylesheets, HashSet<String> &r_linked_stylesheet_paths, String &r_error, HCSRNewestText *text) {
+		Vector<CharString> &r_stylesheets, Vector<CharString> &r_stylesheet_bases, const String &p_embedded_base,
+		HashSet<String> &r_linked_stylesheet_paths, String &r_error, HCSRNewestText *text) {
 	Ref<RegEx> sources = RegEx::create_from_string(
 			"(?is)<style\\b[^>]*>(.*?)</style\\s*>|<link\\b([^>]*)>", false);
 	if (sources.is_null()) return ERR_BUG;
@@ -167,6 +170,7 @@ static Error append_document_stylesheets(const Ref<HTMLDocument> &p_document, co
 		const Ref<RegExMatch> match = matches[index];
 		if (match->get_start(1) >= 0) {
 			r_stylesheets.push_back(match->get_string(1).utf8());
+			r_stylesheet_bases.push_back(p_embedded_base.utf8());
 			continue;
 		}
 		const String attributes = match->get_string(2);
@@ -183,10 +187,55 @@ static Error append_document_stylesheets(const Ref<HTMLDocument> &p_document, co
 		HTMLAssetResource asset;
 		if (HTMLGodotAssetProvider::load_asset(p_document, href, asset, &r_error) != OK) return ERR_CANT_OPEN;
 		r_stylesheets.push_back(String::utf8((const char *)asset.bytes.ptr(), asset.bytes.size()).utf8());
+		r_stylesheet_bases.push_back(asset.path.get_base_dir().utf8());
 		r_linked_stylesheet_paths.insert(asset.path);
         if (text) text->add_stylesheet(String::utf8((const char *)asset.bytes.ptr(), asset.bytes.size()), asset.path.get_base_dir());
 	}
 	return OK;
+}
+
+static int32_t resolve_stylesheet(void *p_user, const hcsr_utf8_t *p_uri,
+        const hcsr_utf8_t *p_base, hcsr_stylesheet_text_t *r_output) {
+    auto *owner = static_cast<HTMLSurfaceHCSRNewestBackend::State *>(p_user);
+    const String uri = String::utf8(p_uri->data, p_uri->length);
+    const String base = String::utf8(p_base->data, p_base->length);
+    String css, name, resolved_base;
+    if (uri.begins_with("data:")) {
+        const int comma = uri.find(",");
+        if (comma < 0) return 0;
+        const String metadata = uri.substr(0, comma);
+        const String payload = uri.substr(comma + 1);
+        if (metadata.to_lower().contains(";base64")) {
+            const Vector<uint8_t> bytes = CoreBind::Marshalls::get_singleton()->base64_to_raw(payload);
+            css = String::utf8(reinterpret_cast<const char *>(bytes.ptr()), bytes.size());
+        } else {
+            css = payload.uri_decode();
+        }
+        name = uri;
+        resolved_base = base;
+    } else {
+        String path = uri;
+        if (!base.is_empty() && !uri.contains("://") && !uri.is_absolute_path() && !uri.begins_with("//")) {
+            path = base.path_join(uri).simplify_path();
+        }
+        HTMLAssetResource asset;
+        String error;
+        if (HTMLGodotAssetProvider::load_asset(owner->document, path, asset, &error) != OK) return 0;
+        css = String::utf8(reinterpret_cast<const char *>(asset.bytes.ptr()), asset.bytes.size());
+        name = asset.path;
+        resolved_base = asset.path.get_base_dir();
+    }
+    // Font registration remains a host resource service, separate from cascade
+    // evaluation. Imports are read before the scene requests any glyph shaping.
+    if (owner->text_enabled) owner->text.add_stylesheet(css, resolved_base);
+    owner->borrowed_stylesheet_css = css.utf8();
+    owner->borrowed_stylesheet_name = name.utf8();
+    owner->borrowed_stylesheet_base = resolved_base.utf8();
+    initialize_abi(*r_output);
+    r_output->css = utf8_view(owner->borrowed_stylesheet_css);
+    r_output->name = utf8_view(owner->borrowed_stylesheet_name);
+    r_output->base_path = utf8_view(owner->borrowed_stylesheet_base);
+    return 1;
 }
 
 static String scene_error(HTMLSurfaceHCSRNewestBackend::State *p_state, const String &p_fallback) {
@@ -481,10 +530,13 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
 	}
 	if (html.strip_edges().is_empty()) return ERR_INVALID_DATA;
 	if (state->text_enabled) state->text.configure(document, html + document->get_css());
-	Vector<CharString> stylesheet_bytes;
+	String resource_base_path = document->get_html_file().is_empty()
+            ? document->get_resource_root() : document->get_html_file().get_base_dir();
+    if (resource_base_path.is_empty()) resource_base_path = "res://";
+    Vector<CharString> stylesheet_bytes, stylesheet_base_bytes;
 	HashSet<String> linked_stylesheet_paths;
 	String stylesheet_error;
-	if (append_document_stylesheets(document, html, stylesheet_bytes, linked_stylesheet_paths, stylesheet_error, state->text_enabled ? &state->text : nullptr) != OK) {
+	if (append_document_stylesheets(document, html, stylesheet_bytes, stylesheet_base_bytes, resource_base_path, linked_stylesheet_paths, stylesheet_error, state->text_enabled ? &state->text : nullptr) != OK) {
 		set_terminal(state, stylesheet_error.is_empty() ? "hcsr_newest could not resolve a linked stylesheet." : stylesheet_error, true);
 		return ERR_CANT_OPEN;
 	}
@@ -511,17 +563,21 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
 			return ERR_CANT_OPEN;
 		}
 		stylesheet_bytes.push_back(String::utf8((const char *)asset.bytes.ptr(), asset.bytes.size()).utf8());
+        stylesheet_base_bytes.push_back(asset.path.get_base_dir().utf8());
         if (state->text_enabled) state->text.add_stylesheet(String::utf8((const char *)asset.bytes.ptr(), asset.bytes.size()), asset.path.get_base_dir());
 	}
-	if (!document->get_css().is_empty()) stylesheet_bytes.push_back(document->get_css().utf8());
-	Vector<hcsr_utf8_t> stylesheets;
+	if (!document->get_css().is_empty()) {
+        stylesheet_bytes.push_back(document->get_css().utf8());
+        stylesheet_base_bytes.push_back(resource_base_path.utf8());
+    }
+	Vector<hcsr_utf8_t> stylesheets, stylesheet_bases;
 	stylesheets.resize(stylesheet_bytes.size());
-	for (int index = 0; index < stylesheet_bytes.size(); index++) stylesheets.write[index] = utf8_view(stylesheet_bytes[index]);
+    stylesheet_bases.resize(stylesheet_base_bytes.size());
+	for (int index = 0; index < stylesheet_bytes.size(); index++) {
+        stylesheets.write[index] = utf8_view(stylesheet_bytes[index]);
+        stylesheet_bases.write[index] = utf8_view(stylesheet_base_bytes[index]);
+    }
 	CharString html_bytes = html.utf8();
-	String resource_base_path = document->get_resource_root();
-	if (resource_base_path.is_empty() && !document->get_html_file().is_empty()) {
-		resource_base_path = document->get_html_file().get_base_dir();
-	}
 	CharString resource_base = resource_base_path.utf8();
 	hcsr_source_desc_t source_desc;
 	initialize_abi(source_desc);
@@ -529,6 +585,7 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
 	source_desc.style_sheets = stylesheets.ptr();
 	source_desc.style_sheet_count = stylesheets.size();
 	source_desc.resource_base = utf8_view(resource_base);
+    source_desc.style_sheet_bases = stylesheet_bases.ptr();
 	if (state->scene != 0) hcsr_scene_destroy(state->scene);
 	if (state->source != 0) hcsr_source_destroy(state->source);
 	state->scene = 0;
@@ -567,6 +624,10 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
                         width,height,content_width,content_height,owner->borrowed_image_pixels,*output);
             },state)!=HCSR_OK) {
         set_terminal(state,"hcsr_newest could not install the SVG tile pixel service.");
+        return ERR_CANT_CREATE;
+    }
+    if (hcsr_runtime_set_stylesheet_resolver(state->runtime, resolve_stylesheet, state) != HCSR_OK) {
+        set_terminal(state, "hcsr_newest could not install the host stylesheet service.");
         return ERR_CANT_CREATE;
     }
 	if (hcsr_source_create(state->runtime, &source_desc, &state->source) != HCSR_OK) {
@@ -1305,7 +1366,7 @@ HTMLSurfaceHCSRNewestBackend::HTMLSurfaceHCSRNewestBackend(HTMLSurfaceHCSRNewest
 	}
 	state->renderer = p_renderer;
 	state->texture = texture;
-	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_19 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
+	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_20 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
 		set_terminal(state, "hcsr_newest scene ABI initialization failed.");
 	}
 }
