@@ -17,6 +17,8 @@ class HCSRNewestText {
 	Ref<HTMLDocument> document;
 	Vector<AuthorFace> authors;
 	HashMap<String, Ref<Font>> fonts;
+	HashMap<String, Ref<SystemFont>> system_fonts;
+	HashMap<String, bool> optical_sizing_support;
 	HashMap<String, Ref<FontFile>> face_files;
 	struct FontMetrics : hcsr_font_metrics {
 		hcsr_font_decoration_metrics decoration = {};

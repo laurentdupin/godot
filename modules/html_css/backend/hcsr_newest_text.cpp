@@ -80,15 +80,21 @@ Ref<Font> HCSRNewestText::resolve(const hcsr_shape_request_t &request) {
 		requested_axes[int64_t(request.variations[i].tag)] = request.variations[i].value;
 	}
 	String key = uitos(configuration) + "|" + family + "|" + itos(weight) + "|" + itos(italic);
-	key += "|" + rtos(request.width_percent) + "|" + rtos(request.slant_degrees) + "|" + (request.optical_sizing ? rtos(request.size) : String("none"));
+	key += "|" + rtos(request.width_percent) + "|" + rtos(request.slant_degrees);
+	bool explicit_optical_size = false;
 	for (size_t i = 0; i < request.variation_count; ++i) {
 		key += "|" + uitos(request.variations[i].tag) + ":" + rtos(request.variations[i].value);
+		explicit_optical_size |= request.variations[i].tag == 0x6f70737a;
 	}
 	for (const AuthorFace &face : authors) {
 		key += "|" + face.family + ":" + face.source + ":" + itos(face.weight) + ":" + itos(face.maximum_weight) + ":" + itos(face.italic);
 	}
-	if (const Ref<Font> *cached = fonts.getptr(key)) {
-		return *cached;
+	const String configuration_key = key;
+	if (const bool *supports_optical = optical_sizing_support.getptr(configuration_key)) {
+		key += "|" + (request.optical_sizing && !explicit_optical_size && *supports_optical ? rtos(request.size) : String("none"));
+		if (const Ref<Font> *cached = fonts.getptr(key)) {
+			return *cached;
+		}
 	}
 	PackedStringArray names;
 	Vector<const AuthorFace *> selected_faces;
@@ -114,13 +120,19 @@ Ref<Font> HCSRNewestText::resolve(const hcsr_shape_request_t &request) {
 		}
 	}
 	Ref<SystemFont> fallback;
-	fallback.instantiate();
-	fallback->set_font_names(names);
-	fallback->set_font_weight(weight);
-	fallback->set_font_italic(italic);
-	fallback->set_hinting(TextServer::HINTING_NONE);
-	fallback->set_subpixel_positioning(TextServer::SUBPIXEL_POSITIONING_DISABLED);
-	fallback->set_oversampling(1);
+	const String system_key = family + "|" + itos(weight) + "|" + itos(italic);
+	if (const Ref<SystemFont> *cached = system_fonts.getptr(system_key)) {
+		fallback = *cached;
+	} else {
+		fallback.instantiate();
+		fallback->set_font_names(names);
+		fallback->set_font_weight(weight);
+		fallback->set_font_italic(italic);
+		fallback->set_hinting(TextServer::HINTING_NONE);
+		fallback->set_subpixel_positioning(TextServer::SUBPIXEL_POSITIONING_DISABLED);
+		fallback->set_oversampling(1);
+		system_fonts.insert(system_key, fallback);
+	}
 	TypedArray<Font> resolved;
 	for (const AuthorFace *selected : selected_faces) {
 		const String face_key = uitos(configuration) + "|" + selected->source;
@@ -184,6 +196,18 @@ Ref<Font> HCSRNewestText::resolve(const hcsr_shape_request_t &request) {
 	for (const Ref<Font> &resolved_font : resolved) {
 		cache_font_metrics(resolved_font, weight);
 	}
+	// Static faces do not acquire a new appearance when CSS font-size changes.
+	// Keep size in the identity only if a face in the actual fallback chain has
+	// an optical-size axis. Explicit opsz values already belong to the key.
+	bool supports_optical = false;
+	TextServer *ts = TextServerManager::get_singleton()->get_primary_interface().ptr();
+	for (const Ref<Font> &resolved_font : resolved) {
+		for (const RID &rid : resolved_font->get_rids()) {
+			supports_optical |= ts->font_supported_variation_list(rid).has(int64_t(0x6f70737a));
+		}
+	}
+	optical_sizing_support.insert(configuration_key, supports_optical);
+	key = configuration_key + "|" + (request.optical_sizing && !explicit_optical_size && supports_optical ? rtos(request.size) : String("none"));
 	fonts.insert(key, font);
 	return font;
 }
