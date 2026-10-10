@@ -75,10 +75,12 @@ private:
     void retry_failed_allocations();
 	mutable Mutex image_mutex;
 	HashMap<String, Ref<Image>> decoded_sources;
-	HashMap<String, Size2i> source_sizes;
+	struct SourceMetadata { Size2i size; int orientation = 1; };
+    HashMap<String, SourceMetadata> source_metadata;
 	Ref<Image> load_image(const Ref<HTMLDocument> &document, const String &source, int width = 0, int height = 0, float content_width = 0, float content_height = 0);
 
 public:
+    bool copy_mask_pixels(const Ref<HTMLDocument> &document,const String &source,int width,int height,float reference_width,float reference_height,uint32_t mode,Vector<uint8_t> &pixels,hcsr_image_pixels_t &output);
     bool copy_tile_pixels(const Ref<HTMLDocument> &document,const String &source,int width,int height,float content_width,float content_height,Vector<uint8_t> &pixels,hcsr_image_pixels_t &output);
     HCSRNewestRasterResources();
     ~HCSRNewestRasterResources();
@@ -106,6 +108,7 @@ private:
 public:
     bool copy_source_pixels(const Ref<HTMLDocument> &document, const String &source, int width, int height, Vector<uint8_t> &pixels, hcsr_image_pixels_t &output);
     Size2i resolve_size(const Ref<HTMLDocument> &document, const String &source);
+    int resolve_orientation(const Ref<HTMLDocument> &document,const String &source);
     bool has_pending_glyphs() const { return !pending_glyphs.is_empty(); }
     void advance_rasterization();
     void ensure_sampling_page();

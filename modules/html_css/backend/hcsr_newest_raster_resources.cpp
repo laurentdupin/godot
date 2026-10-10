@@ -36,13 +36,7 @@ static bool svg_has_filters(const Vector<uint8_t> &bytes) {
     return false;
 }
 
-Ref<Image> HCSRNewestRasterResources::load_image(const Ref<HTMLDocument> &document, const String &source, int width, int height, float content_width, float content_height) {
-    // Caller holds image_mutex. Metadata does not allocate atlas/GPU resources.
-    const String key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source + (width > 0 ? "\nraster:" + itos(width) + ":" + itos(height) : String());
-    const bool tile = content_width > 0 && content_height > 0;
-    if (!tile) if (const Ref<Image> *cached = decoded_sources.getptr(key)) return *cached;
-	Vector<uint8_t> bytes;
-	String mime;
+static bool read_image_bytes(const Ref<HTMLDocument> &document,const String &source,Vector<uint8_t> &bytes,String &mime) {
 	if (source.begins_with("data:")) {
 		const int comma = source.find(",");
 		if (comma >= 0) {
@@ -73,6 +67,16 @@ Ref<Image> HCSRNewestRasterResources::load_image(const Ref<HTMLDocument> &docume
 			mime = asset.mime_type;
 		}
 	}
+    return !bytes.is_empty();
+}
+
+Ref<Image> HCSRNewestRasterResources::load_image(const Ref<HTMLDocument> &document, const String &source, int width, int height, float content_width, float content_height) {
+    // Caller holds image_mutex. Metadata does not allocate atlas/GPU resources.
+    const String key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source + (width > 0 ? "\nraster:" + itos(width) + ":" + itos(height) : String());
+    const bool tile = content_width > 0 && content_height > 0;
+    if (!tile) if (const Ref<Image> *cached = decoded_sources.getptr(key)) return *cached;
+    Vector<uint8_t> bytes;String mime;
+    read_image_bytes(document,source,bytes,mime);
 	Ref<Image> image;
 	image.instantiate();
 	Error error = ERR_FILE_UNRECOGNIZED;
@@ -82,7 +86,7 @@ Ref<Image> HCSRNewestRasterResources::load_image(const Ref<HTMLDocument> &docume
             // SVG filters, so filtered assets use Godot's opacity-corrected ThorVG.
             if (svg_has_filters(bytes)) {
                 if (tile) return Ref<Image>();
-                error = image->load_svg_from_buffer(bytes, width > 0 ? float(width) / MAX(1, source_sizes[(document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source].x) : 1.0f);
+                error = image->load_svg_from_buffer(bytes, width > 0 ? float(width) / MAX(1, source_metadata[(document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source].size.x) : 1.0f);
             } else {
             hcsr_decoded_image decoded = {};
             if (tile ? hcsr_svg_decode_tile_bgra32(bytes.ptr(), bytes.size(), width, height, content_width, content_height, &decoded)
@@ -104,21 +108,48 @@ Ref<Image> HCSRNewestRasterResources::load_image(const Ref<HTMLDocument> &docume
             }
 		} else if (tile) {
             return Ref<Image>();
-        } else if (mime.begins_with("image/png")) {
-			error = image->load_png_from_buffer(bytes);
-		} else if (mime.begins_with("image/jpeg")) {
-			error = image->load_jpg_from_buffer(bytes);
+        } else if (mime.begins_with("image/png") || mime.begins_with("image/jpeg") || mime.begins_with("image/bmp")) {
+            // Both hosts read identical raw, straight-alpha codec pixels. CSS
+            // orientation is applied by the shared scene appearance consumer.
+            hcsr_decoded_image decoded{};
+            if(hcsr_image_decode_bgra32(bytes.ptr(),bytes.size(),&decoded)) {
+                Vector<uint8_t> rgba;rgba.resize(decoded.width*decoded.height*4);
+                for(int y=0;y<decoded.height;y++)for(int x=0;x<decoded.width;x++) {
+                    const uint8_t *src=decoded.pixels+y*decoded.stride+x*4;
+                    uint8_t *dst=rgba.ptrw()+(y*decoded.width+x)*4;
+                    dst[0]=src[2];dst[1]=src[1];dst[2]=src[0];dst[3]=src[3];
+                }
+                image->set_data(decoded.width,decoded.height,false,Image::FORMAT_RGBA8,rgba);
+                hcsr_image_free(&decoded);error=OK;
+            }
 		} else if (mime.begins_with("image/webp")) {
 			error = image->load_webp_from_buffer(bytes);
-		} else if (mime.begins_with("image/bmp")) {
-			error = image->load_bmp_from_buffer(bytes);
+
 		}
 	}
     if (error != OK || image->is_empty()) image.unref();
     else decoded_images++;
     if (!tile) decoded_sources.insert(key, image);
-    if (width == 0) source_sizes.insert(key, image.is_valid() ? image->get_size() : Size2i());
+    if (width == 0) source_metadata.insert(key,SourceMetadata{image.is_valid()?image->get_size():Size2i(),
+        bytes.is_empty()?1:hcsr_image_get_orientation(bytes.ptr(),bytes.size())});
     return image;
+}
+
+bool HCSRNewestRasterResources::copy_mask_pixels(const Ref<HTMLDocument> &document,const String &source,
+        int width,int height,float reference_width,float reference_height,uint32_t mode,Vector<uint8_t> &pixels,hcsr_image_pixels_t &output) {
+    MutexLock lock(image_mutex);
+    int separator=source.rfind("#");
+    if(separator<0 || width<=0 || height<=0 || width>2048 || height>2048)return false;
+    Vector<uint8_t> bytes;String mime;
+    if(!read_image_bytes(document,source.substr(0,separator),bytes,mime) || !mime.begins_with("image/svg+xml"))return false;
+    const CharString fragment=source.substr(separator+1).uri_decode().utf8();
+    hcsr_decoded_image decoded{};
+    if(!hcsr_svg_decode_mask_bgra32(bytes.ptr(),bytes.size(),fragment.get_data(),fragment.length(),
+        width,height,reference_width,reference_height,mode,&decoded))return false;
+    if(pixels.resize(decoded.stride*decoded.height)!=OK){hcsr_image_free(&decoded);return false;}
+    memcpy(pixels.ptrw(),decoded.pixels,pixels.size());
+    output.width=decoded.width;output.height=decoded.height;output.stride=decoded.stride;
+    output.pixels=pixels.ptr();output.length=pixels.size();hcsr_image_free(&decoded);return true;
 }
 
 bool HCSRNewestRasterResources::copy_tile_pixels(const Ref<HTMLDocument> &document,const String &source,
@@ -143,17 +174,19 @@ bool HCSRNewestRasterResources::copy_source_pixels(const Ref<HTMLDocument> &docu
     MutexLock lock(image_mutex);
     // Generated appearances have an explicit requested raster size. Do not
     // substitute the ordinary image atlas's power-of-two upgrade buckets.
-    const int raster_width=CLAMP(width,1,2048),raster_height=CLAMP(height,1,2048);
+
     const String source_key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source;
     Ref<Image> image;
     Size2i natural;
-    if (const Size2i *metadata=source_sizes.getptr(source_key)) natural=*metadata;
+    if (const SourceMetadata *metadata=source_metadata.getptr(source_key)) natural=metadata->size;
     else {
         image=load_image(document,source);
         if(image.is_null())return false;
         natural=image->get_size();
     }
     if(natural.x<=0 || natural.y<=0)return false;
+    const int raster_width=width>0?CLAMP(width,1,2048):natural.x;
+    const int raster_height=height>0?CLAMP(height,1,2048):natural.y;
     const bool rerasterize=natural!=Size2i(raster_width,raster_height);
     if(rerasterize)image=load_image(document,source,raster_width,raster_height);
     else if(image.is_null())image=load_image(document,source);
@@ -183,9 +216,18 @@ bool HCSRNewestRasterResources::copy_source_pixels(const Ref<HTMLDocument> &docu
 Size2i HCSRNewestRasterResources::resolve_size(const Ref<HTMLDocument> &document, const String &source) {
     MutexLock lock(image_mutex);
     const String key = (document.is_valid() ? document->get_html_file() + "|" + document->get_resource_root() : String()) + "\n" + source;
-    if (const Size2i *cached = source_sizes.getptr(key)) return *cached;
+    if (const SourceMetadata *cached = source_metadata.getptr(key)) return cached->size;
     Ref<Image> image = load_image(document, source);
     return image.is_valid() ? image->get_size() : Size2i();
+}
+
+int HCSRNewestRasterResources::resolve_orientation(const Ref<HTMLDocument> &document,const String &source) {
+    MutexLock lock(image_mutex);
+    const String key=(document.is_valid()?document->get_html_file()+"|"+document->get_resource_root():String())+"\n"+source;
+    if(const SourceMetadata *cached=source_metadata.getptr(key))return cached->orientation;
+    load_image(document,source);
+    const SourceMetadata *metadata=source_metadata.getptr(key);
+    return metadata?metadata->orientation:1;
 }
 
 HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_image(const Ref<HTMLDocument> &document, const String &source, const Size2i &natural, const Vector2 &physical_size) {

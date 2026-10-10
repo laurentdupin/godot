@@ -19,6 +19,10 @@
 #include "core/string/regex.h"
 #include "core/templates/hash_set.h"
 #include "servers/rendering/rendering_device.h"
+#include "servers/display/display_server.h"
+#ifdef WINDOWS_ENABLED
+#include <windows.h>
+#endif
 #include "servers/rendering/rendering_server.h"
 
 // A presentation target has no scene, font service or raster cache of its own.
@@ -68,6 +72,8 @@ struct HTMLSurfaceHCSRNewestBackend::State : HCSRNewestPresentationOutput {
 	uint64_t next_output_id = 1;
 	HTMLSurfaceHCSRNewestRenderer renderer = HTML_SURFACE_HCSR_NEWEST_CPU;
 	hcsr_runtime_t runtime = 0;
+    uint64_t color_environment_poll_msec=0;
+    hcsr_environment_t environment_inputs={};
 	HashSet<uint64_t> preloads;
 	hcsr_source_t source = 0;
 	hcsr_scene_t scene = 0;
@@ -608,6 +614,14 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
         set_terminal(state, "hcsr_newest could not install the host image service.");
         return ERR_CANT_CREATE;
     }
+    if (hcsr_runtime_set_image_orientation(state->runtime,
+            [](void *user,const hcsr_utf8_t *source)->int32_t {
+                State *owner=static_cast<State *>(user);
+                return owner->raster_resources.resolve_orientation(owner->document,String::utf8(source->data,source->length));
+            },state)!=HCSR_OK) {
+        set_terminal(state,"hcsr_newest could not install encoded image orientation metadata.");
+        return ERR_CANT_CREATE;
+    }
     if (hcsr_runtime_set_image_pixels(state->runtime,
             [](void *user, const hcsr_utf8_t *source, int32_t width, int32_t height, hcsr_image_pixels_t *output) -> int32_t {
                 State *owner = static_cast<State *>(user);
@@ -625,6 +639,14 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
             },state)!=HCSR_OK) {
         set_terminal(state,"hcsr_newest could not install the SVG tile pixel service.");
         return ERR_CANT_CREATE;
+    }
+    if(hcsr_runtime_set_image_mask_pixels(state->runtime,
+            [](void *user,const hcsr_utf8_t *source,int32_t width,int32_t height,float reference_width,float reference_height,uint32_t mode,hcsr_image_pixels_t *output)->int32_t {
+                State *owner=static_cast<State *>(user);
+                return owner->raster_resources.copy_mask_pixels(owner->document,String::utf8(source->data,source->length),
+                    width,height,reference_width,reference_height,mode,owner->borrowed_image_pixels,*output);
+            },state)!=HCSR_OK) {
+        set_terminal(state,"hcsr_newest could not install the SVG mask pixel service.");return ERR_CANT_CREATE;
     }
     if (hcsr_runtime_set_stylesheet_resolver(state->runtime, resolve_stylesheet, state) != HCSR_OK) {
         set_terminal(state, "hcsr_newest could not install the host stylesheet service.");
@@ -763,6 +785,48 @@ Error HTMLSurfaceHCSRNewestBackend::prepare_host_frame(uint64_t p_host_frame, do
 		set_terminal(state, "Previous HTML frame was not recorded before the next host frame boundary.");
 		return ERR_BUSY;
 	}
+    const uint64_t environment_msec=OS::get_singleton()->get_ticks_msec();
+    if(environment_msec>=state->color_environment_poll_msec) {
+        state->color_environment_poll_msec=environment_msec+1000;
+        DisplayServer *display=DisplayServer::get_singleton();
+        hcsr_environment_t environment={};
+        environment.struct_size=sizeof(environment);
+        environment.device_scale=state->device_scale;
+        environment.initial_font_size=16;
+        environment.color_bits=8;
+        environment.horizontal_segments=environment.vertical_segments=1;
+        environment.display_mode=2; // Native application, not a browser tab.
+        environment.pointer_accuracy=2;environment.hover_capability=1;environment.any_pointer=6;
+        environment.preferred_scheme=display && display->is_dark_mode_supported() && display->is_dark_mode()?1:0;
+        if(display) {
+            float screen_scale=MAX(.01f,display->screen_get_scale());
+            Size2i screen_size=display->screen_get_size();
+            environment.device_width=screen_size.x/screen_scale;
+            environment.device_height=screen_size.y/screen_scale;
+            auto mode=display->window_get_mode();
+            if(mode==DisplayServerEnums::WINDOW_MODE_FULLSCREEN || mode==DisplayServerEnums::WINDOW_MODE_EXCLUSIVE_FULLSCREEN)environment.display_mode=3;
+        }
+        if(OS::get_singleton()->get_environment("HCSR_FORCED_COLORS")=="1")environment.flags|=HCSR_ENV_FORCED_COLORS;
+        const String platform=OS::get_singleton()->get_name();
+        if(platform=="Android" || platform=="iOS") {
+            environment.pointer_accuracy=1;environment.hover_capability=0;environment.any_pointer=1;
+        }
+#ifdef WINDOWS_ENABLED
+        HIGHCONTRASTW contrast={};contrast.cbSize=sizeof(contrast);
+        if(SystemParametersInfoW(SPI_GETHIGHCONTRAST,sizeof(contrast),&contrast,0) && (contrast.dwFlags&HCF_HIGHCONTRASTON)) {
+            environment.flags|=HCSR_ENV_FORCED_COLORS;const COLORREF canvas=GetSysColor(COLOR_WINDOW);
+            environment.preferred_scheme=(GetRValue(canvas)+GetGValue(canvas)+GetBValue(canvas))<384?1:0;
+        }
+        BOOL animations=TRUE;
+        if(SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION,0,&animations,0) && !animations)environment.flags|=HCSR_ENV_REDUCED_MOTION;
+        if(GetSystemMetrics(SM_DIGITIZER)&(NID_INTEGRATED_TOUCH|NID_EXTERNAL_TOUCH))environment.any_pointer|=1;
+#endif
+        environment.contrast_preference=(environment.flags&HCSR_ENV_FORCED_COLORS)?1:0;
+        if(memcmp(&environment,&state->environment_inputs,sizeof(environment))!=0) {
+            if(hcsr_runtime_set_environment(state->runtime,&environment,nullptr,0)!=HCSR_OK)return ERR_CANT_CREATE;
+            state->environment_inputs=environment;state->needs_another_frame=true;
+        }
+    }
 	if (!state->document_dirty && !state->needs_another_frame && state->preparation_count != 0) return OK;
 	const uint64_t preparation_start_usec = OS::get_singleton()->get_ticks_usec();
 	if (state->document_dirty) {
@@ -1366,7 +1430,7 @@ HTMLSurfaceHCSRNewestBackend::HTMLSurfaceHCSRNewestBackend(HTMLSurfaceHCSRNewest
 	}
 	state->renderer = p_renderer;
 	state->texture = texture;
-	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_20 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
+	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_24 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
 		set_terminal(state, "hcsr_newest scene ABI initialization failed.");
 	}
 }

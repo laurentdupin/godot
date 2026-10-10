@@ -131,7 +131,8 @@ class HCSRNewestSceneRenderer {
         uint32_t coverage_front=0;
         uint64_t coverage_revision=0;
         Vector2 coverage_logical;
-        Vector<uint32_t> pages;
+        uint32_t atlas_array=0,empty_texture=0;
+        int atlas_layers=0;
         Vector<GLPool> pools;
         uint64_t hierarchy_geometry=0,hierarchy_revision=0;
     } gl;

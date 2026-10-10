@@ -17,7 +17,7 @@ struct GLStateGuard {
 	GLint program, vao, draw_fbo, read_fbo, viewport[4], scissor[4], active, unpack, pack, unpack_buffer, pack_buffer;
 	GLint src_rgb, dst_rgb, src_alpha, dst_alpha, equation_rgb, equation_alpha;
 	GLint unpack_row, unpack_skip_rows, unpack_skip_pixels;
-	GLint textures[9], samplers[9];
+	GLint textures[10], samplers[10], atlas_array_binding;
 	GLboolean mask[4];
 	bool blend, depth, cull, scissor_on, srgb = false;
 	GLStateGuard() {
@@ -50,12 +50,13 @@ struct GLStateGuard {
 			srgb = glIsEnabled(0x8DB9);
 			glDisable(0x8DB9);
 		}
-		for (int i = 0; i < 9; i++) {
+		for (int i = 0; i < 10; i++) {
 			glActiveTexture(GL_TEXTURE0 + i);
 			glGetIntegerv(GL_TEXTURE_BINDING_2D, &textures[i]);
 			glGetIntegerv(GL_SAMPLER_BINDING, &samplers[i]);
 			glBindSampler(i, 0);
 		}
+		glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &atlas_array_binding);
 		glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 		glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -92,11 +93,12 @@ struct GLStateGuard {
 			enable(0x8DB9, srgb);
 		}
 		glColorMask(mask[0], mask[1], mask[2], mask[3]);
-		for (int i = 0; i < 9; i++) {
+		for (int i = 0; i < 10; i++) {
 			glActiveTexture(GL_TEXTURE0 + i);
 			glBindTexture(GL_TEXTURE_2D, textures[i]);
 			glBindSampler(i, samplers[i]);
 		}
+		glBindTexture(GL_TEXTURE_2D_ARRAY, atlas_array_binding);
 		glActiveTexture(active);
 		glPixelStorei(GL_UNPACK_ALIGNMENT, unpack);
 		glPixelStorei(GL_PACK_ALIGNMENT, pack);
@@ -350,50 +352,44 @@ bool HCSRNewestSceneRenderer::draw_gl(RID target, const Size2i &size, const Colo
 		++coverage.evaluations;
 	}
 	const bool atlas_dirty = uploaded_atlas_revision != resources.atlas_revision();
-	if (atlas_dirty || gl.pages.is_empty()) {
-		while (gl.pages.size() > resources.page_count()) {
-			auto texture = gl.pages[gl.pages.size() - 1];
-			if (texture) {
-				glDeleteTextures(1, &texture);
-			}
-			gl.pages.resize(gl.pages.size() - 1);
-		}
-		gl.pages.resize_initialized(resources.page_count());
-		for (int i = 0; i < gl.pages.size(); i++) {
-			auto &texture = gl.pages.write[i];
-			if (!resources.page_live_allocations(i)) {
-				if (texture) {
-					glDeleteTextures(1, &texture);
-					texture = 0;
-					++retired_atlas_pages;
-				}
-				resources.acknowledge_upload(i);
-				continue;
-			}
-			if (!texture) {
-				glGenTextures(1, &texture);
-				bind_texture(0, texture);
-				sampling(GL_LINEAR);
-				auto s = resources.page_size(i);
-				glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, s.x, s.y, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-				// Native atlas pixels are straight-alpha BGRA on every backend.
-				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, GL_BLUE);
-				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_B, GL_RED);
-				auto pixels = resources.page_pixels(i, Rect2i(Point2i(), s));
-				glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, s.x, s.y, GL_RGBA, GL_UNSIGNED_BYTE, pixels.ptr());
-				uploaded_bytes += pixels.size();
-			} else {
-				bind_texture(0, texture);
-				for (auto region : resources.page_updates(i)) {
-					auto pixels = resources.page_pixels(i, region);
-					glTexSubImage2D(GL_TEXTURE_2D, 0, region.position.x, region.position.y, region.size.x, region.size.y, GL_RGBA, GL_UNSIGNED_BYTE, pixels.ptr());
-					uploaded_bytes += pixels.size();
-				}
-			}
-			resources.acknowledge_upload(i);
-		}
-		uploaded_atlas_revision = resources.atlas_revision();
-	}
+	if (!gl.empty_texture) {
+        glGenTextures(1,&gl.empty_texture);bind_texture(0,gl.empty_texture);sampling(GL_NEAREST);
+        const uint32_t transparent=0;
+        glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,1,1,0,GL_RGBA,GL_UNSIGNED_BYTE,&transparent);
+    }
+    if (atlas_dirty || !gl.atlas_array) {
+        const int layers=MAX(1,resources.page_count()-1);
+        const bool resized=!gl.atlas_array || layers!=gl.atlas_layers;
+        if(!gl.atlas_array)glGenTextures(1,&gl.atlas_array);
+        glActiveTexture(GL_TEXTURE9);glBindTexture(GL_TEXTURE_2D_ARRAY,gl.atlas_array);
+        if(resized) {
+            glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_SWIZZLE_R,GL_BLUE);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_SWIZZLE_B,GL_RED);
+            glTexImage3D(GL_TEXTURE_2D_ARRAY,0,GL_RGBA8,4096,4096,layers,0,GL_RGBA,GL_UNSIGNED_BYTE,nullptr);
+            gl.atlas_layers=layers;
+        }
+        for(int i=1;i<resources.page_count();++i) {
+            if(resources.page_live_allocations(i)) {
+                if(resized) {
+                    const auto size=resources.page_size(i);
+                    auto pixels=resources.page_pixels(i,Rect2i(Point2i(),size));
+                    glTexSubImage3D(GL_TEXTURE_2D_ARRAY,0,0,0,i-1,size.x,size.y,1,GL_RGBA,GL_UNSIGNED_BYTE,pixels.ptr());
+                    uploaded_bytes+=pixels.size();
+                } else for(const auto &region:resources.page_updates(i)) {
+                    auto pixels=resources.page_pixels(i,region);
+                    glTexSubImage3D(GL_TEXTURE_2D_ARRAY,0,region.position.x,region.position.y,i-1,region.size.x,region.size.y,1,GL_RGBA,GL_UNSIGNED_BYTE,pixels.ptr());
+                    uploaded_bytes+=pixels.size();
+                }
+            }
+            resources.acknowledge_upload(i);
+        }
+        resources.acknowledge_upload(0);
+        uploaded_atlas_revision=resources.atlas_revision();
+    }
 	int pool_index = -1;
 	for (int i = 0; i < gl.pools.size(); i++) {
 		if (gl.pools[i].output == target) {
@@ -493,10 +489,12 @@ bool HCSRNewestSceneRenderer::draw_gl(RID target, const Size2i &size, const Colo
 	// Shared paint functions return straight color; fixed-function blending
 	// stores premultiplied pixels, exactly like RenderingDevice::create_blend.
 	glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-	const char *names[] = { "atlas", "mask_atlas", "blend_atlas", "geometry_data", "state_data", "clip_data", "plane_data", "primitive_data", "coverage_data" };
-	for (int i = 0; i < 9; i++) {
+	const char *names[] = { "atlas", "mask_atlas", "blend_atlas", "geometry_data", "state_data", "clip_data", "plane_data", "primitive_data", "coverage_data", "surface_atlas" };
+	for (int i = 0; i < 10; i++) {
 		glUniform1i(glGetUniformLocation(gl.program, names[i]), i);
 	}
+	glActiveTexture(GL_TEXTURE9);
+	glBindTexture(GL_TEXTURE_2D_ARRAY, gl.atlas_array);
 	const GLuint data[] = { gl.geometry.texture, gl.states.texture, gl.clips.texture, gl.planes.texture, gl.primitives.texture };
 	for (int i = 0; i < 5; i++) {
 		bind_texture(i + 3, data[i]);
@@ -524,9 +522,10 @@ bool HCSRNewestSceneRenderer::draw_gl(RID target, const Size2i &size, const Colo
 				while (first + count < effect.first_surface + effect.surface_count && backdrop_entries[first + count].page == page) {
 					++count;
 				}
-				bind_texture(0, gl.pages[page]);
-				bind_texture(1, gl.pages[page]);
-				bind_texture(2, gl.pages[0]);
+				bind_texture(0, gl.empty_texture);
+				bind_texture(2, gl.empty_texture);
+				glUniform1i(glGetUniformLocation(gl.program, "atlas_page"), page-1);
+				glUniform1i(glGetUniformLocation(gl.program, "mask_page"), page-1);
 				glUniform1ui(glGetUniformLocation(gl.program, "params.first"), backdrop_first_primitive + first);
 				glUniform1ui(glGetUniformLocation(gl.program, "params.region"), i + 1);
 				glDrawArraysInstanced(GL_TRIANGLES, 0, 6, count);
@@ -667,12 +666,13 @@ bool HCSRNewestSceneRenderer::draw_gl(RID target, const Size2i &size, const Colo
 				continue;
 			}
 		} else {
-			source = gl.pages[batch.page];
+			source = gl.empty_texture;
 		}
 		bind_texture(0, source);
-		bind_texture(1, gl.pages[batch.mask_page]);
+		glUniform1i(glGetUniformLocation(gl.program, "atlas_page"), batch.page-1);
+		glUniform1i(glGetUniformLocation(gl.program, "mask_page"), batch.mask_page-1);
 		bind_texture(2, batch.backdrop_fused ? pool.groups[batch.depth - 1].texture : blending ? pool.blend.texture
-																							   : gl.pages[0]);
+																							   : gl.empty_texture);
 		uint32_t region = 0;
 		if (batch.kind && (!batch.backdrop || batch.backdrop_prefix || batch.backdrop_fused)) {
 			region = uint32_t(bounds_program.group_index(batch.backdrop_prefix ? batch.backdrop_source_event : batch.event_index)) + 1;
@@ -732,11 +732,8 @@ void HCSRNewestSceneRenderer::release_gl() {
 		glDeleteTextures(1, &p.blend.texture);
 		glDeleteFramebuffers(1, &p.blend.framebuffer);
 	}
-	for (auto texture : gl.pages) {
-		if (texture) {
-			glDeleteTextures(1, &texture);
-		}
-	}
+	if(gl.atlas_array)glDeleteTextures(1,&gl.atlas_array);
+	if(gl.empty_texture)glDeleteTextures(1,&gl.empty_texture);
 	for (auto data : { gl.geometry, gl.states, gl.clips, gl.planes, gl.primitives, gl.nodes, gl.outputs, gl.coverage_input, gl.coverage_levels, gl.coverage_output[0], gl.coverage_output[1] }) {
 		if (data.texture) {
 			glDeleteTextures(1, &data.texture);
