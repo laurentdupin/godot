@@ -100,26 +100,10 @@ int main(int argc, char *argv[]) {
 		return -1;
 	}
 
-	// Create job to monitor process tree.
+	// Own descendants so closing the wrapper still cleans up the process tree.
 	HANDLE job_handle = CreateJobObjectW(nullptr, nullptr);
 	if (!job_handle) {
 		wprintf(L"CreateJobObject failed, error %d\n", GetLastError());
-		return -1;
-	}
-
-	HANDLE io_port_handle = CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 1);
-	if (!io_port_handle) {
-		wprintf(L"CreateIoCompletionPort failed, error %d\n", GetLastError());
-		return -1;
-	}
-
-	JOBOBJECT_ASSOCIATE_COMPLETION_PORT compl_port;
-	ZeroMemory(&compl_port, sizeof(compl_port));
-	compl_port.CompletionKey = job_handle;
-	compl_port.CompletionPort = io_port_handle;
-
-	if (!SetInformationJobObject(job_handle, JobObjectAssociateCompletionPortInformation, &compl_port, sizeof(compl_port))) {
-		wprintf(L"SetInformationJobObject(AssociateCompletionPortInformation) failed, error %d\n", GetLastError());
 		return -1;
 	}
 
@@ -129,6 +113,7 @@ int main(int argc, char *argv[]) {
 
 	if (!SetInformationJobObject(job_handle, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli))) {
 		wprintf(L"SetInformationJobObject(ExtendedLimitInformation) failed, error %d\n", GetLastError());
+		CloseHandle(job_handle);
 		return -1;
 	}
 
@@ -149,34 +134,40 @@ int main(int argc, char *argv[]) {
 
 	if (!CreateProcessW(nullptr, new_command_line, nullptr, nullptr, true, CREATE_SUSPENDED, nullptr, nullptr, &si, &pi)) {
 		wprintf(L"CreateProcess failed, error %d\n", GetLastError());
+		CloseHandle(job_handle);
 		return -1;
 	}
 
 	if (!AssignProcessToJobObject(job_handle, pi.hProcess)) {
 		wprintf(L"AssignProcessToJobObject failed, error %d\n", GetLastError());
+		TerminateProcess(pi.hProcess, 1);
+		CloseHandle(pi.hThread);
+		CloseHandle(pi.hProcess);
+		CloseHandle(job_handle);
 		return -1;
 	}
 
-	ResumeThread(pi.hThread);
+	if (ResumeThread(pi.hThread) == (DWORD)-1) {
+		wprintf(L"ResumeThread failed, error %d\n", GetLastError());
+		CloseHandle(pi.hThread);
+		CloseHandle(job_handle);
+		CloseHandle(pi.hProcess);
+		return -1;
+	}
 	CloseHandle(pi.hThread);
 
-	// Wait until main process and all of its children are finished.
-	DWORD completion_code = 0;
-	ULONG_PTR completion_key = 0;
-	LPOVERLAPPED overlapped = nullptr;
-
-	while (GetQueuedCompletionStatus(io_port_handle, &completion_code, &completion_key, &overlapped, INFINITE)) {
-		if ((HANDLE)completion_key == job_handle && completion_code == JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO) {
-			break;
-		}
-	}
-
-	CloseHandle(job_handle);
-	CloseHandle(io_port_handle);
-
-	// Get exit code of the main process.
+	// The main process owns the invocation's result. Background tool helpers
+	// must not keep a completed editor/export command alive. Closing the job
+	// afterwards terminates remaining descendants, as on wrapper interruption.
 	DWORD exit_code = 0;
-	GetExitCodeProcess(pi.hProcess, &exit_code);
+	if (WaitForSingleObject(pi.hProcess, INFINITE) != WAIT_OBJECT_0 ||
+			!GetExitCodeProcess(pi.hProcess, &exit_code)) {
+		wprintf(L"Waiting for main process failed, error %d\n", GetLastError());
+		CloseHandle(job_handle);
+		CloseHandle(pi.hProcess);
+		return -1;
+	}
+	CloseHandle(job_handle);
 
 	CloseHandle(pi.hProcess);
 
