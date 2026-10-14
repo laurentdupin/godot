@@ -1,6 +1,7 @@
 [CmdletBinding()]
-param([string]$GodotConsole = (Join-Path $PSScriptRoot '../../../bin/godot.windows.editor.x86_64.mono.console.exe'))
+param([string]$GodotConsole = '')
 $ErrorActionPreference = 'Stop'
+if (-not $GodotConsole) { $GodotConsole = Join-Path $PSScriptRoot '../../../bin/godot.windows.editor.x86_64.mono.console.exe' }
 $GodotConsole = [IO.Path]::GetFullPath($GodotConsole)
 $direct = $GodotConsole.Substring(0, $GodotConsole.Length - '.console.exe'.Length) + '.exe'
 $fixture = [IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetTempPath()) ('godot console wait ' + [guid]::NewGuid().ToString('N'))))
