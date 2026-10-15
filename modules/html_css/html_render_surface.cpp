@@ -691,7 +691,13 @@ void HTMLRenderSurface::_prepare_host_frame() {
 	// surface took a long time to prepare.
 	const double time_seconds = (double)Engine::get_singleton()->get_frame_ticks() / 1000000.0;
 	const Error error = backend->prepare_host_frame(host_frame, time_seconds);
-	ERR_FAIL_COND_MSG(error != OK, vformat("HTML preparation failed for Godot frame %d: %s", host_frame, backend->get_terminal_render_failure_reason()));
+	if (error != OK) {
+		String reason = backend->get_terminal_render_failure_reason();
+		if (reason.is_empty()) {
+			reason = error_names[error];
+		}
+		ERR_FAIL_MSG(vformat("HTML preparation failed for Godot frame %d: %s", host_frame, reason));
+	}
 	_notify_frame_state_changes();
 }
 

@@ -534,7 +534,11 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
 		}
 		html = String::utf8((const char *)asset.bytes.ptr(), asset.bytes.size());
 	}
-	if (html.strip_edges().is_empty()) return ERR_INVALID_DATA;
+	if (html.strip_edges().is_empty()) {
+		const String source = document->get_html_file().is_empty() ? "inline HTML" : document->get_html_file();
+		set_terminal(state, vformat("HTML document is empty (%s). Provide HTML content or a non-empty HTML file.", source), true);
+		return ERR_INVALID_DATA;
+	}
 	if (state->text_enabled) state->text.configure(document, html + document->get_css());
 	String resource_base_path = document->get_html_file().is_empty()
             ? document->get_resource_root() : document->get_html_file().get_base_dir();
