@@ -367,7 +367,8 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_glyph(const 
         }
         return *existing;
     }
-    if (const Entry *fallback = last_glyphs.getptr(face_glyph)) {
+    if (const Entry *fallback = last_glyphs.getptr(face_glyph);
+            fallback && hcsr_atlas_glyph_fallback_usable(glyph.font_size,scale,fallback->raster_size)) {
         if(resolution_epoch)requested_glyphs.insert({glyph.face,glyph.glyph,uint32_t(fallback->raster_size)});
         if (!queued_glyphs.has(key)) { pending_glyphs.push_back({ glyph, level, key }); queued_glyphs.insert(key, true); }
         return *fallback;
