@@ -1120,6 +1120,10 @@ void RasterizerCanvasGLES3::_record_item_commands(const Item *p_item, RID p_rend
 				state.canvas_instance_batches[state.current_batch_index].specialization |= CanvasShaderGLES3::USE_ATTRIBUTES;
 				state.canvas_instance_batches[state.current_batch_index].flags = 0;
 
+				if (polygon->premultiplied_colors) {
+					state.canvas_instance_batches[state.current_batch_index].flags |= BATCH_FLAGS_PREMULTIPLIED_COLORS;
+				}
+
 				_prepare_canvas_texture(polygon->texture, state.canvas_instance_batches[state.current_batch_index].filter, state.canvas_instance_batches[state.current_batch_index].repeat, r_index, texpixel_size);
 
 				state.instance_data_array[r_index].modulation[0] = base_color.r;

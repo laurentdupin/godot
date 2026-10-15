@@ -27,6 +27,7 @@
 
 #define BATCH_FLAGS_DEFAULT_NORMAL_MAP_USED uint(1 << 9)
 #define BATCH_FLAGS_DEFAULT_SPECULAR_MAP_USED uint(1 << 10)
+#define BATCH_FLAGS_PREMULTIPLIED_COLORS uint(1 << 11)
 
 layout(std140) uniform GlobalShaderUniformData { //ubo:1
 	vec4 global_shader_uniforms[MAX_GLOBAL_SHADER_UNIFORMS];

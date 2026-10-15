@@ -69,6 +69,7 @@ class RasterizerCanvasGLES3 : public RendererCanvasRender {
 
 		BATCH_FLAGS_DEFAULT_NORMAL_MAP_USED = (1 << 9),
 		BATCH_FLAGS_DEFAULT_SPECULAR_MAP_USED = (1 << 10),
+		BATCH_FLAGS_PREMULTIPLIED_COLORS = (1 << 11),
 	};
 
 	enum {

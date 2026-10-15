@@ -263,6 +263,12 @@ void main() {
 	vertex = (model_matrix * vec4(vertex, 0.0, 1.0)).xy;
 #endif
 
+#ifdef USE_ATTRIBUTES
+	// Keep varying-alpha gradients in premultiplied space during interpolation.
+	if (bool(batch_flags & BATCH_FLAGS_PREMULTIPLIED_COLORS)) {
+		color.rgb *= color.a;
+	}
+#endif
 	color_interp = color;
 
 	vertex = (canvas_transform * vec4(vertex, 0.0, 1.0)).xy;
@@ -565,6 +571,11 @@ float msdf_median(float r, float g, float b) {
 
 void main() {
 	vec4 color = color_interp;
+#ifdef USE_ATTRIBUTES
+	if (bool(batch_flags & BATCH_FLAGS_PREMULTIPLIED_COLORS) && color.a != 1.0) {
+		color.rgb = color.a > 0.0 ? color.rgb / color.a : vec3(0.0);
+	}
+#endif
 	vec2 uv = uv_interp;
 	vec2 vertex = vertex_interp;
 

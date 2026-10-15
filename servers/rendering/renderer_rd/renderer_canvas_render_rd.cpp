@@ -2665,6 +2665,10 @@ void RendererCanvasRenderRD::_record_item_commands(const Item *p_item, RenderTar
 					r_current_batch->tex_info = tex_info;
 				}
 
+				if (polygon->premultiplied_colors) {
+					r_current_batch->flags |= BATCH_FLAGS_PREMULTIPLIED_COLORS;
+				}
+
 				// pipeline variant
 				{
 					ERR_CONTINUE(polygon->primitive < 0 || polygon->primitive >= RSE::PRIMITIVE_MAX);

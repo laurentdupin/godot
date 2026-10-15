@@ -32,6 +32,7 @@
 
 #include "core/config/engine.h"
 #include "core/object/class_db.h"
+#include "scene/main/canvas_item.h"
 #include "servers/rendering/rendering_server.h"
 #include "servers/text/text_server.h"
 
@@ -482,6 +483,12 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	real_t aa_size_scaled = 1.0f;
 	if (aa_on) {
 		real_t scale_factor = TextServer::get_current_drawn_item_oversampling();
+		if (CanvasItem *item = get_current_item_drawn()) {
+			// AA is a physical-pixel footprint, independent of font oversampling.
+			// Read the current transform even on the first draw after a scale change.
+			const Transform2D to_pixels = item->get_viewport_transform() * item->get_global_transform();
+			scale_factor = MAX(to_pixels[0].length(), to_pixels[1].length());
+		}
 		if (scale_factor == 0.0) {
 			scale_factor = 1.0;
 		}
@@ -556,7 +563,44 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 				infill_rect, infill_rect, bg_color, bg_color, corner_detail, skew, true);
 	}
 
-	if (aa_on) {
+	const bool uniform_border = draw_border && adapted_border[0] == adapted_border[1] && adapted_border[0] == adapted_border[2] && adapted_border[0] == adapted_border[3];
+	if (aa_on && uniform_border && !blend_on) {
+		// Integrate a uniform border over a one-feather-wide pixel footprint.
+		// If the border is thinner than that footprint, the two coverage ramps
+		// overlap: merge them instead of emitting an inverted opaque band.
+		const real_t border = adapted_border[0];
+		const real_t first_offset = MIN(aa_size_scaled * 0.5, border - aa_size_scaled * 0.5);
+		const real_t second_offset = MAX(aa_size_scaled * 0.5, border - aa_size_scaled * 0.5);
+		const real_t coverage = MIN(1.0, border / aa_size_scaled);
+		const Rect2 outer = style_rect.grow(aa_size_scaled * 0.5);
+		const Rect2 first = style_rect.grow(-first_offset);
+		const Rect2 second = style_rect.grow(-second_offset);
+		const Rect2 inner = style_rect.grow(-border - aa_size_scaled * 0.5);
+		const Color fill = draw_center ? bg_color : Color(0, 0, 0, 0);
+		Color first_color = border_color;
+		first_color.a *= coverage;
+		// The second plateau also covers the beginning of the inner fill.
+		// Compute its straight color from coverage-weighted premultiplied inputs.
+		Color second_color;
+		second_color.a = border_color.a * coverage + fill.a * (1.0 - coverage);
+		if (second_color.a > 0) {
+			second_color.r = (border_color.r * border_color.a * coverage + fill.r * fill.a * (1.0 - coverage)) / second_color.a;
+			second_color.g = (border_color.g * border_color.a * coverage + fill.g * fill.a * (1.0 - coverage)) / second_color.a;
+			second_color.b = (border_color.b * border_color.a * coverage + fill.b * fill.a * (1.0 - coverage)) / second_color.a;
+		}
+		if (draw_center) {
+			draw_rounded_rectangle(verts, indices, colors, style_rect, adapted_corner,
+					inner, inner, fill, fill, corner_detail, skew, true);
+		}
+		draw_rounded_rectangle(verts, indices, colors, style_rect, adapted_corner,
+				outer, first, first_color, border_color_alpha, corner_detail, skew);
+		if (second_offset > first_offset) {
+			draw_rounded_rectangle(verts, indices, colors, style_rect, adapted_corner,
+					first, second, second_color, first_color, corner_detail, skew);
+		}
+		draw_rounded_rectangle(verts, indices, colors, style_rect, adapted_corner,
+				second, inner, fill, second_color, corner_detail, skew);
+	} else if (aa_on) {
 		real_t aa_border_width[4];
 		real_t aa_border_width_half[4];
 		real_t aa_fill_width[4];
@@ -644,7 +688,9 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 
 	// Draw stylebox.
 	RenderingServer *vs = RenderingServer::get_singleton();
-	vs->canvas_item_add_triangle_array(p_canvas_item, indices, verts, colors, uvs);
+	// The border's straight RGBA colors can have different opacity from the fill.
+	// Interpolating RGB independently makes the thin rounded edge much brighter.
+	vs->canvas_item_add_triangle_array_premultiplied(p_canvas_item, indices, verts, colors, uvs);
 }
 
 void StyleBoxFlat::_bind_methods() {

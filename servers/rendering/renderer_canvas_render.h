@@ -234,6 +234,7 @@ public:
 		};
 
 		struct CommandPolygon : public Command {
+			bool premultiplied_colors = false;
 			RSE::PrimitiveType primitive;
 			Polygon polygon;
 

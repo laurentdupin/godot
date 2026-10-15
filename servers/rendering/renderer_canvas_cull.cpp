@@ -1777,6 +1777,14 @@ void RendererCanvasCull::canvas_item_add_polygon(RID p_item, const Vector<Point2
 }
 
 void RendererCanvasCull::canvas_item_add_triangle_array(RID p_item, const Vector<int> &p_indices, const Vector<Point2> &p_points, const Vector<Color> &p_colors, const Vector<Point2> &p_uvs, const Vector<int> &p_bones, const Vector<float> &p_weights, RID p_texture, int p_count) {
+	_canvas_item_add_triangle_array(p_item, p_indices, p_points, p_colors, p_uvs, p_bones, p_weights, p_texture, p_count, false);
+}
+
+void RendererCanvasCull::canvas_item_add_triangle_array_premultiplied(RID p_item, const Vector<int> &p_indices, const Vector<Point2> &p_points, const Vector<Color> &p_colors, const Vector<Point2> &p_uvs, const Vector<int> &p_bones, const Vector<float> &p_weights, RID p_texture, int p_count) {
+	_canvas_item_add_triangle_array(p_item, p_indices, p_points, p_colors, p_uvs, p_bones, p_weights, p_texture, p_count, true);
+}
+
+void RendererCanvasCull::_canvas_item_add_triangle_array(RID p_item, const Vector<int> &p_indices, const Vector<Point2> &p_points, const Vector<Color> &p_colors, const Vector<Point2> &p_uvs, const Vector<int> &p_bones, const Vector<float> &p_weights, RID p_texture, int p_count, bool p_premultiplied_colors) {
 	Item *canvas_item = canvas_item_owner.get_or_null(p_item);
 	ERR_FAIL_NULL(canvas_item);
 
@@ -1791,6 +1799,7 @@ void RendererCanvasCull::canvas_item_add_triangle_array(RID p_item, const Vector
 	ERR_FAIL_NULL(polygon);
 
 	polygon->texture = p_texture;
+	polygon->premultiplied_colors = p_premultiplied_colors;
 
 	polygon->polygon.create(p_indices, p_points, p_colors, p_uvs, p_bones, p_weights, p_count);
 

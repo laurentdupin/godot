@@ -47,6 +47,7 @@ struct InstanceData {
 
 #define BATCH_FLAGS_DEFAULT_NORMAL_MAP_USED (1 << 9)
 #define BATCH_FLAGS_DEFAULT_SPECULAR_MAP_USED (1 << 10)
+#define BATCH_FLAGS_PREMULTIPLIED_COLORS (1 << 11)
 
 layout(push_constant, std430) uniform Params {
 	uint sc_packed_0;
