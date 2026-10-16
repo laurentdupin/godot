@@ -146,6 +146,7 @@ public:
     uint64_t placement_revision() const {return hierarchy.revision;}
     uint64_t topology_revision() const {return geometry_generation;}
     void release_gl_output(RID target);
+	void release_output_targets(RenderingDevice *device, RID target, RID canvas_target);
     hcsr_gpu_state_t reference_state(const hcsr_draw_packet_view_t &packet,uint32_t index) const;
     // Borrowed atlas bindings: lifetime and upload remain with this renderer.
     HCSRNewestRasterResources::Entry backdrop_entry(uint32_t index) const { return backdrop_entries[index]; }

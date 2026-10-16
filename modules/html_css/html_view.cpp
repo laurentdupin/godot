@@ -340,6 +340,8 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_fixed_viewport_device_scale_factor"), &HTMLView::get_fixed_viewport_device_scale_factor);
 	ClassDB::bind_method(D_METHOD("set_use_document_minimum_size", "use_document_minimum_size"), &HTMLView::set_use_document_minimum_size);
 	ClassDB::bind_method(D_METHOD("is_using_document_minimum_size"), &HTMLView::is_using_document_minimum_size);
+	ClassDB::bind_method(D_METHOD("set_release_targets_when_hidden", "enabled"), &HTMLView::set_release_targets_when_hidden);
+	ClassDB::bind_method(D_METHOD("is_releasing_targets_when_hidden"), &HTMLView::is_releasing_targets_when_hidden);
 	ClassDB::bind_method(D_METHOD("set_backdrop_filter_enabled", "backdrop_filter_enabled"), &HTMLView::set_backdrop_filter_enabled);
 	ClassDB::bind_method(D_METHOD("is_backdrop_filter_enabled"), &HTMLView::is_backdrop_filter_enabled);
 	ClassDB::bind_method(D_METHOD("get_backdrop_filter_regions"), &HTMLView::get_backdrop_filter_regions);
@@ -399,6 +401,7 @@ void HTMLView::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2I, "fixed_viewport_size", PROPERTY_HINT_RANGE, "0,16384,1,or_greater,suffix:px"), "set_fixed_viewport_size", "get_fixed_viewport_size");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "fixed_viewport_device_scale_factor", PROPERTY_HINT_RANGE, "0,8,0.05,or_greater,suffix:x"), "set_fixed_viewport_device_scale_factor", "get_fixed_viewport_device_scale_factor");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "use_document_minimum_size"), "set_use_document_minimum_size", "is_using_document_minimum_size");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "release_targets_when_hidden"), "set_release_targets_when_hidden", "is_releasing_targets_when_hidden");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "backdrop_filter_enabled"), "set_backdrop_filter_enabled", "is_backdrop_filter_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "frame_budget_milliseconds", PROPERTY_HINT_RANGE, "0,1000,0.1,or_greater,suffix:ms"), "set_frame_budget_milliseconds", "get_frame_budget_milliseconds");
 
@@ -597,6 +600,7 @@ void HTMLView::_notification(int p_what) {
 		} break;
 
 		case NOTIFICATION_VISIBILITY_CHANGED: {
+			surface->set_main_presentation_suspended(release_targets_when_hidden && !is_visible_in_tree());
 			if (!is_visible_in_tree()) {
 				_cancel_pointer_interaction(SNAME("capture_loss"));
 			}
@@ -1115,7 +1119,9 @@ Dictionary HTMLView::get_frame_scheduler_diagnostics() const {
 	result[SNAME("physical_pool_blocked")] = scheduler_physical_pool_blocked_count;
 	result[SNAME("preparation_failed")] = scheduler_preparation_failed_count;
 	result[SNAME("submission_failed")] = scheduler_submission_failed_count;
-	result[SNAME("frame_synchronization")] = surface->get_frame_synchronization();
+	const Dictionary synchronization = surface->get_frame_synchronization();
+	result[SNAME("frame_synchronization")] = synchronization;
+	result[SNAME("memory")] = synchronization.get("memory", Dictionary());
 	return result;
 }
 
@@ -1824,6 +1830,15 @@ void HTMLView::set_use_document_minimum_size(bool p_use_document_minimum_size) {
 
 bool HTMLView::is_using_document_minimum_size() const {
 	return use_document_minimum_size;
+}
+
+void HTMLView::set_release_targets_when_hidden(bool p_enabled) {
+	release_targets_when_hidden = p_enabled;
+	surface->set_main_presentation_suspended(p_enabled && !is_visible_in_tree());
+}
+
+bool HTMLView::is_releasing_targets_when_hidden() const {
+	return release_targets_when_hidden;
 }
 
 void HTMLView::set_backdrop_filter_enabled(bool p_backdrop_filter_enabled) {

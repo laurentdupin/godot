@@ -4,6 +4,7 @@
 #include "hcsr_font_engine.h"
 #include "hcsr_scene.h"
 
+#include "core/templates/hash_set.h"
 #include "scene/resources/font.h"
 
 // Host-owned fonts. The scene ABI receives only immutable glyph IDs and logical metrics.
@@ -20,6 +21,7 @@ class HCSRNewestText {
 	HashMap<String, Ref<SystemFont>> system_fonts;
 	HashMap<String, bool> optical_sizing_support;
 	HashMap<String, Ref<FontFile>> face_files;
+	HashSet<String> shared_font_keys;
 	struct FontMetrics : hcsr_font_metrics {
 		hcsr_font_decoration_metrics decoration = {};
 		Ref<FontFile> source;
@@ -41,6 +43,7 @@ class HCSRNewestText {
 
 public:
 	~HCSRNewestText();
+	Dictionary get_statistics() const;
 	static int32_t HCSR_CALL caret_callback(void *user, uint64_t face, uint32_t glyph, float size, uint32_t direction, hcsr_caret_result_t *result);
 	void configure(const Ref<HTMLDocument> &p_document, const String &css);
 	void add_stylesheet(const String &css, const String &base);

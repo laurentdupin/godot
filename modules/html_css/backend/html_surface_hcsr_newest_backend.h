@@ -23,6 +23,7 @@ public:
 	struct State;
 	static void _render_on_render_thread(uint64_t p_state_pointer);
 	static void _prepare_canvas_on_render_thread(uint64_t p_state_pointer, const CanvasRenderTargetPreparation::Input &p_input);
+	static void _suspend_main_on_render_thread(uint64_t p_state_pointer);
 	static void _destroy_state_on_render_thread(uint64_t p_state_pointer);
 
 private:
@@ -51,6 +52,7 @@ public:
 	virtual Dictionary get_frame_synchronization() const override;
 	virtual Ref<CanvasRenderTargetPreparation> get_canvas_render_target_preparation() const override;
 	virtual bool uses_ordered_backdrop_submission() const override;
+	virtual void set_main_presentation_suspended(bool p_suspended) override;
 	virtual void set_backdrop_filter_enabled(bool p_enabled) override;
 	virtual void render_placeholder(const String &p_marker) override;
 	virtual bool poll_pending_output(bool *r_waiting_for_completion = nullptr) override;

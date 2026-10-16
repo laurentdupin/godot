@@ -344,3 +344,48 @@ Panels may share a camera-color capture, while portal/reprojected textures are
 normally panel-specific. Pointer interaction remains independent: Godot raycasts
 the panel, converts hit UV to HTML pixels, and sends the same pointer input used
 by a canvas `HTMLView`.
+
+## Per-view memory and hidden panels
+
+For the newest renderer, `HTMLView.release_targets_when_hidden` is opt-in
+(default `false`). When enabled,
+visibility changes release the main view's output/mipmap textures, its compositing
+scratch targets, and its backdrop mask on the rendering thread. The document,
+layout, font references, raster appearances and atlas remain warm. Showing the
+view requests a new host frame and recreates the presentation resources.
+`HTMLViewOutput` targets are independent consumers: they remain live and continue
+to render even when their source Control is hidden. This preserves 3D/XR use.
+
+Base system fonts and explicit `@font-face` files are shared across HCSR views.
+Variation instances, fallback-stack construction and shaping scratch remain local.
+Explicit assets still use the document asset provider; sharing uses the resolved
+path/package and file modification time. The last view using a shared base font
+releases the pool's reference. Godot's separate implicit system-fallback cache
+already shares font-file bytes process-wide and has its own engine lifetime.
+TTC collections still use Godot's full-file loader; no face extraction is attempted.
+
+`HTMLView.get_frame_scheduler_diagnostics().memory` reports:
+
+- `scene_objects`, computed/cascaded property counts, `scene_raster_bytes` and
+  raster-entry count: scene-owned content, excluding allocator/object overhead.
+- `cached_native_packet_payload_bytes`: requested unmanaged bytes for the cached
+  publication, counting shared definitions once. Excludes old in-flight packets,
+  pinned managed pixels and allocator overhead.
+- Cached managed draw/surface counts; these are counts, not heap-size estimates.
+- CPU atlas pixel bytes and shared base-font byte counts. Shared font bytes are
+  references to process resources and must not be summed across views. Implicit
+  TextServer fallback fonts are outside these font-pool counters.
+- `process_managed_heap_bytes`: non-collecting `GC.GetTotalMemory(false)` across
+  all HCSR views, including uncollected garbage. GC committed/heap/fragmentation
+  figures describe the last GC, not the current view. Before the first GC those
+  last-GC counters can be zero. `process_server_gc` identifies the active policy.
+
+The memory snapshot is collected only when diagnostics are requested. It does not
+force GC, impose a process heap limit, or add per-frame allocation tracing. It is
+not a full private-RAM census: engine allocations, native font/shader/driver
+allocations, runtime metadata and allocator slack require process profiling.
+
+Regression: `modules/html_css/tests/hcsr_view_memory_smoke.gd` tests repeated
+hide/show pixel equality, target retirement, surviving independent outputs and
+shared-font lifetime on RenderingDevice and OpenGL backends. An optional
+`res://memory-font.ttf` fixture also exercises shared authored fonts.

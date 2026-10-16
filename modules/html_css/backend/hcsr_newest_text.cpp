@@ -2,10 +2,39 @@
 
 #include "../bridge/html_asset_provider.h"
 
+#include "core/io/file_access.h"
+#include "core/os/mutex.h"
 #include "core/string/regex.h"
 #include "servers/text/text_server.h"
 
 #include <cstdlib>
+
+namespace {
+struct SharedFont {
+	Ref<Font> font;
+	int users = 0;
+};
+Mutex shared_font_mutex;
+HashMap<String, SharedFont> shared_fonts;
+
+template <class Factory>
+Ref<Font> acquire_shared_font(const String &key, HashSet<String> &owned, Factory create) {
+	MutexLock lock(shared_font_mutex);
+	if (SharedFont *entry = shared_fonts.getptr(key)) {
+		if (!owned.has(key)) {
+			++entry->users;
+			owned.insert(key);
+		}
+		return entry->font;
+	}
+	Ref<Font> font = create();
+	if (font.is_valid()) {
+		shared_fonts.insert(key, { font, 1 });
+		owned.insert(key);
+	}
+	return font;
+}
+} //namespace
 
 static String decode(hcsr_utf8_t value) {
 	return String::utf8(value.data, value.length);
@@ -124,13 +153,17 @@ Ref<Font> HCSRNewestText::resolve(const hcsr_shape_request_t &request) {
 	if (const Ref<SystemFont> *cached = system_fonts.getptr(system_key)) {
 		fallback = *cached;
 	} else {
-		fallback.instantiate();
-		fallback->set_font_names(names);
-		fallback->set_font_weight(weight);
-		fallback->set_font_italic(italic);
-		fallback->set_hinting(TextServer::HINTING_NONE);
-		fallback->set_subpixel_positioning(TextServer::SUBPIXEL_POSITIONING_DISABLED);
-		fallback->set_oversampling(1);
+		fallback = acquire_shared_font("system|" + system_key, shared_font_keys, [&]() -> Ref<Font> {
+			Ref<SystemFont> fallback;
+			fallback.instantiate();
+			fallback->set_font_names(names);
+			fallback->set_font_weight(weight);
+			fallback->set_font_italic(italic);
+			fallback->set_hinting(TextServer::HINTING_NONE);
+			fallback->set_subpixel_positioning(TextServer::SUBPIXEL_POSITIONING_DISABLED);
+			fallback->set_oversampling(1);
+			return fallback;
+		});
 		system_fonts.insert(system_key, fallback);
 	}
 	TypedArray<Font> resolved;
@@ -140,15 +173,27 @@ Ref<Font> HCSRNewestText::resolve(const hcsr_shape_request_t &request) {
 		if (const Ref<FontFile> *cached = face_files.getptr(face_key)) {
 			file = *cached;
 		} else {
-			HTMLAssetResource asset;
-			if (HTMLGodotAssetProvider::load_asset(document, selected->source, asset) != OK) {
+			String resolved_source;
+			if (HTMLGodotAssetProvider::resolve_asset_path(document, selected->source, resolved_source) != OK) {
 				continue;
 			}
-			file.instantiate();
-			file->set_data(asset.bytes);
-			file->set_hinting(TextServer::HINTING_NONE);
-			file->set_subpixel_positioning(TextServer::SUBPIXEL_POSITIONING_DISABLED);
-			file->set_oversampling(1);
+			const String shared_key = "asset|" + document->get_package_file() + "|" + resolved_source + "|" + uitos(FileAccess::get_modified_time(resolved_source));
+			file = acquire_shared_font(shared_key, shared_font_keys, [&]() -> Ref<Font> {
+				HTMLAssetResource asset;
+				if (HTMLGodotAssetProvider::load_asset(document, selected->source, asset) != OK) {
+					return Ref<Font>();
+				}
+				Ref<FontFile> file;
+				file.instantiate();
+				file->set_data(asset.bytes);
+				file->set_hinting(TextServer::HINTING_NONE);
+				file->set_subpixel_positioning(TextServer::SUBPIXEL_POSITIONING_DISABLED);
+				file->set_oversampling(1);
+				return file;
+			});
+			if (file.is_null()) {
+				continue;
+			}
 			face_files.insert(face_key, file);
 		}
 		Ref<FontVariation> variation;
@@ -417,6 +462,45 @@ HCSRNewestText::~HCSRNewestText() {
 			hcsr_font_unregister(entry.value.caret_face);
 		}
 	}
+	MutexLock lock(shared_font_mutex);
+	for (const String &key : shared_font_keys) {
+		SharedFont *entry = shared_fonts.getptr(key);
+		if (entry && --entry->users == 0) {
+			shared_fonts.erase(key);
+		}
+	}
+}
+
+Dictionary HCSRNewestText::get_statistics() const {
+	MutexLock lock(shared_font_mutex);
+	Dictionary result;
+	result["view_font_stacks"] = fonts.size();
+	result["view_shared_font_references"] = shared_font_keys.size();
+	result["process_shared_font_resources"] = shared_fonts.size();
+	uint64_t view_bytes = 0, process_bytes = 0;
+	HashSet<ObjectID> measured, view_measured;
+	for (const auto &item : shared_fonts) {
+		Ref<Font> base = item.value.font;
+		if (Ref<SystemFont>(base).is_valid()) {
+			base = Ref<SystemFont>(base)->_get_base_font_or_default();
+		}
+		Ref<FontFile> file = base;
+		if (file.is_valid()) {
+			const ObjectID identity = file->get_instance_id();
+			const uint64_t bytes = file->get_data().size();
+			if (!measured.has(identity)) {
+				measured.insert(identity);
+				process_bytes += bytes;
+			}
+			if (shared_font_keys.has(item.key) && !view_measured.has(identity)) {
+				view_measured.insert(identity);
+				view_bytes += bytes;
+			}
+		}
+	}
+	result["process_shared_base_font_bytes"] = process_bytes;
+	result["view_shared_base_font_bytes"] = view_bytes;
+	return result;
 }
 int32_t HCSR_CALL HCSRNewestText::caret_callback(void *user, uint64_t face, uint32_t glyph, float size, uint32_t direction, hcsr_caret_result_t *result) {
 	if (!user || !result || direction > 2) {

@@ -76,6 +76,7 @@ private:
 	float fixed_viewport_device_scale_factor = 0.0f;
 	bool use_document_minimum_size = false;
 	bool backdrop_filter_enabled = false;
+	bool release_targets_when_hidden = false;
 	StringName accept_action = "ui_accept";
 	StringName focus_next_action = "ui_focus_next";
 	StringName focus_previous_action = "ui_focus_prev";
@@ -225,6 +226,8 @@ public:
 	void set_use_document_minimum_size(bool p_use_document_minimum_size);
 	bool is_using_document_minimum_size() const;
 
+	void set_release_targets_when_hidden(bool p_enabled);
+	bool is_releasing_targets_when_hidden() const;
 	void set_backdrop_filter_enabled(bool p_backdrop_filter_enabled);
 	bool is_backdrop_filter_enabled() const;
 	Array get_backdrop_filter_regions() const;

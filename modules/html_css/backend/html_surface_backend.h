@@ -96,6 +96,7 @@ public:
 	virtual void render_placeholder(const String &p_marker) = 0;
 	// Hosts call this once at their rendering boundary, after script mutations.
 	// Backends without an explicit host-frame contract retain their own scheduler.
+	virtual void set_main_presentation_suspended(bool p_suspended) {}
 	virtual Error prepare_host_frame(uint64_t p_host_frame, double p_time_seconds) { return OK; }
 	virtual Dictionary get_frame_synchronization() const { return Dictionary(); }
 	virtual Ref<CanvasRenderTargetPreparation> get_canvas_render_target_preparation() const { return Ref<CanvasRenderTargetPreparation>(); }

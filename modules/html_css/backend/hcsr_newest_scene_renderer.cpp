@@ -1368,6 +1368,16 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
 	return true;
 }
 
+void HCSRNewestSceneRenderer::release_output_targets(RenderingDevice *device, RID target, RID canvas_target) {
+	release_gl_output(canvas_target);
+	for (int i = group_pools.size() - 1; i >= 0; --i) {
+		if (group_pools[i].output == target) {
+			release_group_pool(device, group_pools.write[i]);
+			group_pools.remove_at(i);
+		}
+	}
+}
+
 void HCSRNewestSceneRenderer::release_groups(RenderingDevice *device) {
     if(device)for(auto &pool:group_pools)release_group_pool(device,pool);
     group_pools.clear();

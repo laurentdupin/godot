@@ -177,6 +177,9 @@ HCSRNewestBackdrop::~HCSRNewestBackdrop() {
 }
 
 void HCSRNewestBackdrop::release_gpu() {
+	previous.clear();
+	previous_size = Size2i();
+	frame.clear();
 	auto server = RenderingServer::get_singleton();
 	auto device = server ? server->get_rendering_device() : nullptr;
 	if (gpu_texture.is_valid()) {

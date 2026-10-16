@@ -120,6 +120,7 @@ void HTMLTexture2D::clear_external_texture() {
 		return;
 	}
 	html_css_texture_trace("clear_external_texture");
+	latest_image.unref();
 	external_texture_rid = RID();
 	Ref<Image> fallback = Image::create_empty(1, 1, false, Image::FORMAT_RGBA8);
 	fallback->fill(Color(0, 0, 0, 0));

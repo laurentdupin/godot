@@ -57,6 +57,7 @@ void HTMLRenderSurface::_sync_backend_state() {
 	backend->set_background_color(background_color);
 	backend->set_placeholder_background(placeholder_background);
 	backend->set_backdrop_filter_enabled(backdrop_filter_enabled);
+	backend->set_main_presentation_suspended(main_presentation_suspended);
 	_sync_backend_presentation_outputs();
 }
 
@@ -227,6 +228,11 @@ void HTMLRenderSurface::set_placeholder_background(const Color &p_color) {
 	placeholder_background = p_color;
 	_sync_backend_state();
 	render_now(marker);
+}
+
+void HTMLRenderSurface::set_main_presentation_suspended(bool p_suspended) {
+	main_presentation_suspended = p_suspended;
+	if (backend) backend->set_main_presentation_suspended(p_suspended);
 }
 
 void HTMLRenderSurface::set_backdrop_filter_enabled(bool p_enabled) {

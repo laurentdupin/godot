@@ -46,6 +46,7 @@ class HTMLRenderSurface : public RefCounted {
 	float device_scale_factor = 1.0f;
 	Color placeholder_background = Color(0.08, 0.09, 0.1, 1.0);
 	bool backdrop_filter_enabled = false;
+	bool main_presentation_suspended = false;
 	String marker = "HTML";
 	HTMLFrameMetadata frame_metadata;
 	HTMLGPUBackdropFrame gpu_backdrop_frame;
@@ -86,6 +87,7 @@ public:
 	bool set_viewport(const Size2i &p_size, float p_device_scale_factor, bool p_render = true);
 
 	void set_placeholder_background(const Color &p_color);
+	void set_main_presentation_suspended(bool p_suspended);
 	void set_backdrop_filter_enabled(bool p_enabled);
 	bool is_backdrop_filter_enabled() const;
 

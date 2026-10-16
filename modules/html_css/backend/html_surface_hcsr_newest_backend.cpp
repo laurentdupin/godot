@@ -55,6 +55,7 @@ struct HTMLSurfaceHCSRNewestBackend::State : HCSRNewestPresentationOutput {
 	Ref<HCSRCanvasInputProbe> canvas_input_probe;
 	Ref<HCSRCanvasPreparation> canvas_preparation;
 	bool canvas_enabled = false, canvas_required = false;
+	bool main_suspended = false;
 	uint64_t canvas_recordings = 0;
 	double canvas_record_ms = 0;
 	HCSRNewestRasterResources raster_resources;
@@ -352,10 +353,36 @@ static void release_output(HCSRNewestPresentationOutput *output, RenderingServer
 }
 } // namespace
 
+void HTMLSurfaceHCSRNewestBackend::set_main_presentation_suspended(bool p_suspended) {
+	MutexLock lock(state->mutex);
+	if (state->main_suspended == p_suspended) return;
+	state->main_suspended = p_suspended;
+	state->needs_another_frame = true;
+	if (p_suspended) RenderingServer::get_singleton()->call_on_render_thread(
+			callable_mp_static(&HTMLSurfaceHCSRNewestBackend::_suspend_main_on_render_thread).bind((uint64_t)(uintptr_t)state));
+}
+
+void HTMLSurfaceHCSRNewestBackend::_suspend_main_on_render_thread(uint64_t p_state_pointer) {
+	State *state = (State *)(uintptr_t)p_state_pointer;
+	MutexLock lock(state->mutex);
+	if (!state->main_suspended || state->closing) return;
+	auto server = RenderingServer::get_singleton();
+	auto device = server ? server->get_rendering_device() : nullptr;
+	state->scene_renderer.release_output_targets(device, state->rd_texture, state->canvas_texture);
+	state->texture->clear_external_texture();
+	release_gpu_target(state, server, device);
+	state->backdrop.release();
+	state->prepared_backdrop.clear();
+	state->active_backdrop.clear();
+	state->canvas_required = false;
+	state->image_atlas_statistics = state->scene_renderer.get_statistics();
+	state->image_atlas_statistics.merge(state->backdrop.get_statistics());
+}
+
 void HTMLSurfaceHCSRNewestBackend::_prepare_canvas_on_render_thread(uint64_t p_state_pointer, const CanvasRenderTargetPreparation::Input &p_input) {
 	State *state = (State *)(uintptr_t)p_state_pointer;
 	MutexLock lock(state->mutex);
-	if (state->closing || state->terminal || !state->canvas_enabled || !state->canvas_required) return;
+	if (state->closing || state->terminal || state->main_suspended || !state->canvas_enabled || !state->canvas_required) return;
 	auto server = RenderingServer::get_singleton();
 	auto device = server != nullptr ? server->get_rendering_device() : nullptr;
 	if (state->renderer==HTML_SURFACE_HCSR_NEWEST_OPENGL ? !state->canvas_texture.is_valid() : (!device || !state->rd_texture.is_valid())) return;
@@ -382,12 +409,14 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 	Color background;
 	State::PreparedFrame prepared;
 	bool inject_failure = false;
+	bool main_suspended = false;
 	{
 		MutexLock lock(state->mutex);
 		if (state->pending_packet == 0) {
 			state->render_pending = false;
 			return;
 		}
+		main_suspended = state->main_suspended;
 		packet_handle = state->pending_packet;
 		renderer = state->renderer;
 		prepared = state->prepared;
@@ -421,7 +450,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
     const uint64_t atlas_start_usec = OS::get_singleton()->get_ticks_usec();
     const bool valid_packet = rendered;
     const bool textured = rendered && !inject_failure && state->scene_renderer.prepare(packet, state->document, output_scale, backdrop_view,hierarchy_view,raster_demand,renderer!=HTML_SURFACE_HCSR_NEWEST_CPU,renderer==HTML_SURFACE_HCSR_NEWEST_OPENGL);
-	const bool canvas_required = textured && renderer != HTML_SURFACE_HCSR_NEWEST_CPU && prepared.canvas_enabled && state->scene_renderer.has_document_backdrops();
+	const bool canvas_required = !main_suspended && textured && renderer != HTML_SURFACE_HCSR_NEWEST_CPU && prepared.canvas_enabled && state->scene_renderer.has_document_backdrops();
     const uint64_t atlas_end_usec = OS::get_singleton()->get_ticks_usec();
 	if (textured) {
 		RenderingServer *server = RenderingServer::get_singleton();
@@ -453,7 +482,8 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 		};
 		// Main presentation is recorded at the canvas boundary when it needs
 		// current host pixels. Independent outputs keep their explicit clear.
-		if (canvas_required) rendered = renderer==HTML_SURFACE_HCSR_NEWEST_OPENGL ? ensure_gpu_target(state,server,nullptr,physical_size)
+		if (main_suspended) rendered = !device || state->scene_renderer.prepare_gpu_resources(device);
+		else if (canvas_required) rendered = renderer==HTML_SURFACE_HCSR_NEWEST_OPENGL ? ensure_gpu_target(state,server,nullptr,physical_size)
             :device && ensure_gpu_target(state,server,device,physical_size) && state->scene_renderer.prepare_gpu_resources(device);
 		else rendered = draw_output(state, physical_size, background);
 		MutexLock lock(state->mutex);
@@ -469,7 +499,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 		rendered = false;
 	}
     // Ordinary drawing uploads the shared atlas before the mask borrows it.
-    if(rendered)state->prepared_backdrop=state->backdrop.update(packet_handle,rendered_logical_size,physical_size,state->scene_renderer);
+    if(rendered && !main_suspended)state->prepared_backdrop=state->backdrop.update(packet_handle,rendered_logical_size,physical_size,state->scene_renderer);
     static const bool record_profile = OS::get_singleton()->get_environment("HCSR_RECORD_PROFILE") == "1";
     if (record_profile) {
         const uint64_t now = OS::get_singleton()->get_ticks_usec();
@@ -947,6 +977,31 @@ Dictionary HTMLSurfaceHCSRNewestBackend::get_frame_synchronization() const {
 	result["last_mutation_rejection"] = state->last_mutation_rejection;
 	result["mutation_rejected_frames"] = state->mutation_rejected_frames;
 	result["image_atlas"] = state->image_atlas_statistics;
+	result["main_presentation_suspended"] = state->main_suspended;
+	result["fonts"] = state->text.get_statistics();
+	Dictionary memory;
+	hcsr_scene_memory_stats_t stats; initialize_abi(stats);
+	if (state->scene && hcsr_scene_get_memory_stats(state->scene, &stats) == HCSR_OK) {
+		memory["process_managed_heap_bytes"] = stats.process_managed_heap_bytes;
+		memory["process_gc_committed_bytes"] = stats.process_gc_committed_bytes;
+		memory["process_gc_last_heap_bytes"] = stats.process_gc_heap_bytes;
+		memory["process_gc_last_fragmented_bytes"] = stats.process_gc_fragmented_bytes;
+		memory["process_server_gc"] = bool(stats.flags & 1);
+		memory["process_runtime_count"] = stats.process_runtime_count;
+		memory["process_scene_count"] = stats.process_scene_count;
+		memory["scene_objects"] = stats.scene_objects;
+		memory["scene_computed_properties"] = stats.scene_computed_properties;
+		memory["scene_cascaded_properties"] = stats.scene_cascaded_properties;
+		memory["scene_raster_bytes"] = stats.scene_raster_bytes;
+		memory["scene_raster_entries"] = stats.scene_raster_entries;
+		memory["cached_native_packet_payload_bytes"] = stats.cached_native_packet_bytes;
+		memory["cached_managed_draw_count"] = stats.cached_managed_draw_count;
+		memory["cached_managed_surface_count"] = stats.cached_managed_surface_count;
+	}
+	memory["fonts"] = result["fonts"];
+	memory["atlas_cpu_pixel_bytes"] = state->image_atlas_statistics.get("atlas_cpu_pixel_bytes", 0);
+	memory["main_presentation_suspended"] = state->main_suspended;
+	result["memory"] = memory;
 	result["preparation_ms"] = state->preparation_milliseconds;
 	result["maximum_preparation_ms"] = state->maximum_preparation_milliseconds;
 	Dictionary stages;
@@ -978,7 +1033,7 @@ void HTMLSurfaceHCSRNewestBackend::render_placeholder(const String &p_marker) {
 	{
 		MutexLock lock(state->mutex);
 		can_render = !state->closing && !state->terminal && state->document.is_valid() && state->document->is_source_valid();
-		show_placeholder = state->active_generation == 0 && !state->render_pending;
+		show_placeholder = !state->main_suspended && state->active_generation == 0 && !state->render_pending;
 		placeholder_size = state->physical_size;
 		placeholder_color = state->placeholder;
 	}
