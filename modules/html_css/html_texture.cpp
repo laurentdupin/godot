@@ -109,6 +109,9 @@ void HTMLTexture2D::set_external_texture(const RID &p_texture_rid, const Size2i 
 	html_css_texture_trace(vformat("set_external_texture: rid_valid=%s size=%dx%d alpha=%s", p_texture_rid.is_valid() ? "true" : "false", p_size.x, p_size.y, p_alpha ? "true" : "false"));
 	external_texture_rid = p_texture_rid;
 	RenderingServer::get_singleton()->texture_proxy_update(proxy_texture_rid, external_texture_rid);
+	// The proxy now samples the external target. Keeping the old CPU/image
+	// fallback alive retains a second full-sized GPU texture for no consumer.
+	texture.unref();
 	latest_image.unref();
 	size = Size2i(MAX(1, p_size.x), MAX(1, p_size.y));
 	alpha = p_alpha;
@@ -122,6 +125,7 @@ void HTMLTexture2D::clear_external_texture() {
 	html_css_texture_trace("clear_external_texture");
 	latest_image.unref();
 	external_texture_rid = RID();
+	if (texture.is_null()) texture.instantiate();
 	Ref<Image> fallback = Image::create_empty(1, 1, false, Image::FORMAT_RGBA8);
 	fallback->fill(Color(0, 0, 0, 0));
 	texture->set_image(fallback);
