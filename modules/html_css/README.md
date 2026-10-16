@@ -280,7 +280,7 @@ Each changed atlas revision produces
 overwrites the matching `-latest` set: a checkerboard-composited PNG, an
 `-overlay.png` with glyphs green, surfaces orange and images blue, and JSON.
 Page zero (the permanent sampling pixel) is excluded. PNGs retain the full
-4096-pixel width and crop to the highest live allocation. The JSON includes
+physical page width (initially 1024, growing to 4096) and crop to the highest live allocation. The JSON includes
 allocation rectangles, identities, packed area, packing efficiency and the ten
 tallest entries. Surface identities include current owning element/object IDs
 and packet shape kinds (`raster`/`raster_slice`); original CSS painter shape
@@ -297,6 +297,15 @@ reports `atlas_used_rows` (sum over appearance pages), `atlas_used_rows_by_page`
 (page 1 onward), `atlas_packed_area_pixels`, and `atlas_largest_entry`
 (`w`, `h`, `kind`, largest by area). These statistics describe live packed
 rectangles, including their sampling padding, rather than CPU buffer capacity.
+
+Appearance pages start at 1024 square and grow to 2048/4096 without moving
+allocations. `atlas_page_sizes` reports their actual physical extents (page 1
+onward); the legacy `page_size` statistic remains the maximum 4096 address space.
+The 4096 CPU row stride and mask-plane page encoding are logical addresses,
+independent of GPU texture dimensions. RenderingDevice backends copy existing
+pixels on the GPU when growing, then upload new allocation patches. OpenGL 3
+recreates its array and restores only live bounds, using no newer copy-image API.
+Initial page creation also uploads only live bounds; empty space is GPU-cleared.
 
 ## Backdrop input for canvas and world-space HTML
 

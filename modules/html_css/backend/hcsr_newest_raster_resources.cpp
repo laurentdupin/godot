@@ -27,6 +27,19 @@ Vector<Rect2i> HCSRNewestRasterResources::page_updates(int page) const {
     return result;
 }
 
+Rect2i HCSRNewestRasterResources::page_live_bounds(int page) const {
+    Rect2i bounds;
+    auto include=[&](const Entry &entry) {
+        if(entry.page!=page || !entry.rect.has_area())return;
+        const Rect2i padded=entry.rect.grow(1);
+        bounds=bounds.has_area()?bounds.merge(padded):padded;
+    };
+    for(const auto &item:entries)include(item.value);
+    for(const auto &item:glyph_entries)include(item.value);
+    for(const auto &item:surface_entries)include(item.value);
+    return bounds;
+}
+
 static bool svg_has_filters(const Vector<uint8_t> &bytes) {
     XMLParser parser;
     if (parser.open_buffer(bytes) != OK) return false;
@@ -506,9 +519,14 @@ Dictionary HCSRNewestRasterResources::get_statistics() const {
     for (const auto &item : surface_entries) include(item.value, "surface");
     int total_rows = 0;
     PackedInt32Array rows_by_page;
-    for (int page = 1; page < page_count(); ++page) { total_rows += used_rows[page]; rows_by_page.push_back(used_rows[page]); }
+    PackedInt32Array page_extents;
+    for (int page = 1; page < page_count(); ++page) {
+        total_rows += used_rows[page]; rows_by_page.push_back(used_rows[page]);
+        page_extents.push_back(page_size(page).x);
+    }
     result["atlas_used_rows"] = total_rows;
     result["atlas_used_rows_by_page"] = rows_by_page;
+    result["atlas_page_sizes"] = page_extents;
     result["atlas_packed_area_pixels"] = packed_area;
     Dictionary largest;
     largest["w"] = largest_size.x;

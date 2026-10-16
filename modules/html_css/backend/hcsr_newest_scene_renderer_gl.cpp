@@ -359,7 +359,9 @@ bool HCSRNewestSceneRenderer::draw_gl(RID target, const Size2i &size, const Colo
     }
     if (atlas_dirty || !gl.atlas_array) {
         const int layers=MAX(1,resources.page_count()-1);
-        const bool resized=!gl.atlas_array || layers!=gl.atlas_layers;
+        int extent=1024;
+        for(int i=1;i<resources.page_count();++i)if(resources.page_live_allocations(i)>0)extent=MAX(extent,resources.page_size(i).x);
+        const bool resized=!gl.atlas_array || layers!=gl.atlas_layers || extent!=gl.atlas_extent;
         if(!gl.atlas_array)glGenTextures(1,&gl.atlas_array);
         glActiveTexture(GL_TEXTURE9);glBindTexture(GL_TEXTURE_2D_ARRAY,gl.atlas_array);
         if(resized) {
@@ -369,16 +371,27 @@ bool HCSRNewestSceneRenderer::draw_gl(RID target, const Size2i &size, const Colo
             glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_SWIZZLE_R,GL_BLUE);
             glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_SWIZZLE_B,GL_RED);
-            glTexImage3D(GL_TEXTURE_2D_ARRAY,0,GL_RGBA8,4096,4096,layers,0,GL_RGBA,GL_UNSIGNED_BYTE,nullptr);
-            gl.atlas_layers=layers;
+            glTexImage3D(GL_TEXTURE_2D_ARRAY,0,GL_RGBA8,extent,extent,layers,0,GL_RGBA,GL_UNSIGNED_BYTE,nullptr);
+            GLuint clear_fbo=0;
+            glGenFramebuffers(1,&clear_fbo);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,clear_fbo);
+            const GLfloat transparent[4]={0,0,0,0};
+            for(int layer=0;layer<layers;++layer) {
+                glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,gl.atlas_array,0,layer);
+                if(glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE){glDeleteFramebuffers(1,&clear_fbo);return false;}
+                glClearBufferfv(GL_COLOR,0,transparent);
+            }
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER,0);glDeleteFramebuffers(1,&clear_fbo);
+            gl.atlas_layers=layers;gl.atlas_extent=extent;
         }
         for(int i=1;i<resources.page_count();++i) {
             if(resources.page_live_allocations(i)) {
                 if(resized) {
-                    const auto size=resources.page_size(i);
-                    auto pixels=resources.page_pixels(i,Rect2i(Point2i(),size));
-                    glTexSubImage3D(GL_TEXTURE_2D_ARRAY,0,0,0,i-1,size.x,size.y,1,GL_RGBA,GL_UNSIGNED_BYTE,pixels.ptr());
-                    uploaded_bytes+=pixels.size();
+                    const auto region=resources.page_live_bounds(i);
+                    if(region.has_area()) {
+                        auto pixels=resources.page_pixels(i,region);
+                        glTexSubImage3D(GL_TEXTURE_2D_ARRAY,0,region.position.x,region.position.y,i-1,region.size.x,region.size.y,1,GL_RGBA,GL_UNSIGNED_BYTE,pixels.ptr());
+                        uploaded_bytes+=pixels.size();
+                    }
                 } else for(const auto &region:resources.page_updates(i)) {
                     auto pixels=resources.page_pixels(i,region);
                     glTexSubImage3D(GL_TEXTURE_2D_ARRAY,0,region.position.x,region.position.y,i-1,region.size.x,region.size.y,1,GL_RGBA,GL_UNSIGNED_BYTE,pixels.ptr());

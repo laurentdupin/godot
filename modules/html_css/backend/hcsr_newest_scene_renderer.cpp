@@ -892,32 +892,41 @@ bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {
 		format.width = size.x;
 		format.height = size.y;
 		format.usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT;
-		if (!page.texture.is_valid()) {
-			mask_bindings_changed=true;
-			Vector<Vector<uint8_t>> data;
-			data.push_back(rgba_upload(index,Rect2i(Point2i(),size)));
-			page.texture = device->texture_create(format, RD::TextureView(), data);
-			uploaded_bytes += uint64_t(format.width) * format.height * 4;
-		} else if(atlas_dirty) {
-			// Upload only new allocations. Existing atlas coordinates never move.
-			for (const Rect2i &rect : resources.page_updates(index)) {
-				format.width = rect.size.x;
-				format.height = rect.size.y;
-				format.usage_bits = RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT;
-				Vector<Vector<uint8_t>> data;
-				data.push_back(rgba_upload(index,rect));
-				RID patch = device->texture_create(format, RD::TextureView(), data);
-				if (!patch.is_valid()) {
-					return false;
-				}
-				Error error = device->texture_copy(patch, page.texture, Vector3(), Vector3(rect.position.x, rect.position.y, 0), Vector3(rect.size.x, rect.size.y, 1), 0, 0, 0, 0);
-				device->free_rid(patch);
-				if (error != OK) {
-					return false;
-				}
-				uploaded_bytes += uint64_t(rect.size.x) * rect.size.y * 4;
-			}
-		}
+        const bool restore_all=!page.texture.is_valid();
+        const bool recreate=restore_all || page.size!=size;
+        if(recreate) {
+            mask_bindings_changed=true;
+            format.usage_bits|=RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT;
+            const RID replacement=device->texture_create(format,RD::TextureView());
+            if(!replacement.is_valid())return false;
+            if(device->texture_clear(replacement,Color(0,0,0,0),0,1,0,1)!=OK) {device->free_rid(replacement);return false;}
+            if(page.texture.is_valid() && device->texture_copy(page.texture,replacement,Vector3(),Vector3(),
+                    Vector3(MIN(size.x,page.size.x),MIN(size.y,page.size.y),1),0,0,0,0)!=OK) {device->free_rid(replacement);return false;}
+            release_page(device,page);
+            page.texture=replacement;page.size=size;
+        }
+        if(atlas_dirty || recreate) {
+            Vector<Rect2i> updates=resources.page_updates(index);
+            // Recovery after device/page teardown may have no pending patches.
+            // Re-upload live bounds rather than a full mostly empty page.
+            if(restore_all) {
+                updates.clear();
+                const Rect2i bounds=resources.page_live_bounds(index);
+                if(bounds.has_area())updates.push_back(bounds);
+            }
+            for(const Rect2i &rect:updates) {
+                format.width=rect.size.x;format.height=rect.size.y;
+                format.usage_bits=RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT;
+                Vector<Vector<uint8_t>> data;data.push_back(rgba_upload(index,rect));
+                RID patch=device->texture_create(format,RD::TextureView(),data);
+                if(!patch.is_valid())return false;
+                Error error=device->texture_copy(patch,page.texture,Vector3(),Vector3(rect.position.x,rect.position.y,0),
+                        Vector3(rect.size.x,rect.size.y,1),0,0,0,0);
+                device->free_rid(patch);
+                if(error!=OK)return false;
+                uploaded_bytes+=uint64_t(rect.size.x)*rect.size.y*4;
+            }
+        }
 		if(atlas_dirty) resources.acknowledge_upload(index);
 		if (!page.texture.is_valid()) {
 			return false;
@@ -1694,7 +1703,7 @@ Dictionary HCSRNewestSceneRenderer::get_statistics() const {
             if(pool.blend.texture)gl_blends+=uint64_t(pool.size.x)*pool.size.y*4;
         }
         const int gl_atlas_pages=gl.atlas_array?gl.atlas_layers:0;
-        gl_atlas=uint64_t(gl_atlas_pages)*4096*4096*4+(gl.empty_texture?4:0);
+        gl_atlas=uint64_t(gl_atlas_pages)*gl.atlas_extent*gl.atlas_extent*4+(gl.empty_texture?4:0);
         result["gpu_atlas_pages"]=gl_atlas_pages;
         result["gpu_atlas_bytes"]=gl_atlas;
         result["gpu_buffer_reserved_bytes"]=gl_buffers;

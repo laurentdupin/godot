@@ -60,7 +60,7 @@ func _verify_dump(directory: String, stats: Dictionary) -> void:
         var path := directory.path_join(name.trim_suffix(".json"))
         var image := Image.load_from_file(path + ".png")
         var overlay := Image.load_from_file(path + "-overlay.png")
-        _check(image.get_size() == Vector2i(4096,maxi(1,int(metadata.used_rows))), "Full width, live-height crop")
+        _check(image.get_size() == Vector2i(int(metadata.width),maxi(1,int(metadata.used_rows))), "Full width, live-height crop")
         _check(image.get_size() == overlay.get_size(), "Overlay dimensions match")
         var area := 0
         var rows := 0
@@ -77,7 +77,7 @@ func _verify_dump(directory: String, stats: Dictionary) -> void:
                 _check(not entry.identity.owners.is_empty(), "Surface owners resolved")
         _check(area == int(metadata.packed_area_pixels), "Packed area matches live rectangles")
         _check(rows == int(metadata.used_rows), "Used rows match live rectangles")
-        _check(is_equal_approx(float(metadata.efficiency),float(area)/(rows*4096)), "Packing efficiency matches")
+        _check(is_equal_approx(float(metadata.efficiency),float(area)/(rows*int(metadata.width))), "Packing efficiency matches")
         sizes.sort()
         sizes.reverse()
         for index in metadata.ten_tallest_entries.size():

@@ -14,7 +14,7 @@
 class HCSRNewestSceneRenderer {
     HCSRNewestRasterResources &resources;
     using Entry = HCSRNewestRasterResources::Entry;
-    struct GpuPage { RID texture, uniform, mask_uniform,blend_uniform; };
+    struct GpuPage { RID texture, uniform, mask_uniform,blend_uniform; Size2i size; };
     Vector<GpuPage> gpu_pages;
     static void release_page(RenderingDevice *,GpuPage &);
     uint64_t retired_atlas_pages=0;
@@ -132,7 +132,7 @@ class HCSRNewestSceneRenderer {
         uint64_t coverage_revision=0;
         Vector2 coverage_logical;
         uint32_t atlas_array=0,empty_texture=0;
-        int atlas_layers=0;
+        int atlas_layers=0,atlas_extent=0;
         Vector<GLPool> pools;
         uint64_t hierarchy_geometry=0,hierarchy_revision=0;
     } gl;

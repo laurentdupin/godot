@@ -121,6 +121,7 @@ bool HCSRNewestRasterResources::dump_atlas_if_changed(const Ref<HTMLDocument> &d
     const String prefix = stem + "-" + itos(OS::get_singleton()->get_process_id()) + "-" + uitos(instance_id);
     const Array all_entries = debug_atlas_entries(scene, packet);
     for (int page = 1; page < page_count(); ++page) {
+        const int page_extent=page_size(page).x;
         Array page_entries;
         int rows = 0;
         int64_t area = 0;
@@ -132,11 +133,11 @@ bool HCSRNewestRasterResources::dump_atlas_if_changed(const Ref<HTMLDocument> &d
             area += int64_t(entry["w"]) * int64_t(entry["h"]);
         }
         const int image_rows = MAX(1, rows);
-        Vector<uint8_t> pixels = page_pixels(page, Rect2i(0, 0, PAGE_SIZE, image_rows));
-        if (pixels.size() != PAGE_SIZE * image_rows * 4) continue;
+        Vector<uint8_t> pixels = page_pixels(page, Rect2i(0, 0, page_extent, image_rows));
+        if (pixels.size() != page_extent * image_rows * 4) continue;
         uint8_t *data = pixels.ptrw();
-        for (int y = 0; y < image_rows; ++y) for (int x = 0; x < PAGE_SIZE; ++x) {
-            const int offset = (y * PAGE_SIZE + x) * 4;
+        for (int y = 0; y < image_rows; ++y) for (int x = 0; x < page_extent; ++x) {
+            const int offset = (y * page_extent + x) * 4;
             const int background = ((x / 16 + y / 16) % 2) ? 144 : 192;
             const int alpha = data[offset + 3];
             const uint8_t red = data[offset + 2], green = data[offset + 1], blue = data[offset];
@@ -145,7 +146,7 @@ bool HCSRNewestRasterResources::dump_atlas_if_changed(const Ref<HTMLDocument> &d
             data[offset + 2] = (blue * alpha + background * (255 - alpha) + 127) / 255;
             data[offset + 3] = 255;
         }
-        Ref<Image> image = Image::create_from_data(PAGE_SIZE, image_rows, false, Image::FORMAT_RGBA8, pixels);
+        Ref<Image> image = Image::create_from_data(page_extent, image_rows, false, Image::FORMAT_RGBA8, pixels);
         Ref<Image> overlay = image->duplicate();
         Array tallest = page_entries.duplicate();
         // Debug-only insertion sort keeps ties deterministic by insertion order.
@@ -174,14 +175,14 @@ bool HCSRNewestRasterResources::dump_atlas_if_changed(const Ref<HTMLDocument> &d
         metadata["revision"] = uitos(revision);
         metadata["page"] = page;
         Array dimensions;
-        dimensions.push_back(PAGE_SIZE);
-        dimensions.push_back(PAGE_SIZE);
+        dimensions.push_back(page_extent);
+        dimensions.push_back(page_extent);
         metadata["page_size"] = dimensions;
-        metadata["width"] = PAGE_SIZE;
-        metadata["height"] = PAGE_SIZE;
+        metadata["width"] = page_extent;
+        metadata["height"] = page_extent;
         metadata["used_rows"] = rows;
         metadata["packed_area_pixels"] = area;
-        metadata["efficiency"] = rows > 0 ? double(area) / (int64_t(rows) * PAGE_SIZE) : 0.0;
+        metadata["efficiency"] = rows > 0 ? double(area) / (int64_t(rows) * page_extent) : 0.0;
         metadata["entries"] = page_entries;
         metadata["ten_tallest_entries"] = tallest;
         metadata["shape_type_note"] = "Owners expose packet material kinds; original CSS painter shape types are not carried by this ABI. Empty owners may denote masks or retired appearances.";
