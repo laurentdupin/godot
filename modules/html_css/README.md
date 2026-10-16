@@ -267,6 +267,37 @@ modules/html_css/tests/run_html_package_export_smoke.ps1 `
   -EditorPath bin/godot.windows.editor.x86_64.mono.console.exe
 ```
 
+## Atlas packing diagnostics
+
+Set `HCSR_DUMP_ATLAS_DIR` to an absolute directory before launching Godot to
+dump each HCSR newest view's live atlas allocations. The variable is read once;
+unset or empty disables all dump work. Dumps run on the render thread from the
+existing CPU pixels, without GPU readback. PNG encoding and file I/O are
+deliberately synchronous debug work; do not benchmark with this flag enabled.
+
+Each changed atlas revision produces
+`<document-stem>-<process-id>-<surface-instance-id>-page<N>-rev<R>` files and
+overwrites the matching `-latest` set: a checkerboard-composited PNG, an
+`-overlay.png` with glyphs green, surfaces orange and images blue, and JSON.
+Page zero (the permanent sampling pixel) is excluded. PNGs retain the full
+4096-pixel width and crop to the highest live allocation. The JSON includes
+allocation rectangles, identities, packed area, packing efficiency and the ten
+tallest entries. Surface identities include current owning element/object IDs
+and packet shape kinds (`raster`/`raster_slice`); original CSS painter shape
+types are not exposed by the ABI. Mask-only surfaces can have no draw owner.
+
+Dumps are throttled to once per 500 ms per view. While a changed revision waits
+for that interval, debug-only frame requests keep preparation reachable so a
+final idle revision is also saved. No dump timers or frame requests run when
+the flag is unset. Empty appearance pages use a one-row PNG with `used_rows: 0`;
+older revision files remain historical snapshots.
+
+`get_frame_scheduler_diagnostics().frame_synchronization.image_atlas` also
+reports `atlas_used_rows` (sum over appearance pages), `atlas_used_rows_by_page`
+(page 1 onward), `atlas_packed_area_pixels`, and `atlas_largest_entry`
+(`w`, `h`, `kind`, largest by area). These statistics describe live packed
+rectangles, including their sampling padding, rather than CPU buffer capacity.
+
 ## Backdrop input for canvas and world-space HTML
 
 Backdrop filtering must use an explicit Godot render-graph input. The HTML

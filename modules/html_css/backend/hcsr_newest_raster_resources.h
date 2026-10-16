@@ -105,7 +105,15 @@ private:
     uint64_t rasterized_glyphs = 0;
     HashMap<GlyphKey, int, GlyphHasher> glyph_levels;
     uint64_t decoded_images = 0;
+    uint64_t debug_dump_revision = UINT64_MAX;
+    uint64_t debug_dump_msec = 0;
 public:
+    // Render-thread diagnostics only; no GPU readback or retained pixel copy.
+    static bool atlas_dump_enabled();
+    Array debug_atlas_entries(hcsr_scene_t scene, const hcsr_draw_packet_view_t &packet) const;
+    // True while a changed revision is waiting for the debug-only throttle.
+    bool dump_atlas_if_changed(const Ref<HTMLDocument> &document, uint64_t instance_id,
+            hcsr_scene_t scene, const hcsr_draw_packet_view_t &packet);
     bool copy_source_pixels(const Ref<HTMLDocument> &document, const String &source, int width, int height, Vector<uint8_t> &pixels, hcsr_image_pixels_t &output);
     Size2i resolve_size(const Ref<HTMLDocument> &document, const String &source);
     int resolve_orientation(const Ref<HTMLDocument> &document,const String &source);

@@ -475,6 +475,12 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
         const uint64_t now = OS::get_singleton()->get_ticks_usec();
         print_line("HCSR_RECORD_DETAIL|" + uitos(atlas_start_usec - record_start_usec) + "|" + uitos(atlas_end_usec - atlas_start_usec) + "|" + uitos(now - atlas_end_usec) + "|" + uitos(packet.index_count));
     }
+    bool atlas_dump_pending = false;
+    if (valid_packet && HCSRNewestRasterResources::atlas_dump_enabled()) {
+        MutexLock lock(state->mutex);
+        atlas_dump_pending = state->raster_resources.dump_atlas_if_changed(state->document,
+                uint64_t(uintptr_t(state)), state->scene, packet);
+    }
 	hcsr_draw_packet_destroy(packet_handle);
 	Dictionary atlas_statistics = state->scene_renderer.get_statistics();
     atlas_statistics.merge(state->backdrop.get_statistics());
@@ -489,6 +495,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 		state->image_atlas_statistics = atlas_statistics;
 		state->canvas_required = rendered && canvas_required;
         state->needs_another_frame |= state->raster_resources.has_pending_glyphs();
+        state->needs_another_frame |= atlas_dump_pending;
 		if (rendered && !state->closing) {
 			state->last_render_failure = String();
 			state->presentation_changed = true;

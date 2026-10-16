@@ -489,5 +489,31 @@ Dictionary HCSRNewestRasterResources::get_statistics() const {
     result["glyph_pages"] = glyph_pages;
     result["page_size"] = PAGE_SIZE;
     result["atlas_cpu_pixel_bytes"] = hcsr_atlas_resident_bytes(atlas);
+    result["atlas_revision"] = int64_t(atlas_revision());
+    int used_rows[MAX_PAGES] = {};
+    int64_t packed_area = 0;
+    Size2i largest_size;
+    String largest_kind;
+    auto include = [&](const Entry &entry, const char *kind) {
+        if (entry.page <= 0 || entry.page >= MAX_PAGES || !entry.rect.has_area()) return;
+        used_rows[entry.page] = MAX(used_rows[entry.page], entry.rect.position.y + entry.rect.size.y);
+        const int64_t area = int64_t(entry.rect.size.x) * entry.rect.size.y;
+        packed_area += area;
+        if (area > int64_t(largest_size.x) * largest_size.y) { largest_size = entry.rect.size; largest_kind = kind; }
+    };
+    for (const auto &item : entries) include(item.value, "image");
+    for (const auto &item : glyph_entries) include(item.value, "glyph");
+    for (const auto &item : surface_entries) include(item.value, "surface");
+    int total_rows = 0;
+    PackedInt32Array rows_by_page;
+    for (int page = 1; page < page_count(); ++page) { total_rows += used_rows[page]; rows_by_page.push_back(used_rows[page]); }
+    result["atlas_used_rows"] = total_rows;
+    result["atlas_used_rows_by_page"] = rows_by_page;
+    result["atlas_packed_area_pixels"] = packed_area;
+    Dictionary largest;
+    largest["w"] = largest_size.x;
+    largest["h"] = largest_size.y;
+    largest["kind"] = largest_kind;
+    result["atlas_largest_entry"] = largest;
     return result;
 }
