@@ -669,7 +669,7 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
     // renderer for clears or for missing image resources.
     resources.ensure_sampling_page();
     const bool ordinary_groups = !ordered_backdrops
-        && !std::any_of(batches.begin(),batches.end(),[](const Batch &batch){return batch.blend_mode!=0 || batch.kind>=hcsr::render::group_filter_pass;});
+        && !std::any_of(batches.ptr(),batches.ptr()+batches.size(),[](const Batch &batch){return batch.blend_mode!=0 || batch.kind>=hcsr::render::group_filter_pass;});
     nested_group_passes.clear();
     if(gpu_geometry && ordinary_groups && group_depth)
         hcsr::render::schedule_nested_groups(batches.size(),[&](size_t i) {
@@ -1127,7 +1127,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
 	if (!framebuffer.is_valid()) {
 		return false;
 	}
-    const bool fused=std::any_of(batches.begin(),batches.end(),[](const Batch &batch){return batch.backdrop_fused;});
+    const bool fused=std::any_of(batches.ptr(),batches.ptr()+batches.size(),[](const Batch &batch){return batch.backdrop_fused;});
     RID &draw_pipeline=fused?fused_pipeline:pipeline;
 	if (!draw_pipeline.is_valid()) {
 		auto blend = RD::PipelineColorBlendState::create_blend();
@@ -1157,7 +1157,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
     if(pool_index<0) { pool_index=group_pools.size(); GroupPool pool; pool.output=target; group_pools.push_back(pool); }
     auto &pool=group_pools.write[pool_index];
     auto &group_targets=pool.targets;
-    const bool blending=std::any_of(batches.begin(),batches.end(),[](const Batch &batch){return batch.blend_mode!=0;});
+    const bool blending=std::any_of(batches.ptr(),batches.ptr()+batches.size(),[](const Batch &batch){return batch.blend_mode!=0;});
     if(blending && (!pool.blend_texture.is_valid() || !pool.blend_uniform.is_valid())) {
         auto copy_format=format;copy_format.usage_bits=RD::TEXTURE_USAGE_SAMPLING_BIT|RD::TEXTURE_USAGE_CAN_COPY_TO_BIT|RD::TEXTURE_USAGE_STORAGE_BIT;
         if(!pool.blend_texture.is_valid()){pool.blend_texture=device->texture_create(copy_format,RD::TextureView());pool.blend_size=size;}
@@ -1166,8 +1166,8 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
         pool.blend_uniform=device->uniform_set_create(VectorView(&backdrop,1),shader,2);
         if(!pool.blend_uniform.is_valid()){device->free_rid(framebuffer);return false;}
     }
-    const bool spatial_filters=std::any_of(batches.begin(),batches.end(),[](const Batch &batch){return batch.kind>=hcsr::render::group_filter_pass;});
-    const bool shadows=std::any_of(batches.begin(),batches.end(),[](const Batch &batch){return batch.kind==hcsr::render::group_shadow_apply;});
+    const bool spatial_filters=std::any_of(batches.ptr(),batches.ptr()+batches.size(),[](const Batch &batch){return batch.kind>=hcsr::render::group_filter_pass;});
+    const bool shadows=std::any_of(batches.ptr(),batches.ptr()+batches.size(),[](const Batch &batch){return batch.kind==hcsr::render::group_shadow_apply;});
     const int required_targets=int(group_depth)+(ordered_backdrops?(snapshot_target?3:2):spatial_filters?1:0);
     // Scratch residency follows the current pass topology, not peak history.
     // Godot retires freed RIDs after their queued GPU users have completed.

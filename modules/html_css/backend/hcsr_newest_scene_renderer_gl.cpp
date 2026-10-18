@@ -449,7 +449,7 @@ bool HCSRNewestSceneRenderer::draw_gl(RID target, const Size2i &size, const Colo
 		glClearBufferfv(GL_COLOR, 0, zero);
 		return true;
 	};
-	const bool spatial = std::any_of(batches.begin(), batches.end(), [](const Batch &b) { return b.kind >= hcsr::render::group_filter_pass; });
+	const bool spatial = std::any_of(batches.ptr(), batches.ptr() + batches.size(), [](const Batch &b) { return b.kind >= hcsr::render::group_filter_pass; });
 	int targets = mask ? 0 : int(group_depth) + (ordered_backdrops ? (snapshot_target ? 3 : 2) : spatial ? 1
 																										 : 0);
 	while (pool.groups.size() > targets) {
@@ -480,7 +480,7 @@ bool HCSRNewestSceneRenderer::draw_gl(RID target, const Size2i &size, const Colo
 			return false;
 		}
 	}
-	bool blending = !mask && std::any_of(batches.begin(), batches.end(), [](const Batch &b) { return b.blend_mode != 0; });
+	bool blending = !mask && std::any_of(batches.ptr(), batches.ptr() + batches.size(), [](const Batch &b) { return b.blend_mode != 0; });
 	if (blending && !ensure_target(pool.blend)) {
 		return false;
 	}
