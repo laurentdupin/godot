@@ -622,7 +622,16 @@ void HTMLView::_notification(int p_what) {
 #ifdef HTML_CSS_USE_HCSR_NEWEST
 			// Keep pre-draw reachable in the editor/low-processor-usage mode.
 			// Preparation itself waits until every script has finished.
-			if (frame_render_pending) queue_redraw();
+			if (frame_render_pending) {
+				queue_redraw();
+				// Hidden CanvasItems skip their redraw callback, and secondary
+				// outputs need not have a visible canvas consumer. Wake pre-draw
+				// without modifying either presentation; completion/animation work
+				// keeps this process enabled only until the surface becomes idle.
+				if (!is_visible_in_tree() || !outputs.is_empty()) {
+					RenderingServer::get_singleton()->request_redraw();
+				}
+			}
 #else
 			_frame_pre_draw();
 #endif

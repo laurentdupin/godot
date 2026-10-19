@@ -990,6 +990,8 @@ public:
 
 	virtual void draw(bool p_swap_buffers = true, double frame_step = 0.0) = 0;
 	virtual void sync() = 0;
+	// Wake an on-demand frame producer without changing a canvas resource.
+	virtual void request_redraw() = 0;
 	virtual bool has_changed() const = 0;
 	virtual void init();
 	virtual void finish() = 0;

@@ -356,6 +356,18 @@ view requests a new host frame and recreates the presentation resources.
 `HTMLViewOutput` targets are independent consumers: they remain live and continue
 to render even when their source Control is hidden. This preserves 3D/XR use.
 
+Under `OS.low_processor_usage_mode`, newest-renderer views wake RenderingServer
+while a frame request, animation, or output completion is pending. Hidden views
+and secondary-output producers request the draw directly because a hidden
+CanvasItem's `queue_redraw()` does not mark the rendering server changed. Once
+the surface is idle, internal processing stops and no draw is requested.
+`tests/hcsr_hidden_output_low_processor_smoke.gd` verifies hidden text mutations,
+secondary-output resizing, finite animations/transitions, ancestor visibility,
+visible-view updates, and zero draws after settling. Copy it into an otherwise
+empty Godot project and run it with `--script res://hcsr_hidden_output_low_processor_smoke.gd`
+and a real rendering driver (not `--headless`). It counts process-loop iterations
+instead of waiting for draw signals, which would hide the starvation being tested.
+
 Base system fonts and explicit `@font-face` files are shared across HCSR views.
 Variation instances, fallback-stack construction and shaping scratch remain local.
 Explicit assets still use the document asset provider; sharing uses the resolved

@@ -1217,6 +1217,7 @@ public:
 
 	virtual void draw(bool p_present, double frame_step) override;
 	virtual void sync() override;
+	virtual void request_redraw() override { redraw_request(); }
 	virtual bool has_changed() const override;
 	virtual void init() override;
 	virtual void finish() override;
