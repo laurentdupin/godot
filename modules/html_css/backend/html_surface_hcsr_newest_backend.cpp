@@ -1378,7 +1378,7 @@ bool HTMLSurfaceHCSRNewestBackend::hit_test(const Point2 &p_position, HTMLElemen
 	tag.resize(tag_required);
 	if (hcsr_scene_copy_element_tag_name(state->scene, hit.object_id, tag.ptrw(), tag.size(), &tag_required) != HCSR_OK) return false;
 	r_hit.tag_name = StringName(String::utf8(tag.ptr()));
-	r_hit.bounds = Rect2i(Math::floor(hit.bounds.x), Math::floor(hit.bounds.y), Math::ceil(hit.bounds.width), Math::ceil(hit.bounds.height));
+	r_hit.bounds = Rect2(hit.bounds.x, hit.bounds.y, hit.bounds.width, hit.bounds.height);
 	r_hit.disabled = (hit.flags & HCSR_HIT_DISABLED) != 0;
 	r_hit.editable = (hit.flags & HCSR_HIT_EDITABLE) != 0;
 	r_hit.checked = (hit.flags & HCSR_HIT_CHECKED) != 0;

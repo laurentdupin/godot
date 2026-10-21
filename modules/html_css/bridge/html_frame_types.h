@@ -77,7 +77,7 @@ struct HTMLElementHit {
 	uint64_t stable_target_id = 0;
 	StringName element_id;
 	StringName tag_name;
-	Rect2i bounds;
+	Rect2 bounds;
 	bool disabled = false;
 	bool editable = false;
 	bool checked = false;

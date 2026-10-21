@@ -365,8 +365,8 @@ Geometry is from the last completed scene step. Mutations are queued: a query
 immediately after a mutation still sees the previous committed layout. Wait for
 the next frame's `RenderingServer.frame_post_draw` before querying the update.
 The query does not synchronously flush writes or advance animation time.
-Fractional coordinates are preserved; existing pointer/action payload bounds
-remain integer-rounded HTML coordinates.
+Fractional coordinates are preserved. Pointer/action payload `bounds` now also
+use `Rect2` (previously integer-rounded `Rect2i`) to report the same HTML box.
 
 Run `tests/hcsr_element_geometry_smoke.gd` in an empty project to validate sizing
 modes, scaled controls, action clicks, hidden/occluded boxes, mutation timing,
