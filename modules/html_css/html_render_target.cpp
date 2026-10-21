@@ -122,6 +122,8 @@ void HTMLRenderTarget::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("blur_focused_element"), &HTMLRenderTarget::blur_focused_element);
 	ClassDB::bind_method(D_METHOD("set_text_selection", "id", "start", "end"), &HTMLRenderTarget::set_text_selection);
 	ClassDB::bind_method(D_METHOD("get_form_control_state", "id"), &HTMLRenderTarget::get_form_control_state);
+	ClassDB::bind_method(D_METHOD("get_element_rect", "id"), &HTMLRenderTarget::get_element_rect);
+	ClassDB::bind_method(D_METHOD("get_element_html_rect", "id"), &HTMLRenderTarget::get_element_html_rect);
 
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "document", PROPERTY_HINT_RESOURCE_TYPE, HTMLDocument::get_class_static()), "set_document", "get_document");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2I, "size", PROPERTY_HINT_RANGE, "1,16384,1,or_greater,suffix:px"), "set_size", "get_size");
@@ -381,6 +383,16 @@ Error HTMLRenderTarget::set_text_selection(const StringName &p_id, int p_start, 
 		_queue_frame_render();
 	}
 	return err;
+}
+
+Rect2 HTMLRenderTarget::get_element_html_rect(const StringName &p_id) const {
+	Rect2 rect;
+	return surface->get_element_rect(p_id, rect) ? rect : Rect2();
+}
+
+Rect2 HTMLRenderTarget::get_element_rect(const StringName &p_id) const {
+	// Render targets have no Control transform: their local and layout units coincide.
+	return get_element_html_rect(p_id);
 }
 
 Dictionary HTMLRenderTarget::get_form_control_state(const StringName &p_id) {

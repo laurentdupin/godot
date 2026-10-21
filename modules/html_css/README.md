@@ -345,6 +345,33 @@ normally panel-specific. Pointer interaction remains independent: Godot raycasts
 the panel, converts hit UV to HTML pixels, and sends the same pointer input used
 by a canvas `HTMLView`.
 
+## Element geometry queries
+
+The newest renderer exposes `HTMLView.get_element_html_rect(id)` in HTML layout
+coordinates and `get_element_rect(id)` in local Control coordinates, the inverse
+of `local_to_html_position()`. Control position/scale in its parent are not
+included; use `get_global_transform_with_canvas()` if a global point is needed.
+All viewport sizing modes use the same conversion as input dispatch.
+`HTMLRenderTarget` exposes both methods too; its local units are its layout units.
+
+Queries return the transformed, axis-aligned border box, including scrolling,
+without clipping it to ancestors or testing occlusion/pointer eligibility. They
+generate no pointer events, hover changes, frame requests, or paint work.
+Missing IDs, elements without a rendered box (including `display:none` ancestors),
+and documents without a completed layout return `Rect2()`. Hiding the source
+Godot Control does not hide the HTML document from these queries.
+
+Geometry is from the last completed scene step. Mutations are queued: a query
+immediately after a mutation still sees the previous committed layout. Wait for
+the next frame's `RenderingServer.frame_post_draw` before querying the update.
+The query does not synchronously flush writes or advance animation time.
+Fractional coordinates are preserved; existing pointer/action payload bounds
+remain integer-rounded HTML coordinates.
+
+Run `tests/hcsr_element_geometry_smoke.gd` in an empty project to validate sizing
+modes, scaled controls, action clicks, hidden/occluded boxes, mutation timing,
+fractional geometry and render-target parity.
+
 ## Per-view memory and hidden panels
 
 For the newest renderer, `HTMLView.release_targets_when_hidden` is opt-in

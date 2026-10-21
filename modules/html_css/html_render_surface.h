@@ -154,6 +154,7 @@ public:
 	Error blur_focused_element();
 	Error set_text_selection(const StringName &p_id, int p_start, int p_end);
 	bool get_form_control_state(const StringName &p_id, HTMLFormControlState &r_state);
+	bool get_element_rect(const StringName &p_id, Rect2 &r_rect) const;
 	bool is_document_source_valid() const;
 	Error load_asset(const String &p_uri, HTMLAssetResource &r_asset, String *r_error = nullptr) const;
 	Ref<Texture2D> get_texture() const;

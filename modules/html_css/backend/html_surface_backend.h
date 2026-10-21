@@ -158,6 +158,7 @@ public:
 	virtual Error blur_focused_element() { return ERR_UNAVAILABLE; }
 	virtual Error set_text_selection(const StringName &, int, int) { return ERR_UNAVAILABLE; }
 	virtual bool get_form_control_state(const StringName &, HTMLFormControlState &) { return false; }
+	virtual bool get_element_rect(const StringName &, Rect2 &) const { return false; }
 	virtual bool hit_test(const Point2 &, HTMLElementHit &) const { return false; }
 	virtual Ref<Texture2D> get_texture() const = 0;
 	virtual Ref<HTMLTexture2D> get_html_texture() const = 0;

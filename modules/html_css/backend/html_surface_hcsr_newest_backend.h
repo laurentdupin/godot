@@ -90,6 +90,7 @@ public:
 	virtual Error set_form_control_value(const StringName &p_id, const String &p_value) override;
 	virtual Error set_form_control_checked(const StringName &p_id, bool p_checked) override;
 	virtual bool get_form_control_state(const StringName &p_id, HTMLFormControlState &r_state) override;
+	virtual bool get_element_rect(const StringName &p_id, Rect2 &r_rect) const override;
 	virtual bool hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const override;
 	virtual void get_frame_metadata(HTMLFrameMetadata &r_metadata) const override;
 	virtual uint64_t create_presentation_output(const Size2i &, bool) override;

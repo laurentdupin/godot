@@ -1407,6 +1407,17 @@ bool HTMLSurfaceHCSRNewestBackend::hit_test(const Point2 &p_position, HTMLElemen
 	return true;
 }
 
+bool HTMLSurfaceHCSRNewestBackend::get_element_rect(const StringName &p_id, Rect2 &r_rect) const {
+	MutexLock lock(state->mutex);
+	if (state->scene == 0 || state->document_dirty || p_id == StringName()) return false;
+	const CharString id = String(p_id).utf8();
+	hcsr_hit_t hit;
+	initialize_abi(hit);
+	if (hcsr_scene_get_element_rect(state->scene, utf8_view(id), &hit) != HCSR_OK || hit.object_id == 0) return false;
+	r_rect = Rect2(hit.bounds.x, hit.bounds.y, hit.bounds.width, hit.bounds.height);
+	return true;
+}
+
 bool HTMLSurfaceHCSRNewestBackend::get_form_control_state(const StringName &p_id, HTMLFormControlState &r_state) {
 	MutexLock lock(state->mutex);
 	// The old scene is not authoritative while replacement and startup writes
@@ -1496,7 +1507,7 @@ HTMLSurfaceHCSRNewestBackend::HTMLSurfaceHCSRNewestBackend(HTMLSurfaceHCSRNewest
 	}
 	state->renderer = p_renderer;
 	state->texture = texture;
-	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_24 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
+	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_25 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
 		set_terminal(state, "hcsr_newest scene ABI initialization failed.");
 	}
 }

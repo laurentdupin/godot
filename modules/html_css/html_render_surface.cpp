@@ -590,6 +590,10 @@ Error HTMLRenderSurface::set_text_selection(const StringName &p_id, int p_start,
 	return backend->set_text_selection(p_id, p_start, p_end);
 }
 
+bool HTMLRenderSurface::get_element_rect(const StringName &p_id, Rect2 &r_rect) const {
+	return backend != nullptr && backend->get_element_rect(p_id, r_rect);
+}
+
 bool HTMLRenderSurface::get_form_control_state(const StringName &p_id, HTMLFormControlState &r_state) {
 	_ensure_backend();
 	return backend->get_form_control_state(p_id, r_state);

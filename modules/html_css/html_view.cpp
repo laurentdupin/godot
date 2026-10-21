@@ -377,6 +377,8 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("blur_focused_element"), &HTMLView::blur_focused_element);
 	ClassDB::bind_method(D_METHOD("set_text_selection", "id", "start", "end"), &HTMLView::set_text_selection);
 	ClassDB::bind_method(D_METHOD("get_form_control_state", "id"), &HTMLView::get_form_control_state);
+	ClassDB::bind_method(D_METHOD("get_element_rect", "id"), &HTMLView::get_element_rect);
+	ClassDB::bind_method(D_METHOD("get_element_html_rect", "id"), &HTMLView::get_element_html_rect);
 	ClassDB::bind_method(D_METHOD("bind_action", "action", "callable"), &HTMLView::bind_action);
 	ClassDB::bind_method(D_METHOD("unbind_action", "action"), &HTMLView::unbind_action);
 	ClassDB::bind_method(D_METHOD("has_action", "action"), &HTMLView::has_action);
@@ -2041,6 +2043,20 @@ Error HTMLView::set_text_selection(const StringName &p_id, int p_start, int p_en
 		_queue_frame_render();
 	}
 	return err;
+}
+
+Rect2 HTMLView::get_element_html_rect(const StringName &p_id) const {
+	Rect2 rect;
+	return surface->get_element_rect(p_id, rect) ? rect : Rect2();
+}
+
+Rect2 HTMLView::get_element_rect(const StringName &p_id) const {
+	const Size2 control_size = get_size();
+	const Size2i html_size = surface->get_size();
+	if (control_size.x <= 0.0 || control_size.y <= 0.0 || html_size.x <= 0 || html_size.y <= 0) return Rect2();
+	const Rect2 rect = get_element_html_rect(p_id);
+	const Vector2 scale(control_size.x / html_size.x, control_size.y / html_size.y);
+	return Rect2(rect.position * scale, rect.size * scale);
 }
 
 Dictionary HTMLView::get_form_control_state(const StringName &p_id) {
