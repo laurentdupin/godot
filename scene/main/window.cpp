@@ -3375,7 +3375,10 @@ void Window::_update_displayed_title() {
 	displayed_title = atr(title);
 
 #ifdef DEBUG_ENABLED
-	if (window_id == DisplayServerEnums::MAIN_WINDOW_ID && !Engine::get_singleton()->is_project_manager_hint()) {
+	// A project can keep the plain title (e.g. for screen recordings) by setting
+	// the "_plain_debug_title" metadata on its main window.
+	if (window_id == DisplayServerEnums::MAIN_WINDOW_ID && !Engine::get_singleton()->is_project_manager_hint() &&
+			!bool(get_meta(SNAME("_plain_debug_title"), false))) {
 		// Append a suffix to the window title to denote that the project is running
 		// from a debug build (including the editor, excluding the project manager).
 		// Since this results in lower performance, this should be clearly presented
