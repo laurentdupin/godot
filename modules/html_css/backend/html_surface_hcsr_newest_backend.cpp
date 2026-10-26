@@ -1357,6 +1357,11 @@ Error HTMLSurfaceHCSRNewestBackend::apply_element_mutations(const Array &p_mutat
 			mutation.kind = HCSR_MUTATION_SET_CHECKED;
 			mutation.integer_value = value.get("value", false) ? 1 : 0;
 		} else if (operation == "set_inner_html") mutation.kind = HCSR_MUTATION_SET_INNER_HTML;
+		else if (operation == "insert_html") {
+			// Inserts before the element child at "index"; a missing or negative index appends.
+			mutation.kind = HCSR_MUTATION_INSERT_HTML;
+			mutation.integer_value = int(value.get("index", -1));
+		} else if (operation == "remove_element") mutation.kind = HCSR_MUTATION_REMOVE_ELEMENT;
 		else return ERR_UNAVAILABLE;
 	}
 	return _apply_mutations(mutations.ptr(), mutations.size());
@@ -1507,7 +1512,7 @@ HTMLSurfaceHCSRNewestBackend::HTMLSurfaceHCSRNewestBackend(HTMLSurfaceHCSRNewest
 	}
 	state->renderer = p_renderer;
 	state->texture = texture;
-	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_25 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
+	if (hcsr_scene_abi_version() != HCSR_SCENE_ABI_VERSION_26 || hcsr_runtime_create(&state->runtime) != HCSR_OK) {
 		set_terminal(state, "hcsr_newest scene ABI initialization failed.");
 	}
 }

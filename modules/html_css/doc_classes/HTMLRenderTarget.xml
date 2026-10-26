@@ -101,7 +101,7 @@
 			<return type="int" enum="Error" />
 			<param index="0" name="mutations" type="Array" />
 			<description>
-				Applies an ordered array of element mutations as one atomic author revision and queues one render request. Each entry is a [Dictionary] with [code]operation[/code] ([code]set_attribute[/code], [code]remove_attribute[/code], or [code]set_text[/code]) and [code]id[/code]. Attribute operations also use [code]name[/code], and set operations use [code]value[/code]. If validation or any operation fails, none of the mutations are applied. An empty array is a no-op.
+				Applies an ordered array of element mutations as one atomic author revision and queues one render request. Each entry is a [Dictionary] with [code]operation[/code] ([code]set_attribute[/code], [code]remove_attribute[/code], [code]set_text[/code], [code]set_inner_html[/code], [code]insert_html[/code], or [code]remove_element[/code]) and [code]id[/code]. Attribute operations also use [code]name[/code], and set operations use [code]value[/code]. [code]insert_html[/code] parses [code]value[/code] and inserts it into the element [code]id[/code] before its element child at [code]index[/code], appending when [code]index[/code] is missing or negative. [code]remove_element[/code] removes [code]id[/code] with its subtree. Backends without an operation return [constant ERR_UNAVAILABLE]. If validation or any operation fails, none of the mutations are applied. An empty array is a no-op.
 			</description>
 		</method>
 		<method name="remove_element_attribute">
