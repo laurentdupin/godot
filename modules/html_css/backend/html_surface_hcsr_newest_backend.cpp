@@ -1325,6 +1325,24 @@ Error HTMLSurfaceHCSRNewestBackend::set_form_control_checked(const StringName &p
 	return _apply_mutation(mutation);
 }
 
+Error HTMLSurfaceHCSRNewestBackend::set_text_selection(const StringName &p_id, int p_start, int p_end) {
+	HTMLFormControlState current;
+	if (!get_form_control_state(p_id, current)) return ERR_DOES_NOT_EXIST;
+	auto utf16_offset = [&](int offset) {
+		int result = 0;
+		for (int i = 0; i < CLAMP(offset, 0, current.value.length()); i++) result += current.value[i] > 0xffff ? 2 : 1;
+		return result;
+	};
+	const CharString id = String(p_id).utf8();
+	const CharString end = itos(utf16_offset(p_end)).utf8();
+	hcsr_mutation_t mutation; initialize_abi(mutation);
+	mutation.kind = HCSR_MUTATION_SET_TEXT_SELECTION;
+	mutation.element_id = utf8_view(id);
+	mutation.integer_value = utf16_offset(p_start);
+	mutation.value = utf8_view(end);
+	return _apply_mutation(mutation);
+}
+
 Error HTMLSurfaceHCSRNewestBackend::apply_element_mutations(const Array &p_mutations) {
 	if (p_mutations.is_empty()) return OK;
 	Vector<CharString> ids;
@@ -1450,6 +1468,17 @@ bool HTMLSurfaceHCSRNewestBackend::get_form_control_state(const StringName &p_id
 	r_state.selected = (source.flags & HCSR_FORM_CONTROL_SELECTED) != 0;
 	r_state.selected_index = source.selected_index;
 	r_state.focused = (source.flags & HCSR_FORM_CONTROL_FOCUSED) != 0;
+	r_state.selection_offsets_present = (source.flags & HCSR_FORM_CONTROL_SELECTION_OFFSETS) != 0;
+	if (r_state.selection_offsets_present) {
+		auto scalar_offset = [&](uint64_t offset) {
+			int index = 0;
+			uint64_t units = 0;
+			while (index < r_state.value.length() && units < offset) units += r_state.value[index++] > 0xffff ? 2 : 1;
+			return index;
+		};
+		r_state.selection_start = scalar_offset(source.reserved[0]);
+		r_state.selection_end = scalar_offset(source.reserved[1]);
+	}
 	return true;
 }
 

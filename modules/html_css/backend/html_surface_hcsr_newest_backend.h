@@ -89,6 +89,7 @@ public:
 	virtual Error replace_stylesheet_text(const StringName &p_style_id, const String &p_css_text) override;
 	virtual Error set_form_control_value(const StringName &p_id, const String &p_value) override;
 	virtual Error set_form_control_checked(const StringName &p_id, bool p_checked) override;
+	virtual Error set_text_selection(const StringName &p_id, int p_start, int p_end) override;
 	virtual bool get_form_control_state(const StringName &p_id, HTMLFormControlState &r_state) override;
 	virtual bool get_element_rect(const StringName &p_id, Rect2 &r_rect) const override;
 	virtual bool hit_test(const Point2 &p_position, HTMLElementHit &r_hit) const override;
