@@ -45,6 +45,7 @@
 #include "scene/main/viewport.h"
 #include "scene/main/window.h"
 #include "scene/resources/material.h"
+#include "servers/display/display_server.h"
 #include "servers/rendering/rendering_server.h"
 
 static constexpr int HTML_VIEW_MAX_BACKDROP_FILTER_REGIONS = 8;
@@ -1320,6 +1321,8 @@ HTMLSurfaceInputKey HTMLView::_to_html_input_key(Key p_key) const {
 			return HTML_SURFACE_INPUT_KEY_ENTER;
 		case Key::KEY_DELETE:
 			return HTML_SURFACE_INPUT_KEY_DELETE;
+		case Key::A:
+			return HTML_SURFACE_INPUT_KEY_A;
 		default:
 			return HTML_SURFACE_INPUT_KEY_UNKNOWN;
 	}
@@ -1599,13 +1602,32 @@ bool HTMLView::_send_key_event(const Ref<InputEventKey> &p_event) {
 		return false;
 	}
 
+	if (p_event->is_pressed() && p_event->is_command_or_control_pressed() && !p_event->is_alt_pressed()) {
+		if (p_event->get_keycode() == Key::C && !p_event->is_echo()) {
+			String selection;
+			if (surface->copy_selection(selection) == OK) {
+				if (!selection.is_empty()) {
+					DisplayServer::get_singleton()->clipboard_set(selection);
+				}
+				return true;
+			}
+		} else if (p_event->get_keycode() == Key::V) {
+			String clipboard = DisplayServer::get_singleton()->clipboard_get();
+			return clipboard.is_empty() || surface->paste_text(clipboard) == OK;
+		}
+	}
+
 	bool handled = false;
 	const HTMLSurfaceInputKey key = _to_html_input_key(p_event->get_keycode());
+	int modifiers = _modifiers_from_event(p_event);
+	if (p_event->is_command_or_control_pressed()) {
+		modifiers |= HTML_SURFACE_INPUT_MODIFIER_CONTROL;
+	}
 	if (key != HTML_SURFACE_INPUT_KEY_UNKNOWN) {
 		if (p_event->is_pressed()) {
-			handled = surface->key_down(key, _modifiers_from_event(p_event)) == OK;
+			handled = surface->key_down(key, modifiers) == OK;
 		} else {
-			handled = surface->key_up(key, _modifiers_from_event(p_event)) == OK;
+			handled = surface->key_up(key, modifiers) == OK;
 		}
 	}
 

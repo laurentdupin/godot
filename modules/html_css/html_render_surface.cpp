@@ -501,6 +501,16 @@ Error HTMLRenderSurface::text_input(const String &p_text) {
 	return backend->text_input(p_text);
 }
 
+Error HTMLRenderSurface::copy_selection(String &r_text) {
+	_ensure_backend();
+	return backend->copy_selection(r_text);
+}
+
+Error HTMLRenderSurface::paste_text(const String &p_text) {
+	_ensure_backend();
+	return backend->paste_text(p_text);
+}
+
 Error HTMLRenderSurface::set_element_text(const StringName &p_id, const String &p_text) {
 	_ensure_backend();
 	return backend->set_element_text(p_id, p_text);

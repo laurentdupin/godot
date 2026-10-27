@@ -289,6 +289,7 @@ static uint32_t map_key(HTMLSurfaceInputKey p_key) {
 		case HTML_SURFACE_INPUT_KEY_TAB: return HCSR_KEY_TAB;
 		case HTML_SURFACE_INPUT_KEY_ENTER: return HCSR_KEY_ENTER;
 		case HTML_SURFACE_INPUT_KEY_DELETE: return HCSR_KEY_DELETE;
+		case HTML_SURFACE_INPUT_KEY_A: return HCSR_KEY_A;
 		default: return HCSR_KEY_NONE;
 	}
 }
@@ -1205,6 +1206,27 @@ Error HTMLSurfaceHCSRNewestBackend::text_input(const String &p_text) {
 	hcsr_input_event_t event;
 	initialize_abi(event);
 	event.kind = HCSR_INPUT_TEXT; event.payload_length = payload.length();
+	return _queue_input(event, payload);
+}
+
+Error HTMLSurfaceHCSRNewestBackend::copy_selection(String &r_text) {
+	MutexLock lock(state->mutex);
+	if (state->scene == 0 || state->document_dirty) return ERR_UNCONFIGURED;
+	size_t required = 0;
+	const hcsr_result_t result = hcsr_scene_copy_selection(state->scene, nullptr, 0, &required);
+	if (result != HCSR_BUFFER_TOO_SMALL || required == 0) return ERR_UNAVAILABLE;
+	Vector<char> value;
+	value.resize(required);
+	if (hcsr_scene_copy_selection(state->scene, value.ptrw(), value.size(), &required) != HCSR_OK) return ERR_UNAVAILABLE;
+	r_text = String::utf8(value.ptr());
+	return OK;
+}
+
+Error HTMLSurfaceHCSRNewestBackend::paste_text(const String &p_text) {
+	const CharString payload = p_text.utf8();
+	hcsr_input_event_t event; initialize_abi(event);
+	event.kind = HCSR_INPUT_PASTE;
+	event.payload_length = payload.length();
 	return _queue_input(event, payload);
 }
 

@@ -136,6 +136,8 @@ public:
 	Error key_down(HTMLSurfaceInputKey p_key, int p_modifiers);
 	Error key_up(HTMLSurfaceInputKey p_key, int p_modifiers);
 	Error text_input(const String &p_text);
+	Error copy_selection(String &r_text);
+	Error paste_text(const String &p_text);
 	Error set_element_text(const StringName &p_id, const String &p_text);
 	Error apply_element_mutations(const Array &p_mutations);
 	uint64_t preload_page(const String &p_html);

@@ -77,6 +77,8 @@ public:
 	virtual Error key_down(HTMLSurfaceInputKey p_key, int p_modifiers) override;
 	virtual Error key_up(HTMLSurfaceInputKey p_key, int p_modifiers) override;
 	virtual Error text_input(const String &p_text) override;
+	virtual Error copy_selection(String &r_text) override;
+	virtual Error paste_text(const String &p_text) override;
 	virtual Error apply_element_mutations(const Array &p_mutations) override;
 	virtual Error set_element_text(const StringName &p_id, const String &p_text) override;
 	virtual uint64_t preload_page(const String &p_html) override;

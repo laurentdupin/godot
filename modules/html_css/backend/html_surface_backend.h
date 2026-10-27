@@ -48,6 +48,7 @@ enum HTMLSurfaceInputKey {
 	HTML_SURFACE_INPUT_KEY_TAB,
 	HTML_SURFACE_INPUT_KEY_ENTER,
 	HTML_SURFACE_INPUT_KEY_DELETE,
+	HTML_SURFACE_INPUT_KEY_A,
 };
 
 enum HTMLSurfaceInputModifier {
@@ -140,6 +141,8 @@ public:
 	virtual Error key_down(HTMLSurfaceInputKey, int) { return ERR_UNAVAILABLE; }
 	virtual Error key_up(HTMLSurfaceInputKey, int) { return ERR_UNAVAILABLE; }
 	virtual Error text_input(const String &) { return ERR_UNAVAILABLE; }
+	virtual Error copy_selection(String &) { return ERR_UNAVAILABLE; }
+	virtual Error paste_text(const String &) { return ERR_UNAVAILABLE; }
 	virtual Error set_element_text(const StringName &, const String &) { return ERR_UNAVAILABLE; }
 	virtual Error apply_element_mutations(const Array &) { return ERR_UNAVAILABLE; }
 	virtual uint64_t preload_page(const String &) { return 0; }
