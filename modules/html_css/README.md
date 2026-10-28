@@ -428,3 +428,10 @@ Regression: `modules/html_css/tests/hcsr_view_memory_smoke.gd` tests repeated
 hide/show pixel equality, target retirement, surviving independent outputs and
 shared-font lifetime on RenderingDevice and OpenGL backends. An optional
 `res://memory-font.ttf` fixture also exercises shared authored fonts.
+
+`apply_element_mutations` also accepts `{"operation":"move_element",
+"id":"existing-row", "name":"destination-parent", "index":0}`. This moves
+the existing live subtree before the element child at `index` (negative appends),
+preserving node identities, form values, focus and text selection. Indices are
+evaluated in command order against the current child list. Moving an ancestor
+into its own subtree or moving the document element is rejected.

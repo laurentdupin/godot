@@ -1402,6 +1402,10 @@ Error HTMLSurfaceHCSRNewestBackend::apply_element_mutations(const Array &p_mutat
 			mutation.kind = HCSR_MUTATION_INSERT_HTML;
 			mutation.integer_value = int(value.get("index", -1));
 		} else if (operation == "remove_element") mutation.kind = HCSR_MUTATION_REMOVE_ELEMENT;
+		else if (operation == "move_element") {
+			mutation.kind = HCSR_MUTATION_MOVE_ELEMENT;
+			mutation.integer_value = int(value.get("index", -1));
+		}
 		else return ERR_UNAVAILABLE;
 	}
 	return _apply_mutations(mutations.ptr(), mutations.size());

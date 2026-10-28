@@ -21,7 +21,7 @@ func run():
     var view := HTMLView.new()
     view.size = Vector2(640, 360)
     view.logical_size = Vector2i(640, 360)
-    view.html = "<select id='s'><option id='a' value='a'>A</option><option value='b'>B</option></select><input id='text' value='original'>"
+    view.html = "<select id='s'><option id='a' value='a'>A</option><option value='b'>B</option></select><div id='source'><input id='text' value='original'></div><div id='destination'>Moved field</div>"
     root.add_child(view)
     await frames()
     check(view.set_form_control_value('s', 'b') == OK, 'Select mutation accepted')
@@ -61,6 +61,12 @@ func run():
     key(view, KEY_V)
     await frames()
     check(view.get_form_control_state('text').value == 'pasted', 'Queued clipboard paste')
+    view.set_text_selection('text', 1, 3)
+    check(view.apply_element_mutations([{'operation':'move_element','id':'text','name':'destination','index':0}]) == OK, 'Live move accepted')
+    await frames()
+    state = view.get_form_control_state('text')
+    check(state.value == 'pasted' and state.focused, 'Move preserves the edited value and focus')
+    check(state.selection_start == 1 and state.selection_end == 3, 'Move preserves selection')
     await create_timer(0.2).timeout
     DisplayServer.clipboard_set(previous_clipboard)
     view.queue_free()
