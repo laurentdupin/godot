@@ -442,6 +442,8 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
     rendered=rendered && hcsr_draw_packet_get_hierarchy_view(packet_handle,&hierarchy_view)==HCSR_OK;
     hcsr_raster_demand_view_t raster_demand={};raster_demand.struct_size=sizeof(raster_demand);
     rendered=rendered && hcsr_draw_packet_get_raster_demand_view(packet_handle,&raster_demand)==HCSR_OK;
+    hcsr_resource_liveness_view_t liveness={};liveness.struct_size=sizeof(liveness);
+    rendered=rendered && hcsr_draw_packet_get_resource_liveness(packet_handle,&liveness)==HCSR_OK;
     if(rendered && packet.format==HCSR_DRAW_PACKET_FORMAT_SURFACES && hierarchy_view.revision==0)rendered=false;
 	float output_scale = rendered ? MAX(float(physical_size.x) / packet.viewport_width, float(physical_size.y) / packet.viewport_height) : 1;
     { MutexLock lock(state->mutex);
@@ -450,7 +452,7 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
     }
     const uint64_t atlas_start_usec = OS::get_singleton()->get_ticks_usec();
     const bool valid_packet = rendered;
-    const bool textured = rendered && !inject_failure && state->scene_renderer.prepare(packet, state->document, output_scale, backdrop_view,hierarchy_view,raster_demand,renderer!=HTML_SURFACE_HCSR_NEWEST_CPU,renderer==HTML_SURFACE_HCSR_NEWEST_OPENGL);
+    const bool textured = rendered && !inject_failure && state->scene_renderer.prepare(packet, liveness, state->document, output_scale, backdrop_view,hierarchy_view,raster_demand,renderer!=HTML_SURFACE_HCSR_NEWEST_CPU,renderer==HTML_SURFACE_HCSR_NEWEST_OPENGL);
 	const bool canvas_required = !main_suspended && textured && renderer != HTML_SURFACE_HCSR_NEWEST_CPU && prepared.canvas_enabled && state->scene_renderer.has_document_backdrops();
     const uint64_t atlas_end_usec = OS::get_singleton()->get_ticks_usec();
 	if (textured) {

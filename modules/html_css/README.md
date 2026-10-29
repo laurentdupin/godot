@@ -307,6 +307,14 @@ pixels on the GPU when growing, then upload new allocation patches. OpenGL 3
 recreates its array and restores only live bounds, using no newer copy-image API.
 Initial page creation also uploads only live bounds; empty space is GPU-cleared.
 
+Atlas asset retirement consumes `hcsr_draw_packet_get_resource_liveness()` from
+HCSR's canonical publication. It includes image sources, glyph identities and
+all raster/mask/backdrop surfaces, and is shared by placement-only frames.
+Interactive and Godot consume the same live-dependency product; hosts retain
+ownership of atlas slots, pending raster upgrades and GPU release timing.
+Raster-level/fallback selection uses the shared `hcsr_atlas_*` policy helpers.
+The renderer does not independently infer appearance lifetime from paint styles.
+
 ## Backdrop input for canvas and world-space HTML
 
 Backdrop filtering must use an explicit Godot render-graph input. The HTML

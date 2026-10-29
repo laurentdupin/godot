@@ -140,7 +140,7 @@ class HCSRNewestSceneRenderer {
 #endif
 public:
     explicit HCSRNewestSceneRenderer(HCSRNewestRasterResources &p_resources) : resources(p_resources) {}
-    bool prepare(const hcsr_draw_packet_view_t &packet, const Ref<HTMLDocument> &document, float output_scale = 1, const hcsr_backdrop_view_t &backdrop = {},const hcsr_hierarchy_view_t &local = {},const hcsr_raster_demand_view_t &raster_demand = {},bool gpu_compositing=true,bool opengl=false);
+    bool prepare(const hcsr_draw_packet_view_t &packet, const hcsr_resource_liveness_view_t &liveness, const Ref<HTMLDocument> &document, float output_scale = 1, const hcsr_backdrop_view_t &backdrop = {},const hcsr_hierarchy_view_t &local = {},const hcsr_raster_demand_view_t &raster_demand = {},bool gpu_compositing=true,bool opengl=false);
     bool draw_gl(RID target,const Size2i &size,const Color &background,bool mipmaps,const CanvasRenderTargetPreparation::Input *input=nullptr,const hcsr_backdrop_view_t *mask=nullptr);
     bool uses_opengl() const {return opengl_submission;}
     uint64_t placement_revision() const {return hierarchy.revision;}

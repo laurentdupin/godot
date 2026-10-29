@@ -143,7 +143,7 @@ bool HCSRNewestSceneRenderer::clear_group(RenderingDevice *device,RenderingDevic
     device->draw_list_draw(list,false,1,6);++coverage.clears;++last_draw_calls;return true;
 }
 
-bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, const Ref<HTMLDocument> &document, float output_scale, const hcsr_backdrop_view_t &backdrop,const hcsr_hierarchy_view_t &local,const hcsr_raster_demand_view_t &raster_demand,bool gpu_compositing,bool opengl) {
+bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, const hcsr_resource_liveness_view_t &liveness, const Ref<HTMLDocument> &document, float output_scale, const hcsr_backdrop_view_t &backdrop,const hcsr_hierarchy_view_t &local,const hcsr_raster_demand_view_t &raster_demand,bool gpu_compositing,bool opengl) {
     opengl_submission=opengl;
     const auto &packet=submitted;
     const bool had_pending = resources.has_pending_glyphs();
@@ -211,14 +211,21 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
     } else {coverage.program={};coverage.words.clear();}
     HashSet<uint64_t> live_surfaces;
     Vector<String> image_sources;
+    if(liveness.struct_size<sizeof(liveness) || (liveness.surface_count && !liveness.surfaces)
+        || (liveness.image_count && !liveness.images) || (liveness.glyph_count && !liveness.glyphs))return false;
     resources.begin_asset_retention(document);
+    for(size_t i=0;i<liveness.surface_count;++i)live_surfaces.insert(liveness.surfaces[i]);
+    for(size_t i=0;i<liveness.image_count;++i) {
+        const auto &source=liveness.images[i];
+        resources.retain_image_source(String::utf8(source.data,source.length));
+    }
+    for(size_t i=0;i<liveness.glyph_count;++i) {
+        hcsr_glyph_material_t glyph={};glyph.face=liveness.glyphs[i].face;glyph.glyph=liveness.glyphs[i].glyph;
+        resources.retain_glyph(glyph);
+    }
     for (size_t i=0; i<packet.draw_item_count; ++i) {
         const auto &draw=packet.draw_items[i];
         const auto &material=packet.materials[draw.material_index];
-        const auto &group_mask=group_plan.events[i].mask;
-        if(group_mask.raw())for(uint32_t plane=0;plane<group_mask.plane_count;++plane) {
-            hcsr_raster_material_t mask;memcpy(&mask,group_mask.material(plane),sizeof(mask));live_surfaces.insert(mask.identity);
-        }
         if(draw.index_count && (material.kind==HCSR_MATERIAL_IMAGE || material.kind==HCSR_MATERIAL_GLYPH)) {
             if(material.payload_offset>packet.material_payload_size || material.payload_size>packet.material_payload_size-material.payload_offset)return false;
             if(material.kind==HCSR_MATERIAL_IMAGE) {
@@ -226,22 +233,16 @@ bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, 
                 hcsr_image_material_t image;memcpy(&image,packet.material_payload+material.payload_offset,sizeof(image));
                 if(image.source_length>material.payload_size-sizeof(image))return false;
                 const String source=String::utf8((const char *)(packet.material_payload+material.payload_offset+sizeof(image)),image.source_length);
-                image_sources.push_back(source);resources.retain_image_source(source);
+                image_sources.push_back(source);
             } else {
                 if(material.payload_size<sizeof(hcsr_glyph_material_t))return false;
-                hcsr_glyph_material_t glyph;memcpy(&glyph,packet.material_payload+material.payload_offset,sizeof(glyph));
-                resources.retain_glyph(glyph);
             }
         }
         if (material.kind!=HCSR_MATERIAL_RASTER && material.kind!=HCSR_MATERIAL_RASTER_SLICE) continue;
         const size_t expected = material.kind==HCSR_MATERIAL_RASTER_SLICE ? sizeof(hcsr_raster_slice_material_t) : sizeof(hcsr_raster_material_t);
         if (material.payload_size!=expected || material.payload_offset>packet.material_payload_size
             || material.payload_size>packet.material_payload_size-material.payload_offset) return false;
-        hcsr_raster_material_t raster;
-        memcpy(&raster,packet.material_payload+material.payload_offset,sizeof(raster));
-        live_surfaces.insert(raster.identity);
     }
-    for(uint64_t identity:next_backdrop_identities)live_surfaces.insert(identity);
     resources.end_asset_retention();
     resources.retain_surfaces(live_surfaces);
     resources.advance_rasterization();
