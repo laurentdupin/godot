@@ -443,3 +443,25 @@ the existing live subtree before the element child at `index` (negative appends)
 preserving node identities, form values, focus and text selection. Indices are
 evaluated in command order against the current child list. Moving an ancestor
 into its own subtree or moving the document element is rejected.
+
+### Malformed mutation fragments
+
+`set_element_inner_html` and `apply_element_mutations` (`set_inner_html` and
+`insert_html`) validate fragment syntax before accepting work, including before
+the first frame creates the scene. A malformed fragment rejects the whole
+submitted batch without queuing any of its commands. Previously accepted batches
+remain queued. Rejection leaves the completed texture and scene usable; it does
+not become a terminal preparation error. Later valid mutations can render normally.
+
+HCSR's strict fragment parser rejects incomplete/mismatched tags, duplicate
+attributes, a bare `<`, and TMP-only markup such as `<space=-3em>`. Use text
+mutations for literal labels or escape text embedded in markup (`&lt;`). Native
+callers receive `HCSR_INVALID_ARGUMENT` and a syntax diagnostic through
+`hcsr_last_error`; Godot callers receive a non-OK `Error`. Fragments accepted by
+the scene ABI carry their parsed tokens until application rather than being parsed
+again at the frame boundary. The pre-scene Godot queue validates independently
+and reparses when replayed against the newly created scene.
+
+Regression: `modules/html_css/tests/hcsr_invalid_fragment_smoke.gd` checks startup
+and live rejection, batch atomicity, retained transparent output pixels, and
+recovery with valid markup.

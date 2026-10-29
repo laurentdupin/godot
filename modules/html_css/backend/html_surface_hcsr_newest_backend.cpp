@@ -1251,6 +1251,12 @@ Error HTMLSurfaceHCSRNewestBackend::_apply_mutations(const hcsr_mutation_t *p_mu
 			owned.name = mutation.name.length ? String::utf8(mutation.name.data, mutation.name.length).utf8() : CharString();
 			owned.value = mutation.value.length ? String::utf8(mutation.value.data, mutation.value.length).utf8() : CharString();
 			if (owned.id.is_empty() || ((mutation.kind == HCSR_MUTATION_SET_ATTRIBUTE || mutation.kind == HCSR_MUTATION_REMOVE_ATTRIBUTE) && owned.name.is_empty())) return ERR_INVALID_PARAMETER;
+			// Startup batches precede scene creation. Reject malformed fragments now,
+			// just as the scene ABI does, instead of terminalizing on first draw.
+			if ((mutation.kind == HCSR_MUTATION_SET_INNER_HTML || mutation.kind == HCSR_MUTATION_INSERT_HTML) &&
+					hcsr_validate_html_fragment(state->runtime, utf8_view(owned.value)) != HCSR_OK) {
+				return ERR_INVALID_DATA;
+			}
 			// No borrowed ABI pointers survive this call; views are rebuilt at replay.
 			owned.mutation.element_id = {};
 			owned.mutation.name = {};
