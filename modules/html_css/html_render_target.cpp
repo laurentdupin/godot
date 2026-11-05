@@ -122,6 +122,7 @@ void HTMLRenderTarget::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("blur_focused_element"), &HTMLRenderTarget::blur_focused_element);
 	ClassDB::bind_method(D_METHOD("set_text_selection", "id", "start", "end"), &HTMLRenderTarget::set_text_selection);
 	ClassDB::bind_method(D_METHOD("get_form_control_state", "id"), &HTMLRenderTarget::get_form_control_state);
+	ClassDB::bind_method(D_METHOD("trim_process_managed_memory"), &HTMLRenderTarget::trim_process_managed_memory);
 	ClassDB::bind_method(D_METHOD("get_element_rect", "id"), &HTMLRenderTarget::get_element_rect);
 	ClassDB::bind_method(D_METHOD("get_element_html_rect", "id"), &HTMLRenderTarget::get_element_html_rect);
 
@@ -393,6 +394,10 @@ Rect2 HTMLRenderTarget::get_element_html_rect(const StringName &p_id) const {
 Rect2 HTMLRenderTarget::get_element_rect(const StringName &p_id) const {
 	// Render targets have no Control transform: their local and layout units coincide.
 	return get_element_html_rect(p_id);
+}
+
+Dictionary HTMLRenderTarget::trim_process_managed_memory() {
+    return surface->trim_process_managed_memory();
 }
 
 Dictionary HTMLRenderTarget::get_form_control_state(const StringName &p_id) {

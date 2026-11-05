@@ -694,6 +694,10 @@ bool HTMLRenderSurface::uses_ordered_backdrop_submission() const {
 	return backend != nullptr && backend->uses_ordered_backdrop_submission();
 }
 
+Dictionary HTMLRenderSurface::trim_process_managed_memory() {
+    return backend != nullptr ? backend->trim_process_managed_memory() : Dictionary();
+}
+
 Dictionary HTMLRenderSurface::get_frame_synchronization() const {
 	return backend != nullptr ? backend->get_frame_synchronization() : Dictionary();
 }

@@ -50,6 +50,7 @@ public:
 	virtual Error update_compositor(double p_timeline_time_seconds, bool *r_needs_output, bool *r_needs_begin_frame) override;
 	virtual Error prepare_host_frame(uint64_t p_host_frame, double p_time_seconds) override;
 	virtual Dictionary get_frame_synchronization() const override;
+	virtual Dictionary trim_process_managed_memory() override;
 	virtual Ref<CanvasRenderTargetPreparation> get_canvas_render_target_preparation() const override;
 	virtual bool uses_ordered_backdrop_submission() const override;
 	virtual void set_main_presentation_suspended(bool p_suspended) override;

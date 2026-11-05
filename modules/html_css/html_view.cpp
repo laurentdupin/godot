@@ -356,6 +356,7 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_frame_budget_milliseconds"), &HTMLView::get_frame_budget_milliseconds);
 	ClassDB::bind_method(D_METHOD("get_last_frame_budget_result"), &HTMLView::get_last_frame_budget_result);
 	ClassDB::bind_method(D_METHOD("get_frame_scheduler_diagnostics"), &HTMLView::get_frame_scheduler_diagnostics);
+	ClassDB::bind_method(D_METHOD("trim_process_managed_memory"), &HTMLView::trim_process_managed_memory);
 	ClassDB::bind_method(D_METHOD("set_logical_size", "logical_size"), &HTMLView::set_logical_size);
 	ClassDB::bind_method(D_METHOD("get_logical_size"), &HTMLView::get_logical_size);
 	ClassDB::bind_method(D_METHOD("create_output", "size", "mipmaps"), &HTMLView::create_output, DEFVAL(false));
@@ -1121,6 +1122,10 @@ Dictionary HTMLView::get_last_frame_budget_result() const {
 	result[SNAME("missed")] = last_frame_budget_missed;
 	result[SNAME("stage")] = last_frame_budget_stage;
 	return result;
+}
+
+Dictionary HTMLView::trim_process_managed_memory() {
+    return surface->trim_process_managed_memory();
 }
 
 Dictionary HTMLView::get_frame_scheduler_diagnostics() const {

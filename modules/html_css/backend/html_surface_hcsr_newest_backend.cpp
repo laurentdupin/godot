@@ -952,6 +952,20 @@ void HTMLSurfaceHCSRNewestBackend::set_backdrop_filter_enabled(bool p_enabled) {
 	state->needs_another_frame = true;
 }
 
+Dictionary HTMLSurfaceHCSRNewestBackend::trim_process_managed_memory() {
+    MutexLock lock(state->mutex);
+    Dictionary result;
+    hcsr_memory_trim_result_t stats;
+    initialize_abi(stats);
+    if (state->closing || hcsr_process_trim_managed_memory(state->runtime, &stats) != HCSR_OK) return result;
+    result["elapsed_ms"] = stats.elapsed_milliseconds;
+    result["managed_before"] = stats.managed_before;
+    result["managed_after"] = stats.managed_after;
+    result["committed_before"] = stats.committed_before;
+    result["committed_after"] = stats.committed_after;
+    return result;
+}
+
 Dictionary HTMLSurfaceHCSRNewestBackend::get_frame_synchronization() const {
 	MutexLock lock(state->mutex);
 	Dictionary result;

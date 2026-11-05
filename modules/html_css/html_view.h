@@ -242,6 +242,7 @@ public:
 	double get_frame_budget_milliseconds() const;
 	Dictionary get_last_frame_budget_result() const;
 	Dictionary get_frame_scheduler_diagnostics() const;
+	Dictionary trim_process_managed_memory();
 	void set_logical_size(const Size2i &p_logical_size);
 	Size2i get_logical_size() const;
 	Ref<HTMLViewOutput> create_output(const Size2i &p_size, bool p_mipmaps = false);

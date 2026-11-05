@@ -489,3 +489,10 @@ loads, warm shaping, cache clear/reload, multilingual HTML pixels and idle frame
 timings. `HCSR_FONT_PROBE_DIR` optionally saves its screenshot for exact A/B image
 comparison. Windows private-memory sampling uses PowerShell; those child-process
 calls are excluded from shaping/frame timing.
+
+`HTMLView.trim_process_managed_memory()` and the same method on `HTMLRenderTarget`
+perform one explicit blocking full compacting collection of the shared HCSR heap.
+The returned dictionary includes `elapsed_ms`, `managed_before/after` and
+`committed_before/after`; unsupported backends return an empty dictionary. This
+can pause every HCSR view. It is never called automatically during rendering,
+hide/show or diagnostics; it does not release font, atlas or GPU resources.
