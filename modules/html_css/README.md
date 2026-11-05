@@ -465,3 +465,27 @@ and reparses when replayed against the newly created scene.
 Regression: `modules/html_css/tests/hcsr_invalid_fragment_smoke.gd` checks startup
 and live rejection, batch atomicity, retained transparent output pixels, and
 recovery with valid markup.
+
+### System-font mappings and detailed memory counters
+
+TextServerAdvanced maps immutable local system fallback font files read-only on
+Windows and Unix platforms, keeping them alive until cached fallback faces are
+freed. If mapping fails, ordinary FileAccess byte loading is used. Authored font
+assets retain their existing path. `GODOT_SYSTEM_FONT_DATA_MODE=copy`, set before
+startup, selects the byte-copy path for controlled comparisons.
+
+`HCSR_MEMORY_CENSUS=1` enables `frame_synchronization.memory.census` when scheduler
+diagnostics are requested. Entries report identity-deduplicated container/item
+counts, capacities and `known_payload_bytes`. `payload_measured=false` means the
+size is unmeasured, not zero. Payloads exclude managed headers/allocator overhead;
+shared references across views are not exclusive allocations and must not be
+summed. Compiler/source caches and some component-owned collections are outside
+this initial census. Inspection allocates temporary sets; keep it disabled during
+memory/performance A/B runs and collect it separately. Rendering does not invoke
+this walk.
+
+`modules/html_css/tests/hcsr_font_mapping_probe.gd` measures script fallback
+loads, warm shaping, cache clear/reload, multilingual HTML pixels and idle frame
+timings. `HCSR_FONT_PROBE_DIR` optionally saves its screenshot for exact A/B image
+comparison. Windows private-memory sampling uses PowerShell; those child-process
+calls are excluded from shaping/frame timing.

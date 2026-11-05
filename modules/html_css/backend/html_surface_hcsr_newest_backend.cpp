@@ -1001,6 +1001,30 @@ Dictionary HTMLSurfaceHCSRNewestBackend::get_frame_synchronization() const {
 		memory["cached_managed_draw_count"] = stats.cached_managed_draw_count;
 		memory["cached_managed_surface_count"] = stats.cached_managed_surface_count;
 	}
+	// Deliberately opt-in: this walks live document data, never on the render hot path.
+	static const bool memory_census_enabled = OS::get_singleton()->get_environment("HCSR_MEMORY_CENSUS") == "1";
+	if (memory_census_enabled && state->scene != 0) {
+		static const char *names[] = {"unknown", "node_slots", "child_slots", "components", "computed_maps", "cascaded_maps", "style_prototypes", "style_values", "node_style_text_strings", "text_runs", "glyphs", "text_placements", "text_segments", "text_breaks", "bidi_levels", "layout_fragments", "surface_pages", "draw_pages", "raster_active", "raster_inactive", "scratch_vertices", "scratch_draws", "scratch_surfaces"};
+		uint32_t count = 0;
+		if (hcsr_scene_get_memory_census(state->scene, nullptr, 0, &count) == HCSR_BUFFER_TOO_SMALL && count <= 1024) {
+			Vector<hcsr_memory_census_entry_t> entries;
+			entries.resize(count);
+			if (hcsr_scene_get_memory_census(state->scene, entries.ptrw(), count, &count) == HCSR_OK) {
+				Dictionary census;
+				for (uint32_t i = 0; i < count; i++) {
+					const auto &entry = entries[i];
+					Dictionary counter;
+					counter["containers"] = entry.containers;
+					counter["items"] = entry.items;
+					counter["capacity"] = entry.capacity;
+					counter["known_payload_bytes"] = entry.known_payload_bytes;
+					counter["payload_measured"] = bool(entry.flags & 1);
+					census[entry.category < sizeof(names) / sizeof(names[0]) ? String(names[entry.category]) : itos(entry.category)] = counter;
+				}
+				memory["census"] = census;
+			}
+		}
+	}
 	memory["fonts"] = result["fonts"];
 	memory["atlas_cpu_pixel_bytes"] = state->image_atlas_statistics.get("atlas_cpu_pixel_bytes", 0);
 	memory["main_presentation_suspended"] = state->main_suspended;
