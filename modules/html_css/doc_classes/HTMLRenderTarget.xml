@@ -75,6 +75,12 @@
 				Returns dictionaries describing CSS backdrop-filter regions reported by the latest frame. [HTMLRenderTarget] does not composite these regions against a screen backbuffer by itself; callers can use the metadata when drawing the returned texture elsewhere. Each dictionary includes [code]filter_operations[/code], an ordered array of operation dictionaries with [code]type[/code] and [code]amount[/code].
 			</description>
 		</method>
+		<method name="trim_process_managed_memory">
+			<return type="Dictionary" />
+			<description>
+				Explicitly runs one blocking full compacting garbage collection of the HCSR managed heap shared by all HTML views in this process. This may pause every HCSR view. Returns [code]elapsed_ms[/code], [code]managed_before[/code], [code]managed_after[/code], [code]committed_before[/code] and [code]committed_after[/code], with byte counts for memory. Unsupported backends or failure return an empty dictionary. Rendering and visibility changes never invoke this operation automatically. Native font, atlas and GPU resources are unaffected; releasing committed memory to the OS is not guaranteed.
+			</description>
+		</method>
 		<method name="get_form_control_state">
 			<return type="Dictionary" />
 			<param index="0" name="id" type="StringName" />

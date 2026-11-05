@@ -209,6 +209,12 @@
 				Returns dictionaries describing CSS backdrop-filter regions reported by the latest frame. Each dictionary contains [code]element_id[/code], [code]bounds[/code], [code]blur_radius_css_px[/code], four border radius fields, [code]opacity[/code], [code]flags[/code], [code]supported[/code], and [code]filter_operations[/code]. Bounds and radii are in logical HTML coordinates. Each filter operation dictionary contains [code]type[/code] and [code]amount[/code].
 			</description>
 		</method>
+		<method name="trim_process_managed_memory">
+			<return type="Dictionary" />
+			<description>
+				Explicitly runs one blocking full compacting garbage collection of the HCSR managed heap shared by all HTML views in this process. This may pause every HCSR view. Returns [code]elapsed_ms[/code], [code]managed_before[/code], [code]managed_after[/code], [code]committed_before[/code] and [code]committed_after[/code], with byte counts for memory. Unsupported backends or failure return an empty dictionary. Rendering and visibility changes never invoke this operation automatically. Native font, atlas and GPU resources are unaffected; releasing committed memory to the OS is not guaranteed.
+			</description>
+		</method>
 		<method name="get_form_control_state">
 			<return type="Dictionary" />
 			<param index="0" name="id" type="StringName" />
