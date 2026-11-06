@@ -101,6 +101,14 @@ class GDScriptCache {
 
 	bool cleared = false;
 
+	// Parsers reference the parsers of their dependencies, so cyclic script
+	// dependencies keep every syntax tree alive until clear(). When enabled,
+	// all cached parsers are released whenever no compilation is in progress
+	// on any thread; a later load reparses what it needs.
+	int active_compilations = 0;
+	bool release_parse_trees = false;
+	static void _release_parsers_locked();
+
 public:
 	static const int BINARY_MUTEX_TAG = 2;
 
@@ -129,6 +137,16 @@ public:
 	static void remove_static_script(const String &p_fqcn);
 
 	static void clear();
+
+	static void set_release_parse_trees(bool p_enabled);
+	static void begin_compilation();
+	static void end_compilation();
+
+	// Brackets one GDScript::reload(); nesting and other threads are counted.
+	struct CompilationScope {
+		CompilationScope() { begin_compilation(); }
+		~CompilationScope() { end_compilation(); }
+	};
 
 	GDScriptCache();
 	~GDScriptCache();

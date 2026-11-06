@@ -453,6 +453,66 @@ void GDScriptCache::remove_static_script(const String &p_fqcn) {
 	singleton->static_gdscript_cache.erase(p_fqcn);
 }
 
+void GDScriptCache::set_release_parse_trees(bool p_enabled) {
+	if (singleton == nullptr) {
+		return;
+	}
+	MutexLock lock(singleton->mutex);
+	singleton->release_parse_trees = p_enabled;
+}
+
+void GDScriptCache::begin_compilation() {
+	if (singleton == nullptr) {
+		return;
+	}
+	MutexLock lock(singleton->mutex);
+	singleton->active_compilations++;
+}
+
+void GDScriptCache::end_compilation() {
+	if (singleton == nullptr) {
+		return;
+	}
+	// The counter and the release share the cache mutex, so a compilation
+	// starting on another thread either runs before the release (and is
+	// counted) or after it (and reparses on demand).
+	MutexLock lock(singleton->mutex);
+	ERR_FAIL_COND(singleton->active_compilations <= 0);
+	if (--singleton->active_compilations == 0 && singleton->release_parse_trees && !singleton->cleared) {
+		_release_parsers_locked();
+	}
+}
+
+void GDScriptCache::_release_parsers_locked() {
+	// Same parser teardown as clear(), keeping the compiled scripts. Every
+	// released ref is marked abandoned first, so a reference that outlives
+	// this call can never erase a newer parser registered under its path.
+	RBSet<Ref<GDScriptParserRef>> refs;
+	for (const KeyValue<String, Vector<ObjectID>> &KV : singleton->abandoned_parser_map) {
+		for (ObjectID parser_ref_id : KV.value) {
+			Ref<GDScriptParserRef> parser_ref = { ObjectDB::get_instance(parser_ref_id) };
+			if (parser_ref.is_valid()) {
+				refs.insert(parser_ref);
+			}
+		}
+	}
+	for (KeyValue<String, GDScriptParserRef *> &E : singleton->parser_map) {
+		E.value->abandoned = true;
+		refs.insert(Ref<GDScriptParserRef>(E.value));
+	}
+	singleton->abandoned_parser_map.clear();
+	singleton->parser_map.clear();
+	singleton->parser_inverse_dependencies.clear();
+	// Clearing deletes each tree and drops its references to dependency
+	// parsers, which breaks the cycles; the refs are then freed here.
+	for (const Ref<GDScriptParserRef> &E : refs) {
+		if (E.is_valid()) {
+			E->clear();
+		}
+	}
+	refs.clear();
+}
+
 void GDScriptCache::clear() {
 	if (singleton == nullptr) {
 		return;

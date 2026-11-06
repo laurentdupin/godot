@@ -740,6 +740,9 @@ void GDScript::_restore_old_static_data() {
 #endif
 
 Error GDScript::reload(bool p_keep_state) {
+	// Counts this compilation so cached parse trees are only released when no
+	// compilation is running on any thread.
+	GDScriptCache::CompilationScope compilation_scope;
 	if (reloading) {
 		return OK;
 	}
@@ -2139,6 +2142,11 @@ void GDScriptLanguage::remove_named_global_constant(const StringName &p_name) {
 }
 
 void GDScriptLanguage::init() {
+	// The editor's script editor and language server keep parsers outside any
+	// compilation, so this only applies to running projects.
+	const bool release_parse_trees = GLOBAL_DEF_RST("gdscript/memory/release_parse_trees_after_compilation", false);
+	GDScriptCache::set_release_parse_trees(release_parse_trees && !Engine::get_singleton()->is_editor_hint());
+
 	// Populate core constants.
 	int gcc = CoreConstants::get_global_constant_count();
 	for (int i = 0; i < gcc; i++) {

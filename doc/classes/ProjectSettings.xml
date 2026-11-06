@@ -1238,6 +1238,10 @@
 		<member name="filesystem/import/fbx2gltf/enabled.web" type="bool" setter="" getter="" default="false">
 			Override for [member filesystem/import/fbx2gltf/enabled] on the Web where FBX2glTF can't easily be accessed from Godot.
 		</member>
+		<member name="gdscript/memory/release_parse_trees_after_compilation" type="bool" setter="" getter="" default="false">
+			If [code]true[/code], GDScript frees the syntax trees of loaded scripts once no script compilation is in progress. Parsers keep references to the parsers of their dependencies, so scripts that depend on each other in cycles otherwise keep every syntax tree in memory for the lifetime of the process, typically tens of times the size of their source code. A script loaded later reparses the dependencies it needs, which takes a little longer.
+			[b]Note:[/b] This setting has no effect in the editor, whose script editor and language server keep parsers outside compilation. It is read when the project starts.
+		</member>
 		<member name="gui/common/auto_focus_strategy" type="int" setter="" getter="" default="0">
 			Determines what strategy to use when inferring the top/left/right/bottom [Control] to focus if no neighbor is defined.
 			- [b]Legacy[/b] is the old focus strategy up until Godot 4.8. It shouldn't be used for new projects, as the new default (Balloon) yields more intuitive results.
