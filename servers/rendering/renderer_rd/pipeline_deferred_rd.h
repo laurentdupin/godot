@@ -30,11 +30,13 @@
 
 #pragma once
 
+#include "core/config/project_settings.h"
 #include "servers/rendering/rendering_device.h"
 
 // Helper class for automatically deferring compilation of a pipeline to a background task.
 // When attempting to retrieve the pipeline with the getter, the caller will automatically
-// wait for it to be ready.
+// wait for it to be ready. With "rendering/rendering_device/pipelines/compile_on_first_use",
+// compilation is instead postponed until the first get_rid() call.
 
 class PipelineDeferredRD {
 protected:
@@ -55,6 +57,16 @@ protected:
 
 	RID pipeline;
 	WorkerThreadPool::TaskID task = WorkerThreadPool::INVALID_TASK_ID;
+	// With compile_on_first_use, creation only records the parameters and
+	// get_rid() compiles synchronously, so pipelines that are never used are
+	// never compiled (and the driver never allocates memory for them).
+	CreationParameters pending = {};
+	bool has_pending = false;
+
+	static bool _compile_on_first_use() {
+		static const bool enabled = GLOBAL_GET("rendering/rendering_device/pipelines/compile_on_first_use");
+		return enabled;
+	}
 
 	void _create(const CreationParameters &c) {
 		if (c.is_compute) {
@@ -66,6 +78,11 @@ protected:
 
 	void _start(const CreationParameters &c) {
 		free();
+		if (_compile_on_first_use()) {
+			pending = c;
+			has_pending = true;
+			return;
+		}
 		task = WorkerThreadPool::get_singleton()->add_template_task(this, &PipelineDeferredRD::_create, c, true, "PipelineCompilation");
 	}
 
@@ -83,7 +100,7 @@ public:
 
 	~PipelineDeferredRD() {
 #ifdef DEV_ENABLED
-		ERR_FAIL_COND_MSG(pipeline.is_valid(), "'free()' must be called manually before deconstruction and before the corresponding shader is freed.");
+		ERR_FAIL_COND_MSG(pipeline.is_valid() || has_pending || task != WorkerThreadPool::INVALID_TASK_ID, "'free()' must be called manually before deconstruction and before the corresponding shader is freed.");
 #endif
 	}
 
@@ -113,12 +130,21 @@ public:
 	}
 
 	RID get_rid() {
+		if (has_pending) {
+			has_pending = false;
+			_create(pending);
+			pending = {};
+		}
 		_wait();
 		return pipeline;
 	}
 
 	void free() {
 		_wait();
+		if (has_pending) {
+			has_pending = false;
+			pending = {};
+		}
 
 		if (pipeline.is_valid()) {
 #ifdef DEV_ENABLED
