@@ -1041,6 +1041,7 @@ Dictionary HTMLSurfaceHCSRNewestBackend::get_frame_synchronization() const {
 	}
 	memory["fonts"] = result["fonts"];
 	memory["atlas_cpu_pixel_bytes"] = state->image_atlas_statistics.get("atlas_cpu_pixel_bytes", 0);
+    for(const char *key:{"atlas_pool_id","atlas_pool_views","shared_atlas_cpu_pixel_bytes","shared_atlas_gpu_bytes","shared_atlas_entries","shared_atlas_glyphs"})memory[key]=state->image_atlas_statistics.get(key,0);
 	memory["main_presentation_suspended"] = state->main_suspended;
 	result["memory"] = memory;
 	result["preparation_ms"] = state->preparation_milliseconds;

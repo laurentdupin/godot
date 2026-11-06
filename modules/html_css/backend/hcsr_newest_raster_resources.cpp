@@ -6,8 +6,7 @@
 #include "servers/text/text_server.h"
 #include <cmath>
 
-HCSRNewestRasterResources::HCSRNewestRasterResources() { ERR_FAIL_COND(hcsr_atlas_create(&atlas)!=HCSR_OK); }
-HCSRNewestRasterResources::~HCSRNewestRasterResources() { if(atlas) hcsr_atlas_destroy(atlas); }
+
 
 Vector<uint8_t> HCSRNewestRasterResources::page_pixels(int page,const Rect2i &region) const {
     Vector<uint8_t> pixels;
@@ -25,19 +24,6 @@ Vector<Rect2i> HCSRNewestRasterResources::page_updates(int page) const {
         if(hcsr_atlas_get_update(atlas,page-1,i,&r)==HCSR_OK) result.push_back(Rect2i(r.x,r.y,r.width,r.height));
     }
     return result;
-}
-
-Rect2i HCSRNewestRasterResources::page_live_bounds(int page) const {
-    Rect2i bounds;
-    auto include=[&](const Entry &entry) {
-        if(entry.page!=page || !entry.rect.has_area())return;
-        const Rect2i padded=entry.rect.grow(1);
-        bounds=bounds.has_area()?bounds.merge(padded):padded;
-    };
-    for(const auto &item:entries)include(item.value);
-    for(const auto &item:glyph_entries)include(item.value);
-    for(const auto &item:surface_entries)include(item.value);
-    return bounds;
 }
 
 static bool svg_has_filters(const Vector<uint8_t> &bytes) {
@@ -280,8 +266,7 @@ void HCSRNewestRasterResources::retain_surfaces(const HashSet<uint64_t> &live) {
 bool HCSRNewestRasterResources::release_entry(const Entry &entry) {
     if(entry.atlas_failed)--failed_allocation_count;
     if(entry.page<=0)return false;
-    const hcsr_atlas_entry_t allocation{entry.page-1,{entry.rect.position.x,entry.rect.position.y,entry.rect.size.x,entry.rect.size.y}};
-    return hcsr_atlas_release(atlas,&allocation)==HCSR_OK;
+    return release_pool_entry(entry);
 }
 
 void HCSRNewestRasterResources::begin_asset_retention(const Ref<HTMLDocument> &document) {
@@ -342,7 +327,7 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::resolve_raster(const
     hcsr_atlas_entry_t allocation{};
     if(hcsr_atlas_pack(atlas,reinterpret_cast<const uint32_t *>(raster.pixels),raster.width,raster.height,level,0,&allocation)==HCSR_OK) {
         entry.page=allocation.page+1;entry.rect=Rect2i(allocation.rect.x,allocation.rect.y,allocation.rect.width,allocation.rect.height);
-        entry.natural_size=Size2i(raster.width,raster.height);
+        entry.natural_size=Size2i(raster.width,raster.height);track_entry(entry);
     } else entry.atlas_failed=true;
     surface_entries.insert(key, entry);
     if(entry.atlas_failed)++failed_allocation_count;
@@ -355,7 +340,7 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::pack_image(Ref<Image
     entry.natural_size=image->get_size();image->convert(Image::FORMAT_RGBA8);
     const Vector<uint8_t> pixels=image->get_data();hcsr_atlas_entry_t allocation{};
     if(hcsr_atlas_pack(atlas,reinterpret_cast<const uint32_t *>(pixels.ptr()),image->get_width(),image->get_height(),level,2u|(glyph?1u:0u),&allocation)==HCSR_OK) {
-        entry.page=allocation.page+1;entry.rect=Rect2i(allocation.rect.x,allocation.rect.y,allocation.rect.width,allocation.rect.height);
+        entry.page=allocation.page+1;entry.rect=Rect2i(allocation.rect.x,allocation.rect.y,allocation.rect.width,allocation.rect.height);track_entry(entry);
     } else entry.atlas_failed=true;
     return entry;
 }
@@ -393,6 +378,7 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::rasterize_glyph(cons
     const GlyphKey key{ glyph.face, glyph.glyph, uint32_t(level) };
     const GlyphKey face_glyph{ glyph.face, glyph.glyph, 0 };
 	Entry entry;
+    if(acquire_shared_glyph(key,entry)) {glyph_entries.insert(key,entry);last_glyphs.insert(face_glyph,entry);return entry;}
 	entry.raster_size = level;
 	TextServer *ts = TextServerManager::get_singleton()->get_primary_interface().ptr();
 	const RID face = RID::from_uint64(glyph.face);
@@ -410,6 +396,7 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::rasterize_glyph(cons
     entry.glyph_size = ts->font_get_glyph_size(face, size, glyph.glyph);
 	entry.natural_size = image->get_size();
     const Entry allocation = pack_image(image, 0, true);
+    entry.lease = allocation.lease;
     entry.page = allocation.page;
     entry.rect = allocation.rect;
     entry.atlas_failed=allocation.atlas_failed;
@@ -418,6 +405,7 @@ HCSRNewestRasterResources::Entry HCSRNewestRasterResources::rasterize_glyph(cons
     entry.glyph_size += padding * 2;
     if (entry.page >= 0) ++rasterized_glyphs;
 	if (entry.page < 0) WARN_PRINT("HCSR glyph atlas capacity exceeded");
+    share_glyph(key,entry);
 	glyph_entries.insert(key, entry);
     if(entry.atlas_failed)++failed_allocation_count;
     if (entry.page >= 0) last_glyphs.insert(face_glyph, entry);
@@ -477,7 +465,7 @@ void HCSRNewestRasterResources::end_resolution_requests() {
 }
 
 Dictionary HCSRNewestRasterResources::get_statistics() const {
-    Dictionary result;
+    Dictionary result=pool_statistics();
 	// Diagnostics count appearance pages; the permanent empty sampler is not an atlas page.
 	result["pages"] = MAX(0, hcsr_atlas_page_count(atlas));
 	result["sources"] = entries.size() + glyph_entries.size() + surface_entries.size();
@@ -501,7 +489,8 @@ Dictionary HCSRNewestRasterResources::get_statistics() const {
     const int glyph_pages=glyph_page_ids.size();
     result["glyph_pages"] = glyph_pages;
     result["page_size"] = PAGE_SIZE;
-    result["atlas_cpu_pixel_bytes"] = hcsr_atlas_resident_bytes(atlas);
+    result["shared_atlas_cpu_pixel_bytes"] = pool_context ? hcsr_atlas_resident_bytes(atlas) : uint64_t(0);
+    result["atlas_cpu_pixel_bytes"] = pool_context ? uint64_t(0) : hcsr_atlas_resident_bytes(atlas);
     result["atlas_revision"] = int64_t(atlas_revision());
     int used_rows[MAX_PAGES] = {};
     int64_t packed_area = 0;

@@ -351,58 +351,14 @@ bool HCSRNewestSceneRenderer::draw_gl(RID target, const Size2i &size, const Colo
 		gl.coverage_logical = Vector2(logical_width, logical_height);
 		++coverage.evaluations;
 	}
-	const bool atlas_dirty = uploaded_atlas_revision != resources.atlas_revision();
 	if (!gl.empty_texture) {
         glGenTextures(1,&gl.empty_texture);bind_texture(0,gl.empty_texture);sampling(GL_NEAREST);
         const uint32_t transparent=0;
         glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,1,1,0,GL_RGBA,GL_UNSIGNED_BYTE,&transparent);
     }
-    if (atlas_dirty || !gl.atlas_array) {
-        const int layers=MAX(1,resources.page_count()-1);
-        int extent=1024;
-        for(int i=1;i<resources.page_count();++i)if(resources.page_live_allocations(i)>0)extent=MAX(extent,resources.page_size(i).x);
-        const bool resized=!gl.atlas_array || layers!=gl.atlas_layers || extent!=gl.atlas_extent;
-        if(!gl.atlas_array)glGenTextures(1,&gl.atlas_array);
-        glActiveTexture(GL_TEXTURE9);glBindTexture(GL_TEXTURE_2D_ARRAY,gl.atlas_array);
-        if(resized) {
-            glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_SWIZZLE_R,GL_BLUE);
-            glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_SWIZZLE_B,GL_RED);
-            glTexImage3D(GL_TEXTURE_2D_ARRAY,0,GL_RGBA8,extent,extent,layers,0,GL_RGBA,GL_UNSIGNED_BYTE,nullptr);
-            GLuint clear_fbo=0;
-            glGenFramebuffers(1,&clear_fbo);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,clear_fbo);
-            const GLfloat transparent[4]={0,0,0,0};
-            for(int layer=0;layer<layers;++layer) {
-                glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,gl.atlas_array,0,layer);
-                if(glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE){glDeleteFramebuffers(1,&clear_fbo);return false;}
-                glClearBufferfv(GL_COLOR,0,transparent);
-            }
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER,0);glDeleteFramebuffers(1,&clear_fbo);
-            gl.atlas_layers=layers;gl.atlas_extent=extent;
-        }
-        for(int i=1;i<resources.page_count();++i) {
-            if(resources.page_live_allocations(i)) {
-                if(resized) {
-                    const auto region=resources.page_live_bounds(i);
-                    if(region.has_area()) {
-                        auto pixels=resources.page_pixels(i,region);
-                        glTexSubImage3D(GL_TEXTURE_2D_ARRAY,0,region.position.x,region.position.y,i-1,region.size.x,region.size.y,1,GL_RGBA,GL_UNSIGNED_BYTE,pixels.ptr());
-                        uploaded_bytes+=pixels.size();
-                    }
-                } else for(const auto &region:resources.page_updates(i)) {
-                    auto pixels=resources.page_pixels(i,region);
-                    glTexSubImage3D(GL_TEXTURE_2D_ARRAY,0,region.position.x,region.position.y,i-1,region.size.x,region.size.y,1,GL_RGBA,GL_UNSIGNED_BYTE,pixels.ptr());
-                    uploaded_bytes+=pixels.size();
-                }
-            }
-            resources.acknowledge_upload(i);
-        }
-        resources.acknowledge_upload(0);
-        uploaded_atlas_revision=resources.atlas_revision();
-    }
+    if(!resources.prepare_pool_gl(uploaded_bytes))return false;
+    gl.atlas_array=resources.pool_gl_texture();gl.atlas_layers=resources.pool_gl_layers();gl.atlas_extent=resources.pool_gl_extent();
+    uploaded_atlas_revision=resources.atlas_revision();
 	int pool_index = -1;
 	for (int i = 0; i < gl.pools.size(); i++) {
 		if (gl.pools[i].output == target) {
@@ -745,7 +701,7 @@ void HCSRNewestSceneRenderer::release_gl() {
 		glDeleteTextures(1, &p.blend.texture);
 		glDeleteFramebuffers(1, &p.blend.framebuffer);
 	}
-	if(gl.atlas_array)glDeleteTextures(1,&gl.atlas_array);
+	// Shared atlas texture is retired by its last resource owner.
 	if(gl.empty_texture)glDeleteTextures(1,&gl.empty_texture);
 	for (auto data : { gl.geometry, gl.states, gl.clips, gl.planes, gl.primitives, gl.nodes, gl.outputs, gl.coverage_input, gl.coverage_levels, gl.coverage_output[0], gl.coverage_output[1] }) {
 		if (data.texture) {

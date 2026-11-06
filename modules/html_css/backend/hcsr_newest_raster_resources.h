@@ -6,13 +6,15 @@
 #include "core/io/image.h"
 #include "core/os/mutex.h"
 #include "core/templates/hash_set.h"
+#include <memory>
+class RenderingDevice;
 
-// Owns decoded/rasterized pixels, atlas allocation and resolution policy.
-// It has no scene geometry, drawing pipeline or RenderingDevice resources.
-// The view owns this cache independently of its scene renderer.
+// View-owned asset access, resolution policy and leases into a context atlas.
+// The backing owner shares pixels/slots/GPU textures; scene evaluation and
+// per-view descriptor bindings remain independent of that resource lifetime.
 // Atlas mutation and upload acknowledgement run on the render thread; only
 // resolve_size is also called during layout and guards source metadata with a mutex.
-// One renderer consumes updates and shares its uploaded pages across outputs.
+// The context owner consumes updates once, before any dependent view draws.
 class HCSRNewestRasterResources {
 public:
 	static constexpr int PAGE_SIZE = 4096;
@@ -25,9 +27,16 @@ public:
         int raster_size = 0;
         bool color_glyph = false;
         bool atlas_failed = false;
+        uint64_t lease = 0;
 	};
 private:
+    struct Pool;
+    std::shared_ptr<Pool> pool;
     uint64_t atlas = 0;
+    uint64_t pool_context = 0, pool_reclamation_seen = 0;
+    void track_entry(Entry &entry);
+    void refresh_pool_bounds() const;
+    bool release_pool_entry(const Entry &entry);
     struct GlyphKey {
         uint64_t face = 0;
         uint32_t glyph = 0, size = 0;
@@ -38,6 +47,8 @@ private:
             return hash_fmix32(hash_murmur3_one_32(key.size, hash_murmur3_one_32(key.glyph, hash_murmur3_one_64(key.face))));
         }
     };
+    bool acquire_shared_glyph(const GlyphKey &key, Entry &entry);
+    void share_glyph(const GlyphKey &key, const Entry &entry);
     struct SurfaceKey {
         uint64_t identity;
         int level;
@@ -120,10 +131,20 @@ public:
     bool has_pending_glyphs() const { return !pending_glyphs.is_empty(); }
     void advance_rasterization();
     void ensure_sampling_page();
+    void use_shared_pool(uint64_t context);
+    bool refresh_pool_reclamation();
+    bool prepare_pool_rd(RenderingDevice *device, uint64_t &bytes);
+    RID pool_rd_texture(int page) const;
+    uint64_t pool_binding_revision() const;
+    bool prepare_pool_gl(uint64_t &bytes);
+    uint32_t pool_gl_texture() const;
+    int pool_gl_layers() const;
+    int pool_gl_extent() const;
+    Dictionary pool_statistics() const;
     int page_count() const { return MAX(0,hcsr_atlas_page_count(atlas))+1; }
     int page_live_allocations(int page) const { return page==0 ? 1 : hcsr_atlas_live_allocations(atlas,page-1); }
     uint64_t atlas_revision() const { return hcsr_atlas_revision(atlas); }
-    Size2i page_size(int page) const { const int size=page==0 ? 1 : hcsr_atlas_page_size(atlas,page-1); return Size2i(size,size); }
+    Size2i page_size(int page) const;
     Rect2i page_live_bounds(int page) const;
     Vector<uint8_t> page_pixels(int page,const Rect2i &region) const;
     Vector<Rect2i> page_updates(int page) const;

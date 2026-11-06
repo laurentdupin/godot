@@ -503,3 +503,34 @@ lists, inline inputs, cascade combinations, unresolved maps and element attribut
 Dictionary entry sizes, some compiler indexes/keyframes and native host resources
 remain outside exact byte accounting. Offline CLR field-graph inspection is
 available through HCSR's reference host; it is not run by the NativeAOT renderer.
+
+### Shared newest-renderer atlas
+
+GPU HTMLViews now lease slots from one atlas per RenderingDevice generation (or
+Godot OpenGL share group). The backing owner owns CPU pixels and GPU textures;
+views keep their asset provider, raster-demand policy and descriptor bindings.
+Glyph slots are shared by font-face RID/generation, glyph and raster size;
+images and scene surfaces keep independent view leases. Relative asset paths
+are never used as cross-document identity. Upload acknowledgement belongs to the
+backing owner, and texture replacement invalidates each view's bindings lazily.
+Last-borrower release destroys the backing owner on the render thread.
+
+Small allocations prefer low-coordinate physical extents, so a temporary large
+surface need not permanently enlarge a shared page. GPU extents may shrink from
+live bounds without relocating slots. RasterAtlas's fixed CPU stride is unchanged.
+The eight appearance-page budget now applies to the shared context, not per view.
+
+`image_atlas.atlas_pool_id` identifies shared accounting. Deduplicate
+`shared_atlas_gpu_bytes` and `shared_atlas_cpu_pixel_bytes` by this ID when adding
+views. `atlas_cpu_pixel_bytes` is view-exclusive CPU residency (zero for GPU
+pooled views). `owned_gpu_pixel_and_buffer_bytes` excludes shared textures.
+`gpu_atlas_bytes` remains a compatibility alias for borrowed texture residency,
+as does `gpu_atlas_borrowed_bytes`; do not sum it across views.
+`gpu_atlas_retired_pages` is now the context owner's retirement count.
+These diagnostics describe the last prepared frame, not an asynchronous live scan.
+
+`tests/hcsr_shared_atlas_smoke.gd` covers sharing, provider isolation, growth and
+shrink, resolution changes, hide/show and borrower destruction/recreation. Pass
+`-- --groups` to include masks, foreground blur and group opacity.
+`tests/hcsr_shared_atlas_interaction_probe.gd` uses two views, 200 deterministic
+random positions, ten settling frames and a click at every position.

@@ -4,6 +4,7 @@
 #include "hcsr_compositing.h"
 #include "hcsr_document_input_shader.h"
 #include "hcsr_newest_scene_renderer.h"
+#include "servers/rendering/rendering_server.h"
 #include "hcsr_image_codec.h"
 #include "core/os/os.h"
 #include <cmath>
@@ -144,9 +145,16 @@ bool HCSRNewestSceneRenderer::clear_group(RenderingDevice *device,RenderingDevic
 }
 
 bool HCSRNewestSceneRenderer::prepare(const hcsr_draw_packet_view_t &submitted, const hcsr_resource_liveness_view_t &liveness, const Ref<HTMLDocument> &document, float output_scale, const hcsr_backdrop_view_t &backdrop,const hcsr_hierarchy_view_t &local,const hcsr_raster_demand_view_t &raster_demand,bool gpu_compositing,bool opengl) {
+    if(gpu_compositing) {
+        auto *server=RenderingServer::get_singleton();
+        auto *device=server?server->get_rendering_device():nullptr;
+        if(!server || (!opengl && !device))return false;
+        resources.use_shared_pool(opengl ? (uint64_t(server->get_instance_id()) | (uint64_t(1)<<63)) : uint64_t(device->get_instance_id()));
+    }
     opengl_submission=opengl;
     const auto &packet=submitted;
-    const bool had_pending = resources.has_pending_glyphs();
+    const bool retry_reclaimed = resources.refresh_pool_reclamation();
+    const bool had_pending = resources.has_pending_glyphs() || retry_reclaimed;
     const bool next_gpu = hcsr::render::gpu_drawing(packet.format);
     if(next_gpu && (raster_demand.count!=packet.gpu.state_count || (raster_demand.count && !raster_demand.scales)))return false;
     const auto appearance_scale = [&](const hcsr_draw_item_t &draw) {
@@ -863,75 +871,17 @@ bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {
         clip_definition_uploaded_bytes+=gpu_clips.size()*sizeof(hcsr_gpu_clip_t)+gpu_planes.size()*sizeof(hcsr_gpu_plane_t);
     }
     geometry_dirty=false;
-    auto rgba_upload = [&](int page, const Rect2i &rect) {
-        Vector<uint8_t> pixels = resources.page_pixels(page, rect);
-        for (int i = 0; i < pixels.size(); i += 4) SWAP(pixels.write[i], pixels.write[i + 2]);
-        return pixels;
-    };
+    if(!resources.prepare_pool_rd(device,uploaded_bytes))return false;
     const uint64_t atlas_revision=resources.atlas_revision();
-    const bool atlas_dirty=uploaded_atlas_revision!=atlas_revision;
-    const int page_count=atlas_dirty ? resources.page_count() : gpu_pages.size();
-    bool mask_bindings_changed=page_count!=gpu_pages.size();
-    for(int index=page_count;index<gpu_pages.size();++index) release_page(device,gpu_pages.write[index]);
-    if (gpu_pages.resize(page_count) != OK) return false;
-    for (int index = 0; index < gpu_pages.size(); ++index) {
-        GpuPage &page = gpu_pages.write[index];
-        const int live=atlas_dirty ? resources.page_live_allocations(index) : (page.texture.is_valid()?1:0);
-        if(live<0) return false;
-        if(live==0) {
-            mask_bindings_changed=mask_bindings_changed || page.texture.is_valid();
-            if(page.texture.is_valid()) ++retired_atlas_pages;
-            // RenderingDevice defers actual destruction until this frame slot
-            // is safe. Keep the stable page index; reuse creates fresh bindings.
-            release_page(device,page);
-            if(atlas_dirty) resources.acknowledge_upload(index);
-            continue;
-        }
-        const Size2i size = resources.page_size(index);
-		RD::TextureFormat format;
-		format.format = RD::DATA_FORMAT_R8G8B8A8_UNORM;
-		format.width = size.x;
-		format.height = size.y;
-		format.usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT;
-        const bool restore_all=!page.texture.is_valid();
-        const bool recreate=restore_all || page.size!=size;
-        if(recreate) {
-            mask_bindings_changed=true;
-            format.usage_bits|=RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT;
-            const RID replacement=device->texture_create(format,RD::TextureView());
-            if(!replacement.is_valid())return false;
-            if(device->texture_clear(replacement,Color(0,0,0,0),0,1,0,1)!=OK) {device->free_rid(replacement);return false;}
-            if(page.texture.is_valid() && device->texture_copy(page.texture,replacement,Vector3(),Vector3(),
-                    Vector3(MIN(size.x,page.size.x),MIN(size.y,page.size.y),1),0,0,0,0)!=OK) {device->free_rid(replacement);return false;}
-            release_page(device,page);
-            page.texture=replacement;page.size=size;
-        }
-        if(atlas_dirty || recreate) {
-            Vector<Rect2i> updates=resources.page_updates(index);
-            // Recovery after device/page teardown may have no pending patches.
-            // Re-upload live bounds rather than a full mostly empty page.
-            if(restore_all) {
-                updates.clear();
-                const Rect2i bounds=resources.page_live_bounds(index);
-                if(bounds.has_area())updates.push_back(bounds);
-            }
-            for(const Rect2i &rect:updates) {
-                format.width=rect.size.x;format.height=rect.size.y;
-                format.usage_bits=RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT;
-                Vector<Vector<uint8_t>> data;data.push_back(rgba_upload(index,rect));
-                RID patch=device->texture_create(format,RD::TextureView(),data);
-                if(!patch.is_valid())return false;
-                Error error=device->texture_copy(patch,page.texture,Vector3(),Vector3(rect.position.x,rect.position.y,0),
-                        Vector3(rect.size.x,rect.size.y,1),0,0,0,0);
-                device->free_rid(patch);
-                if(error!=OK)return false;
-                uploaded_bytes+=uint64_t(rect.size.x)*rect.size.y*4;
-            }
-        }
-		if(atlas_dirty) resources.acknowledge_upload(index);
-		if (!page.texture.is_valid()) {
-			return false;
-		}
+    const int page_count=resources.page_count();
+    bool mask_bindings_changed=uploaded_pool_bindings!=resources.pool_binding_revision() || page_count!=gpu_pages.size();
+    for(int i=page_count;i<gpu_pages.size();++i)release_page(device,gpu_pages.write[i]);
+    if(gpu_pages.resize(page_count)!=OK)return false;
+    for(int index=0;index<gpu_pages.size();++index) {
+        auto &page=gpu_pages.write[index];
+        const auto texture=resources.pool_rd_texture(index);
+        if(page.texture!=texture) {release_page(device,page);page.texture=texture;page.size=resources.page_size(index);mask_bindings_changed=true;}
+        if(!texture.is_valid())continue;
         if(!page.blend_uniform.is_valid()) {
             RD::Uniform backdrop;backdrop.uniform_type=RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;backdrop.binding=0;backdrop.append_id(sampler);backdrop.append_id(page.texture);
             page.blend_uniform=device->uniform_set_create(VectorView(&backdrop,1),shader,2);
@@ -981,11 +931,12 @@ bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {
         }
     }
     uploaded_atlas_revision=atlas_revision;
+    uploaded_pool_bindings=resources.pool_binding_revision();
 	return true;
 }
 
 bool HCSRNewestSceneRenderer::prepare_gpu_resources(RenderingDevice *device) {
-    if (!uploaded && !upload(device)) return false;
+    if ((!uploaded || uploaded_atlas_revision!=resources.atlas_revision() || uploaded_pool_bindings!=resources.pool_binding_revision()) && !upload(device)) return false;
     uploaded = true;
     return true;
 }
@@ -1118,7 +1069,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
     struct TimestampEnd { RenderingDevice *device; String label; bool active;
         ~TimestampEnd() { if(active) device->capture_timestamp(label+"/end"); }
     } timestamp_end{device,label,profile_gpu};
-	if (!uploaded && !upload(device)) {
+	if (!prepare_gpu_resources(device)) {
 		return false;
 	}
 	uploaded = true;
@@ -1399,8 +1350,8 @@ void HCSRNewestSceneRenderer::release_group_pool(RenderingDevice *device,GroupPo
 }
 
 void HCSRNewestSceneRenderer::release_page(RenderingDevice *device,GpuPage &page) {
-    if(device) for(RID rid:{page.uniform,page.mask_uniform,page.blend_uniform,page.texture})
-        if(rid.is_valid()) device->free_rid(rid);
+    if(device) for(RID rid:{page.uniform,page.mask_uniform,page.blend_uniform})
+        if(rid.is_valid() && device->uniform_set_is_valid(rid)) device->free_rid(rid);
     page=GpuPage();
 }
 
@@ -1434,7 +1385,7 @@ void HCSRNewestSceneRenderer::release(RenderingDevice *device) {
 	}
 	coverage=CoverageGpu();
 	gpu_pages.clear();
-    uploaded_atlas_revision=UINT64_MAX;
+    uploaded_atlas_revision=UINT64_MAX;uploaded_pool_bindings=UINT64_MAX;
 	vertices.clear();
 	batches.clear();
 	pipeline = fused_pipeline = shadow_pipeline = buffer = sampler = shader = document_shader = document_pipeline = RID();
@@ -1646,8 +1597,8 @@ Dictionary HCSRNewestSceneRenderer::get_statistics() const {
         atlas_bytes+=uint64_t(size.x)*size.y*4;++atlas_pages;
     }
     result["gpu_atlas_pages"]=atlas_pages;
-    result["gpu_atlas_bytes"]=atlas_bytes;
-    result["gpu_atlas_retired_pages"]=retired_atlas_pages;
+    result["gpu_atlas_borrowed_bytes"]=atlas_bytes;
+    result["gpu_atlas_bytes"]=atlas_bytes; // Borrowed compatibility alias; deduplicate atlas_pool_id.
     result["geometry_words"] = vertices.size();
     result["prepared_geometry_bytes"] = vertices.size()*sizeof(hcsr::render::scene_word);
     result["gpu_geometry"] = gpu_geometry;
@@ -1689,7 +1640,7 @@ Dictionary HCSRNewestSceneRenderer::get_statistics() const {
     const uint64_t buffers=uint64_t(buffer_capacity)+state_capacity+clip_capacity+plane_capacity+primitive_capacity+hierarchy_capacity
         +coverage.capacities[0]+coverage.capacities[1]+coverage.capacities[2]+coverage.capacities[3]+uint64_t(document_region_capacity)*48;
     result["gpu_buffer_reserved_bytes"]=buffers;
-    result["owned_gpu_pixel_and_buffer_bytes"]=atlas_bytes+bytes+underlay_bytes+blend_bytes+buffers;
+    result["owned_gpu_pixel_and_buffer_bytes"]=bytes+underlay_bytes+blend_bytes+buffers;
     result["opacity_target_allocations"] = group_allocations;
     result["render_passes"] = last_render_passes;
     result["disjoint_opacity_groups"] = last_disjoint_groups;
@@ -1716,13 +1667,14 @@ Dictionary HCSRNewestSceneRenderer::get_statistics() const {
         const int gl_atlas_pages=gl.atlas_array?gl.atlas_layers:0;
         gl_atlas=uint64_t(gl_atlas_pages)*gl.atlas_extent*gl.atlas_extent*4+(gl.empty_texture?4:0);
         result["gpu_atlas_pages"]=gl_atlas_pages;
-        result["gpu_atlas_bytes"]=gl_atlas;
+        result["gpu_atlas_borrowed_bytes"]=gl_atlas;
+        result["gpu_atlas_bytes"]=gl_atlas; // Borrowed compatibility alias.
         result["gpu_buffer_reserved_bytes"]=gl_buffers;
         result["opacity_target_bytes"]=gl_groups;
         result["blend_snapshot_bytes"]=gl_blends;
         result["underlay_target_bytes"]=gl_underlays;
         result["compositing_scratch_bytes"]=gl_groups+gl_underlays+gl_blends;
-        result["owned_gpu_pixel_and_buffer_bytes"]=gl_atlas+gl_buffers+gl_groups+gl_underlays+gl_blends;
+        result["owned_gpu_pixel_and_buffer_bytes"]=(gl.empty_texture?4:0)+gl_buffers+gl_groups+gl_underlays+gl_blends;
         result["opengl_full_target_compositing"]=false;
         result["ordered_backdrop_supported"]=true;
     }

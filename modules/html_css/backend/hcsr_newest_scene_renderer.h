@@ -9,16 +9,15 @@
 #include "servers/rendering/canvas_render_target_preparation.h"
 
 // Shares compact surface submission and local hierarchy across GPU adapters.
-// The view owns raster validity/allocation; this renderer owns GPU mirrors and
-// presentation scratch resources, never a second appearance cache.
+// The context atlas owns shared pixels/GPU pages. This renderer owns per-view
+// bindings and presentation scratch, never another appearance cache.
 class HCSRNewestSceneRenderer {
     HCSRNewestRasterResources &resources;
     using Entry = HCSRNewestRasterResources::Entry;
     struct GpuPage { RID texture, uniform, mask_uniform,blend_uniform; Size2i size; };
     Vector<GpuPage> gpu_pages;
     static void release_page(RenderingDevice *,GpuPage &);
-    uint64_t retired_atlas_pages=0;
-    uint64_t uploaded_atlas_revision=UINT64_MAX;
+    uint64_t uploaded_atlas_revision=UINT64_MAX,uploaded_pool_bindings=UINT64_MAX;
     Vector<Entry> backdrop_entries;
     Vector<uint64_t> backdrop_identities;
     uint32_t backdrop_first_primitive=0;
