@@ -1,3 +1,4 @@
+#include "core/config/project_settings.h"
 /**************************************************************************/
 /*  html_surface_hcsr_newest_backend.cpp                                  */
 /**************************************************************************/
@@ -1662,3 +1663,17 @@ HTMLSurfaceHCSRNewestBackend::~HTMLSurfaceHCSRNewestBackend() {
 }
 
 void HTMLSurfaceHCSRNewestBackend::get_gpu_backdrop_frame(HTMLGPUBackdropFrame &r_frame) const { MutexLock lock(state->mutex); r_frame = state->active_backdrop; }
+
+Error HTMLSurfaceHCSRNewestBackend::capture_process_memory(const String &p_directory, int p_timeout_seconds) {
+    if(p_timeout_seconds<1 || p_timeout_seconds>120 || p_directory.is_empty())return ERR_INVALID_PARAMETER;
+    // Quiesce pending packet/resource work before the process-wide diagnostic.
+    // The main thread remains blocked, so no other view advances its scene.
+    auto *server=RenderingServer::get_singleton();if(server)server->sync();
+    MutexLock lock(state->mutex);
+    if(state->closing)return ERR_UNCONFIGURED;
+    const auto directory=ProjectSettings::get_singleton()->globalize_path(p_directory).utf8();
+    const auto result=hcsr_process_capture_memory(state->runtime,{directory.get_data(),size_t(directory.length())},p_timeout_seconds);
+    if(result==HCSR_UNSUPPORTED)return ERR_UNAVAILABLE;
+    if(result==HCSR_BUSY)return ERR_BUSY;
+    return result==HCSR_OK?OK:ERR_INVALID_DATA;
+}

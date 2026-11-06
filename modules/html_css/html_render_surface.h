@@ -102,6 +102,7 @@ public:
 	bool uses_generation_bound_input() const;
 	Dictionary get_frame_synchronization() const;
 	Dictionary trim_process_managed_memory();
+	Error capture_process_memory(const String &p_directory, int p_timeout_seconds = 60);
 	Ref<CanvasRenderTargetPreparation> get_canvas_render_target_preparation() const;
 	bool uses_ordered_backdrop_submission() const;
 	uint64_t get_active_host_frame_number() const;

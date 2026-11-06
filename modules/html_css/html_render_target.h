@@ -92,6 +92,7 @@ public:
 	Error set_text_selection(const StringName &p_id, int p_start, int p_end);
 	Dictionary get_form_control_state(const StringName &p_id);
 	Dictionary trim_process_managed_memory();
+	Error capture_process_memory(const String &p_directory, int p_timeout_seconds = 60);
 	Rect2 get_element_rect(const StringName &p_id) const;
 	Rect2 get_element_html_rect(const StringName &p_id) const;
 

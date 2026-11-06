@@ -209,6 +209,14 @@
 				Returns dictionaries describing CSS backdrop-filter regions reported by the latest frame. Each dictionary contains [code]element_id[/code], [code]bounds[/code], [code]blur_radius_css_px[/code], four border radius fields, [code]opacity[/code], [code]flags[/code], [code]supported[/code], and [code]filter_operations[/code]. Bounds and radii are in logical HTML coordinates. Each filter operation dictionary contains [code]type[/code] and [code]amount[/code].
 			</description>
 		</method>
+		<method name="capture_process_memory">
+			<return type="int" enum="Error" />
+			<param index="0" name="directory" type="String" />
+			<param index="1" name="timeout_seconds" type="int" default="60" />
+			<description>
+				Diagnostic builds only: blocks the main thread while the external [code]NativeAotMemoryCapture[/code] tool records an ownership census of the HCSR managed heap shared by all HTML views. Writes the handshake files into the fresh [param directory], forces one full compacting collection, and waits up to [param timeout_seconds] (1 to 120) for the collector. Returns [constant ERR_UNAVAILABLE] immediately in normal builds, [constant ERR_BUSY] while a trim or another capture runs, and [constant ERR_INVALID_DATA] if the capture fails or times out. Never pass paths derived from HTML or user data.
+			</description>
+		</method>
 		<method name="trim_process_managed_memory">
 			<return type="Dictionary" />
 			<description>

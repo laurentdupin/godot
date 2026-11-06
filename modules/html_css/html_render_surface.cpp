@@ -746,3 +746,7 @@ HTMLRenderSurface::~HTMLRenderSurface() {
 		memdelete(backend);
 	}
 }
+
+Error HTMLRenderSurface::capture_process_memory(const String &p_directory, int p_timeout_seconds) {
+    return backend != nullptr ? backend->capture_process_memory(p_directory, p_timeout_seconds) : ERR_UNCONFIGURED;
+}

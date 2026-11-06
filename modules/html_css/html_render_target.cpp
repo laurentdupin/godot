@@ -123,6 +123,7 @@ void HTMLRenderTarget::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_text_selection", "id", "start", "end"), &HTMLRenderTarget::set_text_selection);
 	ClassDB::bind_method(D_METHOD("get_form_control_state", "id"), &HTMLRenderTarget::get_form_control_state);
 	ClassDB::bind_method(D_METHOD("trim_process_managed_memory"), &HTMLRenderTarget::trim_process_managed_memory);
+	ClassDB::bind_method(D_METHOD("capture_process_memory", "directory", "timeout_seconds"), &HTMLRenderTarget::capture_process_memory, DEFVAL(60));
 	ClassDB::bind_method(D_METHOD("get_element_rect", "id"), &HTMLRenderTarget::get_element_rect);
 	ClassDB::bind_method(D_METHOD("get_element_html_rect", "id"), &HTMLRenderTarget::get_element_html_rect);
 
@@ -417,4 +418,8 @@ HTMLRenderTarget::HTMLRenderTarget() {
 	surface->set_size(size);
 	surface->set_backend_preference(html_render_target_to_surface_backend_preference(backend_preference));
 	surface->render_now("HTMLRenderTarget");
+}
+
+Error HTMLRenderTarget::capture_process_memory(const String &p_directory, int p_timeout_seconds) {
+    return surface->capture_process_memory(p_directory, p_timeout_seconds);
 }

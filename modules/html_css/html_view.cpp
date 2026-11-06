@@ -357,6 +357,7 @@ void HTMLView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_last_frame_budget_result"), &HTMLView::get_last_frame_budget_result);
 	ClassDB::bind_method(D_METHOD("get_frame_scheduler_diagnostics"), &HTMLView::get_frame_scheduler_diagnostics);
 	ClassDB::bind_method(D_METHOD("trim_process_managed_memory"), &HTMLView::trim_process_managed_memory);
+	ClassDB::bind_method(D_METHOD("capture_process_memory", "directory", "timeout_seconds"), &HTMLView::capture_process_memory, DEFVAL(60));
 	ClassDB::bind_method(D_METHOD("set_logical_size", "logical_size"), &HTMLView::set_logical_size);
 	ClassDB::bind_method(D_METHOD("get_logical_size"), &HTMLView::get_logical_size);
 	ClassDB::bind_method(D_METHOD("create_output", "size", "mipmaps"), &HTMLView::create_output, DEFVAL(false));
@@ -2379,4 +2380,8 @@ HTMLView::~HTMLView() {
 	for (uint64_t output_id : output_ids) {
 		surface->destroy_presentation_output(output_id);
 	}
+}
+
+Error HTMLView::capture_process_memory(const String &p_directory, int p_timeout_seconds) {
+    return surface->capture_process_memory(p_directory, p_timeout_seconds);
 }

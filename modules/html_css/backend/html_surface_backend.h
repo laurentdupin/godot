@@ -101,6 +101,7 @@ public:
 	virtual Error prepare_host_frame(uint64_t p_host_frame, double p_time_seconds) { return OK; }
 	virtual Dictionary get_frame_synchronization() const { return Dictionary(); }
 	virtual Dictionary trim_process_managed_memory() { return Dictionary(); }
+	virtual Error capture_process_memory(const String &, int) { return ERR_UNAVAILABLE; }
 	virtual Ref<CanvasRenderTargetPreparation> get_canvas_render_target_preparation() const { return Ref<CanvasRenderTargetPreparation>(); }
 	virtual bool uses_ordered_backdrop_submission() const { return false; }
 	virtual bool poll_pending_output(bool *r_waiting_for_completion = nullptr) {
