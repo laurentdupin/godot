@@ -1018,7 +1018,7 @@ Dictionary HTMLSurfaceHCSRNewestBackend::get_frame_synchronization() const {
 	// Deliberately opt-in: this walks live document data, never on the render hot path.
 	static const bool memory_census_enabled = OS::get_singleton()->get_environment("HCSR_MEMORY_CENSUS") == "1";
 	if (memory_census_enabled && state->scene != 0) {
-		static const char *names[] = {"unknown", "node_slots", "child_slots", "components", "computed_maps", "cascaded_maps", "style_prototypes", "style_values", "node_style_text_strings", "text_runs", "glyphs", "text_placements", "text_segments", "text_breaks", "bidi_levels", "layout_fragments", "surface_pages", "draw_pages", "raster_active", "raster_inactive", "scratch_vertices", "scratch_draws", "scratch_surfaces"};
+		static const char *names[] = {"unknown", "node_slots", "child_slots", "components", "computed_maps", "cascaded_maps", "style_prototypes", "style_values", "node_style_text_strings", "text_runs", "glyphs", "text_placements", "text_segments", "text_breaks", "bidi_levels", "layout_fragments", "surface_pages", "draw_pages", "raster_active", "raster_inactive", "scratch_vertices", "scratch_draws", "scratch_surfaces", "compiler_rule_lists", "compiled_specified_declarations", "compiled_expanded_declarations", "compiled_selector_lists", "inline_style_inputs", "cascade_combination_inputs", "element_attributes", "unresolved_cascade_maps"};
 		uint32_t count = 0;
 		if (hcsr_scene_get_memory_census(state->scene, nullptr, 0, &count) == HCSR_BUFFER_TOO_SMALL && count <= 1024) {
 			Vector<hcsr_memory_census_entry_t> entries;

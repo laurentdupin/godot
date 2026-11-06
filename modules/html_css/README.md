@@ -496,3 +496,10 @@ The returned dictionary includes `elapsed_ms`, `managed_before/after` and
 `committed_before/after`; unsupported backends return an empty dictionary. This
 can pause every HCSR view. It is never called automatically during rendering,
 hide/show or diagnostics; it does not release font, atlas or GPU resources.
+
+The memory census now also includes compiler-owned rule/selector/declaration
+lists, inline inputs, cascade combinations, unresolved maps and element attributes
+(categories 23–30). Compiler strings/values use the same identity deduplication.
+Dictionary entry sizes, some compiler indexes/keyframes and native host resources
+remain outside exact byte accounting. Offline CLR field-graph inspection is
+available through HCSR's reference host; it is not run by the NativeAOT renderer.
