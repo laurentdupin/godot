@@ -366,8 +366,10 @@ Queries return the transformed, axis-aligned border box, including scrolling,
 without clipping it to ancestors or testing occlusion/pointer eligibility. They
 generate no pointer events, hover changes, frame requests, or paint work.
 Missing IDs, elements without a rendered box (including `display:none` ancestors),
-and documents without a completed layout return `Rect2()`. Hiding the source
-Godot Control does not hide the HTML document from these queries.
+and documents without a completed layout return `Rect2()`. A box with a zero
+layout width or height keeps its position and remaining extent when untransformed.
+Use `has_area()` to check whether the returned rectangle has positive area.
+Hiding the source Godot Control does not hide the HTML document from these queries.
 
 Geometry is from the last completed scene step. Mutations are queued: a query
 immediately after a mutation still sees the previous committed layout. Wait for

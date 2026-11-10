@@ -15,11 +15,15 @@ html,body{margin:0}button{box-sizing:border-box;border:2px solid black;padding:0
 #cover{position:absolute;left:280px;top:25px;width:70px;height:40px;background:red;z-index:2}
 #summary{position:absolute;left:20px;top:150px;width:240px}
 #summary p{margin:0;line-height:20px}
+#squeezed{position:absolute;left:20px;top:220px;display:grid;width:200px;grid-template-columns:minmax(0,1fr) auto;gap:10px}
+#squeezed p{margin:0;line-height:20px}
+#squeezed-action{width:190px;height:20px}
 </style><button id='absolute' data-godot-action='absolute'>Absolute</button>
 <div id='flex'><button id='first' data-godot-action='first'>First</button><button id='second' data-godot-action='second'>Second</button></div>
 <button id='none'>Hidden</button><div class='hidden'><div style='position:relative'><button id='descendant' style='position:absolute'>Descendant</button></div></div>
 <button id='covered'>Covered</button><div id='cover'></div>
-<div id='summary'><label id='summary-label'>Data</label><p id='summary-size'>76 B</p></div>"""
+<div id='summary'><label id='summary-label'>Data</label><p id='summary-size'>76 B</p></div>
+<div id='squeezed'><div><p id='squeezed-size'>…</p></div><div id='squeezed-action'></div></div>"""
 
 func _initialize():
     _run.call_deferred()
@@ -83,6 +87,7 @@ func _run():
         _check(label_rect.has_area() and label_rect.position.is_equal_approx(Vector2(20, 150)), 'Inline label has a layout box')
         var size_rect := view.get_element_html_rect('summary-size')
         _check(is_equal_approx(size_rect.size.y, 20), 'Ordinary space in the size fits on one line')
+        _check(view.get_element_html_rect('squeezed-size').is_equal_approx(Rect2(20, 220, 0, 20)), 'Zero-width paragraph preserves its position and height')
         for id in ['', 'missing', 'none', 'descendant']:
             _check(view.get_element_rect(id) == Rect2(), 'Empty geometry for ' + id)
         if mode == HTMLView.VIEWPORT_SIZE_PHYSICAL_SIZE:
@@ -112,9 +117,14 @@ func _run():
         _check(view.get_element_html_rect('absolute').position.is_equal_approx(Vector2(80, 45)), 'Batched move reflected')
         _check(view.set_element_text('summary-label', 'Paramètres enregistrés') == OK, 'Inline text mutation accepted')
         _check(view.set_element_text('summary-size', '414 B') == OK, 'Paragraph text mutation accepted')
+        _check(view.set_element_text('squeezed-size', '76 B') == OK, 'Zero-width paragraph text mutation accepted')
         await _frames()
         _check(view.get_element_html_rect('summary-label').size.x > label_rect.size.x, 'Inline query reflects committed text mutation')
         _check(view.get_element_html_rect('summary-size').is_equal_approx(size_rect), 'Paragraph remains queryable after text mutation')
+        var squeezed_html := view.get_element_html_rect('squeezed-size')
+        var squeezed_local := view.get_element_rect('squeezed-size')
+        _check(squeezed_html.is_equal_approx(Rect2(20, 220, 0, 40)), 'Zero-width paragraph reports both wrapped lines after mutation')
+        _check(not squeezed_local.has_area() and view.local_to_html_position(squeezed_local.position).is_equal_approx(squeezed_html.position) and view.local_to_html_position(squeezed_local.end).is_equal_approx(squeezed_html.end), 'Zero-width local geometry preserves the two endpoints')
         view.hide()
         await _frames(2)
         _check(view.get_element_rect('absolute').has_area(), 'Hidden source Control retains document geometry')
@@ -128,6 +138,7 @@ func _run():
     _check(target.get_element_rect('absolute').is_equal_approx(Rect2(40, 25, 100, 40)), 'RenderTarget geometry parity')
     _check(target.get_element_html_rect('absolute') == target.get_element_rect('absolute'), 'RenderTarget spaces coincide')
     _check(target.get_element_html_rect('summary-label').has_area(), 'RenderTarget inline geometry parity')
+    _check(target.get_element_rect('squeezed-size').is_equal_approx(Rect2(20, 220, 0, 20)), 'RenderTarget zero-width geometry parity')
     target.queue_free()
     await _frames(2)
     print('ELEMENT_GEOMETRY_', 'FAIL' if failed else 'PASS')
