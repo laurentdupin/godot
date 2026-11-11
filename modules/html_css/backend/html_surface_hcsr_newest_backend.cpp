@@ -690,6 +690,8 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
         set_terminal(state, "hcsr_newest could not install the host stylesheet service.");
         return ERR_CANT_CREATE;
     }
+	static const bool profile = OS::get_singleton()->get_environment("HCSR_RECORD_PROFILE") == "1";
+	const uint64_t source_start = profile ? OS::get_singleton()->get_ticks_usec() : 0;
 	if (hcsr_source_create(state->runtime, &source_desc, &state->source) != HCSR_OK) {
 		set_terminal(state, scene_error(state, "hcsr_newest could not create the document source."));
 		return ERR_INVALID_DATA;
@@ -699,9 +701,14 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
 	scene_desc.viewport_width = state->logical_size.x;
 	scene_desc.viewport_height = state->logical_size.y;
 	scene_desc.device_scale = state->device_scale;
+	const uint64_t scene_start = profile ? OS::get_singleton()->get_ticks_usec() : 0;
 	if (hcsr_scene_create(state->source, &scene_desc, &state->scene) != HCSR_OK) {
 		set_terminal(state, scene_error(state, "hcsr_newest could not create the scene."));
 		return ERR_CANT_CREATE;
+	}
+	if (profile) {
+		const uint64_t scene_end = OS::get_singleton()->get_ticks_usec();
+		print_line("HCSR_SCENE_CREATE|" + uitos(scene_start - source_start) + "|" + uitos(scene_end - scene_start));
 	}
 	// Submit accepted startup updates before the first step can build a packet.
 	for (const State::PendingMutationBatch &batch : state->pending_mutations) {
