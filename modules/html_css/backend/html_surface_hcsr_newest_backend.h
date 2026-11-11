@@ -22,6 +22,7 @@ class HTMLSurfaceHCSRNewestBackend : public HTMLSurfaceBackend {
 public:
 	struct State;
 	static void _render_on_render_thread(uint64_t p_state_pointer);
+	static void _collect_atlas_statistics_on_render_thread(uint64_t p_state_pointer);
 	static void _prepare_canvas_on_render_thread(uint64_t p_state_pointer, const CanvasRenderTargetPreparation::Input &p_input);
 	static void _suspend_main_on_render_thread(uint64_t p_state_pointer);
 	static void _destroy_state_on_render_thread(uint64_t p_state_pointer);

@@ -84,6 +84,7 @@ class HCSRNewestSceneRenderer {
     uint32_t last_render_passes = 0;
     bool last_disjoint_groups = false;
     void release_groups(RenderingDevice *device);
+    void invalidate_group_buffer_bindings(RenderingDevice *device);
     static void release_group_target(RenderingDevice *,GroupTarget &);
     static void release_group_pool(RenderingDevice *,GroupPool &);
     uint64_t retired_group_targets = 0;
