@@ -9,6 +9,58 @@
 #include "hcsr_image_codec.h"
 #include "core/os/os.h"
 #include <cmath>
+#include <unordered_map>
+
+// Device-owned shader programs are shared by live views. Buffer bindings and
+// output textures remain per view. Access and final release run on the render thread.
+struct HCSRNewestSceneRenderer::SharedPrograms {
+    RenderingDevice *device;
+    RID shader, hierarchy_shader, hierarchy_pipeline;
+    HashMap<RenderingDevice::FramebufferFormatID, RID> main[2];
+
+    explicit SharedPrograms(RenderingDevice *p_device) : device(p_device) {}
+
+    ~SharedPrograms() {
+        auto *server = RenderingServer::get_singleton();
+        if (!server || server->get_rendering_device() != device) return;
+        for (const auto &variants : main)
+            for (const auto &entry : variants)
+                if (entry.value.is_valid()) device->free_rid(entry.value);
+        for (RID rid : { hierarchy_pipeline, hierarchy_shader, shader })
+            if (rid.is_valid()) device->free_rid(rid);
+    }
+
+    static std::shared_ptr<SharedPrograms> acquire(RenderingDevice *p_device) {
+        static std::unordered_map<RenderingDevice *, std::weak_ptr<SharedPrograms>> devices;
+        for (auto it = devices.begin(); it != devices.end();)
+            it = it->second.expired() ? devices.erase(it) : std::next(it);
+        auto programs = devices[p_device].lock();
+        if (!programs) {
+            programs = std::make_shared<SharedPrograms>(p_device);
+            devices[p_device] = programs;
+        }
+        return programs;
+    }
+};
+
+RID HCSRNewestSceneRenderer::main_pipeline(RenderingDevice::FramebufferFormatID p_format, bool p_fused) {
+    using RD = RenderingDevice;
+    auto &variants = shared_programs->main[p_fused];
+    if (const RID *existing = variants.getptr(p_format)) return *existing;
+    auto blend = RD::PipelineColorBlendState::create_blend();
+    blend.attachments.write[0].src_alpha_blend_factor = RD::BLEND_FACTOR_ONE;
+    RD::PipelineSpecializationConstant constant;
+    constant.constant_id = 0;
+    constant.type = RD::PIPELINE_SPECIALIZATION_CONSTANT_TYPE_BOOL;
+    constant.bool_value = p_fused;
+    Vector<RD::PipelineSpecializationConstant> constants;
+    constants.push_back(constant);
+    RID pipeline = shared_programs->device->render_pipeline_create(shader, p_format, RD::INVALID_ID,
+            RD::RENDER_PRIMITIVE_TRIANGLES, RD::PipelineRasterizationState(), RD::PipelineMultisampleState(),
+            RD::PipelineDepthStencilState(), blend, 0, 0, constants);
+    if (pipeline.is_valid()) variants.insert(p_format, pipeline);
+    return pipeline;
+}
 
 hcsr_gpu_state_t HCSRNewestSceneRenderer::reference_state(const hcsr_draw_packet_view_t &packet,uint32_t index) const {
     return hcsr::render::query_reference_state(packet,index,local_hierarchy?&hierarchy:nullptr);
@@ -713,8 +765,7 @@ bool HCSRNewestSceneRenderer::draw_backdrop_mask(RenderingDevice *device,RID tar
     Vector<RID> attachments;attachments.push_back(target);
     RID framebuffer=device->framebuffer_create(attachments);
     if(!framebuffer.is_valid())return false;
-    if(!pipeline.is_valid()) {auto blend=RD::PipelineColorBlendState::create_blend();blend.attachments.write[0].src_alpha_blend_factor=RD::BLEND_FACTOR_ONE;
-        pipeline=device->render_pipeline_create(shader,device->framebuffer_get_format(framebuffer),RD::INVALID_ID,RD::RENDER_PRIMITIVE_TRIANGLES,RD::PipelineRasterizationState(),RD::PipelineMultisampleState(),RD::PipelineDepthStencilState(),blend);}
+    const RID pipeline = main_pipeline(device->framebuffer_get_format(framebuffer), false);
     if(!pipeline.is_valid()){device->free_rid(framebuffer);return false;}
     const Color clear(0,0,0,1);
     auto list=device->draw_list_begin(framebuffer,RD::DRAW_CLEAR_COLOR_ALL,VectorView(&clear,1));
@@ -741,7 +792,8 @@ bool HCSRNewestSceneRenderer::draw_backdrop_mask(RenderingDevice *device,RID tar
 
 bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {
 	using RD = RenderingDevice;
-	if (!shader.is_valid()) {
+	if (!shared_programs) shared_programs = SharedPrograms::acquire(device);
+	if (!shared_programs->shader.is_valid()) {
         const char *sources[] = { hcsr::shaders::godot_vertex, hcsr::shaders::godot_fragment };
 		Vector<RD::ShaderStageSPIRVData> stages;
 		for (int i = 0; i < 2; i++) {
@@ -755,9 +807,10 @@ bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {
 			}
 			stages.push_back(stage);
 		}
-		shader = device->shader_create_from_spirv(stages, "HCSR grayscale and image atlas");
-		if(!shader.is_valid())return false;
+		shared_programs->shader = device->shader_create_from_spirv(stages, "HCSR grayscale and image atlas");
+		if (!shared_programs->shader.is_valid()) return false;
 	}
+	shader = shared_programs->shader;
 	if(!sampler.is_valid()) {
 		RD::SamplerState sampling;
 		sampling.min_filter = sampling.mag_filter = RD::SAMPLER_FILTER_LINEAR;
@@ -820,6 +873,8 @@ bool HCSRNewestSceneRenderer::upload(RenderingDevice *device) {
         instance_uploaded_bytes+=instance_bytes;
     }
     if(local_hierarchy) {
+        RID &hierarchy_shader = shared_programs->hierarchy_shader;
+        RID &hierarchy_pipeline = shared_programs->hierarchy_pipeline;
         if(!hierarchy_shader.is_valid()) {
             RD::ShaderStageSPIRVData stage;stage.shader_stage=RD::SHADER_STAGE_COMPUTE;
             String error;stage.spirv=device->shader_compile_spirv_from_source(stage.shader_stage,hcsr::shaders::hierarchy_glsl,RD::SHADER_LANGUAGE_GLSL,&error);
@@ -1080,17 +1135,7 @@ bool HCSRNewestSceneRenderer::draw(RenderingDevice *device, RID target, const Co
 		return false;
 	}
     const bool fused=std::any_of(batches.ptr(),batches.ptr()+batches.size(),[](const Batch &batch){return batch.backdrop_fused;});
-    RID &draw_pipeline=fused?fused_pipeline:pipeline;
-	if (!draw_pipeline.is_valid()) {
-		auto blend = RD::PipelineColorBlendState::create_blend();
-		blend.attachments.write[0].src_alpha_blend_factor = RD::BLEND_FACTOR_ONE;
-        Vector<RD::PipelineSpecializationConstant> constants;
-        RD::PipelineSpecializationConstant enabled;
-        enabled.constant_id=0;enabled.type=RD::PIPELINE_SPECIALIZATION_CONSTANT_TYPE_BOOL;enabled.bool_value=fused;
-        constants.push_back(enabled);
-		draw_pipeline = device->render_pipeline_create(shader, device->framebuffer_get_format(framebuffer), RD::INVALID_ID,
-				RD::RENDER_PRIMITIVE_TRIANGLES, RD::PipelineRasterizationState(), RD::PipelineMultisampleState(), RD::PipelineDepthStencilState(), blend,0,0,constants);
-	}
+    const RID draw_pipeline = main_pipeline(device->framebuffer_get_format(framebuffer), fused);
 	if (!draw_pipeline.is_valid()) {
 		return false;
 	}
@@ -1395,7 +1440,7 @@ void HCSRNewestSceneRenderer::release(RenderingDevice *device) {
         }
         for(GpuPage &page:gpu_pages) release_page(device,page);
         if(document_region_uniform.is_valid() && device->uniform_set_is_valid(document_region_uniform))device->free_rid(document_region_uniform);
-		for (RID rid : { hierarchy_uniform,hierarchy_pipeline,hierarchy_shader,hierarchy_buffer,pipeline,fused_pipeline, shadow_pipeline, document_pipeline,document_region_pipeline,document_region_shader,document_region_buffer,document_arguments,document_descriptors,document_mapping, blend_copy_pipeline,blend_copy_shader,buffer, sampler, shader, document_shader, state_buffer,clip_buffer,plane_buffer,primitive_buffer }) {
+		for (RID rid : { hierarchy_uniform,hierarchy_buffer,shadow_pipeline, document_pipeline,document_region_pipeline,document_region_shader,document_region_buffer,document_arguments,document_descriptors,document_mapping, blend_copy_pipeline,blend_copy_shader,buffer, sampler, document_shader, state_buffer,clip_buffer,plane_buffer,primitive_buffer }) {
 			if (rid.is_valid()) {
 				device->free_rid(rid);
 			}
@@ -1406,14 +1451,15 @@ void HCSRNewestSceneRenderer::release(RenderingDevice *device) {
     uploaded_atlas_revision=UINT64_MAX;uploaded_pool_bindings=UINT64_MAX;
 	vertices.clear();
 	batches.clear();
-	pipeline = fused_pipeline = shadow_pipeline = buffer = sampler = shader = document_shader = document_pipeline = RID();
+	shared_programs.reset();
+	shadow_pipeline = buffer = sampler = shader = document_shader = document_pipeline = RID();
     blend_copy_shader=blend_copy_pipeline=RID();
     document_region_pipeline=document_region_shader=document_region_buffer=document_arguments=document_region_uniform=document_descriptors=document_mapping=RID();
     document_region_capacity=0;document_regions.clear();document_regions_dirty=true;document_snapshot_cohorts=0;
 	buffer_capacity = 0;
     state_buffer=clip_buffer=plane_buffer=primitive_buffer=RID();
     state_capacity=clip_capacity=plane_capacity=primitive_capacity=0;
-    hierarchy_uniform=hierarchy_pipeline=hierarchy_shader=hierarchy_buffer=RID();
+    hierarchy_uniform=hierarchy_buffer=RID();
     hierarchy_capacity=gpu_state_count=0;hierarchy_uploaded_revision=0;local_hierarchy=false;hierarchy.clear();
     geometry_generation=0; gpu_geometry=false; primitives.clear();
     uploaded_vertices.clear();

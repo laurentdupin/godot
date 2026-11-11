@@ -100,7 +100,7 @@ class HCSRNewestSceneRenderer {
     Vector<hcsr_gpu_plane_t> gpu_planes;
     RID state_buffer, clip_buffer, plane_buffer, primitive_buffer;
     hcsr::render::hierarchy_input hierarchy;
-    RID hierarchy_buffer,hierarchy_shader,hierarchy_pipeline,hierarchy_uniform;
+    RID hierarchy_buffer, hierarchy_uniform;
     uint32_t hierarchy_capacity=0,gpu_state_count=0;
     uint64_t hierarchy_uploaded_revision=0,hierarchy_uploaded_bytes=0,hierarchy_evaluations=0,resolved_state_uploaded_bytes=0;
     bool local_hierarchy=false;
@@ -113,7 +113,10 @@ class HCSRNewestSceneRenderer {
     double last_gpu_ms=0;
     uint64_t last_gpu_frame=0;
 
-	RID shader, sampler, buffer, pipeline, fused_pipeline, shadow_pipeline;
+	struct SharedPrograms;
+	std::shared_ptr<SharedPrograms> shared_programs;
+	RID main_pipeline(RenderingDevice::FramebufferFormatID p_format, bool p_fused);
+	RID shader, sampler, buffer, shadow_pipeline;
 	uint32_t buffer_capacity = 0;
 	bool uploaded = false;
 	uint64_t uploaded_bytes = 0;
