@@ -81,7 +81,7 @@ int main() {
 	contains(native_bytes, U"static func count(bytes: PackedByteArray) -> int:", "static native wrapper");
 	contains(native_bytes, U"&\"iB\", [bytes]", "native byte-array signature");
 	check(native_bytes.native_code.find(U"static int64_t count(CGDBytes bytes)") != std::u32string::npos, "native byte-array view");
-	check(native_bytes.native_code.find(U"cgd_native_abi_v3") != std::u32string::npos, "native library exports an ABI check");
+	check(native_bytes.native_code.find(U"cgd_native_abi_v4") != std::u32string::npos, "native library exports an ABI check");
 	bad(U"static native { }", "static native declaration block rejected");
 	contains(good(U"native PackedByteArray f() { cgd_out_alloc(cgd_out, 0); }", "byte-array output"), U"-> PackedByteArray:", "byte-array return wrapper");
 	bad(U"native int f(int n,) { return n; }", "trailing native parameter separator");

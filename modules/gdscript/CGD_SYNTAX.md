@@ -120,6 +120,9 @@ Put native declarations at script scope. A `native { ... }` block adds C declara
 
 Use `native cpp { ... }` and `native cpp int f() { ... }` for C++20. On macOS, use `native objcpp` for Objective-C++. Each script uses a single native language across its blocks and functions. Plain `native` takes the project default, which is C17 unless `cgd_native/default_language` is set to `"cpp"`.
 
+In a native body, use `cgd_print("value=%d", value)`, `cgd_print_warning(...)`, or `cgd_print_error(...)` for Godot output. These functions take printf-style format strings. C++ and Objective-C++ can also use `cgd::print("value=", value)`, `cgd::print_warning(...)`, and `cgd::print_error(...)` to join printable arguments. Warnings and errors report the CGD file and line.
+
+
 
 Use `static native` to call a native function without a script instance. A `PackedByteArray` parameter is exposed to C as `CGDBytes`, with a read-only `data` pointer and an `int64_t size` in bytes. The view shares the Godot array's storage for the duration of the call. An empty view has size zero. C code must keep accesses within that size and release any references to the view before returning.
 

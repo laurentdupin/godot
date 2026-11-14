@@ -38,6 +38,7 @@ class GDCNative : public Object {
 		PackedStringArray project_paths;
 	};
 	HashMap<ObjectID, AnalysisRequest> pending_analysis;
+	HashMap<ObjectID, AnalysisRequest> pending_build_checks;
 	struct AnalysisResult {
 		String key;
 		Array diagnostics;

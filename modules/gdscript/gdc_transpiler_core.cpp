@@ -1503,8 +1503,170 @@ public:
 																					 U"typedef struct { void *ctx; void *(*alloc)(void *, int64_t); } CGDAllocator;\n"
 																					 U"static inline void *cgd_out_alloc(CGDAllocator *out, int64_t count) { return out->alloc(out->ctx, count); }\n"
 																					 U"typedef union { int64_t integer; double floating; bool boolean; CGDBytes bytes; CGDInt32s int32s; CGDInt64s int64s; CGDFloat32s float32s; CGDFloat64s float64s; CGDVector2s vector2s; CGDVector3s vector3s; CGDString string; } CGDNativeValue;\n"
-																					 U"#ifndef CGD_MERGED_EXPORT\nCGD_LINKAGE CGD_EXPORT uint32_t cgd_native_abi_v3(void) {\n"
+																					 U"#ifndef CGD_MERGED_EXPORT\nCGD_LINKAGE CGD_EXPORT uint32_t cgd_native_abi_v4(void) {\n"
 																					 U"    return (CGD_REAL_BITS << 16) | (sizeof(CGDNativeValue) << 8) | CGD_ALIGNOF(CGDNativeValue);\n}\n#endif\n";
+				result.native_code += UR"CGD(
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+typedef struct {
+    uint32_t size;
+    void (*print)(const char *, int64_t);
+    void (*warning)(const char *, int64_t, const char *, int32_t);
+    void (*error)(const char *, int64_t, const char *, int32_t);
+} CGDHost;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+#ifdef CGD_MERGED_EXPORT
+extern const CGDHost *cgd_host;
+#else
+const CGDHost *cgd_host = NULL;
+CGD_EXPORT void cgd_native_set_host(const CGDHost *host) {
+    cgd_host = host && host->size >= sizeof(CGDHost) ? host : NULL;
+}
+#endif
+#ifdef __cplusplus
+}
+#endif
+
+static inline void cgd_log_message(int severity, const char *file, int32_t line, const char *text, size_t length) {
+    if (length && text[length - 1] == '\n') --length;
+    if (cgd_host) {
+        if (severity == 0) cgd_host->print(text, (int64_t)length);
+        else if (severity == 1) cgd_host->warning(text, (int64_t)length, file, line);
+        else cgd_host->error(text, (int64_t)length, file, line);
+    } else {
+        fwrite(text, 1, length, stderr);
+        fputc('\n', stderr);
+        fflush(stderr);
+    }
+}
+
+static inline void cgd_log_format(int severity, const char *file, int32_t line, const char *format, va_list args) {
+    char buffer[1024];
+    va_list copy;
+    va_copy(copy, args);
+    int length = vsnprintf(buffer, sizeof buffer, format, copy);
+    va_end(copy);
+    if (length >= 0 && (size_t)length < sizeof buffer) {
+        cgd_log_message(severity, file, line, buffer, (size_t)length);
+        return;
+    }
+    if (length >= 0) {
+        char *large = (char *)malloc((size_t)length + 1);
+        if (!large) {
+            cgd_log_message(severity, file, line, "(out of memory)", sizeof("(out of memory)") - 1);
+            return;
+        }
+        int written = vsnprintf(large, (size_t)length + 1, format, args);
+        if (written == length) {
+            cgd_log_message(severity, file, line, large, (size_t)length);
+            free(large);
+            return;
+        }
+        free(large);
+    }
+    cgd_log_message(severity, file, line, "(invalid format)", sizeof("(invalid format)") - 1);
+}
+
+#if defined(__clang__) || defined(__GNUC__)
+#define CGD_PRINTF_FORMAT(format_index, first_argument) __attribute__((format(printf, format_index, first_argument)))
+#define CGD_PRINTF_STRING
+#elif defined(_MSC_VER)
+#include <sal.h>
+#define CGD_PRINTF_FORMAT(format_index, first_argument)
+#define CGD_PRINTF_STRING _Printf_format_string_
+#else
+#define CGD_PRINTF_FORMAT(format_index, first_argument)
+#define CGD_PRINTF_STRING
+#endif
+
+static inline CGD_PRINTF_FORMAT(1, 2) void cgd_print(CGD_PRINTF_STRING const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    cgd_log_format(0, NULL, 0, format, args);
+    va_end(args);
+}
+
+static inline CGD_PRINTF_FORMAT(4, 5) void cgd_log_at(int severity, const char *file, int32_t line, CGD_PRINTF_STRING const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    cgd_log_format(severity, file, line, format, args);
+    va_end(args);
+}
+
+#define cgd_print_warning(...) cgd_log_at(1, __FILE__, __LINE__, __VA_ARGS__)
+#define cgd_print_error(...) cgd_log_at(2, __FILE__, __LINE__, __VA_ARGS__)
+
+#ifdef __cplusplus
+#if __has_include(<source_location>)
+#include <source_location>
+#endif
+#include <sstream>
+#include <type_traits>
+#include <utility>
+#if __has_include(<format>)
+#include <format>
+#endif
+namespace cgd {
+namespace detail {
+template<class T> void append(std::ostringstream &output, T &&value) {
+#if defined(__cpp_lib_format)
+    if constexpr (std::is_default_constructible_v<std::formatter<std::decay_t<T>, char>>) {
+        output << std::format("{}", std::forward<T>(value));
+    } else
+#endif
+    {
+        output << std::boolalpha << std::forward<T>(value);
+    }
+}
+template<class... Args> void log(int severity, const char *file, int32_t line, Args &&...args) {
+    std::ostringstream output;
+    (append(output, std::forward<Args>(args)), ...);
+    const auto text = output.str();
+    cgd_log_message(severity, file, line, text.data(), text.size());
+}
+}
+template<class... Args> void print(Args &&...args) {
+    detail::log(0, nullptr, 0, std::forward<Args>(args)...);
+}
+#if defined(__cpp_lib_source_location)
+using LogLocation = std::source_location;
+#elif defined(_MSC_VER) || defined(__clang__) || defined(__GNUC__)
+struct LogLocation {
+    const char *file;
+    int32_t line_number;
+    constexpr const char *file_name() const { return file; }
+    constexpr int32_t line() const { return line_number; }
+    static constexpr LogLocation current(const char *file = __builtin_FILE(), int32_t line = __builtin_LINE()) {
+        return {file, line};
+    }
+};
+#endif
+#if defined(__cpp_lib_source_location) || defined(_MSC_VER) || defined(__clang__) || defined(__GNUC__)
+// Deduction fixes the argument pack before the constructor captures the caller.
+template<class... Args> struct print_warning {
+    explicit print_warning(Args &&...args, LogLocation location = LogLocation::current()) {
+        detail::log(1, location.file_name(), (int32_t)location.line(), std::forward<Args>(args)...);
+    }
+};
+template<class... Args> print_warning(Args &&...) -> print_warning<Args...>;
+template<class... Args> struct print_error {
+    explicit print_error(Args &&...args, LogLocation location = LogLocation::current()) {
+        detail::log(2, location.file_name(), (int32_t)location.line(), std::forward<Args>(args)...);
+    }
+};
+template<class... Args> print_error(Args &&...) -> print_error<Args...>;
+#else
+#define print_warning(...) detail::log(1, __FILE__, __LINE__, __VA_ARGS__)
+#define print_error(...) detail::log(2, __FILE__, __LINE__, __VA_ARGS__)
+#endif
+}
+#endif
+)CGD";
 				if (native_declaration_cursor != NO_INDEX) {
 					result.native_completion_offset = result.native_code.size() + native_declaration_cursor;
 				} else if (native_function_cursor != NO_INDEX) {

@@ -128,3 +128,11 @@ The follow-up audit covers explicit `.gd` checks and language-extension comparis
 - Real editor creation test: the GD-C FileSystem menu opened the dialog with the correct dialect, saved the Node template with C-style callbacks and no compatibility syntax, and the created script executed successfully.
 - The optional existing GDScript binary-token suite reports seven diagnostic-output mismatches (match patterns, untyped declarations, an unexpected class-body identifier, and four empty-file warnings). The identical seven failures were reproduced by compiling and testing the original pre-integration parser. They are recorded rather than suppressed.
 - Final deployed-release checks passed for text, binary and compressed packs, including mixed inheritance and same-stem scripts. Invalid GD-C source returns a failed export status.
+
+### Native logging
+
+`cgd_print`, `cgd_print_warning`, and `cgd_print_error` take UTF-8 printf-style messages and route them to Godot's console and logging handlers, including the editor Output panel during Run. Native workers can call them concurrently. Warnings and errors report their original CGD source location. The logger strips one trailing newline. Standard `printf` still writes to the process's stdout.
+
+C++ and Objective-C++ can also use `cgd::print`, `cgd::print_warning`, and `cgd::print_error` with printable values. These join arguments without adding spaces. Strings, numbers, and booleans work, as do streamable types and custom formatters on standard libraries that provide `std::format`.
+
+Use matching editor and export templates with the logging ABI. The host registers logging when loading the native library. Calls made before registration, such as from native static initializers, write to stderr.

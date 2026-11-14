@@ -31,7 +31,7 @@ GDCNative *GDCNative::singleton = nullptr;
 
 namespace {
 
-constexpr int NATIVE_BUILD_SCHEMA = 6;
+constexpr int NATIVE_BUILD_SCHEMA = 7;
 
 union NativeValue {
 	int64_t integer;
@@ -44,6 +44,26 @@ union NativeValue {
 };
 
 constexpr uint32_t NATIVE_ABI_LAYOUT = (sizeof(real_t) * 8 << 16) | (sizeof(NativeValue) << 8) | alignof(NativeValue);
+
+struct NativeHost {
+	uint32_t size;
+	void (*print)(const char *, int64_t);
+	void (*warning)(const char *, int64_t, const char *, int32_t);
+	void (*error)(const char *, int64_t, const char *, int32_t);
+};
+
+const NativeHost native_host = {
+	sizeof(NativeHost),
+	[](const char *p_text, int64_t p_length) {
+		print_line(String::utf8(p_text, p_length));
+	},
+	[](const char *p_text, int64_t p_length, const char *p_file, int32_t p_line) {
+		_err_print_error("cgd_print_warning", p_file, p_line, String::utf8(p_text, p_length), false, ERR_HANDLER_WARNING);
+	},
+	[](const char *p_text, int64_t p_length, const char *p_file, int32_t p_line) {
+		_err_print_error("cgd_print_error", p_file, p_line, String::utf8(p_text, p_length));
+	},
+};
 
 struct NativeAllocator {
 	void *context;
@@ -531,8 +551,8 @@ Error add_cxx_flags(List<String> &r_args, const NativeTarget &p_target, const St
 	}
 	for (const String &flag : target_array("cxx_flags", p_target.platform, p_target.arch)) {
 		const bool standard = p_target.uses_msvc_flags()
-				? flag == "/std:c++20" || flag == "/std:c++latest"
-				: flag == "-std=c++20" || flag == "-std=c++23" || flag == "-std=gnu++20" || flag == "-std=gnu++23";
+				? flag == "/std:c++17" || flag == "/std:c++20" || flag == "/std:c++latest"
+				: flag == "-std=c++17" || flag == "-std=gnu++17" || flag == "-std=c++20" || flag == "-std=c++23" || flag == "-std=gnu++20" || flag == "-std=gnu++23";
 		const bool optimization = p_target.uses_msvc_flags()
 				? flag == "/Od" || flag == "/O1" || flag == "/O2" || flag == "/Ox"
 				: flag == "-O0" || flag == "-O1" || flag == "-O2" || flag == "-O3" || flag == "-Os";
@@ -972,11 +992,8 @@ bool resolve_analysis_frontend(const String &p_path, const String &p_language, N
 
 #ifdef TOOLS_ENABLED
 void GDCNative::request_analysis(ObjectID p_editor, const String &p_path, const String &p_code, const Callable &p_callback, bool p_check_build) {
-	const AnalysisRequest *pending = pending_analysis.getptr(p_editor);
-	if (!p_check_build && pending && pending->check_build) {
-		return;
-	}
-	pending_analysis.insert(p_editor, { p_path, p_code, p_callback, p_check_build });
+	auto &queue = p_check_build ? pending_build_checks : pending_analysis;
+	queue.insert(p_editor, { p_path, p_code, p_callback, p_check_build });
 	start_analysis();
 }
 
@@ -999,17 +1016,18 @@ void GDCNative::request_project_check(ObjectID p_editor, const Callable &p_callb
 			pending.push_back(directory->get_subdir(i));
 		}
 	}
-	pending_analysis.insert(p_editor, { String(), String(), p_callback, true, paths });
+	pending_build_checks.insert(p_editor, { String(), String(), p_callback, true, paths });
 	start_analysis();
 }
 
 void GDCNative::start_analysis() {
-	if (analysis_task != WorkerThreadPool::INVALID_TASK_ID || pending_analysis.is_empty()) {
+	auto &queue = pending_build_checks.is_empty() ? pending_analysis : pending_build_checks;
+	if (analysis_task != WorkerThreadPool::INVALID_TASK_ID || queue.is_empty()) {
 		return;
 	}
-	const ObjectID editor = pending_analysis.begin()->key;
-	const AnalysisRequest request = pending_analysis.begin()->value;
-	pending_analysis.erase(editor);
+	const ObjectID editor = queue.begin()->key;
+	const AnalysisRequest request = queue.begin()->value;
+	queue.erase(editor);
 	analysis_task = WorkerThreadPool::get_singleton()->add_template_task(this, &GDCNative::analyze, request, false, "CGD native diagnostics");
 }
 
@@ -2164,16 +2182,39 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 		for (const String &entry : runtime_libraries(p_platform, p_arch)) {
 			stamp(native_path(entry));
 		}
+		const PackedStringArray library_dirs = target_array("library_dirs", p_platform, p_arch);
 		for (const String &entry : target_array("libraries", p_platform, p_arch)) {
-			const String path = native_path(entry);
-			if (FileAccess::exists(path)) {
-				stamp(path);
+			if (!windows && !entry.is_valid_ascii_identifier()) {
+				const String path = native_path(entry);
+				if (FileAccess::exists(path)) {
+					stamp(path);
+				}
+				continue;
 			}
-		}
-		for (const String &entry : target_array("library_dirs", p_platform, p_arch)) {
-			const String directory_path = native_path(entry);
-			for (const String &file : DirAccess::get_files_at(directory_path)) {
-				stamp(directory_path.path_join(file));
+			if (windows) {
+				const String path = native_path(entry);
+				if (FileAccess::exists(path)) {
+					stamp(path);
+				}
+			}
+			if (entry != entry.get_file()) {
+				continue;
+			}
+			for (const String &directory : library_dirs) {
+				const String base = native_path(directory);
+				if (windows) {
+					const String path = base.path_join(entry.get_extension().is_empty() ? entry + ".lib" : entry);
+					if (FileAccess::exists(path)) {
+						stamp(path);
+					}
+				} else {
+					for (const char *extension : { ".a", ".so", ".dylib", ".tbd" }) {
+						const String path = base.path_join("lib" + entry + extension);
+						if (FileAccess::exists(path)) {
+							stamp(path);
+						}
+					}
+				}
 			}
 		}
 		for (const char *name : { "PATH", "LIB", "LIBPATH", "LIBRARY_PATH", "SDKROOT", "DEVELOPER_DIR", "MACOSX_DEPLOYMENT_TARGET", "CL", "_CL_", "LINK", "_LINK_" }) {
@@ -2364,11 +2405,17 @@ Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const St
 				} else {
 					ERR_FAIL_COND_V_MSG(os->open_dynamic_library(dll, library, &options) != OK, Variant(), "Cannot load CGD native library: " + dll);
 					void *abi = nullptr;
-					if (os->get_dynamic_library_symbol_handle(library, "cgd_native_abi_v3", abi, true) != OK ||
+					if (os->get_dynamic_library_symbol_handle(library, "cgd_native_abi_v4", abi, true) != OK ||
 							!abi || reinterpret_cast<uint32_t (*)()>(abi)() != NATIVE_ABI_LAYOUT) {
 						os->close_dynamic_library(library);
 						ERR_FAIL_V_MSG(Variant(), "Incompatible CGD native ABI or engine precision. Rebuild the native library: " + dll);
 					}
+					void *set_host = nullptr;
+					if (os->get_dynamic_library_symbol_handle(library, "cgd_native_set_host", set_host, true) != OK || !set_host) {
+						os->close_dynamic_library(library);
+						ERR_FAIL_V_MSG(Variant(), "Missing CGD native logging setup. Rebuild the native library: " + dll);
+					}
+					reinterpret_cast<void (*)(const NativeHost *)>(set_host)(&native_host);
 					libraries.insert(library_key, library);
 				}
 			}
