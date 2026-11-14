@@ -34,6 +34,7 @@ class GDCNative : public Object {
 		String code;
 		Callable callback;
 		bool check_build = false;
+		PackedStringArray project_paths;
 	};
 	HashMap<ObjectID, AnalysisRequest> pending_analysis;
 	struct AnalysisResult {
@@ -63,6 +64,7 @@ public:
 #ifdef TOOLS_ENABLED
 	static bool prepare_editor_run();
 	void request_analysis(ObjectID p_editor, const String &p_path, const String &p_code, const Callable &p_callback, bool p_check_build = false);
+	void request_project_check(ObjectID p_editor, const Callable &p_callback);
 	static bool is_native_position(const String &p_code, const String &p_path, int p_row, int p_column);
 	static bool complete_code(const String &p_code, const String &p_path, List<ScriptLanguage::CodeCompletionOption> &r_options, String &r_call_hint);
 #endif

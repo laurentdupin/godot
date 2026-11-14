@@ -74,6 +74,9 @@ class ScriptTextEditor : public CodeEditorBase {
 	void _request_native_diagnostics(uint64_t p_revision);
 	List<EditorLanguage::ScriptError> native_build_errors;
 	String native_build_code;
+	Button *native_check_button = nullptr;
+	void _check_native_script();
+	void _native_project_check_finished(const String &p_path, const String &p_code, const Array &p_diagnostics, const Dictionary &p_symbols);
 	void _native_diagnostics_finished(const String &p_path, const String &p_code, const Array &p_diagnostics, const Dictionary &p_symbols);
 	void _native_build_finished(const String &p_path, const String &p_code, const Array &p_diagnostics, const Dictionary &p_symbols);
 	HashMap<String, List<EditorLanguage::ScriptError>> depended_errors;
@@ -115,6 +118,7 @@ class ScriptTextEditor : public CodeEditorBase {
 		EDIT_EVALUATE,
 		EDIT_CREATE_CODE_REGION,
 		EDIT_CHECK_NATIVE_C,
+		EDIT_CHECK_ALL_NATIVE_C,
 
 		SEARCH_LOCATE_FUNCTION,
 

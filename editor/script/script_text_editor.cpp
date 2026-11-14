@@ -56,6 +56,7 @@
 #include "editor/settings/editor_command_palette.h"
 #include "editor/settings/editor_settings.h"
 #include "editor/themes/editor_scale.h"
+#include "scene/gui/button.h"
 #include "scene/gui/grid_container.h"
 #include "scene/gui/menu_button.h"
 #include "scene/gui/rich_text_label.h"
@@ -160,6 +161,7 @@ ScriptTextEditor::EditMenusScTE::EditMenusScTE(ScriptEditor *p_se) : EditMenusCE
 	edit_menu->get_popup()->add_shortcut(ED_GET_SHORTCUT("script_text_editor/evaluate_selection"), EDIT_EVALUATE);
 #ifdef MODULE_GDSCRIPT_ENABLED
 	edit_menu->get_popup()->add_shortcut(ED_GET_SHORTCUT("script_text_editor/check_native_c"), EDIT_CHECK_NATIVE_C);
+	edit_menu->get_popup()->add_item(TTR("Check All Native Scripts"), EDIT_CHECK_ALL_NATIVE_C);
 #endif
 	_popup_move_item(EDIT_DUPLICATE_LINES, edit_menu->get_popup());
 	goto_menu->get_popup()->add_shortcut(ED_GET_SHORTCUT("script_text_editor/goto_function"), SEARCH_LOCATE_FUNCTION);
@@ -981,6 +983,7 @@ void ScriptTextEditor::_validate_script() {
 
 #ifdef MODULE_GDSCRIPT_ENABLED
 	const uint64_t revision = ++native_analysis_revision;
+	native_check_button->set_visible(script->get_path().get_extension().to_lower() == "cgd" && text.contains("native"));
 	if (script->get_path().get_extension().to_lower() == "cgd" && text.contains("native") &&
 			EDITOR_GET("text_editor/cgd/live_native_diagnostics").booleanize()) {
 		const double delay = double(EDITOR_GET("text_editor/cgd/native_diagnostics_delay_ms")) / 1000.0;
@@ -1057,12 +1060,53 @@ void ScriptTextEditor::_native_build_finished(const String &p_path, const String
 	native_build_code = p_code;
 	native_build_errors.clear();
 	if (!error.is_empty()) {
-		const int line = CLAMP(int(result["line"]), 1, text->get_line_count());
-		const int column = CLAMP(int(result["column"]), 1, text->get_line(line - 1).length() + 1);
-		native_build_errors.push_back({ p_path, line, column, line, MIN(column + 1, text->get_line(line - 1).length() + 1), error });
+		for (int i = p_diagnostics.size() > 1 ? 1 : 0; i < p_diagnostics.size(); ++i) {
+			const Dictionary diagnostic = p_diagnostics[i];
+			const int line = CLAMP(int(diagnostic["line"]), 1, text->get_line_count());
+			const int column = CLAMP(int(diagnostic["column"]), 1, text->get_line(line - 1).length() + 1);
+			native_build_errors.push_back({ p_path, line, column, line, MIN(column + 1, text->get_line(line - 1).length() + 1), diagnostic["error"] });
+		}
 	}
 	_update_errors();
 	_update_background_color();
+}
+
+void ScriptTextEditor::_check_native_script() {
+#ifdef MODULE_GDSCRIPT_ENABLED
+	const Ref<Script> script = edited_res;
+	if (script.is_valid() && script->get_path().get_extension().to_lower() == "cgd") {
+		GDCNative::get_singleton()->request_analysis(get_instance_id(), script->get_path(), code_editor->get_text_editor()->get_text(), callable_mp(this, &ScriptTextEditor::_native_build_finished), true);
+	}
+#endif
+}
+
+void ScriptTextEditor::_native_project_check_finished(const String &p_path, const String &p_code, const Array &p_diagnostics, const Dictionary &p_symbols) {
+	const Array editors = ScriptEditor::get_singleton()->call("get_open_script_editors");
+	for (const Variant &value : p_diagnostics) {
+		const Dictionary diagnostic = value;
+		const String path = diagnostic["path"];
+		bool routed = false;
+		for (const Variant &entry : editors) {
+			ScriptTextEditor *editor = Object::cast_to<ScriptTextEditor>(entry.operator Object *());
+			if (editor && editor->edited_res.is_valid() && editor->edited_res->get_path() == path) {
+				Array report;
+				report.push_back(diagnostic);
+				report.append_array(diagnostic["positioned"]);
+				editor->_native_build_finished(path, diagnostic["source"], report, Dictionary());
+				routed = true;
+				break;
+			}
+		}
+		if (!routed) {
+			ERR_PRINT(String(diagnostic["error"]));
+		}
+	}
+	if (p_diagnostics.is_empty()) {
+		print_line("All native C checks passed.");
+		EditorToaster::get_singleton()->popup_str(TTR("All native C checks passed."));
+	} else {
+		EditorToaster::get_singleton()->popup_str(TTR("Native C checks failed. See Output for details."), EditorToaster::SEVERITY_ERROR);
+	}
 }
 
 void ScriptTextEditor::_update_warnings() {
@@ -1882,10 +1926,15 @@ bool ScriptTextEditor::_edit_option(int p_op) {
 	if (p_op == EDIT_CHECK_NATIVE_C) {
 		const Ref<Script> script = edited_res;
 		if (script.is_valid() && script->get_path().get_extension().to_lower() == "cgd") {
-			GDCNative::get_singleton()->request_analysis(get_instance_id(), script->get_path(), code_editor->get_text_editor()->get_text(), callable_mp(this, &ScriptTextEditor::_native_build_finished), true);
+			_check_native_script();
 			return true;
 		}
 		return false;
+	}
+	if (p_op == EDIT_CHECK_ALL_NATIVE_C) {
+		EditorToaster::get_singleton()->popup_str(TTR("Checking native C…"));
+		GDCNative::get_singleton()->request_project_check(get_instance_id(), callable_mp(this, &ScriptTextEditor::_native_project_check_finished));
+		return true;
 	}
 #endif
 	CodeEdit *tx = code_editor->get_text_editor();
@@ -2799,6 +2848,14 @@ void ScriptTextEditor::_enable_code_editor() {
 }
 
 ScriptTextEditor::ScriptTextEditor() {
+#ifdef MODULE_GDSCRIPT_ENABLED
+	native_check_button = memnew(Button);
+	native_check_button->set_text(TTR("Check Native C"));
+	native_check_button->set_h_size_flags(SIZE_SHRINK_END);
+	native_check_button->hide();
+	native_check_button->connect("pressed", callable_mp(this, &ScriptTextEditor::_check_native_script));
+	editor_box->add_child(native_check_button);
+#endif
 	editor_box->add_child(code_editor);
 	editor_box->add_child(warnings_panel);
 

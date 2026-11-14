@@ -89,6 +89,8 @@ Analysis results are reused across CGD-only edits, including edits that move nat
 
 **Text Editor → CGD → Native Diagnostics Delay Ms** adds a 500 ms delay by default after script validation. C diagnostics show the line and column and underline the rest of the identifier at that position.
 
+The **Check Native C** toolbar button checks the active native script. **Edit → Check All Native Scripts** builds saved native scripts in the background for the editor's Run target and reports failures in Output and in open script editors. The single-script check reports individual compiler errors at their source positions. Linker failures without positions are shown at the first native body.
+
 ## Editor feature audit
 
 The follow-up audit covers explicit `.gd` checks and language-extension comparisons in the editor, resource system and GDScript language server. Details and validation are in [CGD_EDITOR_AUDIT.md](CGD_EDITOR_AUDIT.md).

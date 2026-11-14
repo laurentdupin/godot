@@ -12,6 +12,7 @@
 #include "core/os/os.h"
 #include "core/os/time.h"
 #include "core/string/char_utils.h"
+#include "core/string/regex.h"
 #include "core/templates/local_vector.h"
 
 #ifdef ANDROID_ENABLED
@@ -545,6 +546,29 @@ void GDCNative::request_analysis(ObjectID p_editor, const String &p_path, const 
 	start_analysis();
 }
 
+void GDCNative::request_project_check(ObjectID p_editor, const Callable &p_callback) {
+	PackedStringArray paths;
+	Vector<EditorFileSystemDirectory *> pending;
+	if (EditorFileSystemDirectory *root = EditorFileSystem::get_singleton()->get_filesystem()) {
+		pending.push_back(root);
+	}
+	while (!pending.is_empty()) {
+		EditorFileSystemDirectory *directory = pending[pending.size() - 1];
+		pending.remove_at(pending.size() - 1);
+		for (int i = 0; i < directory->get_file_count(); i++) {
+			const String path = directory->get_file_path(i);
+			if (GDCFrontend::is_source_path(path)) {
+				paths.push_back(path);
+			}
+		}
+		for (int i = 0; i < directory->get_subdir_count(); i++) {
+			pending.push_back(directory->get_subdir(i));
+		}
+	}
+	pending_analysis.insert(p_editor, { String(), String(), p_callback, true, paths });
+	start_analysis();
+}
+
 void GDCNative::start_analysis() {
 	if (analysis_task != WorkerThreadPool::INVALID_TASK_ID || pending_analysis.is_empty()) {
 		return;
@@ -564,6 +588,56 @@ void GDCNative::finish_analysis(const String &p_path, const String &p_code, cons
 	}
 }
 
+static Array positioned_build_errors(const String &p_path, const String &p_native_source, const std::vector<GDC::Result::NativeBody> &p_bodies, const String &error) {
+	Array diagnostics;
+	if (!error.is_empty()) {
+		RegEx unix_location;
+		RegEx msvc_location;
+		unix_location.compile(R"(^(.+?):(\d+):(\d+):\s*((?:fatal )?error|warning):\s*(.*)$)");
+		msvc_location.compile(R"(^(.+?)\((\d+)(?:,(\d+))?\)\s*:\s*((?:fatal )?error|warning)(?:\s+[^:]+)?:\s*(.*)$)");
+		for (const String &entry : error.split("\n", false)) {
+			Ref<RegExMatch> match = unix_location.search(entry.strip_edges());
+			if (match.is_null()) {
+				match = msvc_location.search(entry.strip_edges());
+			}
+			if (match.is_null() || match->get_string(4) == "warning") {
+				continue;
+			}
+			int error_line = match->get_string(2).to_int();
+			int error_column = MAX(1, int(match->get_string(3).to_int()));
+			String message = match->get_string(5);
+			const String filename = match->get_string(1);
+			if (filename.begins_with("<cgd_native_") && filename.ends_with(">")) {
+				int function_index = filename.substr(12, filename.length() - 13).to_int();
+				for (const auto &body : p_bodies) {
+					if (!body.function_name.empty() && function_index-- == 0) {
+						error_line = body.original.line;
+						error_column = body.original.column;
+						message = vformat("In generated wrapper for %s: %s", String(body.function_name.c_str()), message);
+						break;
+					}
+				}
+			} else if (filename == p_path) {
+				for (const auto &body : p_bodies) {
+					if (int(body.original.line) == error_line && !match->get_string(3).is_empty()) {
+						const int start = p_native_source.rfind_char('\n', int(body.offset) - 1) + 1;
+						error_column += int(body.original.column) - p_native_source.substr(start, int(body.offset) - start).utf8().length() - 1;
+						break;
+					}
+				}
+			} else {
+				continue;
+			}
+			Dictionary positioned;
+			positioned["line"] = error_line;
+			positioned["column"] = error_column;
+			positioned["error"] = message;
+			diagnostics.push_back(positioned);
+		}
+	}
+	return diagnostics;
+}
+
 void GDCNative::analyze(AnalysisRequest p_request) {
 	Array diagnostics;
 	Dictionary symbols;
@@ -577,6 +651,33 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 	List<String> args;
 	std::vector<GDC::Result::NativeBody> bodies;
 	if (p_request.check_build) {
+		if (p_request.path.is_empty()) {
+			const String platform = OS::get_singleton()->get_name().to_lower();
+			const String arch = Engine::get_singleton()->get_architecture_name();
+			HashMap<String, Dictionary> stamps;
+			for (const String &path : p_request.project_paths) {
+				const String code = FileAccess::get_file_as_string(path);
+				if (!code.contains("native")) {
+					continue;
+				}
+				String id;
+				String library;
+				if (GDCFrontend::transpile(code, generated, map, error, line, column, false, { 0, 0 }, path, &native_source, nullptr, &id, &bodies) != OK ||
+						native_source.is_empty() || build(path, id, native_source, library, error, platform, arch, true, &stamps) == OK) {
+					continue;
+				}
+				Dictionary failure;
+				failure["path"] = path;
+				failure["source"] = code;
+				failure["line"] = bodies.empty() ? 1 : int(bodies.front().original.line);
+				failure["column"] = bodies.empty() ? 1 : int(bodies.front().original.column);
+				failure["positioned"] = positioned_build_errors(path, native_source, bodies, error);
+				failure["error"] = error;
+				diagnostics.push_back(failure);
+			}
+			callable_mp(this, &GDCNative::finish_analysis).call_deferred(p_request.path, p_request.code, p_request.callback, diagnostics, symbols);
+			return;
+		}
 		String id;
 		String library;
 		if (GDCFrontend::transpile(p_request.code, generated, map, error, line, column, false, { 0, 0 }, p_request.path, &native_source, nullptr, &id, &bodies) == OK && !native_source.is_empty()) {
@@ -596,6 +697,7 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 		result["line"] = line;
 		result["column"] = column;
 		diagnostics.push_back(result);
+		diagnostics.append_array(positioned_build_errors(p_request.path, native_source, bodies, error));
 		callable_mp(this, &GDCNative::finish_analysis).call_deferred(p_request.path, p_request.code, p_request.callback, diagnostics, symbols);
 		return;
 	}
