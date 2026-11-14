@@ -48,6 +48,8 @@ Native parameters also support read-only `PackedByteArray` views. Use `static na
 
 Native call wrappers use interned library IDs, symbol names, and signatures. The runtime caches the resolved symbol and its UTF-8 signature after the first successful call. It checks signature identity and argument count on every call.
 
+Run `python modules/gdscript/tests/cgd/tools/run_native_reload_test.py --godot <editor>` to exercise native reload through the editor debugger. The test saves a CGD-only edit and a C edit while the same game process is running, checks both results, and checks that the run cache contains one library identity for each C version.
+
 ```ini
 [cgd_native]
 
