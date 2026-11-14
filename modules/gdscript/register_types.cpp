@@ -90,6 +90,7 @@ class GDScriptExportPlugin : public EditorExportPlugin {
 	static constexpr EditorExportPreset::ScriptExportMode DEFAULT_SCRIPT_MODE = EditorExportPreset::MODE_SCRIPT_BINARY_TOKENS_COMPRESSED;
 	EditorExportPreset::ScriptExportMode script_mode = DEFAULT_SCRIPT_MODE;
 	HashMap<String, Vector<GDCNative::NativeUnit>> native_units;
+	Vector<Ref<DirAccess>> native_export_workspaces;
 
 protected:
 	virtual void _export_begin(const HashSet<String> &p_features, bool p_debug, const String &p_path, int p_flags) override {
@@ -179,7 +180,7 @@ protected:
 		for (const auto &entry : native_units) {
 			String library;
 			String error;
-			if (GDCNative::get_singleton()->build_export(entry.value, platform, entry.key, library, error) != OK) {
+			if (GDCNative::get_singleton()->build_export(entry.value, platform, entry.key, library, error, native_export_workspaces) != OK) {
 				get_export_preset()->get_platform()->add_message(EditorExportPlatform::EXPORT_MESSAGE_ERROR, "GDScript / GD-C", error);
 				fail_export(ERR_COMPILATION_FAILED);
 				return;
@@ -195,6 +196,7 @@ protected:
 	}
 
 	virtual void _export_end() override {
+		native_export_workspaces.clear();
 		native_units.clear();
 	}
 

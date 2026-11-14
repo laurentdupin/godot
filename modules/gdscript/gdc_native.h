@@ -27,7 +27,6 @@ class GDCNative : public Object {
 	};
 	HashMap<StringName, HashMap<StringName, NativeFunctionEntry>> functions;
 	Ref<DirAccess> build_dir;
-	Vector<Ref<DirAccess>> export_directories;
 #ifdef TOOLS_ENABLED
 	WorkerThreadPool::TaskID analysis_task = WorkerThreadPool::INVALID_TASK_ID;
 	struct AnalysisRequest {
@@ -89,7 +88,7 @@ public:
 	static GDCNative *get_singleton() { return singleton; }
 	static PackedStringArray runtime_libraries(const String &p_platform, const String &p_arch);
 	Error build(const String &p_path, const String &p_id, const String &p_native_source, String &r_library, String &r_error, const String &p_platform, const String &p_arch, bool p_cache_for_run = false, HashMap<String, Dictionary> *p_run_stamps = nullptr);
-	Error build_export(const Vector<NativeUnit> &p_units, const String &p_platform, const String &p_arch, String &r_library, String &r_error);
+	Error build_export(const Vector<NativeUnit> &p_units, const String &p_platform, const String &p_arch, String &r_library, String &r_error, Vector<Ref<DirAccess>> &r_workspaces);
 #ifdef TOOLS_ENABLED
 	static bool prepare_editor_run();
 	void request_analysis(ObjectID p_editor, const String &p_path, const String &p_code, const Callable &p_callback, bool p_check_build = false);

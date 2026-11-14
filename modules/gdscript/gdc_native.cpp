@@ -549,6 +549,43 @@ bool gcc_completion_flags(const String &p_compiler, List<String> &r_args) {
 #endif
 }
 Mutex preamble_mutex;
+Ref<DirAccess> preamble_workspace;
+HashMap<String, uint64_t> preamble_last_used;
+constexpr uint64_t PREAMBLE_BYTE_LIMIT = 256 * 1024 * 1024;
+constexpr uint32_t PREAMBLE_ENTRY_LIMIT = 32;
+
+void remove_preamble(const String &p_base) {
+	for (const char *extension : { ".pch", ".d", ".log", ".h", ".c", ".tmp.pch" }) {
+		const String path = p_base + extension;
+		if (FileAccess::exists(path)) {
+			DirAccess::remove_absolute(path);
+		}
+	}
+	preamble_last_used.erase(p_base);
+}
+
+// Callers hold preamble_mutex from lookup through the last compiler invocation.
+void prune_preambles(const String &p_current) {
+	uint64_t total = 0;
+	for (const KeyValue<String, uint64_t> &entry : preamble_last_used) {
+		total += MAX(int64_t(0), FileAccess::get_size(entry.key + ".pch"));
+	}
+	while (total > PREAMBLE_BYTE_LIMIT || preamble_last_used.size() > PREAMBLE_ENTRY_LIMIT) {
+		String oldest;
+		uint64_t last_used = UINT64_MAX;
+		for (const KeyValue<String, uint64_t> &entry : preamble_last_used) {
+			if (entry.key != p_current && entry.value < last_used) {
+				last_used = entry.value;
+				oldest = entry.key;
+			}
+		}
+		if (oldest.is_empty()) {
+			break;
+		}
+		total -= MAX(int64_t(0), FileAccess::get_size(oldest + ".pch"));
+		remove_preamble(oldest);
+	}
+}
 
 String prepare_preamble(const NativeTarget &frontend, const Ref<DirAccess> &workspace, const std::vector<GDC::Result::NativeBody> &bodies,
 		String &native_source, int &offset, List<String> &args, PackedStringArray &r_dependencies, String &r_preamble_output) {
@@ -575,25 +612,19 @@ String prepare_preamble(const NativeTarget &frontend, const Ref<DirAccess> &work
 		for (const String &arg : args) {
 			key.push_back(arg);
 		}
-		const String cache = native_path(ProjectSettings::get_singleton()->get_project_data_path().path_join("cgd_native/pch"));
-		DirAccess::make_dir_recursive_absolute(cache);
-		const String base = cache.path_join(String(Variant(key)).sha256_text());
-		const String header = base + ".h";
-		const String pch = base + ".pch";
-
-		if (DirAccess::get_files_at(cache).size() > 128) {
-			const uint64_t now = Time::get_singleton()->get_unix_time_from_system();
-			for (const String &entry : DirAccess::get_files_at(cache)) {
-				if (entry.get_basename().length() != 64 || !entry.get_basename().is_valid_hex_number(false) ||
-						(entry.get_extension() != "h" && entry.get_extension() != "c" && entry.get_extension() != "pch" && entry.get_extension() != "d" && entry.get_extension() != "log")) {
-					continue;
-				}
-				const String stale = cache.path_join(entry);
-				if (FileAccess::get_modified_time(stale) + 86400 * 7 < now) {
-					DirAccess::remove_absolute(stale);
-				}
+		// A second Godot process may open the same project. Give each editor
+		// its own workspace so it never invalidates another editor's PCH.
+		if (preamble_workspace.is_null()) {
+			Error error;
+			preamble_workspace = DirAccess::create_temp("cgd-pch", false, &error);
+			if (preamble_workspace.is_null()) {
+				break;
 			}
 		}
+		const String base = preamble_workspace->get_current_dir().path_join(String(Variant(key)).sha256_text());
+		const String header = base + ".h";
+		const String pch = base + ".pch";
+		const String pending_pch = base + ".tmp.pch";
 		if (!FileAccess::exists(pch) || !FileAccess::exists(base + ".d") || !FileAccess::exists(base + ".log")) {
 			Ref<FileAccess> file = FileAccess::open(header, FileAccess::WRITE);
 			if (file.is_null() || !file->store_string(preamble)) {
@@ -619,28 +650,38 @@ String prepare_preamble(const NativeTarget &frontend, const Ref<DirAccess> &work
 				file.unref();
 				flags.push_back("/c");
 				flags.push_back("/Yc" + header);
-				flags.push_back("/Fp" + pch);
+				flags.push_back("/Fp" + pending_pch);
 				flags.push_back("/Fo" + workspace->get_current_dir().path_join("preamble.obj"));
 				flags.push_back(stub);
 			} else {
 				flags.push_back("-x");
 				flags.push_back("c-header");
 				flags.push_back("-o");
-				flags.push_back(pch);
+				flags.push_back(pending_pch);
 				flags.push_back(header);
 			}
 			String output;
 			int status = -1;
-			if (capture_compiler(frontend.compiler, flags, output, &status) != OK || status != 0) {
-				DirAccess::remove_absolute(pch);
+			if (capture_compiler(frontend.compiler, flags, output, &status) != OK || status != 0 ||
+					FileAccess::get_size(pending_pch) > int64_t(PREAMBLE_BYTE_LIMIT)) {
+				remove_preamble(base);
 				break;
 			}
 			file = FileAccess::open(base + ".log", FileAccess::WRITE);
-			if (file.is_valid()) {
-				file->store_string(output);
+			if (file.is_null() || !file->store_string(output)) {
+				file.unref();
+				remove_preamble(base);
+				break;
+			}
+			file.unref();
+			if (DirAccess::rename_absolute(pending_pch, pch) != OK) {
+				remove_preamble(base);
+				break;
 			}
 		}
 		if (FileAccess::exists(pch)) {
+			preamble_last_used[base] = Time::get_singleton()->get_ticks_usec();
+			prune_preambles(base);
 			r_dependencies = compiler_dependencies(base + ".d");
 			r_preamble_output = FileAccess::get_file_as_string(base + ".log");
 			used_pch = pch;
@@ -864,7 +905,8 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 			}
 			if (!units.is_empty() && diagnostics.is_empty()) {
 				String library;
-				if (build_export(units, platform, arch, library, error) != OK) {
+				Vector<Ref<DirAccess>> workspaces;
+				if (build_export(units, platform, arch, library, error, workspaces) != OK) {
 					Dictionary failure;
 					failure["error"] = error;
 					for (const NativeUnit &unit : units) {
@@ -988,7 +1030,7 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 							checked_body = !output.contains("fatal error:") || !output.contains("precompiled");
 						}
 						if (!checked_body) {
-							DirAccess::remove_absolute(pch);
+							remove_preamble(pch.get_basename());
 						}
 					}
 					if (checked_body) {
@@ -1099,7 +1141,7 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 					output = String();
 					capture_compiler(frontend.compiler, symbol_args, output);
 					if (!symbol_pch.is_empty() && output.contains("fatal error:") && output.contains("precompiled")) {
-						DirAccess::remove_absolute(symbol_pch);
+						remove_preamble(symbol_pch.get_basename());
 					}
 					for (const String &entry : output.split("\n", false)) {
 						if (!entry.begins_with("COMPLETION: ")) {
@@ -1289,8 +1331,10 @@ bool GDCNative::complete_code(const String &p_code, const String &p_path, List<S
 		return capture_compiler(frontend.compiler, flags, output, &status) == OK && status == 0;
 	};
 	if (!query(native_source, offset, args) && !used_pch.is_empty()) {
-		print_verbose("CGD preamble rejected: " + output.get_slice("\n", 0));
-		DirAccess::remove_absolute(used_pch);
+		if (output.contains("fatal error:") && output.contains("precompiled")) {
+			print_verbose("CGD preamble rejected: " + output.get_slice("\n", 0));
+			remove_preamble(used_pch.get_basename());
+		}
 		query(full_source, full_offset, full_args);
 	}
 	if (output.is_empty()) {
@@ -1632,7 +1676,7 @@ Error GDCNative::build(const String &p_path, const String &p_id, const String &p
 #endif
 }
 
-Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p_platform, const String &p_arch, String &r_library, String &r_error) {
+Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p_platform, const String &p_arch, String &r_library, String &r_error, Vector<Ref<DirAccess>> &r_workspaces) {
 #ifdef TOOLS_ENABLED
 	NativeTarget target;
 	const Error target_error = resolve_target(p_platform, p_arch, target, r_error);
@@ -1644,11 +1688,11 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 	if (macos && p_arch == "universal") {
 		String x64;
 		String arm64;
-		Error error = build_export(p_units, p_platform, "x86_64", x64, r_error);
+		Error error = build_export(p_units, p_platform, "x86_64", x64, r_error, r_workspaces);
 		if (error != OK) {
 			return error;
 		}
-		error = build_export(p_units, p_platform, "arm64", arm64, r_error);
+		error = build_export(p_units, p_platform, "arm64", arm64, r_error, r_workspaces);
 		if (error != OK) {
 			return error;
 		}
@@ -1671,24 +1715,10 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 	const String filename = windows ? "cgd_native.dll" : macos ? "libcgd_native.dylib"
 															   : "libcgd_native.so";
 	List<String> objects;
-	String symbol_tool;
-#ifdef WINDOWS_ENABLED
-	symbol_tool = find_clang_cl().get_base_dir().path_join("llvm-nm.exe");
-	if (!FileAccess::exists(symbol_tool)) {
-		symbol_tool = find_on_path("llvm-nm.exe");
-	}
-#else
-	symbol_tool = macos ? "/usr/bin/nm" : find_on_path("nm");
-#endif
-	if (symbol_tool.is_empty()) {
-		r_error = "CGD native exports need nm to validate native helper linkage.";
-		return ERR_FILE_NOT_FOUND;
-	}
 	HashMap<String, Dictionary> stamps;
 	const Dictionary compiler_stamp = input_stamp(target.compiler, Dictionary(), &stamps);
 	const String cache_root = native_path(ProjectSettings::get_singleton()->get_project_data_path().path_join("cgd_native/export").path_join(p_platform).path_join(p_arch));
 	DirAccess::make_dir_recursive_absolute(cache_root);
-	String helper_errors;
 	for (const NativeUnit &unit : p_units) {
 		const String source = directory.path_join(unit.id + ".c");
 		const String object = directory.path_join(unit.id + (windows ? ".obj" : ".o"));
@@ -1704,6 +1734,7 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 		}
 		Array configuration;
 		configuration.push_back(NATIVE_BUILD_SCHEMA);
+		configuration.push_back(unit.source.sha256_text());
 		configuration.push_back(target.compiler);
 		configuration.push_back(compiler_stamp);
 		for (const String &arg : args) {
@@ -1767,23 +1798,6 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 			r_error = unit.path + ": " + output;
 			return ERR_COMPILATION_FAILED;
 		}
-		String symbols;
-		const List<String> symbol_args = macos ? List<String>{ "-g", "-U", "-j", object } : List<String>{ "--extern-only", "--defined-only", "--format=just-symbols", object };
-		if (capture_compiler(symbol_tool, symbol_args, symbols, &status) != OK || status != 0) {
-			r_error = unit.path + ": Cannot inspect native object symbols.\n" + symbols;
-			return ERR_COMPILATION_FAILED;
-		}
-		bool invalid_helpers = false;
-		for (const String &line : symbols.split("\n", false)) {
-			const String symbol = line.strip_edges().trim_prefix(macos ? "_" : "");
-			if (!symbol.is_empty() && !symbol.begins_with("cgd_native_" + unit.id.left(16) + "_") && symbol != "@feat.00" && symbol != "_fltused" && symbol != "__fltused") {
-				helper_errors += unit.path + ": Native helpers must be static (scripts are linked together on export): " + symbol + "\n";
-				invalid_helpers = true;
-			}
-		}
-		if (invalid_helpers) {
-			continue;
-		}
 		const PackedStringArray headers = target.toolchain == "msvc" ? msvc_dependencies(deps) : compiler_dependencies(deps);
 		Dictionary dependencies;
 		for (const String &header : headers) {
@@ -1802,10 +1816,6 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 			}
 		}
 		objects.push_back(object);
-	}
-	if (!helper_errors.is_empty()) {
-		r_error = helper_errors;
-		return ERR_INVALID_DATA;
 	}
 	const String abi_source = directory.path_join("abi.c");
 	const String abi_object = directory.path_join(windows ? "abi.obj" : "abi.o");
@@ -1874,13 +1884,19 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 	}
 	int status = -1;
 	if (capture_compiler(target.compiler, link, r_error, &status) != OK || status != 0 || !FileAccess::exists(library)) {
+		if (r_error.contains("LNK2005") || r_error.contains("duplicate symbol") || r_error.contains("multiple definition")) {
+			String definitions;
+			for (const NativeUnit &unit : p_units) {
+				if (r_error.contains(unit.id + ".obj") || r_error.contains(unit.id + ".o") || r_error.contains(unit.id + ".c")) {
+					definitions += "\n" + unit.path;
+				}
+			}
+			r_error += "\nNative helpers defined in more than one script must be static." + definitions;
+		}
 		return ERR_COMPILATION_FAILED;
 	}
 	r_library = library;
-	{
-		MutexLock lock(build_mutex);
-		export_directories.push_back(workspace);
-	}
+	r_workspaces.push_back(workspace);
 	return OK;
 #else
 	r_error = "CGD native exports require an editor build.";
@@ -2122,6 +2138,8 @@ GDCNative::~GDCNative() {
 	if (analysis_task != WorkerThreadPool::INVALID_TASK_ID) {
 		WorkerThreadPool::get_singleton()->wait_for_task_completion(analysis_task);
 	}
+	preamble_last_used.clear();
+	preamble_workspace.unref();
 #endif
 	for (const KeyValue<String, void *> &entry : libraries) {
 		OS::get_singleton()->close_dynamic_library(entry.value);

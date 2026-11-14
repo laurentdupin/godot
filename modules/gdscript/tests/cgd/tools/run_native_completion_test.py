@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Verify asynchronous native completion and preamble creation in the editor."""
-import pathlib, subprocess, sys, tempfile
+import os, pathlib, subprocess, sys, tempfile
 with tempfile.TemporaryDirectory() as tmp:
     root=pathlib.Path(tmp)
     addon=root/"addons/check"
@@ -39,10 +39,20 @@ func run_test():
         if code.get_code_completion_options().any(func(option): return option.display_text == "fopen"):
             print("CGD_WARM_COMPLETION_US ", Time.get_ticks_usec() - started)
             break
-    get_tree().quit(0 if not immediate and found else 1)
+    var pch_count = 0
+    var temp_dir = OS.get_temp_dir()
+    for directory in DirAccess.get_directories_at(temp_dir):
+        if directory.begins_with("cgd-pch-"):
+            for file in DirAccess.get_files_at(temp_dir.path_join(directory)):
+                if file.ends_with(".pch"):
+                    pch_count += 1
+    print("PCH_COUNT ", pch_count)
+    get_tree().quit(0 if not immediate and found and pch_count > 0 else 1)
 ''')
-    p=subprocess.run([sys.argv[1],"--headless","--editor","--verbose","--path",tmp],capture_output=True,text=True,encoding="utf-8",errors="replace",timeout=25)
+    cache_root = root / "temp"
+    cache_root.mkdir()
+    env = dict(os.environ, TMPDIR=str(cache_root), TMP=str(cache_root), TEMP=str(cache_root))
+    p=subprocess.run([sys.argv[1],"--headless","--editor","--verbose","--path",tmp],capture_output=True,text=True,encoding="utf-8",errors="replace",timeout=25,env=env)
     print(p.stdout,p.stderr)
-    print("PCH_COUNT", len(list(root.rglob("*.pch"))))
-    assert list(root.rglob("*.pch"))
-    sys.exit(p.returncode or ("CGD_ASYNC true" not in p.stdout))
+    assert not list(cache_root.glob("cgd-pch-*")), "Editor leaked its preamble cache"
+    sys.exit(p.returncode or ("CGD_ASYNC true" not in p.stdout) or ("CGD preamble rejected:" in p.stdout))
