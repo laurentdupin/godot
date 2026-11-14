@@ -92,7 +92,7 @@ Rect2i HCSRNewestRasterResources::page_live_bounds(int page) const {refresh_pool
 Size2i HCSRNewestRasterResources::page_size(int page) const {
     if(!page)return Size2i(1,1);
     const auto bounds=page_live_bounds(page);int size=1024;
-    while(size<MAX(bounds.get_end().x,bounds.get_end().y) && size<PAGE_SIZE)size*=2;
+    while(size<MAX(bounds.get_end().x,bounds.get_end().y) && size<ATLAS_PAGE_SIZE)size*=2;
     return Size2i(size,size);
 }
 RID HCSRNewestRasterResources::pool_rd_texture(int page) const {return page<pool->pages.size()?pool->pages[page].texture:RID();}

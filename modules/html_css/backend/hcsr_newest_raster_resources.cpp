@@ -473,7 +473,7 @@ Dictionary HCSRNewestRasterResources::get_statistics() const {
     result["glyph_entries"] = glyph_entries.size();
     result["failed_allocations"] = failed_allocation_count;
     result["retired_resolution_variants"] = int64_t(retired_resolution_variants);
-    result["atlas_pixel_budget_bytes"] = int64_t(MAX_PAGES-1)*PAGE_SIZE*PAGE_SIZE*4;
+    result["atlas_pixel_budget_bytes"] = int64_t(MAX_PAGES-1)*ATLAS_PAGE_SIZE*ATLAS_PAGE_SIZE*4;
     {
         MutexLock lock(image_mutex);
         result["decoded_images"] = decoded_images;
@@ -488,7 +488,7 @@ Dictionary HCSRNewestRasterResources::get_statistics() const {
     HashSet<int> glyph_page_ids; for(const auto &item:glyph_entries) if(item.value.page>0) glyph_page_ids.insert(item.value.page);
     const int glyph_pages=glyph_page_ids.size();
     result["glyph_pages"] = glyph_pages;
-    result["page_size"] = PAGE_SIZE;
+    result["page_size"] = ATLAS_PAGE_SIZE;
     result["shared_atlas_cpu_pixel_bytes"] = pool_context ? hcsr_atlas_resident_bytes(atlas) : uint64_t(0);
     result["atlas_cpu_pixel_bytes"] = pool_context ? uint64_t(0) : hcsr_atlas_resident_bytes(atlas);
     result["atlas_revision"] = int64_t(atlas_revision());

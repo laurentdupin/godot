@@ -17,7 +17,7 @@ class RenderingDevice;
 // The context owner consumes updates once, before any dependent view draws.
 class HCSRNewestRasterResources {
 public:
-	static constexpr int PAGE_SIZE = 4096;
+	static constexpr int ATLAS_PAGE_SIZE = 4096;
 	static constexpr int MAX_PAGES = 9;
 	struct Entry {
 		int page = -1;
