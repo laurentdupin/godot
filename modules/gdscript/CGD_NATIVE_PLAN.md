@@ -1,10 +1,12 @@
-# CGD native: implementation plan (revision 4)
+# CGD native: implementation plan (revision 5)
 
 Audience: the implementer agent. Read the referenced code before changing it. Line numbers are approximate.
 
 Revision 3 reviews Phases 9b–11 as landed, records the fixes made in `cc02edd6f3`, and adds **Phase 12: editor/export parity** (per-script symbol isolation on export, Run on the merged library, Run cache cleanup). See "Review of Phases 9b–11" and "Stage 3" in the order of work.
 
 Revision 4 adds **Phase 13: printing to the Godot console from native code** (`cgd_print`, `cgd_print_warning`, `cgd_print_error`, and a C++ `cgd::print`). See "Stage 4" in the order of work.
+
+Revision 5 adds **Phase 14: project-pinned C and C++ standards** (`cgd_native/c_standard`, `cgd_native/cpp_standard`), used identically by builds, exports, Run, diagnostics, completion and preambles. See "Stage 5" in the order of work.
 
 Revision 2 recorded what had landed, reviewed it, listed the remaining work, and added these tracks:
 - packed arrays and strings in the native ABI;
@@ -434,6 +436,68 @@ cgd::print_error(...);
 
 ---
 
+## Phase 14: project-pinned C and C++ standards
+
+**Problem.** The language standard isn't under the project's control:
+- C is hard-coded to C17 in `language_flags` (`-std=c17` / `/std:c17`), with no setting.
+- C++ defaults to C++20, and a standard can only be changed through the per-target `cxx_flags` allowlist (`add_cxx_flags`). Different targets of one project can therefore compile the same script under different standards, and the choice is buried among optimization flags.
+- Editor completion and the GCC include query (`gcc_completion_flags`) use their own hard-coded `-std=c17` / `-std=c++20`, so they can disagree with the build.
+- The Phase 13 C++ preamble includes `<source_location>` and `<format>`, which need C++20. The working tree's `cxx_flags` allowlist now also accepts `-std=c++17` / `/std:c++17`, which would make every C++ script fail to compile.
+
+**Decision.** Two project-wide settings pin the standards. Every compiler invocation for that language uses exactly that standard: per-script builds, merged export and Run builds, live diagnostics, completion, hover lookup, precompiled preambles, and the GCC include query. Nothing else can set a standard.
+
+### Settings
+Register both in `GDCNative` (or the module's `register_types.cpp`) with `GLOBAL_DEF` and an enum property hint, so they appear in **Project Settings → Cgd Native** with a dropdown:
+
+| Setting | Values | Default |
+|---|---|---|
+| `cgd_native/c_standard` | `c11`, `c17`, `c23`, `gnu11`, `gnu17`, `gnu23` | `c17` (today's behavior) |
+| `cgd_native/cpp_standard` | `c++20`, `c++23`, `gnu++20`, `gnu++23` | `c++20` (today's behavior) |
+
+- C++17 is not offered: the generated C++ preamble needs C++20 (`<source_location>`, `<format>`, CTAD for `cgd::print_warning`/`print_error`). Remove `-std=c++17`, `-std=gnu++17` and `/std:c++17` from the working tree's allowlist. If C++17 is ever wanted, the preamble must first guard those parts with `__has_include` / `__cpp_lib_*` and fall back to `__FILE__`/`__LINE__` macros.
+- Objective-C++ uses `cpp_standard`. Plain Objective-C isn't a CGD language.
+- Values are lowercase strings; reject anything else with "Unsupported cgd_native/c_standard value: …".
+
+### Flag mapping
+One function, `standard_flags(target, language) -> List<String>` (or an error), used everywhere `language_flags` adds a standard today:
+
+| Setting | clang / gcc | clang-cl | MSVC (`cl.exe`) |
+|---|---|---|---|
+| `c11` / `c17` | `-std=c11` / `-std=c17` | `/std:c11` / `/std:c17` | `/std:c11` / `/std:c17` |
+| `c23` | `-std=c23` (older Clang/GCC: `-std=c2x`) | `/clang:-std=c23` | `/std:clatest` |
+| `gnu11` / `gnu17` / `gnu23` | `-std=gnu11` / `-std=gnu17` / `-std=gnu23` | `/clang:-std=gnu11` … | **error**: "GNU C dialects need Clang or GCC; MSVC doesn't support them." |
+| `c++20` | `-std=c++20` | `/std:c++20` | `/std:c++20` |
+| `c++23` | `-std=c++23` (older: `-std=c++2b`) | `/std:c++latest` (or `/clang:-std=c++23`) | `/std:c++latest` |
+| `gnu++20` / `gnu++23` | `-std=gnu++20` / `-std=gnu++23` | `/clang:-std=gnu++20` … | **error**, as for GNU C |
+
+- Probe once per compiler (cache by compiler path and stamp): compile an empty file with the mapped flag. If the compiler rejects it, fail with "This compiler doesn't support <standard>: <compiler>" instead of a raw compiler error. Use the fallback spellings (`c2x`, `c++2b`) only when the probe says the modern spelling is unknown.
+- Keep `/Zc:__cplusplus` and `/EHsc` for C++ on the MSVC-style toolchains.
+
+### Removing the old paths
+- Remove standard flags from the `cxx_flags` allowlist. If a project still lists one, fail with "Set the C++ standard with cgd_native/cpp_standard instead of cxx_flags" and the offending entry. `cxx_flags` keeps only optimization and RTTI flags.
+- Replace the hard-coded standards in `language_flags`, `gcc_completion_flags`, the analysis and completion arguments, and the preamble builds with `standard_flags`.
+
+### Caches and identities
+- The standard is already part of the compiler arguments, so it enters the per-script build fingerprint, the export object fingerprint, the merged Run link fingerprint and the PCH key automatically. Verify each one, and that changing the setting rebuilds everything on the next Run without a manual cache clear.
+- The library ID doesn't need to change: it identifies the source, and the fingerprints handle rebuilding.
+
+### Editor
+- Live diagnostics, completion and hover must use the pinned standard, so a C23 or C++23 feature shows no false error when the setting allows it, and shows a real error when it doesn't.
+- Changing either setting re-requests analysis for open native scripts (listen to `ProjectSettings::settings_changed`).
+
+### Docs
+`CGD_INTEGRATION.md` and `CGD_SYNTAX.md`: replace "compiled as C17" / "C++20" with the settings and their defaults, list the MSVC limits, and remove the standard flags from the `cxx_flags` description.
+
+**Done when.**
+- With `c_standard="c23"`, a C script using `constexpr`, `nullptr`, `bool` without `<stdbool.h>` and `typeof` builds, runs and exports on Windows (clang-cl), macOS arm64 and Android, and shows no live diagnostic. With `c17`, the same script shows the errors live and fails to build.
+- With `cpp_standard="c++23"`, a script using `std::expected` and `if consteval` builds on Windows and macOS. With `c++20`, it fails with a clear error.
+- `gnu17` with `toolchain="msvc"` fails with the MSVC message, before any compile.
+- A `cxx_flags` entry of `-std=c++23` fails with the "use cgd_native/cpp_standard" message.
+- Changing a setting and pressing Run rebuilds the affected objects and relinks (check `print_verbose`); pressing Run again reuses them.
+- Both settings appear in Project Settings with dropdowns and their defaults.
+
+---
+
 ## Target: ExtractAndTranslate
 
 The project's own native code is one GDExtension (`Addons/VisualNovelToolbarNative`, built by `Tools/Build/BuildWindowsNativeComponents.ps1` and `BuildMacosNativeComponents.sh`). The export presets are **Windows x86_64** and **macOS arm64**. The table maps each part to what it needs from this plan.
@@ -509,6 +573,12 @@ At the end of Stage 1, Phases 1–8 are complete and the pilot is in production.
 | Step | Phase | Work |
 |---|---|---|
 | 17 | Phase 13 | `cgd_print`, `cgd_print_warning`, `cgd_print_error`, the host table set at load (shared ABI object in merged libraries), `cgd::print` for C++, docs. Then replace ad hoc native logging in ExtractAndTranslate (returned log strings, `fprintf(stderr, ...)`) where it exists. |
+
+### Stage 5: language standards (revision 5)
+
+| Step | Phase | Work |
+|---|---|---|
+| 18 | Phase 14 | `cgd_native/c_standard` and `cgd_native/cpp_standard` with dropdowns, one flag mapping for every toolchain and every compiler invocation (build, export, Run, diagnostics, completion, preambles, GCC include query), standard flags removed from `cxx_flags`, re-analysis on change, docs. Finish and commit Phase 13 first; drop the C++17 allowlist entries added during it. |
 
 ## Out of scope
 
