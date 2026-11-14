@@ -20,7 +20,12 @@ class GDCNative : public Object {
 	Mutex mutex;
 	Mutex build_mutex;
 	HashMap<String, void *> libraries;
-	HashMap<String, HashMap<String, void *>> functions;
+	struct NativeFunctionEntry {
+		void *address = nullptr;
+		StringName signature;
+		CharString signature_utf8;
+	};
+	HashMap<StringName, HashMap<StringName, NativeFunctionEntry>> functions;
 	Ref<DirAccess> build_dir;
 #ifdef TOOLS_ENABLED
 	WorkerThreadPool::TaskID analysis_task = WorkerThreadPool::INVALID_TASK_ID;
@@ -36,7 +41,7 @@ class GDCNative : public Object {
 	void finish_analysis(const String &p_path, const String &p_code, const Callable &p_callback, const Array &p_diagnostics, const Dictionary &p_symbols);
 #endif
 
-	Variant invoke(const String &p_path, const String &p_id, const String &p_symbol, const String &p_signature, const Array &p_args);
+	Variant invoke(const String &p_path, const StringName &p_id, const StringName &p_symbol, const StringName &p_signature, const Array &p_args);
 
 protected:
 	static void _bind_methods();

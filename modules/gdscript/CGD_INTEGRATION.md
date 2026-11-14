@@ -46,6 +46,8 @@ A file-scope `native { ... }` block supplies C headers, macros and helpers to th
 
 Native parameters also support read-only `PackedByteArray` views. Use `static native` for a static script method. Native builds use `-O2` or `/O2`. The runtime checks the native ABI and engine precision before dispatch, so rebuild native exports and their templates together after updating.
 
+Native call wrappers use interned library IDs, symbol names, and signatures. The runtime caches the resolved symbol and its UTF-8 signature after the first successful call. It checks signature identity and argument count on every call.
+
 ```ini
 [cgd_native]
 

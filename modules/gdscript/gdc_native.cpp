@@ -1060,21 +1060,25 @@ Error GDCNative::build(const String &p_path, const String &p_id, const String &p
 #endif
 }
 
-Variant GDCNative::invoke(const String &p_path, const String &p_id, const String &p_symbol, const String &p_signature, const Array &p_args) {
-	ERR_FAIL_COND_V_MSG(p_id.length() != 64 || !p_id.is_valid_hex_number(false), Variant(), "Invalid CGD native library identifier.");
-	ERR_FAIL_COND_V_MSG(!p_symbol.begins_with("cgd_native_") || !p_symbol.substr(11).is_valid_int(), Variant(), "Invalid CGD native function identifier.");
-	ERR_FAIL_COND_V_MSG(p_signature.length() != p_args.size() + 1, Variant(), "Invalid CGD native function signature.");
-
+Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const StringName &p_symbol, const StringName &p_signature, const Array &p_args) {
 	OS *os = OS::get_singleton();
-	void *symbol = nullptr;
+	NativeFunctionEntry function;
+	bool cache_hit = false;
 	{
 		MutexLock lock(mutex);
 		// Libraries stay loaded until shutdown. Clear their function caches before any future unload.
-		HashMap<String, void *> &library_functions = functions[p_id];
-		void **cached_function = library_functions.getptr(p_symbol);
+		const auto *library_functions = functions.getptr(p_id);
+		const NativeFunctionEntry *cached_function = library_functions ? library_functions->getptr(p_symbol) : nullptr;
 		if (cached_function) {
-			symbol = *cached_function;
+			function = *cached_function;
+			cache_hit = true;
 		} else {
+			const String id = p_id;
+			const String symbol_name = p_symbol;
+			ERR_FAIL_COND_V_MSG(id.length() != 64 || !id.is_valid_hex_number(false), Variant(), "Invalid CGD native library identifier.");
+			ERR_FAIL_COND_V_MSG(!symbol_name.begins_with("cgd_native_") || !symbol_name.substr(11).is_valid_int(), Variant(), "Invalid CGD native function identifier.");
+			const CharString signature = p_signature.string().utf8();
+			ERR_FAIL_COND_V_MSG(signature.length() != p_args.size() + 1, Variant(), "Invalid CGD native function signature.");
 			void **cached = libraries.getptr(p_id);
 			void *library = cached ? *cached : nullptr;
 			if (!library) {
@@ -1135,14 +1139,19 @@ Variant GDCNative::invoke(const String &p_path, const String &p_id, const String
 					libraries.insert(p_id, library);
 				}
 			}
-			ERR_FAIL_COND_V_MSG(os->get_dynamic_library_symbol_handle(library, p_symbol, symbol) != OK, Variant(), "Missing CGD native function: " + p_symbol);
-			functions[p_id].insert(p_symbol, symbol);
+			ERR_FAIL_COND_V_MSG(os->get_dynamic_library_symbol_handle(library, symbol_name, function.address) != OK, Variant(), "Missing CGD native function: " + symbol_name);
+			function.signature = p_signature;
+			function.signature_utf8 = signature;
 		}
 	}
+	const CharString &signature = function.signature_utf8;
+	ERR_FAIL_COND_V_MSG(function.signature != p_signature || signature.length() != p_args.size() + 1, Variant(), "Invalid CGD native function signature.");
 
 	NativeValue stack_args[8];
 	Vector<NativeValue> extra_args;
-	LocalVector<PackedByteArray> byte_arrays;
+	PackedByteArray stack_byte_arrays[2];
+	LocalVector<PackedByteArray> extra_byte_arrays;
+	int byte_array_count = 0;
 	NativeValue *args = stack_args;
 	if (p_args.size() > int(std::size(stack_args))) {
 		ERR_FAIL_COND_V(extra_args.resize(p_args.size()) != OK, Variant());
@@ -1150,7 +1159,7 @@ Variant GDCNative::invoke(const String &p_path, const String &p_id, const String
 	}
 	for (int i = 0; i < p_args.size(); ++i) {
 		NativeValue &value = args[i];
-		switch (p_signature[i + 1]) {
+		switch (signature[i + 1]) {
 			case 'i':
 				value.integer = p_args[i];
 				break;
@@ -1163,23 +1172,26 @@ Variant GDCNative::invoke(const String &p_path, const String &p_id, const String
 			case 'B': {
 				const Variant &argument = p_args[i];
 				ERR_FAIL_COND_V_MSG(argument.get_type() != Variant::PACKED_BYTE_ARRAY, Variant(), "Expected a PackedByteArray native argument.");
-				byte_arrays.push_back(PackedByteArray(argument));
-				const PackedByteArray &bytes = byte_arrays[byte_arrays.size() - 1];
+				PackedByteArray bytes = argument;
 				value.bytes = { bytes.ptr(), bytes.size() };
+				if (byte_array_count < int(std::size(stack_byte_arrays))) {
+					stack_byte_arrays[byte_array_count++] = std::move(bytes);
+				} else {
+					extra_byte_arrays.push_back(std::move(bytes));
+				}
 			} break;
 			default:
 				ERR_FAIL_V_MSG(Variant(), "Invalid CGD native parameter type.");
 		}
 	}
 	NativeValue result = {};
-	const CharString signature = p_signature.utf8();
 #ifdef ANDROID_ENABLED
 	using NativeFunction = bool (*)(const char *, const NativeValue *, NativeValue *, JNIEnv *, jobject);
 	JNIEnv *env = get_jni_env();
 	ERR_FAIL_NULL_V(env, Variant());
 	ERR_FAIL_COND_V_MSG(env->PushLocalFrame(32) < 0, Variant(), "Cannot allocate a CGD native JNI frame.");
 	jobject activity = OS_Android::get_singleton()->get_godot_java()->get_activity();
-	const bool called = !env->ExceptionCheck() && reinterpret_cast<NativeFunction>(symbol)(signature.get_data(), args, &result, env, activity);
+	const bool called = !env->ExceptionCheck() && reinterpret_cast<NativeFunction>(function.address)(signature.get_data(), args, &result, env, activity);
 	const bool exception = env->ExceptionCheck();
 	if (exception) {
 		env->ExceptionDescribe();
@@ -1189,10 +1201,14 @@ Variant GDCNative::invoke(const String &p_path, const String &p_id, const String
 	ERR_FAIL_COND_V_MSG(exception, Variant(), "CGD native Android call raised a Java exception.");
 #else
 	using NativeFunction = bool (*)(const char *, const NativeValue *, NativeValue *);
-	const bool called = reinterpret_cast<NativeFunction>(symbol)(signature.get_data(), args, &result);
+	const bool called = reinterpret_cast<NativeFunction>(function.address)(signature.get_data(), args, &result);
 #endif
 	ERR_FAIL_COND_V_MSG(!called, Variant(), "CGD native function signature mismatch.");
-	switch (p_signature[0]) {
+	if (!cache_hit) {
+		MutexLock lock(mutex);
+		functions[p_id].insert(p_symbol, function);
+	}
+	switch (signature[0]) {
 		case 'i':
 			return result.integer;
 		case 'f':
