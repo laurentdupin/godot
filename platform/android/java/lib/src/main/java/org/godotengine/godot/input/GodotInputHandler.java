@@ -211,7 +211,7 @@ public class GodotInputHandler implements InputManager.InputDeviceListener, Sens
 
 	public boolean onKeyUp(final int keyCode, KeyEvent event) {
 		int source = event.getSource();
-		if (isKeyEventGameDevice(source)) {
+		if (keyCode != KeyEvent.KEYCODE_DPAD_CENTER && isKeyEventGameDevice(source)) {
 			// Check if the device exists
 			final int deviceId = event.getDeviceId();
 			if (mJoystickIds.indexOfKey(deviceId) >= 0) {
@@ -239,7 +239,7 @@ public class GodotInputHandler implements InputManager.InputDeviceListener, Sens
 
 		final int deviceId = event.getDeviceId();
 		// Check if source is a game device and that the device is a registered gamepad
-		if (isKeyEventGameDevice(source)) {
+		if (keyCode != KeyEvent.KEYCODE_DPAD_CENTER && isKeyEventGameDevice(source)) {
 			if (event.getRepeatCount() > 0) // ignore key echo
 				return true;
 
