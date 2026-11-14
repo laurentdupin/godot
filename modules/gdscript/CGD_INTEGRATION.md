@@ -1,6 +1,6 @@
 # GD-C integration
 
-GD-C adds C-style syntax to GDScript using `.cgd` files. Source is transpiled in memory and uses the existing GDScript analyzer, compiler and VM. It is not native C/C++ compilation. See [syntax reference](CGD_SYNTAX.md).
+GD-C adds C-style syntax to GDScript using `.cgd` files. Source is transpiled in memory and uses the existing GDScript analyzer, compiler and VM. Explicit native declarations can also compile inline C on supported targets. See [syntax reference](CGD_SYNTAX.md).
 
 ## Creating scripts
 
@@ -39,6 +39,41 @@ The editing test opens a Node3D CGD script in the actual script editor and reque
 - Folding still follows the existing editor's indentation behavior. Use brace-aware reindentation for source that has no indentation.
 - Exported token buffers preserve source lines; precise columns remain limited by Godot's native token format.
 - Malformed-script class discovery and selected-resource dependency discovery retain the limitations described in the candidate. Cross-platform builds have not been validated here.
+
+## Inline C
+
+A file-scope `native { ... }` block supplies C headers, macros and helpers to that script's generated C file. A `native int f() { ... }` declaration exposes a typed script method whose body is compiled as C17. Native parameters and returns support `int` (C `int64_t`), `float` (C `double`) and `bool`. Functions may also return `void`. The CGD declaration stays at script scope. C braces must balance across the source of each block, including conditional preprocessing branches.
+
+Native parameters also support read-only `PackedByteArray` views. Use `static native` for a static script method. Native builds use `-O2` or `/O2`. The runtime checks the native ABI and engine precision before dispatch, so rebuild native exports and their templates together after updating.
+
+```ini
+[cgd_native]
+
+include_dirs=PackedStringArray("res://native/include")
+windows/x86_64/toolchain="clang-cl"
+windows/x86_64/defines=PackedStringArray("WIN32_LEAN_AND_MEAN")
+windows/x86_64/libraries=PackedStringArray("user32.lib")
+```
+
+Windows x86-64 defaults to `clang-cl` with the Visual C++ build tools and Windows SDK. Set `CGD_NATIVE_WINDOWS_X86_64_COMPILER` to override the clang-cl executable or set `windows/x86_64/compiler_path` to select it in the project. Otherwise the editor checks PATH and the Visual Studio installation. Set `windows/x86_64/toolchain="msvc"` to build with `cl.exe` and launch Godot from an x64 Visual Studio Developer Command Prompt so it inherits the compiler and SDK environment. `compiler_path` can select a different executable within that environment.
+
+The source script's directory comes before configured include directories. With MSVC it also participates in angle-bracket include lookup. Common include directories precede target-specific directories. Target-specific defines override common defines by name. Targets accept `library_dirs` and `runtime_libraries` as packed string arrays.
+
+Before Run Project or Run Current Scene, the editor checks the project's native CGD scripts and compiles stale libraries. The cache tracks generated C, the compiler, build settings, and headers reported by the compiler. CGD-only edits reuse the library, even when they move a native block. In a reused library, values derived from `__LINE__` reflect the source locations from its last compilation. A C build failure stops the launch. A game launched directly from source can build or reuse the cached library on the first native call. After a saved C edit is reloaded in an editor-launched game, the first call can compile the new library, which starts with fresh C static state. Relaunch after changing headers or build settings. Windows x86-64 export compiles the script DLLs and copies them and configured runtime DLLs into `cgd_native` beside the game executable. Use an export template built from this fork. The C compiler and SDK are build-machine dependencies.
+
+For Android, export from a Windows editor with the Android NDK installed. Set `ANDROID_NDK_ROOT` to select an NDK explicitly. The exporter compiles a shared library for each enabled ABI and packages it with the APK. Use target keys such as `android/arm32/toolchain="ndk-clang"` for `armeabi-v7a`. Android native C bodies can use `cgd_android_env` and `cgd_android_activity` for JNI calls. These values are borrowed for the current native call, and the Activity may be null.
+
+Linux defaults to Clang and also supports `linux/x86_64/toolchain="gcc"`. Export from a Linux editor of the same architecture as the target and keep the exported `cgd_native` directory beside the game. On macOS, install Xcode Command Line Tools and export from a macOS editor. The exporter places `.dylib` files in the app's `Contents/Frameworks` directory. Universal exports compile both x86-64 and ARM64 slices. Target settings use keys such as `linux/x86_64/compiler_path` and `macos/universal/libraries` under `[cgd_native]`.
+
+Projects using ordinary `.gd` or `.cgd` scripts require no native build settings or C compiler. Export compiles scripts containing native C and ships the resulting libraries with the game.
+
+Inside a native block or body, the script editor asks Clang for C17 completion using the unsaved script and the selected target's include directories and defines. The default is the editor's OS and architecture. Set `completion_target="android/arm32"` under `[cgd_native]` to edit Android code from a Windows editor with the NDK installed. A universal macOS profile uses the editor's architecture for completion.
+
+When the caret is inside a C function call, the editor shows the prototype and highlights the active parameter. CGD highlighting colors the `native` keyword, preprocessor directives such as `#include` and `#import`, and angle-bracket header paths.
+
+The editor checks native C in the background after the script validation delay. It shows Clang diagnostics from the script in the errors and warnings panels, and provides hover signatures for file-scope C symbols. Toggle background analysis in Editor Settings under **Text Editor → CGD → Live Native Diagnostics**. For an actual compile and link of the current buffer, use **Edit → Check Native C** (`Ctrl+Alt+F7`, or `Cmd+Option+F7` on macOS). This uses the selected target's build compiler and prints build failures to Output.
+
+For GCC, the editor queries the selected compiler for its target triple, GNU version, and system header search paths. For MSVC, completion uses the developer prompt's `INCLUDE` order and Visual C++ version. GCC and MSVC builds can run with their respective compilers alone. C completion for either also needs Clang, with an optional `completion_compiler_path` under `[cgd_native]` to select the Clang executable. Compiler-specific extensions and predefined macros can differ from the completion frontend. Compiler diagnostics appear when running or exporting the project.
 
 The initial bundle targets commit `95d622f2966ad862c8f7fe317267dff1f6a5413e`; all nine original file hashes also matched this checkout at `a34464c9a834975c7ab6dd60055498cafdf019e4`. The bundled implementation is MIT licensed; its notice is retained in `gdc/LICENSE`.
 

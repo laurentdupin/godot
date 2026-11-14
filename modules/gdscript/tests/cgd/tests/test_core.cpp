@@ -35,6 +35,58 @@ int main() {
 	contains(good(U"@tool; @export_range(0, 10) int health = 10;", "annotations"), U"var health: int = 10", "C declaration");
 	contains(good(U"const int MAX = 3; static float speed = 1.5;", "storage"), U"static var speed: float = 1.5", "static declaration");
 	contains(good(U"static int twice(int n) { return n * 2; }", "C function"), U"static func twice(n: int) -> int:", "typed signature");
+	GDC::Options native_options;
+	native_options.script_path = U"res://win32.cgd";
+	native_options.native_library_id = U"example";
+	auto native_script = GDC::transpile(
+			U"extends Node;\n"
+			U"native {\n#include <windows.h>\n#define OPEN '{'\n}\n"
+			U"native float f(int n, bool use_it) {\n"
+			U"\t/* } */ char brace = '}';\n\treturn use_it ? n + brace : 0;\n"
+			U"}\nvoid _ready() { print(f(4, true)); }\n",
+			native_options);
+	check(native_script.ok(), "native C and CGD parse together");
+	contains(native_script, U"func f(n: int, use_it: bool) -> float:", "native wrapper retains types");
+	contains(native_script, U"CGDNative.invoke_v2(\"res://win32.cgd\", \"example\", \"cgd_native_0\", \"fib\", [n, use_it])", "native wrapper identifies the script and ABI");
+	check(native_script.native_code.find(U"#line 2 \"res://win32.cgd\"\n\n#include <windows.h>") != std::u32string::npos, "native include and source location retained");
+	check(native_script.native_code.find(U"static double f(int64_t n, bool use_it)") != std::u32string::npos, "native ABI uses Godot-sized numeric types");
+	check(native_script.native_code.find(U"/* } */ char brace = '}';") != std::u32string::npos, "native body survives verbatim");
+	check(native_script.native_code.find(U"CGD_ANDROID_PARAMETERS , JNIEnv *env, jobject activity") != std::u32string::npos, "Android wrappers accept the engine's JNI context");
+	check(native_script.native_code.find(U"CGD_ANDROID_ENTER;") < native_script.native_code.find(U"result->floating = f("), "JNI context is available before calling the C body");
+	check(native_script.native_library_id_offsets.size() == 1 &&
+					native_script.code.substr(native_script.native_library_id_offsets[0], 7) == U"example",
+			"library identifier patch points to the wrapper argument");
+	const auto normalize_native = [](const GDC::Result &result) {
+		std::u32string normalized = result.native_code;
+		for (auto it = result.native_line_numbers.rbegin(); it != result.native_line_numbers.rend(); ++it) {
+			normalized.replace(it->first, it->second, U"1");
+		}
+		return normalized;
+	};
+	const std::u32string native_body = U"native {\n#line 123 \"user.h\"\n}\nnative int f() { return 4; }";
+	const auto original_native = normalize_native(GDC::transpile(native_body, native_options));
+	check(original_native == normalize_native(GDC::transpile(U"// CGD comment\n" + native_body, native_options)), "CGD line moves preserve native build input");
+	check(original_native.find(U"#line 123 \"user.h\"") != std::u32string::npos, "user line directives survive normalization");
+	check(original_native != normalize_native(GDC::transpile(native_body + U"\nnative int g() { return 5; }", native_options)), "C changes alter native build input");
+	native_options.completion = true;
+	native_options.native_completion = true;
+	native_options.completion_cursor = { 2, 11 };
+	const auto native_completion = GDC::transpile(U"native int f(int value) {\nreturn val", native_options);
+	check(native_completion.ok(), "completion recovers an open native body");
+	check(native_completion.native_completion_offset != std::u32string::npos &&
+					native_completion.native_code.substr(native_completion.native_completion_offset - 10, 10) == U"return val",
+			"completion cursor maps to the generated C body");
+	bad(U"native String f() { return 0; }", "unsupported native return type");
+	const auto native_bytes = good(U"static native int count(PackedByteArray bytes) { return bytes.size; }", "static byte-array native function");
+	contains(native_bytes, U"static func count(bytes: PackedByteArray) -> int:", "static native wrapper");
+	contains(native_bytes, U"\"iB\", [bytes]", "native byte-array signature");
+	check(native_bytes.native_code.find(U"static int64_t count(CGDBytes bytes)") != std::u32string::npos, "native byte-array view");
+	check(native_bytes.native_code.find(U"cgd_native_abi_v2") != std::u32string::npos, "native library exports an ABI check");
+	bad(U"static native { }", "static native declaration block rejected");
+	bad(U"native PackedByteArray f() { return 0; }", "byte-array return rejected");
+	bad(U"native int f(int n,) { return n; }", "trailing native parameter separator");
+	bad(U"native int f() { return 0;", "unterminated native function");
+	bad(U"class Nested { native int f() { return 0; } }", "native methods require script scope");
 	bad(U"fn f(x: int = 2) -> int { return x; }", "fn alias rejected");
 	contains(good(U"signal hit(int damage, Node source);", "signal"), U"signal hit(damage: int, source: Node)", "typed signal");
 	contains(good(U"Array[Dictionary[String, int]] values = [];", "generic type"), U"var values: Array[Dictionary[String, int]]", "container type");

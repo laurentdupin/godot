@@ -11,7 +11,9 @@ public:
 	static bool is_source_path(const String &p_path);
 	static bool is_binary_path(const String &p_path);
 	static Error transpile(const String &p_source, String &r_source, GDC::SourceMap &r_map,
-			String &r_error, int &r_line, int &r_column, bool p_completion = false, GDC::Position p_completion_cursor = { 0, 0 });
+			String &r_error, int &r_line, int &r_column, bool p_completion = false, GDC::Position p_completion_cursor = { 0, 0 },
+			const String &p_path = String(), String *r_native_source = nullptr, int *r_native_completion_offset = nullptr, String *r_native_id = nullptr,
+			std::vector<GDC::Result::NativeBody> *r_native_bodies = nullptr);
 	static Vector<uint8_t> compile_binary(const String &p_source, const String &p_path,
 			GDScriptTokenizerBuffer::CompressMode p_mode, String &r_error);
 	static Error unpack_binary(const Vector<uint8_t> &p_binary, Vector<uint8_t> &r_tokens,

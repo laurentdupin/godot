@@ -30,6 +30,7 @@
 
 #include "register_types.h"
 #include "gdc_frontend.h"
+#include "gdc_native.h"
 
 #include "gdscript.h"
 #include "gdscript_cache.h"
@@ -55,6 +56,8 @@
 #include "tests/test_gdscript.h"
 #endif
 
+#include "core/config/engine.h"
+#include "core/config/project_settings.h"
 #include "core/io/file_access.h"
 #include "core/io/resource_loader.h"
 #include "core/io/resource_saver.h"
@@ -66,9 +69,6 @@
 #include "editor/export/editor_export_platform.h"
 #include "editor/translations/editor_translation_parser.h"
 
-#ifndef GDSCRIPT_NO_LSP
-#include "core/config/engine.h"
-#endif
 #endif // TOOLS_ENABLED
 
 #ifdef TESTS_ENABLED
@@ -89,10 +89,12 @@ class GDScriptExportPlugin : public EditorExportPlugin {
 
 	static constexpr EditorExportPreset::ScriptExportMode DEFAULT_SCRIPT_MODE = EditorExportPreset::MODE_SCRIPT_BINARY_TOKENS_COMPRESSED;
 	EditorExportPreset::ScriptExportMode script_mode = DEFAULT_SCRIPT_MODE;
+	HashSet<String> native_runtime_added;
 
 protected:
 	virtual void _export_begin(const HashSet<String> &p_features, bool p_debug, const String &p_path, int p_flags) override {
 		script_mode = DEFAULT_SCRIPT_MODE;
+		native_runtime_added.clear();
 
 		const Ref<EditorExportPreset> &preset = get_export_preset();
 		if (preset.is_valid()) {
@@ -133,6 +135,47 @@ protected:
 				add_file(compiled_path, file, true);
 			}
 		}
+		if (extension == "cgd" && error.is_empty()) {
+			String generated;
+			String native_source;
+			String native_id;
+			GDC::SourceMap map;
+			int line = 1;
+			int column = 1;
+			if (GDCFrontend::transpile(source, generated, map, error, line, column, false, { 0, 0 }, p_path, &native_source, nullptr, &native_id) == OK && !native_source.is_empty()) {
+				const Ref<EditorExportPreset> preset = get_export_preset();
+				const String platform = preset->get_platform()->get_os_name().to_lower();
+				const bool android = platform == "android";
+				Vector<String> targets;
+				if (android) {
+					for (const char *arch : { "arm32", "arm64", "x86_32", "x86_64" }) {
+						if (p_features.has(arch)) {
+							targets.push_back(arch);
+						}
+					}
+				} else if (platform == "windows" || platform == "linux" || platform == "macos") {
+					targets.push_back(preset->get("binary_format/architecture"));
+				}
+				if (targets.is_empty()) {
+					error = p_path + ": CGD native C requires a supported desktop or Android export target.";
+				}
+				for (const String &arch : targets) {
+					String dll;
+					if (GDCNative::get_singleton()->build(p_path, native_id, native_source, dll, error, platform, arch) != OK) {
+						break;
+					}
+					const Vector<String> tags = android ? Vector<String>{ arch } : Vector<String>();
+					const String destination = android || platform == "macos" ? String() : String("cgd_native");
+					add_shared_object(dll, tags, destination);
+					if (!native_runtime_added.has(arch)) {
+						for (const String &library : GDCNative::runtime_libraries(platform, arch)) {
+							add_shared_object(ProjectSettings::get_singleton()->globalize_path(library), tags, destination);
+						}
+						native_runtime_added.insert(arch);
+					}
+				}
+			}
+		}
 		if (!error.is_empty()) {
 			get_export_preset()->get_platform()->add_message(EditorExportPlatform::EXPORT_MESSAGE_ERROR, "GDScript / GD-C", error);
 			fail_export(ERR_INVALID_DATA); // Consumed by EditorExportPlatform's per-plugin check.
@@ -145,6 +188,7 @@ public:
 };
 
 static void _editor_init() {
+	EditorNode::add_build_callback(GDCNative::prepare_editor_run);
 	Ref<GDScriptExportPlugin> gd_export;
 	gd_export.instantiate();
 	EditorExport::get_singleton()->add_export_plugin(gd_export);
@@ -162,6 +206,9 @@ void initialize_gdscript_module(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SERVERS) {
 		GDREGISTER_CLASS(GDScript);
 		GDREGISTER_INTERNAL_CLASS(GDScriptFunctionState);
+		GDREGISTER_ABSTRACT_CLASS(GDCNative);
+		GDCNative *native = memnew(GDCNative);
+		Engine::get_singleton()->add_singleton(Engine::Singleton("CGDNative", native, "GDCNative"));
 
 		script_language_gd = memnew(GDScriptLanguage);
 		ScriptServer::register_language(script_language_gd);
@@ -203,6 +250,8 @@ void initialize_gdscript_module(ModuleInitializationLevel p_level) {
 void uninitialize_gdscript_module(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SERVERS) {
 		ScriptServer::unregister_language(script_language_gd);
+		Engine::get_singleton()->remove_singleton("CGDNative");
+		memdelete(GDCNative::get_singleton());
 
 		memdelete(gdscript_cache);
 		memdelete(script_language_gd);

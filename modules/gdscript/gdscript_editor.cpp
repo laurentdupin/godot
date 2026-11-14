@@ -30,6 +30,7 @@
 
 #include "gdscript.h"
 #include "gdc_frontend.h"
+#include "gdc_native.h"
 #include "gdscript_analyzer.h"
 #include "gdscript_parser.h"
 #include "gdscript_tokenizer.h"
@@ -3583,6 +3584,10 @@ static bool _make_cgd_override_hint(const MethodInfo &p_method, const StringName
 
 ::Error GDScriptEditorLanguage::complete_code(const String &p_code, const String &p_path, Object *p_owner, List<ScriptLanguage::CodeCompletionOption> *r_options, bool &r_forced, String &r_call_hint) {
 	const bool cgd = GDCFrontend::is_source_path(p_path);
+	if (cgd && r_options && GDCNative::complete_code(p_code, p_path, *r_options, r_call_hint)) {
+		r_forced = r_call_hint.is_empty();
+		return OK;
+	}
 	const String quote_style = !cgd && EDITOR_GET("text_editor/completion/use_single_quotes") ? "'" : "\"";
 
 	GDScriptParser parser;
@@ -4038,7 +4043,7 @@ static bool _make_cgd_override_hint(const MethodInfo &p_method, const StringName
 		r_options->push_back(E.value);
 	}
 	if (cgd && options.has("var")) {
-		for (const String &word : { "auto", "dynamic", "void", "switch", "cast", "type_is", "is_in" }) {
+		for (const String word : { "auto", "dynamic", "void", "switch", "cast", "type_is", "is_in", "native" }) {
 			ScriptLanguage::CodeCompletionOption option(word, ScriptLanguage::CODE_COMPLETION_KIND_KEYWORD);
 			option.insert_text += (word == "cast" || word == "type_is") ? "<" : word == "is_in" ? "(" : " ";
 			r_options->push_back(option);

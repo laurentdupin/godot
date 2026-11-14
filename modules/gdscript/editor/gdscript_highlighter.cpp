@@ -98,6 +98,38 @@ Dictionary GDScriptSyntaxHighlighter::_get_line_syntax_highlighting_impl(int p_l
 	const String &str = text_edit->get_line_with_ime(p_line);
 	const int line_length = str.length();
 	Color prev_color;
+	int directive_start = -1;
+	int directive_end = -1;
+	int header_start = -1;
+	int header_end = -1;
+	if (highlight_cgd && in_region == -1) {
+		int column = 0;
+		while (column < line_length && is_whitespace(str[column])) {
+			column++;
+		}
+		if (column < line_length && str[column] == '#') {
+			directive_start = column++;
+			while (column < line_length && is_whitespace(str[column])) {
+				column++;
+			}
+			const int word_start = column;
+			while (column < line_length && is_ascii_identifier_char(str[column])) {
+				column++;
+			}
+			directive_end = column;
+			const String directive = str.substr(word_start, column - word_start);
+			if (directive == "include" || directive == "include_next" || directive == "import") {
+				while (column < line_length && is_whitespace(str[column])) {
+					column++;
+				}
+				if (column < line_length && str[column] == '<') {
+					header_start = column;
+					const int close = str.find_char('>', column + 1);
+					header_end = close < 0 ? line_length : close + 1;
+				}
+			}
+		}
+	}
 
 	if (in_region != -1 && line_length == 0) {
 		color_region_cache[p_line] = in_region;
@@ -110,6 +142,16 @@ Dictionary GDScriptSyntaxHighlighter::_get_line_syntax_highlighting_impl(int p_l
 		bool is_a_symbol = is_symbol(str[j]);
 		bool is_a_digit = is_digit(str[j]);
 		bool is_binary_op = false;
+
+		if ((j >= directive_start && j < directive_end) || (j >= header_start && j < header_end)) {
+			color = j < directive_end ? preprocessor_color : string_color;
+			if (color != prev_color) {
+				highlighter_info["color"] = color;
+				color_map[j] = highlighter_info;
+				prev_color = color;
+			}
+			continue;
+		}
 
 		/* color regions */
 		if (is_a_symbol || in_region != -1) {
@@ -214,10 +256,13 @@ Dictionary GDScriptSyntaxHighlighter::_get_line_syntax_highlighting_impl(int p_l
 					color_map[j] = highlighter_info;
 
 					if (color_regions[in_region].is_comment) {
+						const String &end_key = color_regions[in_region].end_key;
+						const int end = end_key.is_empty() ? -1 : str.find(end_key, from);
+						const int comment_end = end < 0 ? line_length : end;
 						int marker_start_pos = from;
 						int marker_len = 0;
-						while (from <= line_length) {
-							if (from < line_length && is_unicode_identifier_continue(str[from])) {
+						while (from <= comment_end) {
+							if (from < comment_end && is_unicode_identifier_continue(str[from])) {
 								marker_len++;
 							} else {
 								if (marker_len > 0) {
@@ -237,8 +282,10 @@ Dictionary GDScriptSyntaxHighlighter::_get_line_syntax_highlighting_impl(int p_l
 							}
 							from++;
 						}
-						from = line_length - 1;
-						j = from;
+						j = end < 0 ? line_length - 1 : end + end_key.length() - 1;
+						if (end < 0 && !color_regions[in_region].line_only) {
+							color_region_cache[p_line] = in_region;
+						}
 					} else {
 						// Search the line.
 						int region_end_index = -1;
@@ -811,8 +858,10 @@ void GDScriptSyntaxHighlighter::_update_cache() {
 
 	Ref<Script> highlight_script = _get_edited_resource();
 	const bool cgd = highlight_script.is_valid() && highlight_script->get_path().get_extension().to_lower() == "cgd";
+	highlight_cgd = cgd;
 	/* Reserved words. */
 	const Color keyword_color = EDITOR_GET("text_editor/theme/highlighting/keyword_color");
+	preprocessor_color = keyword_color;
 	const Color control_flow_keyword_color = EDITOR_GET("text_editor/theme/highlighting/control_flow_keyword_color");
 	for (const String &keyword : gdscript->get_reserved_words()) {
 		if (gdscript->is_control_flow_keyword(keyword)) {
@@ -827,6 +876,7 @@ void GDScriptSyntaxHighlighter::_update_cache() {
 			reserved_keywords.erase(StringName(word));
 		}
 		reserved_keywords[SNAME("auto")] = keyword_color;
+		reserved_keywords[SNAME("native")] = keyword_color;
 		reserved_keywords[SNAME("switch")] = control_flow_keyword_color;
 		reserved_keywords[SNAME("case")] = control_flow_keyword_color;
 		reserved_keywords[SNAME("default")] = control_flow_keyword_color;

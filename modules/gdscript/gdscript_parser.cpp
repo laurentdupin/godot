@@ -600,7 +600,7 @@ Error GDScriptParser::parse(const String &p_source_code, const String &p_script_
 		if (p_for_completion && cursor_line > 0 && cursor_column > 0) {
 			completion_cursor = { uint32_t(cursor_line), uint32_t(cursor_column) };
 		}
-		if (GDCFrontend::transpile(source, generated, gdc_map, error, line, column, p_for_completion || !p_parse_body, completion_cursor) != OK) {
+		if (GDCFrontend::transpile(source, generated, gdc_map, error, line, column, p_for_completion || !p_parse_body, completion_cursor, p_script_path) != OK) {
 			script_path = p_script_path.simplify_path();
 			ParserError failure;
 			failure.message = "GD-C: " + error;

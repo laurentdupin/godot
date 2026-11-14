@@ -186,7 +186,14 @@ Error EditorRun::run(const String &p_scene, const String &p_write_movie, const V
 		}
 
 		ProcessID pid = 0;
+		const String previous_cgd_project = OS::get_singleton()->get_environment("GODOT_CGD_NATIVE_PREBUILT");
+		OS::get_singleton()->set_environment("GODOT_CGD_NATIVE_PREBUILT", resource_path);
 		Error err = OS::get_singleton()->create_instance(instance_args, &pid);
+		if (previous_cgd_project.is_empty()) {
+			OS::get_singleton()->unset_environment("GODOT_CGD_NATIVE_PREBUILT");
+		} else {
+			OS::get_singleton()->set_environment("GODOT_CGD_NATIVE_PREBUILT", previous_cgd_project);
+		}
 		ERR_FAIL_COND_V(err, err);
 		if (pid != 0) {
 			pids.push_back(pid);

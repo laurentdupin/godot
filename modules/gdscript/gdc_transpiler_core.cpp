@@ -15,6 +15,7 @@ enum class Kind { WORD,
 	NUMBER,
 	STRING,
 	SYMBOL,
+	NATIVE_BODY,
 	DOC,
 	END };
 struct Token {
@@ -54,6 +55,15 @@ class Frontend {
 	uint32_t indent = 0;
 	uint32_t recursion = 0;
 	uint32_t next_loop = 0;
+	uint32_t next_native = 0;
+	std::u32string native_declarations;
+	std::vector<std::pair<size_t, size_t>> declaration_line_numbers;
+	std::vector<std::pair<size_t, size_t>> function_line_numbers;
+	std::vector<Result::NativeBody> declaration_bodies;
+	std::vector<Result::NativeBody> function_bodies;
+	std::u32string native_functions;
+	size_t native_declaration_cursor = NO_INDEX;
+	size_t native_function_cursor = NO_INDEX;
 	bool line_start = true;
 	size_t completion_offset = NO_INDEX;
 
@@ -141,6 +151,75 @@ class Frontend {
 		}
 	}
 
+	// C is opaque to the CGD lexer. Only track the outer brace pair here.
+	size_t native_body_end(size_t begin) {
+		size_t depth = 1;
+		char32_t quote = 0;
+		bool line_comment = false;
+		bool block_comment = false;
+		bool directive = false;
+		bool first_on_line = false;
+		for (size_t i = begin + 1; i < source.size(); ++i) {
+			const char32_t c = source[i];
+			const char32_t next = i + 1 < source.size() ? source[i + 1] : 0;
+			if (c == U'\\' && (next == U'\n' || (next == U'\r' && i + 2 < source.size() && source[i + 2] == U'\n'))) {
+				i += next == U'\n' ? 1 : 2;
+				continue;
+			}
+			if (c == U'\n') {
+				first_on_line = true;
+				line_comment = false;
+				directive = false;
+			}
+			if (line_comment) {
+				continue;
+			}
+			if (block_comment) {
+				if (c == U'*' && next == U'/') {
+					block_comment = false;
+					++i;
+				}
+				continue;
+			}
+			if (quote) {
+				if (c == U'\\' && next) {
+					++i;
+				} else if (c == quote || c == U'\n') {
+					quote = 0;
+				}
+				continue;
+			}
+			if (c == U'/' && next == U'/') {
+				line_comment = true;
+				++i;
+				continue;
+			}
+			if (c == U'/' && next == U'*') {
+				block_comment = true;
+				++i;
+				continue;
+			}
+			if (c == U' ' || c == U'\t' || c == U'\r' || c == U'\n') {
+				continue;
+			}
+			if (first_on_line && c == U'#') {
+				directive = true;
+			}
+			first_on_line = false;
+			if (c == U'"' || c == U'\'') {
+				quote = c;
+			} else if (!directive && c == U'{') {
+				++depth;
+			} else if (!directive && c == U'}' && --depth == 0) {
+				return i;
+			}
+		}
+		if (!options.completion) {
+			error(locations[begin], "Unclosed native C body.");
+		}
+		return source.size();
+	}
+
 	void lex() {
 		locations.reserve(source.size() + 1);
 		Position pos;
@@ -159,6 +238,7 @@ class Frontend {
 		auto add = [&](Kind kind, size_t begin, size_t end) {
 			tokens.push_back({ kind, source.substr(begin, end - begin), begin, NO_INDEX, locations[begin] });
 		};
+		bool native_header = false;
 		while (i < source.size() && !failed()) {
 			char32_t c = ch(i);
 			if (c == U' ' || c == U'\t' || c == U'\r' || c == U'\n') {
@@ -170,6 +250,16 @@ class Frontend {
 				break;
 			}
 			size_t begin = i;
+			if (native_header && c == U'{') {
+				i = native_body_end(begin);
+				i += i < source.size();
+				add(Kind::NATIVE_BODY, begin, i);
+				native_header = false;
+				continue;
+			}
+			if (c == U';' || c == U'}' || c == U'=') {
+				native_header = false;
+			}
 			if (c == U'#') {
 				error(locations[i], "Use // or /* */ comments in GD-C.");
 				break;
@@ -250,6 +340,12 @@ class Frontend {
 				// Reject source aliases before lowering; strings, comments and member
 				// names (such as String.match()) never take this keyword path.
 				bool member = tokens.size() > 1 && tokens[tokens.size() - 2].text == U".";
+				if (!member && tokens.back().text == U"native" && (tokens.size() == 1 ||
+							tokens[tokens.size() - 2].kind == Kind::DOC || tokens[tokens.size() - 2].kind == Kind::NATIVE_BODY ||
+							tokens[tokens.size() - 2].text == U";" || tokens[tokens.size() - 2].text == U"}" ||
+							tokens[tokens.size() - 2].text == U"{" || tokens[tokens.size() - 2].text == U"static")) {
+					native_header = true;
+				}
 				if (!member) {
 					for (const char32_t *word : { U"func", U"fn", U"var", U"pass", U"elif", U"and", U"or", U"not", U"in", U"is", U"as", U"match" }) {
 						if (tokens.back().text == word) {
@@ -967,6 +1063,168 @@ class Frontend {
 		take(U";");
 		--indent;
 	}
+	void native_line(std::u32string &r_output, std::vector<std::pair<size_t, size_t>> &r_numbers, uint32_t line_number) const {
+		r_output += U"\n#line ";
+		const std::string digits = std::to_string(line_number);
+		r_numbers.emplace_back(r_output.size(), digits.size());
+		for (char c : digits) {
+			r_output.push_back(c);
+		}
+		r_output += U" " + native_path_literal() + U"\n";
+	}
+
+	std::u32string native_path_literal() const {
+		std::u32string output = U"\"";
+		for (char32_t c : options.script_path) {
+			if (c == U'\\' || c == U'"') {
+				output.push_back(U'\\');
+			}
+			output.push_back(c);
+		}
+		return output + U"\"";
+	}
+
+	const char32_t *native_type(const std::u32string &type) const {
+		if (type == U"int") {
+			return U"int64_t";
+		}
+		if (type == U"float") {
+			return U"double";
+		}
+		if (type == U"bool") {
+			return U"bool";
+		}
+		return type == U"void" ? U"void" : nullptr;
+	}
+
+	const char32_t *native_field(const std::u32string &type) const {
+		return type == U"float" ? U"floating" : type == U"bool" ? U"boolean" : U"integer";
+	}
+
+	void append_native_body(std::u32string &output, size_t &native_cursor, const Token &block, bool include_braces) {
+		const size_t begin = include_braces ? 0 : 1;
+		const bool closed = block.text.back() == U'}';
+		const size_t end = block.text.size() - (!include_braces && closed ? 1 : 0);
+		if (options.native_completion && options.completion_cursor.line > 0) {
+			for (size_t i = 1; i <= block.text.size() - (closed ? 1 : 0); i++) {
+				if (locations[block.offset + i] == options.completion_cursor) {
+					native_cursor = output.size() + i - begin;
+					break;
+				}
+			}
+		}
+		output += block.text.substr(begin, end - begin);
+		if (include_braces && !closed) {
+			output += U"\n}";
+		}
+	}
+
+	void native_statement(bool class_body, bool is_static) {
+		const Position origin = peek().position;
+		cursor += is_static ? 2 : 1;
+		if (!class_body || indent != 0) {
+			error(origin, "Native C declarations must be at script scope.");
+			return;
+		}
+		if (peek().kind == Kind::NATIVE_BODY) {
+			if (is_static) {
+				error(origin, "Expected a function after static native.");
+				return;
+			}
+			const Token &block = peek();
+			native_line(native_declarations, declaration_line_numbers, block.position.line);
+			declaration_bodies.push_back({ { block.position.line, block.position.column + 1 }, native_declarations.size() });
+			append_native_body(native_declarations, native_declaration_cursor, block, false);
+			native_declarations += U"\n";
+			++cursor;
+			take(U";");
+			return;
+		}
+		const Token &type = peek();
+		const char32_t *c_type = native_type(type.text);
+		const Token &name = token(cursor + 1);
+		if (!c_type || name.kind != Kind::WORD || token(cursor + 2).text != U"(") {
+			error(origin, "Expected a native function with an int, float, bool or void return type.");
+			return;
+		}
+		cursor += 2;
+		const auto args = parenthesized();
+		if (failed()) {
+			return;
+		}
+		if (peek().kind != Kind::NATIVE_BODY) {
+			error(peek().position, "Expected a native C function body.");
+			return;
+		}
+		std::u32string c_params;
+		std::u32string c_args;
+		std::u32string gd_params;
+		std::u32string gd_args;
+		std::u32string arg_types;
+		for (size_t i = args.first; i < args.second;) {
+			const Token &arg_type = token(i++);
+			const Token &arg = token(i++);
+			const bool is_bytes = arg_type.text == U"PackedByteArray";
+			const char32_t *c_arg_type = is_bytes ? U"CGDBytes" : native_type(arg_type.text);
+			if (!c_arg_type || arg_type.text == U"void" || arg.kind != Kind::WORD || i > args.second) {
+				error(arg_type.position, "Native parameters require an int, float, bool or PackedByteArray type and a name.");
+				return;
+			}
+			if (!arg_types.empty()) {
+				c_params += U", ";
+				c_args += U", ";
+				gd_params += U", ";
+				gd_args += U", ";
+			}
+			c_params += std::u32string(c_arg_type) + U" " + arg.text;
+			c_args += U"args[";
+			for (char c : std::to_string(arg_types.size())) {
+				c_args.push_back(c);
+			}
+			c_args += std::u32string(U"].") + (is_bytes ? U"bytes" : native_field(arg_type.text));
+			gd_params += arg.text + U": " + arg_type.text;
+			gd_args += arg.text;
+			arg_types.push_back(is_bytes ? U'B' : arg_type.text[0]);
+			if (i < args.second && (token(i++).text != U"," || i == args.second)) {
+				error(arg.position, "Expected another native parameter after ','.");
+				return;
+			}
+		}
+		std::u32string symbol = U"cgd_native_";
+		for (char c : std::to_string(next_native++)) {
+			symbol.push_back(c);
+		}
+		const Token &block = peek();
+		native_line(native_functions, function_line_numbers, block.position.line);
+		native_functions += std::u32string(U"static ") + c_type + U" " + name.text +
+				U"(" + (c_params.empty() ? U"void" : c_params) + U") ";
+		function_bodies.push_back({ block.position, native_functions.size() });
+		append_native_body(native_functions, native_function_cursor, block, true);
+		native_functions += U"\n";
+		native_functions += U"#line 1 \"<cgd-generated>\"\n";
+		const std::u32string signature = type.text.substr(0, 1) + arg_types;
+		native_functions += U"CGD_EXPORT bool " + symbol + U"(const char *signature, const CGDNativeValue *args, CGDNativeValue *result CGD_ANDROID_PARAMETERS) {\n"
+																						 U"\tif (strcmp(signature, \"" +
+				signature + U"\") != 0) { return false; }\n\tCGD_ANDROID_ENTER;\n\t";
+		if (type.text != U"void") {
+			native_functions += std::u32string(U"result->") + native_field(type.text) + U" = ";
+		}
+		native_functions += name.text + U"(" + c_args + U");\n\tCGD_ANDROID_LEAVE;\n\treturn true;\n}\n";
+
+		line(std::u32string(is_static ? U"static func " : U"func ") + name.text + U"(" + gd_params + U") -> " + type.text + U":", origin);
+		++indent;
+		std::u32string call = type.text == U"void" ? U"" : U"return ";
+		call += U"CGDNative.invoke_v2(" + native_path_literal() + U", \"";
+		start(origin);
+		result.native_library_id_offsets.push_back(result.code.size() + call.size());
+		call += options.native_library_id + U"\", \"" +
+				symbol + U"\", \"" + signature + U"\", [" + gd_args + U"])";
+		line(call, origin);
+		--indent;
+		++cursor;
+		take(U";");
+	}
+
 	void statement(bool class_body) {
 		if (failed()) {
 			return;
@@ -1008,7 +1266,11 @@ class Frontend {
 			leave();
 			return;
 		}
-		if (at(U"if") || at(U"while")) {
+		const bool static_native = at(U"static") && token(cursor + 1).text == U"native" &&
+				(token(cursor + 2).kind == Kind::WORD || token(cursor + 2).kind == Kind::NATIVE_BODY);
+		if (static_native || (at(U"native") && (token(cursor + 1).kind == Kind::NATIVE_BODY || token(cursor + 1).kind == Kind::WORD))) {
+			native_statement(class_body, static_native);
+		} else if (at(U"if") || at(U"while")) {
 			control(peek().text);
 		} else if (at(U"else")) {
 			if (token(cursor + 1).text == U"if") {
@@ -1151,6 +1413,42 @@ public:
 			result.code.clear();
 			result.map = SourceMap();
 		} else {
+			if (!native_declarations.empty() || !native_functions.empty()) {
+				result.native_code = U"#include <stdint.h>\n#include <stdbool.h>\n#include <string.h>\n"
+									 U"#ifdef __ANDROID__\n#include <jni.h>\n"
+									 U"static _Thread_local JNIEnv *cgd_android_env;\n"
+									 U"static _Thread_local jobject cgd_android_activity;\n"
+									 U"#define CGD_ANDROID_PARAMETERS , JNIEnv *env, jobject activity\n"
+									 U"#define CGD_ANDROID_ENTER JNIEnv *previous_env = cgd_android_env; jobject previous_activity = cgd_android_activity; cgd_android_env = env; cgd_android_activity = activity\n"
+									 U"#define CGD_ANDROID_LEAVE cgd_android_env = previous_env; cgd_android_activity = previous_activity\n"
+									 U"#define CGD_EXPORT __attribute__((visibility(\"default\")))\n"
+									 U"#else\n#define CGD_ANDROID_PARAMETERS\n#define CGD_ANDROID_ENTER\n#define CGD_ANDROID_LEAVE\n"
+									 U"#ifdef _WIN32\n#define CGD_EXPORT __declspec(dllexport)\n"
+									 U"#else\n#define CGD_EXPORT __attribute__((visibility(\"default\")))\n#endif\n#endif\n"
+									 U"typedef struct { const uint8_t *data; int64_t size; } CGDBytes;\n"
+									 U"typedef union { int64_t integer; double floating; bool boolean; CGDBytes bytes; } CGDNativeValue;\n"
+									 U"#ifndef CGD_REAL_BITS\n#define CGD_REAL_BITS 32\n#endif\n"
+									 U"CGD_EXPORT uint32_t cgd_native_abi_v2(void) {\n"
+									 U"    return (CGD_REAL_BITS << 16) | (sizeof(CGDNativeValue) << 8) | _Alignof(CGDNativeValue);\n}\n";
+				if (native_declaration_cursor != NO_INDEX) {
+					result.native_completion_offset = result.native_code.size() + native_declaration_cursor;
+				} else if (native_function_cursor != NO_INDEX) {
+					result.native_completion_offset = result.native_code.size() + native_declarations.size() + native_function_cursor;
+				}
+				for (const auto &[offset, length] : declaration_line_numbers) {
+					result.native_line_numbers.emplace_back(result.native_code.size() + offset, length);
+				}
+				for (const auto &[offset, length] : function_line_numbers) {
+					result.native_line_numbers.emplace_back(result.native_code.size() + native_declarations.size() + offset, length);
+				}
+				for (const auto &body : declaration_bodies) {
+					result.native_bodies.push_back({ body.original, result.native_code.size() + body.offset });
+				}
+				for (const auto &body : function_bodies) {
+					result.native_bodies.push_back({ body.original, result.native_code.size() + native_declarations.size() + body.offset });
+				}
+				result.native_code += native_declarations + native_functions;
+			}
 			build_map();
 		}
 		return std::move(result);
