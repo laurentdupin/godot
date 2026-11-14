@@ -1600,7 +1600,8 @@ void ScriptTextEditor::_show_symbol_tooltip(const String &p_symbol, int p_row, i
 		const String code = text->get_text_with_cursor_char(p_row, start);
 		const Callable callback = callable_mp(this, &ScriptTextEditor::_native_hover_finished).bind(p_row, start, start + p_symbol.length(), p_shortcut);
 		if (native_symbols.has(p_symbol)) {
-			callback.call(script->get_path(), code, native_symbols[p_symbol]);
+			const PackedStringArray prototypes = native_symbols[p_symbol];
+			callback.call(script->get_path(), code, String("\n").join(prototypes));
 		} else {
 			GDCNative::get_singleton()->request_native_hover(get_instance_id(), code, script->get_path(), p_symbol, callback);
 		}

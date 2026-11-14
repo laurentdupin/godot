@@ -1112,7 +1112,12 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 							continue;
 						}
 						const String detail = split < 0 ? name : completion.substr(split + 3);
-						symbols[name] = detail.replace("[#", "").replace("#]", " ").replace("<#", "").replace("#>", "").replace("{#", "").replace("#}", "");
+						const String prototype = detail.replace("[#", "").replace("#]", " ").replace("<#", "").replace("#>", "").replace("{#", "").replace("#}", "");
+						PackedStringArray prototypes = symbols.get(name, PackedStringArray());
+						if (!prototypes.has(prototype)) {
+							prototypes.push_back(prototype);
+							symbols[name] = prototypes;
+						}
 					}
 				}
 				if (FileAccess::exists(depfile) || !preamble_dependencies.is_empty()) {
