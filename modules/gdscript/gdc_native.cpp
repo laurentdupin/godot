@@ -30,7 +30,7 @@ GDCNative *GDCNative::singleton = nullptr;
 
 namespace {
 
-constexpr int NATIVE_BUILD_SCHEMA = 3;
+constexpr int NATIVE_BUILD_SCHEMA = 4;
 
 union NativeValue {
 	int64_t integer;
@@ -132,11 +132,33 @@ PackedStringArray msvc_dependencies(const String &p_depfile) {
 	return Dictionary(data).get("Includes", Array());
 }
 
-String input_stamp(const String &p_path) {
-	return itos(FileAccess::get_size(p_path)) + ":" + itos(FileAccess::get_modified_time(p_path)) + ":" + FileAccess::get_sha256(p_path);
+Dictionary input_stamp(const String &p_path, const Dictionary &p_previous, HashMap<String, Dictionary> *p_run_stamps) {
+	const uint64_t size = FileAccess::get_size(p_path);
+	const uint64_t modified = FileAccess::get_modified_time(p_path);
+	if (uint64_t(p_previous.get("size", -1)) == size && uint64_t(p_previous.get("mtime", -1)) == modified) {
+		if (p_run_stamps) {
+			p_run_stamps->insert(p_path, p_previous);
+		}
+		return p_previous;
+	}
+	if (p_run_stamps) {
+		if (const Dictionary *cached = p_run_stamps->getptr(p_path)) {
+			if (uint64_t(cached->get("size", -1)) == size && uint64_t(cached->get("mtime", -1)) == modified) {
+				return *cached;
+			}
+		}
+	}
+	Dictionary stamp;
+	stamp["size"] = size;
+	stamp["mtime"] = modified;
+	stamp["sha256"] = FileAccess::get_sha256(p_path);
+	if (p_run_stamps) {
+		p_run_stamps->insert(p_path, stamp);
+	}
+	return stamp;
 }
 
-Error prepare_directory(EditorFileSystemDirectory *p_directory, const String &p_platform, const String &p_arch, String &r_error, HashMap<String, String> &r_stamps) {
+Error prepare_directory(EditorFileSystemDirectory *p_directory, const String &p_platform, const String &p_arch, String &r_error, HashMap<String, Dictionary> &r_stamps) {
 	for (int i = 0; i < p_directory->get_file_count(); i++) {
 		const String path = p_directory->get_file_path(i);
 		if (!GDCFrontend::is_source_path(path)) {
@@ -806,7 +828,7 @@ bool GDCNative::prepare_editor_run() {
 		return true;
 	}
 	String error;
-	HashMap<String, String> stamps;
+	HashMap<String, Dictionary> stamps;
 	const uint64_t started = Time::get_singleton()->get_ticks_usec();
 	const Error result = prepare_directory(directory, OS::get_singleton()->get_name().to_lower(), Engine::get_singleton()->get_architecture_name(), error, stamps);
 	if (!stamps.is_empty()) {
@@ -825,20 +847,8 @@ PackedStringArray GDCNative::runtime_libraries(const String &p_platform, const S
 	return target_array("runtime_libraries", p_platform, p_arch);
 }
 
-Error GDCNative::build(const String &p_path, const String &p_id, const String &p_native_source, String &r_dll, String &r_error, const String &p_platform, const String &p_arch, bool p_cache_for_run, HashMap<String, String> *p_run_stamps) {
+Error GDCNative::build(const String &p_path, const String &p_id, const String &p_native_source, String &r_dll, String &r_error, const String &p_platform, const String &p_arch, bool p_cache_for_run, HashMap<String, Dictionary> *p_run_stamps) {
 #ifdef TOOLS_ENABLED
-	const auto stamp = [p_run_stamps](const String &p_input) -> String {
-		if (!p_run_stamps) {
-			return input_stamp(p_input);
-		}
-		const String *previous = p_run_stamps->getptr(p_input);
-		if (previous) {
-			return *previous;
-		}
-		const String value = input_stamp(p_input);
-		p_run_stamps->insert(p_input, value);
-		return value;
-	};
 	const bool windows = p_platform == "windows";
 	const bool android = p_platform == "android";
 	const bool macos = p_platform == "macos";
@@ -855,6 +865,9 @@ Error GDCNative::build(const String &p_path, const String &p_id, const String &p
 	const String cache = native_path(run_cache_path(p_platform, p_arch, p_id));
 	String fingerprint;
 	Dictionary inputs;
+	const Dictionary previous = p_cache_for_run ? read_run_cache(cache) : Dictionary();
+	const Dictionary previous_inputs = previous.get("inputs", Dictionary());
+	const auto stamp = [&](const String &p_input) { return input_stamp(p_input, previous_inputs.get(p_input, Dictionary()), p_run_stamps); };
 	if (p_cache_for_run) {
 		OS *os = OS::get_singleton();
 		Array configuration;
@@ -883,32 +896,60 @@ Error GDCNative::build(const String &p_path, const String &p_id, const String &p
 		}
 		for (const String &entry : target_array("library_dirs", p_platform, p_arch)) {
 			const String directory = native_path(entry);
+			Dictionary listing;
 			for (const String &file : DirAccess::get_files_at(directory)) {
 				const String path = directory.path_join(file);
-				inputs[path] = stamp(path);
+				listing[file] = vformat("%d:%d", FileAccess::get_size(path), FileAccess::get_modified_time(path));
 			}
+			configuration.push_back(listing);
 		}
-		configuration.push_back(inputs);
+		configuration.push_back(inputs.keys());
 		fingerprint = String(Variant(configuration)).sha256_text();
-		const Dictionary previous = read_run_cache(cache);
 		const String previous_library = cached_library(cache, previous, library_name);
 		if (!previous_library.is_empty() && previous.get("fingerprint", String()) == Variant(fingerprint)) {
 			const Dictionary dependencies = previous.get("dependencies", Dictionary());
-			bool current = previous.has("dependencies");
+			bool current = previous.has("dependencies") && previous.has("inputs");
+			Dictionary checked_dependencies;
 			for (const KeyValue<Variant, Variant> &dependency : dependencies) {
 				const String path = dependency.key;
-				if (!FileAccess::exists(path) || stamp(path) != String(dependency.value)) {
+				const Dictionary old_stamp = dependency.value;
+				const Dictionary new_stamp = input_stamp(path, old_stamp, p_run_stamps);
+				checked_dependencies[path] = new_stamp;
+				if (!FileAccess::exists(path) || new_stamp["sha256"] != old_stamp["sha256"]) {
+					current = false;
+					break;
+				}
+			}
+			for (const KeyValue<Variant, Variant> &input : inputs) {
+				const Dictionary old_stamp = previous_inputs.get(input.key, Dictionary());
+				const Dictionary new_stamp = input.value;
+				if (new_stamp["sha256"] != old_stamp.get("sha256", Variant())) {
 					current = false;
 					break;
 				}
 			}
 			if (current) {
+				if (inputs != previous_inputs || checked_dependencies != dependencies) {
+					MutexLock lock(build_mutex);
+					if (read_run_cache(cache) == previous) {
+						Dictionary refreshed = previous.duplicate();
+						refreshed["inputs"] = inputs;
+						refreshed["dependencies"] = checked_dependencies;
+						const String pending = cache.path_join("refresh_" + itos(os->get_process_id()));
+						Ref<FileAccess> file = FileAccess::open(pending, FileAccess::WRITE);
+						if (file.is_valid() && file->store_var(refreshed)) {
+							file.unref();
+							DirAccess::rename_absolute(pending, cache.path_join("current"));
+						}
+					}
+				}
 				r_dll = previous_library;
 				print_verbose("CGD native cache hit: " + p_path);
 				return OK;
 			}
 		}
 	}
+
 	String dir;
 	uint64_t build_index;
 	{
@@ -1018,7 +1059,7 @@ Error GDCNative::build(const String &p_path, const String &p_id, const String &p
 		for (const String &header : headers) {
 			const String path = header.replace_char('\\', '/');
 			if (path != source_file && FileAccess::exists(path)) {
-				dependencies[path] = input_stamp(path);
+				dependencies[path] = input_stamp(path, Dictionary(), p_run_stamps);
 			}
 		}
 		const String generation = "build_" + itos(OS::get_singleton()->get_process_id()) + "_" + itos(Time::get_singleton()->get_ticks_usec()) + "_" + itos(build_index);
@@ -1038,6 +1079,7 @@ Error GDCNative::build(const String &p_path, const String &p_id, const String &p
 		manifest["schema"] = NATIVE_BUILD_SCHEMA;
 		manifest["generation"] = generation;
 		manifest["fingerprint"] = fingerprint;
+		manifest["inputs"] = inputs;
 		manifest["dependencies"] = dependencies;
 		const String pending = cache.path_join(generation + ".manifest");
 		Ref<FileAccess> file = FileAccess::open(pending, FileAccess::WRITE);

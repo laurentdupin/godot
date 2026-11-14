@@ -50,6 +50,8 @@ Native call wrappers use interned library IDs, symbol names, and signatures. The
 
 Run `python modules/gdscript/tests/cgd/tools/run_native_reload_test.py --godot <editor>` to exercise native reload through the editor debugger. The test saves a CGD-only edit and a C edit while the same game process is running, checks both results, and checks that the run cache contains one library identity for each C version.
 
+Run preflight checks each compiler and header against its saved size and modification time. When either changes, it checks the content hash and refreshes the metadata if the contents still match. Configured library directories use their file listing and metadata. If an external tool replaces a file while preserving both size and modification time, clear the project's `.godot/cgd_native` cache to force a rebuild. Use `run_native_preflight_test.py --godot <editor>` in the CGD test tools to measure cold and warm preflight on five scripts.
+
 ```ini
 [cgd_native]
 

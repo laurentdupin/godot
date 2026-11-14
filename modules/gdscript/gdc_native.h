@@ -49,7 +49,7 @@ protected:
 public:
 	static GDCNative *get_singleton() { return singleton; }
 	static PackedStringArray runtime_libraries(const String &p_platform, const String &p_arch);
-	Error build(const String &p_path, const String &p_id, const String &p_native_source, String &r_library, String &r_error, const String &p_platform, const String &p_arch, bool p_cache_for_run = false, HashMap<String, String> *p_run_stamps = nullptr);
+	Error build(const String &p_path, const String &p_id, const String &p_native_source, String &r_library, String &r_error, const String &p_platform, const String &p_arch, bool p_cache_for_run = false, HashMap<String, Dictionary> *p_run_stamps = nullptr);
 #ifdef TOOLS_ENABLED
 	static bool prepare_editor_run();
 	void request_analysis(ObjectID p_editor, const String &p_path, const String &p_code, const Callable &p_callback, bool p_check_build = false);
