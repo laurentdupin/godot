@@ -1,8 +1,10 @@
-# CGD native: implementation plan (revision 2)
+# CGD native: implementation plan (revision 3)
 
 Audience: the implementer agent. Read the referenced code before changing it. Line numbers are approximate.
 
-Revision 2 records what has landed, reviews it, lists the remaining work, and adds three new tracks:
+Revision 3 reviews Phases 9b–11 as landed, records the fixes made in `cc02edd6f3`, and adds **Phase 12: editor/export parity** (per-script symbol isolation on export, Run on the merged library, Run cache cleanup). See "Review of Phases 9b–11" and "Stage 3" in the order of work.
+
+Revision 2 recorded what had landed, reviewed it, listed the remaining work, and added these tracks:
 - packed arrays and strings in the native ABI;
 - one native library per export target instead of one per script;
 - asynchronous completion with a precompiled preamble;
@@ -27,6 +29,9 @@ Keep one commit per phase. Run the existing suites before and after each phase: 
 | 7. Check Native C | Partial | Edit menu item, `Ctrl+Alt+F7`, real toolchain build with `p_cache_for_run = true`, toast and Output. | Per-line diagnostic parsing (one blob on the first body line today), Check All, toolbar button. |
 | 8. Docs | Partial | `CGD_INTEGRATION.md` covers what shipped. | Update as each phase lands. |
 | 9. ABI (first milestone) | Partial, verified on Windows | `static native`; read-only `PackedByteArray` inputs that share Godot's storage; `-O2` / `/O2`; `cgd_native_abi_v2` ABI and precision check at load; compiler runs outside the build mutex (fixes R4). Pilot: 2,000 cases match; at 9,216 bytes, CGD 3.50–3.70 µs, GDExtension 2.92–3.18 µs, GDScript 293–298 µs. | Other packed types, `String` in/out, packed array returns, macOS validation. The ~0.6 µs gap to the GDExtension is the per-call cost (R1). |
+| 9b. One library per export target | Landed (`3537ae60f6`, fixes in `cc02edd6f3`) | `cgd_native_<id16>_<N>` names, per-script object cache, merged `cgd_native.dll` / `libcgd_native.so` / `.dylib`, `lipo` for universal macOS, linker duplicate-symbol errors mapped to scripts, Check All links the merged library. | Name isolation and Run parity (Phase 12). Users still have to write `static` helpers. |
+| 10. Async completion and preamble | Landed (`7d89d4e5f8`, `1601f95658`, `15e5101c72`, fixes in `cc02edd6f3`) | Completion and hover on a worker, PCH shared by completion, diagnostics and symbol indexing, overload lists for hover, PCH cache capped at 32 entries / 256 MiB (LRU) in an editor temp directory. | Nothing known. |
+| 11. C++ / Objective-C++ | Landed (`b24672c301`) | `native cpp` / `native objcpp`, `cgd_native/default_language`, exceptions caught at the ABI boundary, `cxx_flags`. | Silent merging of same-named C++ inline functions across scripts on export (R15, Phase 12). |
 
 ---
 
@@ -60,6 +65,23 @@ Fix: cache results in `GDCNative`, keyed by `sha256(native source with real line
 **R6. The editor core includes a module header.** `editor/script/script_text_editor.cpp` includes `modules/gdscript/gdc_native.h` and checks the `.cgd` extension directly. That's acceptable in a fork. If it causes merge pain, move it behind `EditorLanguage` virtuals (`request_native_analysis`, `lookup_native_symbol`, `check_native`). It's optional cleanup; do it before Phase 11 if you're already editing these files.
 
 **R7. The ID test copies the normalization code.** `test_core.cpp` re-implements the normalization in a lambda. Add one test that calls `GDCFrontend::transpile` twice (a GDScript line added above versus not) and compares the returned `r_native_id` strings.
+
+---
+
+## Review of Phases 9b–11 (revision 3)
+
+### Fixed in `cc02edd6f3`
+- **R8.** The Windows static-helper check ran `llvm-nm` and rejected symbols clang-cl emits on its own: `__real@…` (double constants), `??_C@…` (string literals), and UCRT inline functions such as `sprintf`. The nm pass is gone; duplicate definitions now come from the linker (`LNK2005`, `duplicate symbol`, `multiple definition`) and are mapped to the scripts.
+- **R9.** `fail_export()` from `_export_finalize_files` was never checked, so an export with a failed native link still produced a package. `export_project_files` now returns the plugin's error after the finalize loop.
+- **R10.** Precompiled preambles were pruned only when older than 7 days, so active editing could grow `.godot/cgd_native/pch` without bound. The cache now lives in an editor temp directory, keeps 32 entries / 256 MiB, and evicts least recently used first.
+- **R11.** Export temp workspaces were held in `export_directories` until the editor quit. They are now released in `_export_end`.
+- **R12.** The export object cache was keyed by the library ID, which ignores line numbers, so `__LINE__` and debug line info could be stale. The fingerprint now includes the hash of the generated source.
+- **R13.** Two workers could delete a PCH the other was using. Preambles are now written under a pending name and renamed into place, and rejected preambles are no longer deleted from under another query.
+
+### Open
+**R14. The Run cache is never cleaned up.** `build()` publishes each Run build to `.godot/cgd_native/<platform>/<arch>/<id>/build_<pid>_<time>_<n>/` and points `current` at it. Nothing deletes older `build_*` folders, and every change to a script's native C creates a new `<id>` folder that is never removed. ExtractAndTranslate already has 4 `<id>` folders under `windows/x86_64`. Fix in Phase 12, item P4.
+
+**R15. C++ inline functions with the same name are silently merged on export.** Class member functions defined in the class body, `inline` functions and template instantiations are mergeable (COMDAT/weak) symbols. If two scripts each define `struct Parser { int parse() { ... } };` with different bodies, the merged link succeeds with **no error** and both scripts call the same `parse`. In the editor, each script has its own library, so each gets its own `parse`. Reproduced with clang-cl at `/Od`: script B returned script A's value (1 instead of 2). At `/O2` the call is often inlined, so the bug depends on optimization. The linker can't report this; only isolation (Phase 12, P1) fixes it.
 
 ---
 
@@ -177,7 +199,7 @@ The generated wrapper is always an instance method (`func name(...)`), so static
    - macOS universal: link each slice, then combine with `lipo`. Or link with both `-arch` flags, as single-script builds already do.
    - Generate a small manifest (`cgd_native.json`, or a `PackedStringArray` in the exported project settings) listing the IDs included, so the game can report a clear error for a missing ID instead of "missing symbol".
 3. **Runtime** (`invoke`): in a datapack (exported) run, open the single project library once and look up `cgd_native_<id16>_<N>` in it. Leave editor and source runs unchanged (one library per ID).
-4. **Static helpers rule.**
+4. **Static helpers rule.** *(Superseded by Phase 12, P1: exports isolate each script's symbols, so `static` stops being required. Keep the linker duplicate-symbol mapping until P1 lands.)*
    - Code in `native { }` blocks and helper functions written by the user must be `static` (or `static inline`). A non-static definition in two scripts would clash at link time. Even in one script, it would be visible to other scripts in the export but not in editor builds, so the two would behave differently.
    - Enforce this in the background analysis (Phase 4 service): after the syntax check, list external definitions from the native code and report each non-`static` function or variable *definition* as a C error on its line: "Native helpers must be static (scripts are linked together on export)."
      - With Clang, use `-Xclang -ast-dump=json -fsyntax-only` filtered to top-level `FunctionDecl`/`VarDecl` that have a body or initializer and `storageClass != static`. Or compile to an object and inspect it with `llvm-nm --defined-only --extern-only`, ignoring `cgd_native_*`. Choose whichever is cheaper. It can run only on save or Check.
@@ -282,6 +304,72 @@ Prerequisite for C++, which parses headers far more slowly. Also worth doing for
 
 ---
 
+## Phase 12: editor/export parity
+
+**Problem.** The editor builds one library per script; exports link every script into one library. Code that works in the editor can fail or misbehave in the export:
+
+| Situation | Editor (one library per script) | Export (one library) today |
+|---|---|---|
+| Non-static helper or global with the same name in two scripts (`int counter;`, `int helper()`) | Each script has its own copy | Link error |
+| Single-header library implemented in two scripts (stb, cJSON, miniaudio `*_IMPLEMENTATION`) | Works | Link error |
+| Same-named C++ inline function or class member with different bodies (R15) | Each script has its own | **Silently merged**, wrong code runs |
+| C runtime on Windows (`/MT`) | Each script has its own heap, `errno`, `rand()` state, stdio buffers, `atexit` list | One shared C runtime |
+| `DllMain`, `__attribute__((constructor))`, C++ static initializers | Run when that script's library loads | One `DllMain` only; every script's initializers run on the first native call in the project |
+
+**Goal.** Make the export behave like the editor for names, so users no longer need the `static` rule, and make Run use what is shipped so the remaining differences show up during development.
+
+### P1. Isolate each script's symbols in the merged export
+After compiling a script's object file, and before linking:
+1. List the symbols the object **defines** (`llvm-nm --defined-only --extern-only --format=just-symbols`, or `nm` on Unix). Never rename undefined (referenced) symbols.
+2. Rename every defined symbol except the script's `cgd_native_<id16>_*` exports and the object-format markers (`@feat.00`, `_fltused`, `__fltused`) to `<name>__cgd_<id16>`, with `llvm-objcopy --redefine-sym` (or `--redefine-syms <file>` for long lists). References inside the object are renamed with the definition.
+3. Link as today. Store the renamed object in the export object cache (the rename list is derived from the object, so the existing fingerprint covers it).
+
+Verified on Windows (clang-cl objects, `llvm-objcopy` from Visual Studio's LLVM component):
+- two scripts each defining a non-static `int counter;` and `int helper()`: a plain link fails with "duplicate symbol: helper"; after renaming, the DLL links and each script's counter is independent (`[1, 2, 3]` vs `[1, 2]`);
+- the R15 C++ case: after renaming `?parse@Parser@@QEAAHXZ` per script, script A returns 1 and script B returns 2.
+
+`llvm-objcopy --localize-symbol` is **not** supported for COFF ("option is not supported for COFF"), which is why renaming is the method for every platform.
+
+Tooling per target:
+| Target | Tool | Notes |
+|---|---|---|
+| Windows clang-cl | `llvm-objcopy.exe` next to `clang-cl.exe` (VS "C++ Clang tools") | Verified. |
+| Windows MSVC-only | none ships with MSVC | Require the VS LLVM component for exports with native code, or fall back to today's linker duplicate check with a clear message. Choose one and document it. |
+| Android | NDK `llvm-objcopy` in the toolchain `bin` | Use the NDK's own tool, not the host's. |
+| Linux | `llvm-objcopy` or binutils `objcopy` | Both support `--redefine-sym(s)`. |
+| macOS | Xcode doesn't ship `llvm-objcopy` | Try `ld -r` per script with `-exported_symbols_list` (keeping only the exports) and confirm that the hidden symbols no longer collide in the final link. **Unverified**; if it doesn't work, require Homebrew LLVM's `llvm-objcopy`. |
+
+Consequences:
+- Renaming COMDAT symbols (string literals, inline functions, template instantiations such as `std::vector<int>` members) gives each script its own copy. That is correct but increases size; measure the merged library size on a project with several C++ scripts and report it.
+- Symbols that the runtime finds **by name** stop working when renamed: `DllMain`, replacements of `operator new`/`operator delete`, `main`-style hooks. Detect them by name before renaming and report "`DllMain` is not supported in CGD native scripts" (and similar) as a build error on the native declaration line.
+- Once P1 lands, remove the `static` requirement from `CGD_INTEGRATION.md`, keep the linker duplicate mapping only for the MSVC-only fallback (if chosen), and drop the related "done when" check in Phase 9b.
+
+### P2. Run uses the merged library
+- The game started by Run is a separate process, so it doesn't need one library per script. Build the merged library for Run from the cached objects (recompile changed scripts, relink), publish it in the Run cache, and have `invoke` load it in source runs as it does in datapack runs.
+- Keep one library per script **only** for code that runs inside the editor process (`@tool` scripts, Check Native C on one script). Reloading in the editor process stays out of scope.
+- Report the Run preflight time with one changed script out of 5 (`print_verbose`), next to the per-script build time it replaces.
+
+### P3. Document what still differs
+In `CGD_INTEGRATION.md`, state that:
+- `DllMain` and runtime-replaced symbols are not supported (P1 enforces it);
+- on Windows, all native scripts share one C runtime in the merged library (heap, `errno`, `rand()`, stdio, locale), so one script's runtime state is visible to the others;
+- initializers (`__attribute__((constructor))`, C++ static constructors) of every script run when the first native function in the project is called.
+
+### P4. Clean the Run cache (R14)
+- When `build()` publishes a new `current` for an `<id>`, delete that `<id>`'s older `build_*` folders that no process has loaded. A DLL loaded by a running game is locked on Windows: skip folders that fail to delete and retry on the next publish.
+- During the Run preflight and Check All, delete `<id>` folders under `.godot/cgd_native/<platform>/<arch>/` that no current project script produces. A missing entry is rebuilt on the next Run, so deletion is always safe.
+- After P2, apply the same rule to the published merged libraries.
+
+**Done when.**
+- Two scripts with a non-static `helper()` and `counter` export and run, each with its own state, on Windows and macOS arm64.
+- The R15 C++ case (`struct Parser` with different inline bodies in two scripts) returns each script's own value in the export, at `/Od` and `/O2`.
+- A script defining `DllMain` gets a build error on its line.
+- Run uses the merged library; the timing for one changed script is reported.
+- After 10 edit-and-run cycles on one script, its `<id>` folders and `build_*` folders don't accumulate.
+- `CGD_INTEGRATION.md` no longer asks for `static` helpers and lists the P3 differences.
+
+---
+
 ## Target: ExtractAndTranslate
 
 The project's own native code is one GDExtension (`Addons/VisualNovelToolbarNative`, built by `Tools/Build/BuildWindowsNativeComponents.ps1` and `BuildMacosNativeComponents.sh`). The export presets are **Windows x86_64** and **macOS arm64**. The table maps each part to what it needs from this plan.
@@ -343,6 +431,14 @@ At the end of Stage 1, Phases 1–8 are complete and the pilot is in production.
 | 11 | Phase 10 | Async completion, position-specific lookup, precompiled preamble, merged Clang run. |
 | 12 | Phase 11 | `native cpp` / `native objcpp`, then the `default_language` setting. Then port `DesktopLifecycle` (macOS, `objcpp`). Then evaluate `detect_paragraphs`: measure the GDScript cost of flattening detections into packed arrays first, and port only if the total stays well ahead of the script version. |
 | 13 | Phase 1b step 4 | Handle-based wrapper, **only** if a real workload shows the per-call cost still matters. Otherwise skip. |
+
+### Stage 3: editor/export parity (revision 3)
+
+| Step | Phase | Work |
+|---|---|---|
+| 14 | Phase 12 P4 | Run cache cleanup (R14). Small and independent; do it first. |
+| 15 | Phase 12 P1 + P3 | Per-script symbol isolation on export, `DllMain` / runtime-symbol check, documentation of the remaining differences. Fixes R15, which can produce wrong code today in any project with two C++ scripts. Decide the MSVC-only fallback and verify the macOS method before writing the code. |
+| 16 | Phase 12 P2 | Run on the merged library, with the timing report. |
 
 ## Out of scope
 
