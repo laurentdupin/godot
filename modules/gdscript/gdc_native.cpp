@@ -606,6 +606,91 @@ Error capture_compiler(const String &p_compiler, const List<String> &p_args, Str
 #endif
 }
 
+Error isolate_export_symbols(const NativeTarget &p_target, const String &p_object, const GDCNative::NativeUnit &p_unit, String &r_error) {
+	const bool windows = p_target.uses_msvc_flags();
+	const bool macos = p_target.platform == "macos";
+	const String suffix = windows ? ".exe" : "";
+	String tool_dir = p_target.compiler.get_base_dir();
+#ifdef WINDOWS_ENABLED
+	if (p_target.toolchain == "msvc") {
+		tool_dir = find_clang_cl().get_base_dir();
+	}
+#endif
+	String nm = macos ? String("/usr/bin/nm") : tool_dir.path_join("llvm-nm" + suffix);
+	String objcopy = tool_dir.path_join("llvm-objcopy" + suffix);
+	if (!macos && !FileAccess::exists(nm) && p_target.platform != "android") {
+		nm = find_on_path(windows ? "llvm-nm.exe" : "nm");
+	}
+	if (!macos && !FileAccess::exists(objcopy) && p_target.platform != "android") {
+		objcopy = find_on_path(windows ? "llvm-objcopy.exe" : "objcopy");
+	}
+	if (!FileAccess::exists(nm) || (!macos && !FileAccess::exists(objcopy))) {
+		r_error = "CGD native export requires object tools for per-script symbol isolation. On Windows install the Visual Studio C++ Clang tools or put llvm-nm and llvm-objcopy on PATH.";
+		return ERR_UNAVAILABLE;
+	}
+	const List<String> inspect = macos ? List<String>{ "-gjU", p_object } : List<String>{ "--extern-only", "--defined-only", "--format=just-symbols", p_object };
+	String symbols;
+	int status = -1;
+	if (capture_compiler(nm, inspect, symbols, &status) != OK || status != 0) {
+		r_error = symbols;
+		return ERR_COMPILATION_FAILED;
+	}
+	const String prefix = (macos ? "_" : "") + String("cgd_native_") + p_unit.id.left(16) + "_";
+	const String map_path = p_object + ".symbols";
+	String mapping;
+	for (const String &line : symbols.split("\n", false)) {
+		const String symbol = line.strip_edges();
+		const String name = macos ? symbol.trim_prefix("_") : symbol;
+		if (name == "DllMain" || name == "main" || name == "WinMain" || name == "wWinMain" ||
+				name.begins_with("??2@") || name.begins_with("??3@") || name.begins_with("??_U@") || name.begins_with("??_V@") ||
+				name.begins_with("_Znwm") || name.begins_with("_Znam") || name.begins_with("_Znwj") || name.begins_with("_Znaj") ||
+				name.begins_with("_ZdlPv") || name.begins_with("_ZdaPv")) {
+			r_error = "Runtime entry point or replacement '" + name + "' is not supported in CGD native scripts.";
+			if (name.is_valid_ascii_identifier()) {
+				const Ref<RegEx> declaration = RegEx::create_from_string("\\b" + name + "\\s*\\(");
+				int source_line = 0;
+				for (const String &source : p_unit.source.split("\n")) {
+					if (source.begins_with("#line ")) {
+						source_line = source.get_slice(" ", 1).to_int();
+						continue;
+					}
+					if (source_line > 0 && declaration->search(source).is_valid()) {
+						r_error = vformat("%d: ", source_line) + r_error;
+						break;
+					}
+					if (source_line > 0) {
+						++source_line;
+					}
+				}
+			}
+			return ERR_COMPILATION_FAILED;
+		}
+		if (symbol.begins_with(prefix)) {
+			if (macos) {
+				mapping += symbol + "\n";
+			}
+		} else if (!macos && !symbol.is_empty() && symbol != "@feat.00" && symbol != "_fltused" && symbol != "__fltused") {
+			mapping += symbol + " " + symbol + "__cgd_" + p_unit.id.left(16) + "\n";
+		}
+	}
+	if (!macos && mapping.is_empty()) {
+		return OK;
+	}
+	Ref<FileAccess> file = FileAccess::open(map_path, FileAccess::WRITE);
+	if (file.is_null() || !file->store_string(mapping)) {
+		return ERR_CANT_CREATE;
+	}
+	file.unref();
+	const String isolated = p_object + ".isolated";
+	const List<String> rewrite = macos ? List<String>{ "ld", "-r", "-arch", p_target.arch, "-exported_symbols_list", map_path, p_object, "-o", isolated }
+									   : List<String>{ "--redefine-syms", map_path, p_object, isolated };
+	if (capture_compiler(macos ? String("/usr/bin/xcrun") : objcopy, rewrite, r_error, &status) != OK || status != 0 ||
+			DirAccess::rename_absolute(isolated, p_object) != OK) {
+		return ERR_COMPILATION_FAILED;
+	}
+	return OK;
+}
+
 bool gcc_completion_flags(const String &p_compiler, const String &p_language, List<String> &r_args) {
 #ifdef WINDOWS_ENABLED
 	return false;
@@ -1886,6 +1971,9 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 		List<String> args = language_flags(target, language);
 		args.push_back(windows ? "/O2" : "-O2");
 		args.push_back(windows ? "/DCGD_MERGED_EXPORT" : "-DCGD_MERGED_EXPORT");
+		if (!windows) {
+			args.push_back("-fno-common");
+		}
 		const Error flags_error = add_cxx_flags(args, target, language, r_error);
 		if (flags_error != OK) {
 			return flags_error;
@@ -1897,6 +1985,7 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 		Array configuration;
 		configuration.push_back(NATIVE_BUILD_SCHEMA);
 		configuration.push_back(unit.source.sha256_text());
+		configuration.push_back("symbol-isolation-v1");
 		configuration.push_back(target.compiler);
 		configuration.push_back(compiler_stamp);
 		for (const String &arg : args) {
@@ -1959,6 +2048,11 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 		if (capture_compiler(target.compiler, args, output, &status) != OK || status != 0 || !FileAccess::exists(object)) {
 			r_error = unit.path + ": " + output;
 			return ERR_COMPILATION_FAILED;
+		}
+		const Error isolation_error = isolate_export_symbols(target, object, unit, r_error);
+		if (isolation_error != OK) {
+			r_error = unit.path + ": " + r_error;
+			return isolation_error;
 		}
 		const PackedStringArray headers = target.toolchain == "msvc" ? msvc_dependencies(deps) : compiler_dependencies(deps);
 		Dictionary dependencies;
