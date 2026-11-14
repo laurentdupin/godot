@@ -602,10 +602,14 @@ Error capture_compiler(const String &p_compiler, const List<String> &p_args, Str
 #endif
 }
 
-Error isolate_export_symbols(const NativeTarget &p_target, const String &p_object, const GDCNative::NativeUnit &p_unit, String &r_error) {
+Error isolate_export_symbols(const NativeTarget &p_target, const String &p_object, const GDCNative::NativeUnit &p_unit, bool p_for_run, String &r_error) {
 	const bool windows = p_target.uses_msvc_flags();
 	const bool macos = p_target.platform == "macos";
-	const String suffix = windows ? ".exe" : "";
+#ifdef WINDOWS_ENABLED
+	const String suffix = ".exe";
+#else
+	const String suffix;
+#endif
 	String tool_dir = p_target.compiler.get_base_dir();
 #ifdef WINDOWS_ENABLED
 	if (p_target.toolchain == "msvc") {
@@ -621,7 +625,12 @@ Error isolate_export_symbols(const NativeTarget &p_target, const String &p_objec
 		objcopy = find_on_path(windows ? "llvm-objcopy.exe" : "objcopy");
 	}
 	if (!FileAccess::exists(nm) || (!macos && !FileAccess::exists(objcopy))) {
-		r_error = "CGD native export requires object tools for per-script symbol isolation. On Windows install the Visual Studio C++ Clang tools or put llvm-nm and llvm-objcopy on PATH.";
+		if (!suffix.is_empty() && p_target.platform == "windows") {
+			r_error = String(p_for_run ? "Running this CGD project" : "Exporting or checking this CGD project") +
+					" requires LLVM object tools even when MSVC is the compiler. Install Visual Studio's C++ Clang tools or put llvm-nm.exe and llvm-objcopy.exe on PATH.";
+		} else {
+			r_error = "CGD native symbol isolation could not find nm and objcopy for " + p_target.platform + ".";
+		}
 		return ERR_UNAVAILABLE;
 	}
 	const List<String> inspect = macos ? List<String>{ "-gjU", p_object } : List<String>{ "--extern-only", "--defined-only", "--format=just-symbols", p_object };
@@ -1629,8 +1638,11 @@ bool GDCNative::prepare_editor_run() {
 	} else {
 		Vector<Ref<DirAccess>> workspaces;
 		String library;
-		result = singleton->build_export(units, platform, arch, library, error, workspaces);
-		if (result == OK) {
+		MergedRunCache run_cache;
+		run_cache.directory = cache;
+		run_cache.previous = read_run_cache(cache);
+		result = singleton->build_export(units, platform, arch, library, error, workspaces, &run_cache);
+		if (result == OK && !run_cache.hit) {
 			const String generation = "build_" + itos(OS::get_singleton()->get_process_id()) + "_" + itos(Time::get_singleton()->get_ticks_usec());
 			const String destination = cache.path_join(generation);
 			result = DirAccess::make_dir_recursive_absolute(destination);
@@ -1651,6 +1663,8 @@ bool GDCNative::prepare_editor_run() {
 				manifest["schema"] = NATIVE_BUILD_SCHEMA;
 				manifest["generation"] = generation;
 				manifest["ids"] = ids;
+				manifest["link_fingerprint"] = run_cache.fingerprint;
+				manifest["inputs"] = run_cache.inputs;
 				const String pending = cache.path_join(generation + ".manifest");
 				Ref<FileAccess> file = FileAccess::open(pending, FileAccess::WRITE);
 				if (file.is_valid() && file->store_var(manifest)) {
@@ -1953,7 +1967,7 @@ bool GDCNative::supports_source(const String &p_source, const String &p_platform
 	return p_platform == "macos" || p_source.get_slice("\n", 1) != "// cgd-language: objcpp";
 }
 
-Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p_platform, const String &p_arch, String &r_library, String &r_error, Vector<Ref<DirAccess>> &r_workspaces) {
+Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p_platform, const String &p_arch, String &r_library, String &r_error, Vector<Ref<DirAccess>> &r_workspaces, MergedRunCache *r_run_cache) {
 #ifdef TOOLS_ENABLED
 	NativeTarget target;
 	const Error target_error = resolve_target(p_platform, p_arch, target, r_error);
@@ -1993,10 +2007,13 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 															   : "libcgd_native.so";
 	List<String> objects;
 	HashMap<String, Dictionary> stamps;
-	const Dictionary compiler_stamp = input_stamp(target.compiler, Dictionary(), &stamps);
+	const Dictionary previous_inputs = r_run_cache ? Dictionary(r_run_cache->previous.get("inputs", Dictionary())) : Dictionary();
+	const Dictionary compiler_stamp = input_stamp(target.compiler, previous_inputs.get(target.compiler, Dictionary()), &stamps);
 	const String cache_root = native_path(ProjectSettings::get_singleton()->get_project_data_path().path_join("cgd_native/export").path_join(p_platform).path_join(p_arch));
 	DirAccess::make_dir_recursive_absolute(cache_root);
 	bool needs_cpp = false;
+	bool all_objects_cached = true;
+	Array object_fingerprints;
 	for (const NativeUnit &unit : p_units) {
 		const String source = directory.path_join(unit.id + ".c");
 		const String object = directory.path_join(unit.id + (windows ? ".obj" : ".o"));
@@ -2049,11 +2066,13 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 				}
 				if (fresh) {
 					objects.push_back(cached_object);
+					object_fingerprints.push_back(entry);
 					print_verbose("CGD native export object cache hit: " + unit.path);
 					continue;
 				}
 			}
 		}
+		all_objects_cached = false;
 		manifest.unref();
 		Ref<FileAccess> file = FileAccess::open(source, FileAccess::WRITE);
 		if (file.is_null() || !file->store_string(unit.source)) {
@@ -2090,7 +2109,7 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 			r_error = unit.path + ": " + output;
 			return ERR_COMPILATION_FAILED;
 		}
-		const Error isolation_error = isolate_export_symbols(target, object, unit, r_error);
+		const Error isolation_error = isolate_export_symbols(target, object, unit, r_run_cache != nullptr, r_error);
 		if (isolation_error != OK) {
 			r_error = unit.path + ": " + r_error;
 			return isolation_error;
@@ -2105,6 +2124,7 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 		Dictionary entry;
 		entry["fingerprint"] = fingerprint;
 		entry["dependencies"] = dependencies;
+		object_fingerprints.push_back(entry);
 		if (FileAccess::exists(deps) && DirAccess::copy_absolute(object, cached_object) == OK) {
 			manifest = FileAccess::open(manifest_path, FileAccess::WRITE);
 			if (manifest.is_valid() && manifest->store_var(entry)) {
@@ -2113,6 +2133,60 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 			}
 		}
 		objects.push_back(object);
+	}
+	if (r_run_cache) {
+		Array link_inputs;
+		link_inputs.push_back(NATIVE_BUILD_SCHEMA);
+		link_inputs.push_back(p_platform);
+		link_inputs.push_back(p_arch);
+		link_inputs.push_back(target.toolchain);
+		link_inputs.push_back(target.triple);
+		link_inputs.push_back(object_fingerprints);
+		const auto stamp = [&](const String &p_path) {
+			const Dictionary value = input_stamp(p_path, previous_inputs.get(p_path, Dictionary()), &stamps);
+			r_run_cache->inputs[p_path] = value;
+			link_inputs.push_back(p_path);
+			link_inputs.push_back(value);
+		};
+		stamp(target.compiler);
+		for (const String &object : objects) {
+			stamp(object);
+		}
+		for (const char *name : { "libraries", "library_dirs", "runtime_libraries" }) {
+			link_inputs.push_back(target_array(name, p_platform, p_arch));
+		}
+		for (const String &entry : runtime_libraries(p_platform, p_arch)) {
+			stamp(native_path(entry));
+		}
+		for (const String &entry : target_array("libraries", p_platform, p_arch)) {
+			const String path = native_path(entry);
+			if (FileAccess::exists(path)) {
+				stamp(path);
+			}
+		}
+		for (const String &entry : target_array("library_dirs", p_platform, p_arch)) {
+			const String directory_path = native_path(entry);
+			for (const String &file : DirAccess::get_files_at(directory_path)) {
+				stamp(directory_path.path_join(file));
+			}
+		}
+		for (const char *name : { "PATH", "LIB", "LIBPATH", "LIBRARY_PATH", "SDKROOT", "DEVELOPER_DIR", "MACOSX_DEPLOYMENT_TARGET", "CL", "_CL_", "LINK", "_LINK_" }) {
+			link_inputs.push_back(OS::get_singleton()->get_environment(name));
+		}
+		r_run_cache->fingerprint = String(Variant(link_inputs)).sha256_text();
+		if (all_objects_cached && r_run_cache->previous.get("link_fingerprint", String()) == Variant(r_run_cache->fingerprint)) {
+			r_library = cached_library(r_run_cache->directory, r_run_cache->previous, filename);
+			bool ready = !r_library.is_empty();
+			for (const String &entry : runtime_libraries(p_platform, p_arch)) {
+				ready = ready && FileAccess::exists(r_library.get_base_dir().path_join(entry.get_file()));
+			}
+			if (ready) {
+				r_run_cache->hit = true;
+				print_verbose("CGD native merged Run cache hit");
+				return OK;
+			}
+		}
+		print_verbose("Linking CGD native Run library");
 	}
 	const String abi_source = directory.path_join("abi.c");
 	const String abi_object = directory.path_join(windows ? "abi.obj" : "abi.o");
