@@ -63,6 +63,7 @@ struct Result {
 	struct NativeBody {
 		Position original;
 		size_t offset;
+		std::u32string function_name;
 	};
 	std::u32string code;
 	std::u32string native_code;

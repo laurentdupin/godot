@@ -1133,7 +1133,7 @@ class Frontend {
 			}
 			const Token &block = peek();
 			native_line(native_declarations, declaration_line_numbers, block.position.line);
-			declaration_bodies.push_back({ { block.position.line, block.position.column + 1 }, native_declarations.size() });
+			declaration_bodies.push_back({ { block.position.line, block.position.column + 1 }, native_declarations.size(), {} });
 			append_native_body(native_declarations, native_declaration_cursor, block, false);
 			native_declarations += U"\n";
 			++cursor;
@@ -1198,10 +1198,10 @@ class Frontend {
 		native_line(native_functions, function_line_numbers, block.position.line);
 		native_functions += std::u32string(U"static ") + c_type + U" " + name.text +
 				U"(" + (c_params.empty() ? U"void" : c_params) + U") ";
-		function_bodies.push_back({ block.position, native_functions.size() });
+		function_bodies.push_back({ block.position, native_functions.size(), name.text });
 		append_native_body(native_functions, native_function_cursor, block, true);
 		native_functions += U"\n";
-		native_functions += U"#line 1 \"<cgd-generated>\"\n";
+		native_functions += U"#line 1 \"<" + symbol + U">\"\n";
 		const std::u32string signature = type.text.substr(0, 1) + arg_types;
 		native_functions += U"CGD_EXPORT bool " + symbol + U"(const char *signature, const CGDNativeValue *args, CGDNativeValue *result CGD_ANDROID_PARAMETERS) {\n"
 																						 U"\tif (strcmp(signature, \"" +
@@ -1442,10 +1442,10 @@ public:
 					result.native_line_numbers.emplace_back(result.native_code.size() + native_declarations.size() + offset, length);
 				}
 				for (const auto &body : declaration_bodies) {
-					result.native_bodies.push_back({ body.original, result.native_code.size() + body.offset });
+					result.native_bodies.push_back({ body.original, result.native_code.size() + body.offset, body.function_name });
 				}
 				for (const auto &body : function_bodies) {
-					result.native_bodies.push_back({ body.original, result.native_code.size() + native_declarations.size() + body.offset });
+					result.native_bodies.push_back({ body.original, result.native_code.size() + native_declarations.size() + body.offset, body.function_name });
 				}
 				result.native_code += native_declarations + native_functions;
 			}

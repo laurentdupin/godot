@@ -927,10 +927,12 @@ void ScriptTextEditor::_validate_script() {
 	errors.clear();
 	depended_errors.clear();
 	safe_lines.clear();
-	native_errors.clear();
-	native_warnings.clear();
-	native_symbols.clear();
-	native_analysis_code = String();
+	if (text != native_analysis_code && !text.contains("native")) {
+		native_errors.clear();
+		native_warnings.clear();
+		native_symbols.clear();
+		native_analysis_code = String();
+	}
 	if (native_build_code != text) {
 		native_build_errors.clear();
 	}
@@ -1491,8 +1493,7 @@ void ScriptTextEditor::_show_symbol_tooltip(const String &p_symbol, int p_row, i
 	Ref<Script> script = edited_res;
 #ifdef MODULE_GDSCRIPT_ENABLED
 	if (native_symbols.has(p_symbol) && script->get_path().get_extension().to_lower() == "cgd" &&
-			code_editor->get_text_editor()->get_text() == native_analysis_code &&
-			GDCNative::is_native_position(native_analysis_code, script->get_path(), p_row, p_column)) {
+			GDCNative::is_native_position(code_editor->get_text_editor()->get_text(), script->get_path(), p_row, p_column)) {
 		const String prototype = native_symbols[p_symbol];
 		Control *tooltip = EditorHelpBitTooltip::make_tooltip(code_editor->get_text_editor(), "", "[code]" + prototype.replace("[", "[lb]") + "[/code]", true, p_shortcut);
 		memdelete(tooltip);
@@ -2008,6 +2009,14 @@ void ScriptTextEditor::_edit_option_toggle_inline_comment() {
 }
 
 void ScriptTextEditor::_notification(int p_what) {
+#ifdef MODULE_GDSCRIPT_ENABLED
+	if (p_what == NOTIFICATION_APPLICATION_FOCUS_IN && edited_res.is_valid() && edited_res->get_path().get_extension().to_lower() == "cgd") {
+		const String code = code_editor->get_text_editor()->get_text();
+		if (code.contains("native") && EDITOR_GET("text_editor/cgd/live_native_diagnostics").booleanize()) {
+			GDCNative::get_singleton()->request_analysis(get_instance_id(), edited_res->get_path(), code, callable_mp(this, &ScriptTextEditor::_native_diagnostics_finished));
+		}
+	}
+#endif
 	switch (p_what) {
 		case NOTIFICATION_TRANSLATION_CHANGED: {
 			if (is_ready() && is_visible_in_tree()) {

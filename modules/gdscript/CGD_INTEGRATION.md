@@ -85,6 +85,8 @@ For GCC, the editor queries the selected compiler for its target triple, GNU ver
 
 The initial bundle targets commit `95d622f2966ad862c8f7fe317267dff1f6a5413e`; all nine original file hashes also matched this checkout at `a34464c9a834975c7ab6dd60055498cafdf019e4`. The bundled implementation is MIT licensed; its notice is retained in `gdc/LICENSE`.
 
+Analysis results are reused across CGD-only edits, including edits that move native bodies. The editor checks included headers when the application regains focus and refreshes analysis if they have changed. Diagnostics include Clang's notes and identify failures in generated native wrappers.
+
 ## Editor feature audit
 
 The follow-up audit covers explicit `.gd` checks and language-extension comparisons in the editor, resource system and GDScript language server. Details and validation are in [CGD_EDITOR_AUDIT.md](CGD_EDITOR_AUDIT.md).

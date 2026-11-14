@@ -599,8 +599,53 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 		callable_mp(this, &GDCNative::finish_analysis).call_deferred(p_request.path, p_request.code, p_request.callback, diagnostics, symbols);
 		return;
 	}
-	if (GDCFrontend::transpile(p_request.code, generated, map, error, line, column, false, { 0, 0 }, p_request.path, &native_source, nullptr, nullptr, &bodies) == OK &&
+	String native_id;
+	if (GDCFrontend::transpile(p_request.code, generated, map, error, line, column, false, { 0, 0 }, p_request.path, &native_source, nullptr, &native_id, &bodies) == OK &&
 			!native_source.is_empty() && resolve_analysis_frontend(p_request.path, frontend, args, error)) {
+		Array context;
+		context.push_back(native_id);
+		context.push_back(frontend.compiler);
+		context.push_back(FileAccess::get_modified_time(frontend.compiler));
+		for (const String &arg : args) {
+			context.push_back(arg);
+		}
+		for (const char *env : { "INCLUDE", "CPATH", "C_INCLUDE_PATH", "SDKROOT", "DEVELOPER_DIR", "MACOSX_DEPLOYMENT_TARGET", "CL", "_CL_" }) {
+			context.push_back(OS::get_singleton()->get_environment(env));
+		}
+		const String key = String(Variant(context)).sha256_text();
+		Vector<int> body_lines;
+		Vector<int> body_columns;
+		for (const auto &body : bodies) {
+			body_lines.push_back(body.original.line);
+			body_columns.push_back(body.original.column);
+		}
+		if (const AnalysisResult *cached = analysis_cache.getptr(p_request.path); cached && cached->key == key && cached->body_lines.size() == body_lines.size()) {
+			bool fresh = true;
+			for (const KeyValue<Variant, Variant> &header : cached->headers) {
+				const String path = header.key;
+				if (!FileAccess::exists(path) || input_stamp(path, header.value, nullptr) != Dictionary(header.value)) {
+					fresh = false;
+					break;
+				}
+			}
+			if (fresh) {
+				print_verbose("CGD native analysis cache hit: " + p_request.path);
+				diagnostics = cached->diagnostics.duplicate(true);
+				for (int i = 0; i < diagnostics.size(); ++i) {
+					Dictionary diagnostic = diagnostics[i];
+					const int body = diagnostic.get("body", -1);
+					if (body >= 0) {
+						if (int(diagnostic["line"]) == cached->body_lines[body]) {
+							diagnostic["column"] = int(diagnostic["column"]) + body_columns[body] - cached->body_columns[body];
+						}
+						diagnostic["line"] = int(diagnostic["line"]) + body_lines[body] - cached->body_lines[body];
+					}
+				}
+				callable_mp(this, &GDCNative::finish_analysis).call_deferred(p_request.path, p_request.code, p_request.callback, diagnostics, cached->symbols);
+				return;
+			}
+		}
+
 		Error temp_error = OK;
 		Ref<DirAccess> workspace = DirAccess::create_temp("cgd-diagnostics", false, &temp_error);
 		if (workspace.is_valid()) {
@@ -613,7 +658,12 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 					args.push_back(passthrough + flag);
 				}
 				String output;
+				print_verbose("Analyzing CGD native C: " + p_request.path);
 				List<String> diagnostic_args(args);
+				const String depfile = workspace->get_current_dir().path_join("diagnostics.d");
+				diagnostic_args.push_back(passthrough + "-MD");
+				diagnostic_args.push_back(passthrough + "-MF");
+				diagnostic_args.push_back(passthrough + depfile);
 				diagnostic_args.push_back(path);
 				capture_compiler(frontend.compiler, diagnostic_args, output);
 				const String prefix = p_request.path + ":";
@@ -627,6 +677,26 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 						include_column = location.size() > 1 ? MAX(1, location[1].to_int()) : 1;
 						continue;
 					}
+					if (entry.contains(": note: ") && !diagnostics.is_empty()) {
+						Dictionary previous = diagnostics[diagnostics.size() - 1];
+						previous["message"] = String(previous["message"]) + "\n" + entry.strip_edges();
+						continue;
+					}
+					int generated_body = -1;
+					if (entry.begins_with("<cgd_native_")) {
+						const int end = entry.find(">");
+						const String number = entry.substr(12, end - 12);
+						if (end >= 0 && number.is_valid_int()) {
+							const int index = int(number.to_int());
+							int function = 0;
+							for (int i = 0; i < int(bodies.size()); ++i) {
+								if (!bodies[i].function_name.empty() && function++ == index) {
+									generated_body = i;
+									break;
+								}
+							}
+						}
+					}
 					const bool own_source = entry.begins_with(prefix);
 					if (own_source) {
 						include_line = 0;
@@ -635,10 +705,10 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 					const int fatal_separator = own_source ? -1 : entry.find(": fatal error: ");
 					const int warning_separator = own_source ? -1 : entry.find(": warning: ");
 					const int separator = MAX(error_separator, MAX(fatal_separator, warning_separator));
-					if (!own_source && (include_line <= 0 || separator < 0)) {
+					if (!own_source && generated_body < 0 && (include_line <= 0 || separator < 0)) {
 						continue;
 					}
-					const String location = own_source ? entry.substr(prefix.length()) : vformat("%d:%d%s", include_line, include_column, entry.substr(separator));
+					const String location = own_source ? entry.substr(prefix.length()) : vformat("%d:%d%s", generated_body >= 0 ? body_lines[generated_body] : include_line, include_column, entry.substr(separator));
 					const PackedStringArray parts = location.split(":", true, 3);
 					if (parts.size() != 4 || !parts[0].is_valid_int() || !parts[1].is_valid_int()) {
 						continue;
@@ -650,7 +720,14 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 					Dictionary diagnostic;
 					const int diagnostic_line = parts[0].to_int();
 					int diagnostic_column = parts[1].to_int();
-					for (const auto &body : bodies) {
+					int body_index = generated_body;
+					int nearest_line = 0;
+					for (int i = 0; generated_body < 0 && i < int(bodies.size()); ++i) {
+						const auto &body = bodies[i];
+						if (int(body.original.line) <= diagnostic_line && int(body.original.line) >= nearest_line) {
+							body_index = i;
+							nearest_line = body.original.line;
+						}
 						if (int(body.original.line) == diagnostic_line) {
 							const int line_start = native_source.rfind_char('\n', int(body.offset) - 1) + 1;
 							const int generated_column = native_source.substr(line_start, int(body.offset) - line_start).utf8().length() + 1;
@@ -659,9 +736,11 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 						}
 					}
 					diagnostic["line"] = diagnostic_line;
-					diagnostic["column"] = diagnostic_column;
+					diagnostic["column"] = generated_body >= 0 ? body_columns[generated_body] : diagnostic_column;
 					diagnostic["error"] = severity != "warning";
-					diagnostic["message"] = own_source ? parts[3].strip_edges() : entry.strip_edges();
+					diagnostic["body"] = body_index;
+					diagnostic["message"] = generated_body >= 0 ? vformat("In generated wrapper for %s: %s", String(bodies[generated_body].function_name.c_str()), parts[3].strip_edges()) : own_source ? parts[3].strip_edges()
+																																																		: entry.strip_edges();
 					diagnostics.push_back(diagnostic);
 				}
 				file = FileAccess::open(path, FileAccess::WRITE);
@@ -687,6 +766,18 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 						const String detail = split < 0 ? name : completion.substr(split + 3);
 						symbols[name] = detail.replace("[#", "").replace("#]", " ").replace("<#", "").replace("#>", "").replace("{#", "").replace("#}", "");
 					}
+				}
+				if (FileAccess::exists(depfile)) {
+					Dictionary headers;
+					for (const String &header : compiler_dependencies(depfile)) {
+						if (header != path && FileAccess::exists(header)) {
+							headers[header] = input_stamp(header, Dictionary(), nullptr);
+						}
+					}
+					if (analysis_cache.size() >= 32 && !analysis_cache.has(p_request.path)) {
+						analysis_cache.erase(analysis_cache.begin()->key);
+					}
+					analysis_cache.insert(p_request.path, { key, diagnostics, symbols, headers, body_lines, body_columns });
 				}
 			}
 		}

@@ -36,6 +36,16 @@ class GDCNative : public Object {
 		bool check_build = false;
 	};
 	HashMap<ObjectID, AnalysisRequest> pending_analysis;
+	struct AnalysisResult {
+		String key;
+		Array diagnostics;
+		Dictionary symbols;
+		Dictionary headers;
+		Vector<int> body_lines;
+		Vector<int> body_columns;
+	};
+	// Accessed only by the serialized analysis worker.
+	HashMap<String, AnalysisResult> analysis_cache;
 	void analyze(AnalysisRequest p_request);
 	void start_analysis();
 	void finish_analysis(const String &p_path, const String &p_code, const Callable &p_callback, const Array &p_diagnostics, const Dictionary &p_symbols);
