@@ -70,6 +70,8 @@ class ScriptTextEditor : public CodeEditorBase {
 	List<EditorLanguage::Warning> native_warnings;
 	Dictionary native_symbols;
 	String native_analysis_code;
+	uint64_t native_analysis_revision = 0;
+	void _request_native_diagnostics(uint64_t p_revision);
 	List<EditorLanguage::ScriptError> native_build_errors;
 	String native_build_code;
 	void _native_diagnostics_finished(const String &p_path, const String &p_code, const Array &p_diagnostics, const Dictionary &p_symbols);

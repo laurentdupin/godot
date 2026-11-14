@@ -40,6 +40,7 @@
 #include "core/object/class_db.h"
 #include "core/object/editor_language.h"
 #include "core/os/keyboard.h"
+#include "core/string/char_utils.h"
 #include "editor/debugger/editor_debugger_node.h"
 #include "editor/doc/editor_help.h"
 #include "editor/docks/filesystem_dock.h"
@@ -979,9 +980,11 @@ void ScriptTextEditor::_validate_script() {
 	_update_background_color();
 
 #ifdef MODULE_GDSCRIPT_ENABLED
+	const uint64_t revision = ++native_analysis_revision;
 	if (script->get_path().get_extension().to_lower() == "cgd" && text.contains("native") &&
 			EDITOR_GET("text_editor/cgd/live_native_diagnostics").booleanize()) {
-		GDCNative::get_singleton()->request_analysis(get_instance_id(), script->get_path(), text, callable_mp(this, &ScriptTextEditor::_native_diagnostics_finished));
+		const double delay = double(EDITOR_GET("text_editor/cgd/native_diagnostics_delay_ms")) / 1000.0;
+		get_tree()->create_timer(MAX(0.0, delay))->connect("timeout", callable_mp(this, &ScriptTextEditor::_request_native_diagnostics).bind(revision));
 	}
 #endif
 
@@ -990,6 +993,14 @@ void ScriptTextEditor::_validate_script() {
 	}
 
 	TextEditorBase::_validate_script();
+}
+
+void ScriptTextEditor::_request_native_diagnostics(uint64_t p_revision) {
+#ifdef MODULE_GDSCRIPT_ENABLED
+	if (p_revision == native_analysis_revision && edited_res.is_valid() && EDITOR_GET("text_editor/cgd/live_native_diagnostics").booleanize()) {
+		GDCNative::get_singleton()->request_analysis(get_instance_id(), edited_res->get_path(), code_editor->get_text_editor()->get_text(), callable_mp(this, &ScriptTextEditor::_native_diagnostics_finished));
+	}
+#endif
 }
 
 void ScriptTextEditor::_native_diagnostics_finished(const String &p_path, const String &p_code, const Array &p_diagnostics, const Dictionary &p_symbols) {
@@ -1008,8 +1019,14 @@ void ScriptTextEditor::_native_diagnostics_finished(const String &p_path, const 
 		if (line < 1 || line > text->get_line_count()) {
 			continue;
 		}
-		const int column = CLAMP(int(entry["column"]), 1, text->get_line(line - 1).length() + 1);
-		const int end_column = MIN(column + 1, text->get_line(line - 1).length() + 1);
+		const String source_line = text->get_line(line - 1);
+		const int column = CLAMP(int(entry["column"]), 1, source_line.length() + 1);
+		int end_column = MIN(column + 1, source_line.length() + 1);
+		if (column <= source_line.length() && is_unicode_identifier_continue(source_line[column - 1])) {
+			while (end_column <= source_line.length() && is_unicode_identifier_continue(source_line[end_column - 1])) {
+				end_column++;
+			}
+		}
 		const String message = entry["message"];
 		if (bool(entry["error"])) {
 			native_errors.push_back({ p_path, line, column, line, end_column, "C: " + message });
@@ -1125,9 +1142,17 @@ void ScriptTextEditor::_update_errors() {
 	for (const List<EditorLanguage::ScriptError> *list : { &errors, &native_errors, &native_build_errors }) {
 		for (const EditorLanguage::ScriptError &err : *list) {
 			errors_panel->push_cell();
-			errors_panel->push_meta(err.start_line - 1);
+			if (list == &errors) {
+				errors_panel->push_meta(err.start_line - 1);
+			} else {
+				Dictionary location;
+				location["path"] = err.path;
+				location["line"] = err.start_line - 1;
+				location["column"] = err.start_column - 1;
+				errors_panel->push_meta(location);
+			}
 			errors_panel->push_color(warnings_panel->get_theme_color(SNAME("error_color"), EditorStringName(Editor)));
-			errors_panel->add_text(vformat(TTR("Line %d:"), err.start_line));
+			errors_panel->add_text(list == &errors ? vformat(TTR("Line %d:"), err.start_line) : vformat(TTR("Line %d, column %d:"), err.start_line, err.start_column));
 			errors_panel->pop(); // Color.
 			errors_panel->pop(); // Meta goto.
 			errors_panel->pop(); // Cell.

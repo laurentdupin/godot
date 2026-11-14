@@ -37,11 +37,25 @@ func run_test():
     for child in script_editor.find_children("*", "RichTextLabel", true, false):
         generated_error = generated_error or "In generated wrapper for value:" in child.get_parsed_text()
     print("CGD_GENERATED_ERROR ", generated_error)
-    get_tree().quit(0 if has_error and generated_error else 1)
+    code.text = "extends Node;\nnative int value() { return bad_identifier; }\n"
+    code.text_changed.emit()
+    await get_tree().create_timer(3).timeout
+    var positioned = false
+    for child in script_editor.find_children("*", "RichTextLabel", true, false):
+        var text = child.get_parsed_text()
+        positioned = positioned or ("Line 2, column 29:" in text and "bad_identifier" in text)
+    code.text = code.text.replace("bad_identifier", "12")
+    code.text_changed.emit()
+    await get_tree().create_timer(3).timeout
+    var cleared = true
+    for child in script_editor.find_children("*", "RichTextLabel", true, false):
+        cleared = cleared and "bad_identifier" not in child.get_parsed_text()
+    print("CGD_POSITIONED_DIAGNOSTIC ", positioned, " CLEARED ", cleared)
+    get_tree().quit(0 if has_error and generated_error and positioned and cleared else 1)
 """)
     result = subprocess.run([str(Path(sys.argv[1]).resolve()), "--headless", "--editor", "--verbose", "--path", str(root)],
                             capture_output=True, encoding="utf-8", errors="replace", timeout=35)
     output = result.stdout + result.stderr
     print(output)
-    if result.returncode or output.count("Analyzing CGD native C: res://main.cgd") != 3 or "CGD native analysis cache hit: res://main.cgd" not in output:
+    if result.returncode or output.count("Analyzing CGD native C: res://main.cgd") != 5 or "CGD native analysis cache hit: res://main.cgd" not in output:
         raise SystemExit(1)

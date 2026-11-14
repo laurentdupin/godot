@@ -87,6 +87,8 @@ The initial bundle targets commit `95d622f2966ad862c8f7fe317267dff1f6a5413e`; al
 
 Analysis results are reused across CGD-only edits, including edits that move native bodies. The editor checks included headers when the application regains focus and refreshes analysis if they have changed. Diagnostics include Clang's notes and identify failures in generated native wrappers.
 
+**Text Editor → CGD → Native Diagnostics Delay Ms** adds a 500 ms delay by default after script validation. C diagnostics show the line and column and underline the rest of the identifier at that position.
+
 ## Editor feature audit
 
 The follow-up audit covers explicit `.gd` checks and language-extension comparisons in the editor, resource system and GDScript language server. Details and validation are in [CGD_EDITOR_AUDIT.md](CGD_EDITOR_AUDIT.md).
