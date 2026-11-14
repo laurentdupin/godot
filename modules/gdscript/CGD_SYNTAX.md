@@ -126,6 +126,19 @@ static native int first_byte(PackedByteArray bytes) {
 }
 ```
 
+Native functions also accept `PackedInt32Array`, `PackedInt64Array`, `PackedFloat32Array`, `PackedFloat64Array`, `PackedVector2Array`, `PackedVector3Array`, and `String`. Array views expose `data` and `size`. Vector data uses `data[index][component]` with the engine's real-number precision. A `CGDString` exposes `utf8` and its byte `length`.
+
+For a packed array or String return, the C body returns void and writes to storage from `cgd_out_alloc(cgd_out, count)`. Count is in elements for arrays and UTF-8 bytes for strings. A second allocation replaces the first and invalidates its pointer. Zero count or a body that never allocates produces an empty value. Check the returned pointer before writing. Invalid counts or allocation failures report a native call error.
+
+```c
+static native String copy_string(String value) {
+    char *output = cgd_out_alloc(cgd_out, value.length);
+    if (output) {
+        memcpy(output, value.utf8, (size_t)value.length);
+    }
+}
+```
+
 ## Runtime limits
 
 Ordinary GD-C retains Godot's Variant values, reference semantics, type system and script permissions. The C compiler handles pointers, structs and preprocessing inside native blocks and bodies.

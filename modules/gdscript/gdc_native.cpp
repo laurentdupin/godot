@@ -31,19 +31,86 @@ GDCNative *GDCNative::singleton = nullptr;
 
 namespace {
 
-constexpr int NATIVE_BUILD_SCHEMA = 4;
+constexpr int NATIVE_BUILD_SCHEMA = 5;
 
 union NativeValue {
 	int64_t integer;
 	double floating;
 	bool boolean;
 	struct {
-		const uint8_t *data;
+		const void *data;
 		int64_t size;
-	} bytes;
+	} span;
 };
 
 constexpr uint32_t NATIVE_ABI_LAYOUT = (sizeof(real_t) * 8 << 16) | (sizeof(NativeValue) << 8) | alignof(NativeValue);
+
+struct NativeAllocator {
+	void *context;
+	void *(*allocate)(void *, int64_t);
+};
+
+struct NativeOutput {
+	char type;
+	Variant array;
+	PackedByteArray utf8;
+	bool failed = false;
+};
+
+template <class T>
+void *allocate_native_array(Variant &r_array, int64_t p_count) {
+	T array;
+	if (array.resize(p_count) != OK) {
+		return nullptr;
+	}
+	void *data = p_count > 0 ? array.ptrw() : nullptr;
+	r_array = array;
+	return data;
+}
+
+static void *allocate_native_output(void *p_context, int64_t p_count) {
+	auto &output = *static_cast<NativeOutput *>(p_context);
+	if (output.failed || p_count < 0 || p_count > INT32_MAX) {
+		output.failed = true;
+		return nullptr;
+	}
+	void *data = nullptr;
+	switch (output.type) {
+		case 's':
+			if (output.utf8.resize(p_count) != OK) {
+				output.failed = true;
+				return nullptr;
+			}
+			data = p_count ? output.utf8.ptrw() : nullptr;
+			break;
+		case 'B':
+			data = allocate_native_array<PackedByteArray>(output.array, p_count);
+			break;
+		case 'I':
+			data = allocate_native_array<PackedInt32Array>(output.array, p_count);
+			break;
+		case 'L':
+			data = allocate_native_array<PackedInt64Array>(output.array, p_count);
+			break;
+		case 'F':
+			data = allocate_native_array<PackedFloat32Array>(output.array, p_count);
+			break;
+		case 'D':
+			data = allocate_native_array<PackedFloat64Array>(output.array, p_count);
+			break;
+		case '2':
+			data = allocate_native_array<PackedVector2Array>(output.array, p_count);
+			break;
+		case '3':
+			data = allocate_native_array<PackedVector3Array>(output.array, p_count);
+			break;
+	}
+	output.failed = p_count > 0 && data == nullptr;
+	return data;
+}
+
+static_assert(sizeof(Vector2) == sizeof(real_t) * 2 && alignof(Vector2) == alignof(real_t));
+static_assert(sizeof(Vector3) == sizeof(real_t) * 3 && alignof(Vector3) == alignof(real_t));
 
 String library_filename(const String &p_platform, const String &p_id) {
 	if (p_platform == "windows") {
@@ -1366,7 +1433,7 @@ Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const St
 				} else {
 					ERR_FAIL_COND_V_MSG(os->open_dynamic_library(dll, library, &options) != OK, Variant(), "Cannot load CGD native library: " + dll);
 					void *abi = nullptr;
-					if (os->get_dynamic_library_symbol_handle(library, "cgd_native_abi_v2", abi, true) != OK ||
+					if (os->get_dynamic_library_symbol_handle(library, "cgd_native_abi_v3", abi, true) != OK ||
 							!abi || reinterpret_cast<uint32_t (*)()>(abi)() != NATIVE_ABI_LAYOUT) {
 						os->close_dynamic_library(library);
 						ERR_FAIL_V_MSG(Variant(), "Incompatible CGD native ABI or engine precision. Rebuild the native library: " + dll);
@@ -1386,6 +1453,7 @@ Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const St
 	Vector<NativeValue> extra_args;
 	PackedByteArray stack_byte_arrays[2];
 	LocalVector<PackedByteArray> extra_byte_arrays;
+	LocalVector<CharString> strings;
 	int byte_array_count = 0;
 	NativeValue *args = stack_args;
 	if (p_args.size() > int(std::size(stack_args))) {
@@ -1408,25 +1476,56 @@ Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const St
 				const Variant &argument = p_args[i];
 				ERR_FAIL_COND_V_MSG(argument.get_type() != Variant::PACKED_BYTE_ARRAY, Variant(), "Expected a PackedByteArray native argument.");
 				PackedByteArray bytes = argument;
-				value.bytes = { bytes.ptr(), bytes.size() };
+				value.span = { bytes.ptr(), bytes.size() };
 				if (byte_array_count < int(std::size(stack_byte_arrays))) {
 					stack_byte_arrays[byte_array_count++] = std::move(bytes);
 				} else {
 					extra_byte_arrays.push_back(std::move(bytes));
 				}
 			} break;
+			case 'I':
+			case 'L':
+			case 'F':
+			case 'D':
+			case '2':
+			case '3': {
+				const Variant &argument = p_args[i];
+				switch (signature[i + 1]) {
+#define CGD_READ_ARRAY(letter, variant_type, array_type) \
+	case letter: { \
+		ERR_FAIL_COND_V_MSG(argument.get_type() != Variant::variant_type, Variant(), "Unexpected packed native argument type."); \
+		const array_type array = argument; \
+		value.span = { array.ptr(), array.size() }; \
+	} break;
+					CGD_READ_ARRAY('I', PACKED_INT32_ARRAY, PackedInt32Array)
+					CGD_READ_ARRAY('L', PACKED_INT64_ARRAY, PackedInt64Array)
+					CGD_READ_ARRAY('F', PACKED_FLOAT32_ARRAY, PackedFloat32Array)
+					CGD_READ_ARRAY('D', PACKED_FLOAT64_ARRAY, PackedFloat64Array)
+					CGD_READ_ARRAY('2', PACKED_VECTOR2_ARRAY, PackedVector2Array)
+					CGD_READ_ARRAY('3', PACKED_VECTOR3_ARRAY, PackedVector3Array)
+#undef CGD_READ_ARRAY
+				}
+			} break;
+			case 's': {
+				ERR_FAIL_COND_V_MSG(p_args[i].get_type() != Variant::STRING, Variant(), "Expected a String native argument.");
+				strings.push_back(String(p_args[i]).utf8());
+				const CharString &utf8 = strings[strings.size() - 1];
+				value.span = { utf8.get_data(), utf8.length() };
+			} break;
 			default:
 				ERR_FAIL_V_MSG(Variant(), "Invalid CGD native parameter type.");
 		}
 	}
 	NativeValue result = {};
+	NativeOutput output{ signature[0] };
+	NativeAllocator allocator{ &output, allocate_native_output };
 #ifdef ANDROID_ENABLED
-	using NativeFunction = bool (*)(const char *, const NativeValue *, NativeValue *, JNIEnv *, jobject);
+	using NativeFunction = bool (*)(const char *, const NativeValue *, NativeValue *, NativeAllocator *, JNIEnv *, jobject);
 	JNIEnv *env = get_jni_env();
 	ERR_FAIL_NULL_V(env, Variant());
 	ERR_FAIL_COND_V_MSG(env->PushLocalFrame(32) < 0, Variant(), "Cannot allocate a CGD native JNI frame.");
 	jobject activity = OS_Android::get_singleton()->get_godot_java()->get_activity();
-	const bool called = !env->ExceptionCheck() && reinterpret_cast<NativeFunction>(function.address)(signature.get_data(), args, &result, env, activity);
+	const bool called = !env->ExceptionCheck() && reinterpret_cast<NativeFunction>(function.address)(signature.get_data(), args, &result, &allocator, env, activity);
 	const bool exception = env->ExceptionCheck();
 	if (exception) {
 		env->ExceptionDescribe();
@@ -1435,15 +1534,34 @@ Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const St
 	env->PopLocalFrame(nullptr);
 	ERR_FAIL_COND_V_MSG(exception, Variant(), "CGD native Android call raised a Java exception.");
 #else
-	using NativeFunction = bool (*)(const char *, const NativeValue *, NativeValue *);
-	const bool called = reinterpret_cast<NativeFunction>(function.address)(signature.get_data(), args, &result);
+	using NativeFunction = bool (*)(const char *, const NativeValue *, NativeValue *, NativeAllocator *);
+	const bool called = reinterpret_cast<NativeFunction>(function.address)(signature.get_data(), args, &result, &allocator);
 #endif
 	ERR_FAIL_COND_V_MSG(!called, Variant(), "CGD native function signature mismatch.");
 	if (!cache_hit) {
 		MutexLock lock(mutex);
 		functions[p_id].insert(p_symbol, function);
 	}
+	ERR_FAIL_COND_V_MSG(output.failed, Variant(), "CGD native output allocation failed.");
 	switch (signature[0]) {
+		case 's': {
+			String value;
+			if (!output.utf8.is_empty()) {
+				ERR_FAIL_COND_V_MSG(value.append_utf8(reinterpret_cast<const char *>(output.utf8.ptr()), output.utf8.size()) != OK, Variant(), "CGD native String output is not valid UTF-8.");
+			}
+			return value;
+		}
+		case 'B':
+		case 'I':
+		case 'L':
+		case 'F':
+		case 'D':
+		case '2':
+		case '3':
+			if (output.array.get_type() == Variant::NIL) {
+				allocate_native_output(&output, 0);
+			}
+			return output.array;
 		case 'i':
 			return result.integer;
 		case 'f':
@@ -1456,7 +1574,7 @@ Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const St
 }
 
 void GDCNative::_bind_methods() {
-	ClassDB::bind_method(D_METHOD("invoke_v2", "path", "library_id", "symbol", "signature", "args"), &GDCNative::invoke);
+	ClassDB::bind_method(D_METHOD("invoke_v3", "path", "library_id", "symbol", "signature", "args"), &GDCNative::invoke);
 }
 
 GDCNative::GDCNative() {

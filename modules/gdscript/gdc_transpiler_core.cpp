@@ -1084,21 +1084,34 @@ class Frontend {
 		return output + U"\"";
 	}
 
-	const char32_t *native_type(const std::u32string &type) const {
-		if (type == U"int") {
-			return U"int64_t";
-		}
-		if (type == U"float") {
-			return U"double";
-		}
-		if (type == U"bool") {
-			return U"bool";
-		}
-		return type == U"void" ? U"void" : nullptr;
-	}
+	struct NativeType {
+		const char32_t *name;
+		const char32_t *c_type;
+		const char32_t *field;
+		char32_t signature;
+	};
 
-	const char32_t *native_field(const std::u32string &type) const {
-		return type == U"float" ? U"floating" : type == U"bool" ? U"boolean" : U"integer";
+	const NativeType *native_type(const std::u32string &type) const {
+		static constexpr NativeType types[] = {
+			{ U"int", U"int64_t", U"integer", U'i' },
+			{ U"float", U"double", U"floating", U'f' },
+			{ U"bool", U"bool", U"boolean", U'b' },
+			{ U"void", U"void", nullptr, U'v' },
+			{ U"String", U"CGDString", U"string", U's' },
+			{ U"PackedByteArray", U"CGDBytes", U"bytes", U'B' },
+			{ U"PackedInt32Array", U"CGDInt32s", U"int32s", U'I' },
+			{ U"PackedInt64Array", U"CGDInt64s", U"int64s", U'L' },
+			{ U"PackedFloat32Array", U"CGDFloat32s", U"float32s", U'F' },
+			{ U"PackedFloat64Array", U"CGDFloat64s", U"float64s", U'D' },
+			{ U"PackedVector2Array", U"CGDVector2s", U"vector2s", U'2' },
+			{ U"PackedVector3Array", U"CGDVector3s", U"vector3s", U'3' },
+		};
+		for (const NativeType &entry : types) {
+			if (type == entry.name) {
+				return &entry;
+			}
+		}
+		return nullptr;
 	}
 
 	void append_native_body(std::u32string &output, size_t &native_cursor, const Token &block, bool include_braces) {
@@ -1141,10 +1154,10 @@ class Frontend {
 			return;
 		}
 		const Token &type = peek();
-		const char32_t *c_type = native_type(type.text);
+		const NativeType *return_type = native_type(type.text);
 		const Token &name = token(cursor + 1);
-		if (!c_type || name.kind != Kind::WORD || token(cursor + 2).text != U"(") {
-			error(origin, "Expected a native function with an int, float, bool or void return type.");
+		if (!return_type || name.kind != Kind::WORD || token(cursor + 2).text != U"(") {
+			error(origin, "Expected a native function with a supported return type.");
 			return;
 		}
 		cursor += 2;
@@ -1164,10 +1177,9 @@ class Frontend {
 		for (size_t i = args.first; i < args.second;) {
 			const Token &arg_type = token(i++);
 			const Token &arg = token(i++);
-			const bool is_bytes = arg_type.text == U"PackedByteArray";
-			const char32_t *c_arg_type = is_bytes ? U"CGDBytes" : native_type(arg_type.text);
-			if (!c_arg_type || arg_type.text == U"void" || arg.kind != Kind::WORD || i > args.second) {
-				error(arg_type.position, "Native parameters require an int, float, bool or PackedByteArray type and a name.");
+			const NativeType *parameter = native_type(arg_type.text);
+			if (!parameter || !parameter->field || arg.kind != Kind::WORD || i > args.second) {
+				error(arg_type.position, "Native parameters require a supported type and a name.");
 				return;
 			}
 			if (!arg_types.empty()) {
@@ -1176,19 +1188,25 @@ class Frontend {
 				gd_params += U", ";
 				gd_args += U", ";
 			}
-			c_params += std::u32string(c_arg_type) + U" " + arg.text;
+			c_params += std::u32string(parameter->c_type) + U" " + arg.text;
 			c_args += U"args[";
 			for (char c : std::to_string(arg_types.size())) {
 				c_args.push_back(c);
 			}
-			c_args += std::u32string(U"].") + (is_bytes ? U"bytes" : native_field(arg_type.text));
+			c_args += std::u32string(U"].") + parameter->field;
 			gd_params += arg.text + U": " + arg_type.text;
 			gd_args += arg.text;
-			arg_types.push_back(is_bytes ? U'B' : arg_type.text[0]);
+			arg_types.push_back(parameter->signature);
 			if (i < args.second && (token(i++).text != U"," || i == args.second)) {
 				error(arg.position, "Expected another native parameter after ','.");
 				return;
 			}
+		}
+		const bool uses_allocator = return_type->signature == U's' || (return_type->signature >= U'A' && return_type->signature <= U'Z') ||
+				return_type->signature == U'2' || return_type->signature == U'3';
+		if (uses_allocator) {
+			c_params += c_params.empty() ? U"CGDAllocator *cgd_out" : U", CGDAllocator *cgd_out";
+			c_args += c_args.empty() ? U"cgd_out" : U", cgd_out";
 		}
 		std::u32string symbol = U"cgd_native_";
 		for (char c : std::to_string(next_native++)) {
@@ -1196,25 +1214,25 @@ class Frontend {
 		}
 		const Token &block = peek();
 		native_line(native_functions, function_line_numbers, block.position.line);
-		native_functions += std::u32string(U"static ") + c_type + U" " + name.text +
+		native_functions += std::u32string(U"static ") + (uses_allocator ? U"void" : return_type->c_type) + U" " + name.text +
 				U"(" + (c_params.empty() ? U"void" : c_params) + U") ";
 		function_bodies.push_back({ block.position, native_functions.size(), name.text });
 		append_native_body(native_functions, native_function_cursor, block, true);
 		native_functions += U"\n";
 		native_functions += U"#line 1 \"<" + symbol + U">\"\n";
-		const std::u32string signature = type.text.substr(0, 1) + arg_types;
-		native_functions += U"CGD_EXPORT bool " + symbol + U"(const char *signature, const CGDNativeValue *args, CGDNativeValue *result CGD_ANDROID_PARAMETERS) {\n"
+		const std::u32string signature = std::u32string(1, return_type->signature) + arg_types;
+		native_functions += U"CGD_EXPORT bool " + symbol + U"(const char *signature, const CGDNativeValue *args, CGDNativeValue *result, CGDAllocator *cgd_out CGD_ANDROID_PARAMETERS) {\n"
 																						 U"\tif (strcmp(signature, \"" +
 				signature + U"\") != 0) { return false; }\n\tCGD_ANDROID_ENTER;\n\t";
-		if (type.text != U"void") {
-			native_functions += std::u32string(U"result->") + native_field(type.text) + U" = ";
+		if (!uses_allocator && return_type->field) {
+			native_functions += std::u32string(U"result->") + return_type->field + U" = ";
 		}
 		native_functions += name.text + U"(" + c_args + U");\n\tCGD_ANDROID_LEAVE;\n\treturn true;\n}\n";
 
 		line(std::u32string(is_static ? U"static func " : U"func ") + name.text + U"(" + gd_params + U") -> " + type.text + U":", origin);
 		++indent;
 		std::u32string call = type.text == U"void" ? U"" : U"return ";
-		call += U"CGDNative.invoke_v2(" + native_path_literal() + U", &\"";
+		call += U"CGDNative.invoke_v3(" + native_path_literal() + U", &\"";
 		start(origin);
 		result.native_library_id_offsets.push_back(result.code.size() + call.size());
 		call += options.native_library_id + U"\", &\"" +
@@ -1425,10 +1443,20 @@ public:
 									 U"#else\n#define CGD_ANDROID_PARAMETERS\n#define CGD_ANDROID_ENTER\n#define CGD_ANDROID_LEAVE\n"
 									 U"#ifdef _WIN32\n#define CGD_EXPORT __declspec(dllexport)\n"
 									 U"#else\n#define CGD_EXPORT __attribute__((visibility(\"default\")))\n#endif\n#endif\n"
-									 U"typedef struct { const uint8_t *data; int64_t size; } CGDBytes;\n"
-									 U"typedef union { int64_t integer; double floating; bool boolean; CGDBytes bytes; } CGDNativeValue;\n"
 									 U"#ifndef CGD_REAL_BITS\n#define CGD_REAL_BITS 32\n#endif\n"
-									 U"CGD_EXPORT uint32_t cgd_native_abi_v2(void) {\n"
+									 U"#if CGD_REAL_BITS == 64\ntypedef double cgd_real;\n#else\ntypedef float cgd_real;\n#endif\n"
+									 U"typedef struct { const uint8_t *data; int64_t size; } CGDBytes;\n"
+									 U"typedef struct { const int32_t *data; int64_t size; } CGDInt32s;\n"
+									 U"typedef struct { const int64_t *data; int64_t size; } CGDInt64s;\n"
+									 U"typedef struct { const float *data; int64_t size; } CGDFloat32s;\n"
+									 U"typedef struct { const double *data; int64_t size; } CGDFloat64s;\n"
+									 U"typedef struct { const cgd_real (*data)[2]; int64_t size; } CGDVector2s;\n"
+									 U"typedef struct { const cgd_real (*data)[3]; int64_t size; } CGDVector3s;\n"
+									 U"typedef struct { const char *utf8; int64_t length; } CGDString;\n"
+									 U"typedef struct { void *ctx; void *(*alloc)(void *, int64_t); } CGDAllocator;\n"
+									 U"static inline void *cgd_out_alloc(CGDAllocator *out, int64_t count) { return out->alloc(out->ctx, count); }\n"
+									 U"typedef union { int64_t integer; double floating; bool boolean; CGDBytes bytes; CGDInt32s int32s; CGDInt64s int64s; CGDFloat32s float32s; CGDFloat64s float64s; CGDVector2s vector2s; CGDVector3s vector3s; CGDString string; } CGDNativeValue;\n"
+									 U"CGD_EXPORT uint32_t cgd_native_abi_v3(void) {\n"
 									 U"    return (CGD_REAL_BITS << 16) | (sizeof(CGDNativeValue) << 8) | _Alignof(CGDNativeValue);\n}\n";
 				if (native_declaration_cursor != NO_INDEX) {
 					result.native_completion_offset = result.native_code.size() + native_declaration_cursor;
