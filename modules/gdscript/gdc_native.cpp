@@ -128,8 +128,12 @@ String target_prefix(const String &p_platform, const String &p_arch) {
 	return "cgd_native/" + p_platform + "/" + p_arch + "/";
 }
 
+String run_cache_root(const String &p_platform, const String &p_arch) {
+	return ProjectSettings::get_singleton()->get_project_data_path().path_join("cgd_native").path_join(p_platform).path_join(p_arch);
+}
+
 String run_cache_path(const String &p_platform, const String &p_arch, const String &p_id) {
-	return ProjectSettings::get_singleton()->get_project_data_path().path_join("cgd_native").path_join(p_platform).path_join(p_arch).path_join(p_id);
+	return run_cache_root(p_platform, p_arch).path_join(p_id);
 }
 
 Dictionary read_run_cache(const String &p_directory) {
@@ -226,7 +230,60 @@ Dictionary input_stamp(const String &p_path, const Dictionary &p_previous, HashM
 	return stamp;
 }
 
-Error prepare_directory(EditorFileSystemDirectory *p_directory, const String &p_platform, const String &p_arch, String &r_error, HashMap<String, Dictionary> &r_stamps) {
+void prune_run_generations(const String &p_cache, const String &p_current, const String &p_superseded, bool p_windows) {
+	Ref<DirAccess> cache = DirAccess::open(p_cache);
+	if (cache.is_null()) {
+		return;
+	}
+	for (const String &entry : cache->get_directories()) {
+		if (!entry.begins_with("build_") || entry == p_current || cache->is_link(entry)) {
+			continue;
+		}
+		const String path = p_cache.path_join(entry);
+		// A publishing process creates its directory before replacing the manifest.
+		// Give those directories a grace period unless known to be superseded.
+		if (entry != p_superseded && FileAccess::get_modified_time(path) + 60 > Time::get_singleton()->get_unix_time_from_system()) {
+			continue;
+		}
+		Ref<DirAccess> generation = DirAccess::open(path);
+		if (generation.is_null()) {
+			continue;
+		}
+		if (p_windows) {
+			const String library = library_filename("windows", p_cache.get_file());
+			if (generation->file_exists(library) && generation->remove(library) != OK) {
+				continue;
+			}
+		}
+		if (generation->erase_contents_recursive() == OK) {
+			cache->remove(entry);
+		}
+	}
+}
+
+void prune_run_cache(const String &p_platform, const String &p_arch, const HashSet<String> &p_live_ids) {
+	const String path = ProjectSettings::get_singleton()->globalize_path(run_cache_root(p_platform, p_arch));
+	Ref<DirAccess> cache = DirAccess::open(path);
+	if (cache.is_null()) {
+		return;
+	}
+	for (const String &id : cache->get_directories()) {
+		if (id.length() != 64 || !id.is_valid_hex_number(false) || cache->is_link(id)) {
+			continue;
+		}
+		const String directory = path.path_join(id);
+		const Dictionary manifest = read_run_cache(directory);
+		const String generation = manifest.get("generation", String());
+		const bool live = p_live_ids.has(id);
+		prune_run_generations(directory, live ? generation : String(), live ? String() : generation, p_platform == "windows");
+		if (!live && DirAccess::get_directories_at(directory).is_empty()) {
+			DirAccess::remove_absolute(directory.path_join("current"));
+			cache->remove(id);
+		}
+	}
+}
+
+Error prepare_directory(EditorFileSystemDirectory *p_directory, const String &p_platform, const String &p_arch, String &r_error, HashMap<String, Dictionary> &r_stamps, HashSet<String> &r_live_ids) {
 	for (int i = 0; i < p_directory->get_file_count(); i++) {
 		const String path = p_directory->get_file_path(i);
 		if (!GDCFrontend::is_source_path(path)) {
@@ -248,6 +305,7 @@ Error prepare_directory(EditorFileSystemDirectory *p_directory, const String &p_
 			continue;
 		}
 		if (!native_source.is_empty() && GDCNative::supports_source(native_source, p_platform)) {
+			r_live_ids.insert(native_id);
 			String library;
 			const Error error = GDCNative::get_singleton()->build(path, native_id, native_source, library, r_error, p_platform, p_arch, true, &r_stamps);
 			if (error != OK) {
@@ -256,7 +314,7 @@ Error prepare_directory(EditorFileSystemDirectory *p_directory, const String &p_
 		}
 	}
 	for (int i = 0; i < p_directory->get_subdir_count(); i++) {
-		const Error error = prepare_directory(p_directory->get_subdir(i), p_platform, p_arch, r_error, r_stamps);
+		const Error error = prepare_directory(p_directory->get_subdir(i), p_platform, p_arch, r_error, r_stamps, r_live_ids);
 		if (error != OK) {
 			return error;
 		}
@@ -942,6 +1000,7 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 			const String arch = Engine::get_singleton()->get_architecture_name();
 			HashMap<String, Dictionary> stamps;
 			Vector<NativeUnit> units;
+			HashSet<String> live_ids;
 			for (const String &path : p_request.project_paths) {
 				const String code = FileAccess::get_file_as_string(path);
 				if (!code.contains("native")) {
@@ -953,6 +1012,7 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 					continue;
 				}
 				units.push_back({ path, id, native_source });
+				live_ids.insert(id);
 				if (build(path, id, native_source, library, error, platform, arch, true, &stamps) == OK) {
 					continue;
 				}
@@ -964,6 +1024,10 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 				failure["positioned"] = positioned_build_errors(path, native_source, bodies, error);
 				failure["error"] = error;
 				diagnostics.push_back(failure);
+			}
+			if (diagnostics.is_empty()) {
+				MutexLock lock(build_mutex);
+				prune_run_cache(platform, arch, live_ids);
 			}
 			if (!units.is_empty() && diagnostics.is_empty()) {
 				String library;
@@ -1469,7 +1533,14 @@ bool GDCNative::prepare_editor_run() {
 	String error;
 	HashMap<String, Dictionary> stamps;
 	const uint64_t started = Time::get_singleton()->get_ticks_usec();
-	const Error result = prepare_directory(directory, OS::get_singleton()->get_name().to_lower(), Engine::get_singleton()->get_architecture_name(), error, stamps);
+	const String platform = OS::get_singleton()->get_name().to_lower();
+	const String arch = Engine::get_singleton()->get_architecture_name();
+	HashSet<String> live_ids;
+	const Error result = prepare_directory(directory, platform, arch, error, stamps, live_ids);
+	if (result == OK) {
+		MutexLock lock(singleton->build_mutex);
+		prune_run_cache(platform, arch, live_ids);
+	}
 	if (!stamps.is_empty()) {
 		print_verbose(vformat("CGD native preflight: %.1f ms", (Time::get_singleton()->get_ticks_usec() - started) / 1000.0));
 	}
@@ -1737,11 +1808,13 @@ Error GDCNative::build(const String &p_path, const String &p_id, const String &p
 		}
 		file.unref();
 		MutexLock lock(build_mutex);
+		const String superseded = read_run_cache(cache).get("generation", String());
 		if (DirAccess::rename_absolute(pending, cache.path_join("current")) != OK) {
 			r_error = "Cannot publish the CGD native cache manifest: " + p_path;
 			return ERR_CANT_CREATE;
 		}
 		r_dll = destination.path_join(library_name);
+		prune_run_generations(cache, generation, superseded, windows);
 	}
 	return OK;
 #else
