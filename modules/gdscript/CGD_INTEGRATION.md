@@ -97,6 +97,8 @@ The built-in script editor runs C completion and call hints on a worker. Results
 
 In the editor completion probe, a body edit took about 83 ms on Windows and 47 ms on macOS arm64 with a cached preamble, versus 215 ms and 84 ms when the same edit required rebuilding the preamble.
 
+Live diagnostics and the file-scope hover index share that preamble. The syntax pass includes warnings from the preamble build and tracks its header dependencies. If the preamble cannot be built or loaded, diagnostics check the full translation unit.
+
 **Text Editor → CGD → Native Diagnostics Delay Ms** adds a 500 ms delay by default after script validation. C diagnostics show the line and column and underline the rest of the identifier at that position.
 
 The **Check Native C** toolbar button checks the active native script. **Edit → Check All Native Scripts** builds saved native scripts in the background for the editor's Run target and reports failures in Output and in open script editors. The single-script check reports individual compiler errors at their source positions. Linker failures without positions are shown at the first native body.

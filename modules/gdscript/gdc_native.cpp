@@ -548,6 +548,122 @@ bool gcc_completion_flags(const String &p_compiler, List<String> &r_args) {
 	return false;
 #endif
 }
+Mutex preamble_mutex;
+
+String prepare_preamble(const NativeTarget &frontend, const Ref<DirAccess> &workspace, const std::vector<GDC::Result::NativeBody> &bodies,
+		String &native_source, int &offset, List<String> &args, PackedStringArray &r_dependencies, String &r_preamble_output) {
+	String used_pch;
+	// Keep declaration-block completion on the full translation unit. A completion
+	// in a function can reuse the declarations compiled into the preamble.
+	for (const auto &body : bodies) {
+		if (body.function_name.empty()) {
+			continue;
+		}
+		const int function_line = native_source.rfind_char('\n', int(body.offset) - 1);
+		const int split = native_source.rfind_char('\n', function_line - 1) + 1;
+		if (split <= 0 || split > offset) {
+			break;
+		}
+		const String preamble = native_source.left(split);
+		Array key;
+		key.push_back(preamble);
+		key.push_back(frontend.compiler);
+		key.push_back(FileAccess::get_modified_time(frontend.compiler));
+		for (const char *name : { "PATH", "INCLUDE", "CPATH", "C_INCLUDE_PATH", "SDKROOT", "DEVELOPER_DIR", "MACOSX_DEPLOYMENT_TARGET", "CL", "_CL_" }) {
+			key.push_back(OS::get_singleton()->get_environment(name));
+		}
+		for (const String &arg : args) {
+			key.push_back(arg);
+		}
+		const String cache = native_path(ProjectSettings::get_singleton()->get_project_data_path().path_join("cgd_native/pch"));
+		DirAccess::make_dir_recursive_absolute(cache);
+		const String base = cache.path_join(String(Variant(key)).sha256_text());
+		const String header = base + ".h";
+		const String pch = base + ".pch";
+
+		if (DirAccess::get_files_at(cache).size() > 128) {
+			const uint64_t now = Time::get_singleton()->get_unix_time_from_system();
+			for (const String &entry : DirAccess::get_files_at(cache)) {
+				if (entry.get_basename().length() != 64 || !entry.get_basename().is_valid_hex_number(false) ||
+						(entry.get_extension() != "h" && entry.get_extension() != "c" && entry.get_extension() != "pch" && entry.get_extension() != "d" && entry.get_extension() != "log")) {
+					continue;
+				}
+				const String stale = cache.path_join(entry);
+				if (FileAccess::get_modified_time(stale) + 86400 * 7 < now) {
+					DirAccess::remove_absolute(stale);
+				}
+			}
+		}
+		if (!FileAccess::exists(pch) || !FileAccess::exists(base + ".d") || !FileAccess::exists(base + ".log")) {
+			Ref<FileAccess> file = FileAccess::open(header, FileAccess::WRITE);
+			if (file.is_null() || !file->store_string(preamble)) {
+				break;
+			}
+			file.unref();
+			List<String> flags;
+			for (const String &arg : args) {
+				if (arg != "/Zs" && arg != "-fsyntax-only") {
+					flags.push_back(arg);
+				}
+			}
+			const String passthrough = frontend.uses_msvc_flags() ? "/clang:" : "";
+			flags.push_back(passthrough + "-MD");
+			flags.push_back(passthrough + "-MF");
+			flags.push_back(passthrough + base + ".d");
+			if (frontend.uses_msvc_flags()) {
+				const String stub = base + ".c";
+				file = FileAccess::open(stub, FileAccess::WRITE);
+				if (file.is_null() || !file->store_string("#include \"" + header + "\"\n")) {
+					break;
+				}
+				file.unref();
+				flags.push_back("/c");
+				flags.push_back("/Yc" + header);
+				flags.push_back("/Fp" + pch);
+				flags.push_back("/Fo" + workspace->get_current_dir().path_join("preamble.obj"));
+				flags.push_back(stub);
+			} else {
+				flags.push_back("-x");
+				flags.push_back("c-header");
+				flags.push_back("-o");
+				flags.push_back(pch);
+				flags.push_back(header);
+			}
+			String output;
+			int status = -1;
+			if (capture_compiler(frontend.compiler, flags, output, &status) != OK || status != 0) {
+				DirAccess::remove_absolute(pch);
+				break;
+			}
+			file = FileAccess::open(base + ".log", FileAccess::WRITE);
+			if (file.is_valid()) {
+				file->store_string(output);
+			}
+		}
+		if (FileAccess::exists(pch)) {
+			r_dependencies = compiler_dependencies(base + ".d");
+			r_preamble_output = FileAccess::get_file_as_string(base + ".log");
+			used_pch = pch;
+			if (frontend.uses_msvc_flags()) {
+				const String include = "#include \"" + header + "\"\n";
+				args.push_back("/Yu" + header);
+				args.push_back("/Fp" + pch);
+				native_source = include + native_source.substr(split);
+				offset += include.length() - split;
+			} else {
+				args.push_back("-Xclang");
+				args.push_back("-include-pch");
+				args.push_back("-Xclang");
+				args.push_back(pch);
+				native_source = native_source.substr(split);
+				offset -= split;
+			}
+		}
+		break;
+	}
+	return used_pch;
+}
+
 bool resolve_analysis_frontend(const String &p_path, NativeTarget &frontend, List<String> &args, String &r_error) {
 	const Variant configured = setting("cgd_native/completion_target");
 	const String selection = configured.get_type() == Variant::STRING ? String(configured) : String();
@@ -844,18 +960,50 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 			if (file.is_valid() && file->store_string(native_source)) {
 				file.unref();
 				const String passthrough = frontend.uses_msvc_flags() ? "/clang:" : "";
-				for (const char *flag : { "-fno-color-diagnostics", "-fno-caret-diagnostics", "-fdiagnostics-format=clang", "-ferror-limit=50" }) {
-					args.push_back(passthrough + flag);
-				}
 				String output;
 				print_verbose("Analyzing CGD native C: " + p_request.path);
-				List<String> diagnostic_args(args);
 				const String depfile = workspace->get_current_dir().path_join("diagnostics.d");
-				diagnostic_args.push_back(passthrough + "-MD");
-				diagnostic_args.push_back(passthrough + "-MF");
-				diagnostic_args.push_back(passthrough + depfile);
-				diagnostic_args.push_back(path);
-				capture_compiler(frontend.compiler, diagnostic_args, output);
+				PackedStringArray preamble_dependencies;
+				String preamble_output;
+				{
+					MutexLock preamble_lock(preamble_mutex);
+					List<String> body_args(args);
+					String body_source = native_source;
+					int end = body_source.length();
+					const String pch = prepare_preamble(frontend, workspace, bodies, body_source, end, body_args, preamble_dependencies, preamble_output);
+					const auto syntax_check = [&](List<String> &p_flags) {
+						for (const char *flag : { "-fno-color-diagnostics", "-fno-caret-diagnostics", "-fdiagnostics-format=clang", "-ferror-limit=50", "-MD", "-MF" }) {
+							p_flags.push_back(passthrough + flag);
+						}
+						p_flags.push_back(passthrough + depfile);
+						p_flags.push_back(path);
+						capture_compiler(frontend.compiler, p_flags, output);
+					};
+					bool checked_body = false;
+					if (!pch.is_empty() && !preamble_dependencies.is_empty()) {
+						file = FileAccess::open(path, FileAccess::WRITE);
+						if (file.is_valid() && file->store_string(body_source)) {
+							file.unref();
+							syntax_check(body_args);
+							checked_body = !output.contains("fatal error:") || !output.contains("precompiled");
+						}
+						if (!checked_body) {
+							DirAccess::remove_absolute(pch);
+						}
+					}
+					if (checked_body) {
+						output = preamble_output + output;
+					} else {
+						preamble_dependencies.clear();
+						output.clear();
+						file = FileAccess::open(path, FileAccess::WRITE);
+						if (file.is_valid() && file->store_string(native_source)) {
+							file.unref();
+							List<String> full_args(args);
+							syntax_check(full_args);
+						}
+					}
+				}
 				const String prefix = p_request.path + ":";
 				const String include_prefix = "In file included from " + prefix;
 				int include_line = 0;
@@ -933,16 +1081,26 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 																																																		: entry.strip_edges();
 					diagnostics.push_back(diagnostic);
 				}
+				String symbol_source = native_source + "\nstatic void cgd_native_editor_scope(void) {\n    ;\n}\n";
+				int symbol_offset = symbol_source.length();
+				List<String> symbol_args(args);
+				PackedStringArray symbol_dependencies;
+				String symbol_preamble_output;
+				MutexLock preamble_lock(preamble_mutex);
+				const String symbol_pch = prepare_preamble(frontend, workspace, bodies, symbol_source, symbol_offset, symbol_args, symbol_dependencies, symbol_preamble_output);
 				file = FileAccess::open(path, FileAccess::WRITE);
-				if (file.is_valid() && file->store_string(native_source + "\nstatic void cgd_native_editor_scope(void) {\n    ;\n}\n")) {
+				if (file.is_valid() && file->store_string(symbol_source)) {
 					file.unref();
-					args.push_back(passthrough + "-Xclang");
-					args.push_back(passthrough + vformat("-code-completion-at=%s:%d:5", path, native_source.count("\n") + 3));
-					args.push_back(passthrough + "-Xclang");
-					args.push_back(passthrough + "-code-completion-macros");
-					args.push_back(path);
+					symbol_args.push_back(passthrough + "-Xclang");
+					symbol_args.push_back(passthrough + vformat("-code-completion-at=%s:%d:5", path, symbol_source.count("\n") - 1));
+					symbol_args.push_back(passthrough + "-Xclang");
+					symbol_args.push_back(passthrough + "-code-completion-macros");
+					symbol_args.push_back(path);
 					output = String();
-					capture_compiler(frontend.compiler, args, output);
+					capture_compiler(frontend.compiler, symbol_args, output);
+					if (!symbol_pch.is_empty() && output.contains("fatal error:") && output.contains("precompiled")) {
+						DirAccess::remove_absolute(symbol_pch);
+					}
 					for (const String &entry : output.split("\n", false)) {
 						if (!entry.begins_with("COMPLETION: ")) {
 							continue;
@@ -957,9 +1115,10 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 						symbols[name] = detail.replace("[#", "").replace("#]", " ").replace("<#", "").replace("#>", "").replace("{#", "").replace("#}", "");
 					}
 				}
-				if (FileAccess::exists(depfile)) {
+				if (FileAccess::exists(depfile) || !preamble_dependencies.is_empty()) {
 					Dictionary headers;
-					for (const String &header : compiler_dependencies(depfile)) {
+					preamble_dependencies.append_array(compiler_dependencies(depfile));
+					for (const String &header : preamble_dependencies) {
 						if (header != path && FileAccess::exists(header)) {
 							headers[header] = input_stamp(header, Dictionary(), nullptr);
 						}
@@ -1101,106 +1260,10 @@ bool GDCNative::complete_code(const String &p_code, const String &p_path, List<S
 	const String full_source = native_source;
 	const int full_offset = offset;
 	const List<String> full_args(args);
-	String used_pch;
-	// Keep declaration-block completion on the full translation unit. A completion
-	// in a function can reuse the declarations compiled into the preamble.
-	for (const auto &body : bodies) {
-		if (body.function_name.empty()) {
-			continue;
-		}
-		const int function_line = native_source.rfind_char('\n', int(body.offset) - 1);
-		const int split = native_source.rfind_char('\n', function_line - 1) + 1;
-		if (split <= 0 || split > offset) {
-			break;
-		}
-		const String preamble = native_source.left(split);
-		Array key;
-		key.push_back(preamble);
-		key.push_back(frontend.compiler);
-		key.push_back(FileAccess::get_modified_time(frontend.compiler));
-		for (const char *name : { "PATH", "INCLUDE", "CPATH", "C_INCLUDE_PATH", "SDKROOT", "DEVELOPER_DIR", "MACOSX_DEPLOYMENT_TARGET", "CL", "_CL_" }) {
-			key.push_back(OS::get_singleton()->get_environment(name));
-		}
-		for (const String &arg : args) {
-			key.push_back(arg);
-		}
-		const String cache = native_path(ProjectSettings::get_singleton()->get_project_data_path().path_join("cgd_native/pch"));
-		DirAccess::make_dir_recursive_absolute(cache);
-		const String base = cache.path_join(String(Variant(key)).sha256_text());
-		const String header = base + ".h";
-		const String pch = base + ".pch";
-		static Mutex preamble_mutex;
-		MutexLock lock(preamble_mutex);
-		if (DirAccess::get_files_at(cache).size() > 128) {
-			const uint64_t now = Time::get_singleton()->get_unix_time_from_system();
-			for (const String &entry : DirAccess::get_files_at(cache)) {
-				if (entry.get_basename().length() != 64 || !entry.get_basename().is_valid_hex_number(false) ||
-						(entry.get_extension() != "h" && entry.get_extension() != "c" && entry.get_extension() != "pch")) {
-					continue;
-				}
-				const String stale = cache.path_join(entry);
-				if (FileAccess::get_modified_time(stale) + 86400 * 7 < now) {
-					DirAccess::remove_absolute(stale);
-				}
-			}
-		}
-		if (!FileAccess::exists(pch)) {
-			Ref<FileAccess> file = FileAccess::open(header, FileAccess::WRITE);
-			if (file.is_null() || !file->store_string(preamble)) {
-				break;
-			}
-			file.unref();
-			List<String> flags;
-			for (const String &arg : args) {
-				if (arg != "/Zs" && arg != "-fsyntax-only") {
-					flags.push_back(arg);
-				}
-			}
-			if (frontend.uses_msvc_flags()) {
-				const String stub = base + ".c";
-				file = FileAccess::open(stub, FileAccess::WRITE);
-				if (file.is_null() || !file->store_string("#include \"" + header + "\"\n")) {
-					break;
-				}
-				file.unref();
-				flags.push_back("/c");
-				flags.push_back("/Yc" + header);
-				flags.push_back("/Fp" + pch);
-				flags.push_back("/Fo" + workspace->get_current_dir().path_join("preamble.obj"));
-				flags.push_back(stub);
-			} else {
-				flags.push_back("-x");
-				flags.push_back("c-header");
-				flags.push_back("-o");
-				flags.push_back(pch);
-				flags.push_back(header);
-			}
-			String output;
-			int status = -1;
-			if (capture_compiler(frontend.compiler, flags, output, &status) != OK || status != 0) {
-				DirAccess::remove_absolute(pch);
-				break;
-			}
-		}
-		if (FileAccess::exists(pch)) {
-			used_pch = pch;
-			if (frontend.uses_msvc_flags()) {
-				const String include = "#include \"" + header + "\"\n";
-				args.push_back("/Yu" + header);
-				args.push_back("/Fp" + pch);
-				native_source = include + native_source.substr(split);
-				offset += include.length() - split;
-			} else {
-				args.push_back("-Xclang");
-				args.push_back("-include-pch");
-				args.push_back("-Xclang");
-				args.push_back(pch);
-				native_source = native_source.substr(split);
-				offset -= split;
-			}
-		}
-		break;
-	}
+	PackedStringArray preamble_dependencies;
+	String preamble_output;
+	MutexLock preamble_lock(preamble_mutex);
+	const String used_pch = prepare_preamble(frontend, workspace, bodies, native_source, offset, args, preamble_dependencies, preamble_output);
 	String output;
 	const auto query = [&](const String &p_source, int p_offset, const List<String> &p_args) {
 		Ref<FileAccess> temporary = FileAccess::open(path, FileAccess::WRITE);
