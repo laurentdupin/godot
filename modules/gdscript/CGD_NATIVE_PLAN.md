@@ -454,3 +454,8 @@ The macOS lifecycle port passed the single-instance and activation smoke tests, 
 The paragraph evaluation used 300 synthetic OCR detections with per-character rectangles. On macOS arm64 the existing native detector took about 8.0 ms, the CGD script fallback took 153 ms, and flattening inputs and rebuilding mock groups took 3.4 ms. The prototype did not run the grouping algorithm through CGD or reconstruct full paragraph metadata. The measured bridge cost does not establish a production speedup over the existing native detector, so the detector remains in the extension.
 
 The evaluated production workloads call native once per capture or OCR batch, or on lifecycle events. No measured workload justified a handle-based wrapper in Step 13.
+
+
+### Step 16 Run parity validation
+
+The five-script editor Run test measured 1122 ms cold, 723 ms with one changed script, and 604 ms with all objects cached on Windows. On macOS arm64 it measured 473 ms, 173 ms, and 93 ms respectively. The incremental run recompiled one object and reused four. The warm run reused all five objects and relinked. The game returned the expected native values on all three launches, and the debugger reload test passed on both platforms.

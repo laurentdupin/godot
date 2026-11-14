@@ -128,6 +128,10 @@ String target_prefix(const String &p_platform, const String &p_arch) {
 	return "cgd_native/" + p_platform + "/" + p_arch + "/";
 }
 
+String merged_library_filename(const String &p_platform) {
+	return p_platform == "windows" ? "cgd_native.dll" : p_platform == "macos" ? "libcgd_native.dylib" : "libcgd_native.so";
+}
+
 String run_cache_root(const String &p_platform, const String &p_arch) {
 	return ProjectSettings::get_singleton()->get_project_data_path().path_join("cgd_native").path_join(p_platform).path_join(p_arch);
 }
@@ -250,7 +254,7 @@ void prune_run_generations(const String &p_cache, const String &p_current, const
 			continue;
 		}
 		if (p_windows) {
-			const String library = library_filename("windows", p_cache.get_file());
+			const String library = p_cache.get_file() == "merged" ? merged_library_filename("windows") : library_filename("windows", p_cache.get_file());
 			if (generation->file_exists(library) && generation->remove(library) != OK) {
 				continue;
 			}
@@ -283,7 +287,7 @@ void prune_run_cache(const String &p_platform, const String &p_arch, const HashS
 	}
 }
 
-Error prepare_directory(EditorFileSystemDirectory *p_directory, const String &p_platform, const String &p_arch, String &r_error, HashMap<String, Dictionary> &r_stamps, HashSet<String> &r_live_ids) {
+void collect_run_units(EditorFileSystemDirectory *p_directory, const String &p_platform, Vector<GDCNative::NativeUnit> &r_units, HashSet<String> &r_live_ids) {
 	for (int i = 0; i < p_directory->get_file_count(); i++) {
 		const String path = p_directory->get_file_path(i);
 		if (!GDCFrontend::is_source_path(path)) {
@@ -293,33 +297,25 @@ Error prepare_directory(EditorFileSystemDirectory *p_directory, const String &p_
 		if (!source.contains("native")) {
 			continue;
 		}
+		String error;
 		String generated;
 		String native_source;
 		String native_id;
 		GDC::SourceMap map;
 		int line = 1;
 		int column = 1;
-		if (GDCFrontend::transpile(source, generated, map, r_error, line, column, false, { 0, 0 }, path, &native_source, nullptr, &native_id) != OK) {
+		if (GDCFrontend::transpile(source, generated, map, error, line, column, false, { 0, 0 }, path, &native_source, nullptr, &native_id) != OK) {
 			// The normal parser owns CGD syntax errors. Only build valid native units.
-			r_error = String();
 			continue;
 		}
 		if (!native_source.is_empty() && GDCNative::supports_source(native_source, p_platform)) {
 			r_live_ids.insert(native_id);
-			String library;
-			const Error error = GDCNative::get_singleton()->build(path, native_id, native_source, library, r_error, p_platform, p_arch, true, &r_stamps);
-			if (error != OK) {
-				return error;
-			}
+			r_units.push_back({ path, native_id, native_source });
 		}
 	}
 	for (int i = 0; i < p_directory->get_subdir_count(); i++) {
-		const Error error = prepare_directory(p_directory->get_subdir(i), p_platform, p_arch, r_error, r_stamps, r_live_ids);
-		if (error != OK) {
-			return error;
-		}
+		collect_run_units(p_directory->get_subdir(i), p_platform, r_units, r_live_ids);
 	}
-	return OK;
 }
 
 String native_path(const String &p_path) {
@@ -1616,17 +1612,62 @@ bool GDCNative::prepare_editor_run() {
 		return true;
 	}
 	String error;
-	HashMap<String, Dictionary> stamps;
 	const uint64_t started = Time::get_singleton()->get_ticks_usec();
 	const String platform = OS::get_singleton()->get_name().to_lower();
 	const String arch = Engine::get_singleton()->get_architecture_name();
 	HashSet<String> live_ids;
-	const Error result = prepare_directory(directory, platform, arch, error, stamps, live_ids);
-	if (result == OK) {
-		MutexLock lock(singleton->build_mutex);
-		prune_run_cache(platform, arch, live_ids);
-	}
-	if (!stamps.is_empty()) {
+	Vector<NativeUnit> units;
+	collect_run_units(directory, platform, units, live_ids);
+	MutexLock lock(singleton->build_mutex);
+	prune_run_cache(platform, arch, live_ids);
+	const String cache = native_path(run_cache_path(platform, arch, "merged"));
+	Error result = OK;
+	if (units.is_empty()) {
+		const String previous = read_run_cache(cache).get("generation", String());
+		DirAccess::remove_absolute(cache.path_join("current"));
+		prune_run_generations(cache, String(), previous, platform == "windows");
+	} else {
+		Vector<Ref<DirAccess>> workspaces;
+		String library;
+		result = singleton->build_export(units, platform, arch, library, error, workspaces);
+		if (result == OK) {
+			const String generation = "build_" + itos(OS::get_singleton()->get_process_id()) + "_" + itos(Time::get_singleton()->get_ticks_usec());
+			const String destination = cache.path_join(generation);
+			result = DirAccess::make_dir_recursive_absolute(destination);
+			if (result == OK) {
+				result = DirAccess::copy_absolute(library, destination.path_join(library.get_file()));
+			}
+			for (const String &entry : runtime_libraries(platform, arch)) {
+				if (result == OK) {
+					result = DirAccess::copy_absolute(native_path(entry), destination.path_join(entry.get_file()));
+				}
+			}
+			if (result == OK) {
+				Dictionary ids;
+				for (const NativeUnit &unit : units) {
+					ids[unit.id] = true;
+				}
+				Dictionary manifest;
+				manifest["schema"] = NATIVE_BUILD_SCHEMA;
+				manifest["generation"] = generation;
+				manifest["ids"] = ids;
+				const String pending = cache.path_join(generation + ".manifest");
+				Ref<FileAccess> file = FileAccess::open(pending, FileAccess::WRITE);
+				if (file.is_valid() && file->store_var(manifest)) {
+					file.unref();
+					const String previous = read_run_cache(cache).get("generation", String());
+					result = DirAccess::rename_absolute(pending, cache.path_join("current"));
+					if (result == OK) {
+						prune_run_generations(cache, generation, previous, platform == "windows");
+					}
+				} else {
+					result = ERR_CANT_CREATE;
+				}
+			}
+			if (result != OK) {
+				error = "Cannot publish the merged CGD native Run library.";
+			}
+		}
 		print_verbose(vformat("CGD native preflight: %.1f ms", (Time::get_singleton()->get_ticks_usec() - started) / 1000.0));
 	}
 	if (result == OK) {
@@ -2164,6 +2205,7 @@ Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const St
 	OS *os = OS::get_singleton();
 	NativeFunctionEntry function;
 	bool cache_hit = false;
+	bool use_merged_library = false;
 	{
 		MutexLock lock(mutex);
 		// Libraries stay loaded until shutdown. Clear their function caches before any future unload.
@@ -2196,8 +2238,12 @@ Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const St
 					const String arch = Engine::get_singleton()->get_architecture_name();
 					const bool prebuilt = os->get_environment("GODOT_CGD_NATIVE_PREBUILT") == ProjectSettings::get_singleton()->get_resource_path();
 					if (prebuilt) {
-						const String cache = run_cache_path(platform, arch, p_id);
-						dll = cached_library(cache, read_run_cache(cache), library_filename(platform, p_id));
+						const String cache = run_cache_path(platform, arch, "merged");
+						const Dictionary manifest = read_run_cache(cache);
+						if (Dictionary(manifest.get("ids", Dictionary())).has(id)) {
+							dll = cached_library(cache, manifest, merged_library_filename(platform));
+							use_merged_library = !dll.is_empty();
+						}
 					}
 					if (dll.is_empty()) {
 						Error read_error = OK;
@@ -2231,7 +2277,7 @@ Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const St
 #ifdef ANDROID_ENABLED
 				const String library_key = dll;
 #else
-				const String library_key = ProjectSettings::get_singleton()->is_using_datapack() ? dll : id;
+				const String library_key = (use_merged_library || ProjectSettings::get_singleton()->is_using_datapack()) ? dll : id;
 #endif
 				if (void **loaded = libraries.getptr(library_key)) {
 					library = *loaded;
