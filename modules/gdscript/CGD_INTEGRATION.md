@@ -44,6 +44,11 @@ The editing test opens a Node3D CGD script in the actual script editor and reque
 
 A file-scope `native { ... }` block supplies C headers, macros and helpers to that script's generated C file. A `native int f() { ... }` declaration exposes a typed script method whose body is compiled as C17. Native parameters and returns support `int` (C `int64_t`), `float` (C `double`) and `bool`. Functions may also return `void`. The CGD declaration stays at script scope. C braces must balance across the source of each block, including conditional preprocessing branches.
 
+A script can use `native cpp { ... }` and `native cpp int f() { ... }` to compile as C++20, or `native objcpp` for Objective-C++ on macOS. Every native declaration in a script uses the same language. Set `cgd_native/default_language` to `"cpp"` to use C++ for unqualified `native` declarations. The default is C17. The Godot-facing types remain the native CGD ABI types, so C++ containers and Objective-C objects stay inside the native implementation. Exceptions raised by C++ are caught at the ABI boundary and logged by Godot.
+
+For macOS frameworks, add entries such as `"-framework AppKit"` to the target's `libraries` array. The target's optional `cxx_flags` array accepts supported C++ standard, optimization, and RTTI options. Exceptions remain enabled for the ABI wrapper.
+
+
 Native parameters also support read-only `PackedByteArray` views. Use `static native` for a static script method. Native builds use `-O2` or `/O2`. The runtime checks the native ABI and engine precision before dispatch, so rebuild native exports and their templates together after updating.
 
 Native call wrappers use interned library IDs, symbol names, and signatures. The runtime caches the resolved symbol and its UTF-8 signature after the first successful call. It checks signature identity and argument count on every call.

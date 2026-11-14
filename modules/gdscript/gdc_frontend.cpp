@@ -3,6 +3,8 @@
 
 #include "gdscript_parser.h"
 
+#include "core/config/project_settings.h"
+
 #include <utility>
 
 namespace {
@@ -51,6 +53,9 @@ Error GDCFrontend::transpile(const String &p_source, String &r_source, GDC::Sour
 	GDC::Options options;
 	options.script_path.assign(p_path.get_data(), p_path.length());
 	options.native_library_id.assign(64, U'0');
+	if (ProjectSettings *settings = ProjectSettings::get_singleton(); settings && settings->has_setting("cgd_native/default_language")) {
+		options.default_cpp = settings->get_setting("cgd_native/default_language") == Variant("cpp");
+	}
 	if (r_native_id) {
 		*r_native_id = String();
 	}

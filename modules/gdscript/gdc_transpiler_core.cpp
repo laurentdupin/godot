@@ -152,7 +152,7 @@ class Frontend {
 	}
 
 	// C is opaque to the CGD lexer. Only track the outer brace pair here.
-	size_t native_body_end(size_t begin) {
+	size_t native_body_end(size_t begin, bool cpp) {
 		size_t depth = 1;
 		char32_t quote = 0;
 		bool line_comment = false;
@@ -206,6 +206,27 @@ class Frontend {
 				directive = true;
 			}
 			first_on_line = false;
+			if (cpp && c == U'R' && next == U'"') {
+				const size_t delimiter = i + 2;
+				const size_t open = source.find(U'(', delimiter);
+				if (open != std::u32string::npos && open - delimiter <= 16) {
+					const auto closing = U")" + source.substr(delimiter, open - delimiter) + U"\"";
+					const size_t end = source.find(closing, open + 1);
+					if (end != std::u32string::npos) {
+						i = end + closing.size() - 1;
+						continue;
+					}
+				}
+			}
+			if (cpp && c == U'\'' && i > begin + 1 && word_char(source[i - 1]) && word_char(next)) {
+				size_t start = i;
+				while (start > begin + 1 && word_char(source[start - 1])) {
+					start--;
+				}
+				if (source[start] >= U'0' && source[start] <= U'9') {
+					continue;
+				}
+			}
 			if (c == U'"' || c == U'\'') {
 				quote = c;
 			} else if (!directive && c == U'{') {
@@ -239,6 +260,7 @@ class Frontend {
 			tokens.push_back({ kind, source.substr(begin, end - begin), begin, NO_INDEX, locations[begin] });
 		};
 		bool native_header = false;
+		bool cpp_body = false;
 		while (i < source.size() && !failed()) {
 			char32_t c = ch(i);
 			if (c == U' ' || c == U'\t' || c == U'\r' || c == U'\n') {
@@ -251,7 +273,7 @@ class Frontend {
 			}
 			size_t begin = i;
 			if (native_header && c == U'{') {
-				i = native_body_end(begin);
+				i = native_body_end(begin, cpp_body);
 				i += i < source.size();
 				add(Kind::NATIVE_BODY, begin, i);
 				native_header = false;
@@ -340,11 +362,13 @@ class Frontend {
 				// Reject source aliases before lowering; strings, comments and member
 				// names (such as String.match()) never take this keyword path.
 				bool member = tokens.size() > 1 && tokens[tokens.size() - 2].text == U".";
-				if (!member && tokens.back().text == U"native" && (tokens.size() == 1 ||
-							tokens[tokens.size() - 2].kind == Kind::DOC || tokens[tokens.size() - 2].kind == Kind::NATIVE_BODY ||
-							tokens[tokens.size() - 2].text == U";" || tokens[tokens.size() - 2].text == U"}" ||
-							tokens[tokens.size() - 2].text == U"{" || tokens[tokens.size() - 2].text == U"static")) {
+				if (!member && tokens.back().text == U"native" && (tokens.size() == 1 || tokens[tokens.size() - 2].kind == Kind::DOC || tokens[tokens.size() - 2].kind == Kind::NATIVE_BODY || tokens[tokens.size() - 2].text == U";" || tokens[tokens.size() - 2].text == U"}" || tokens[tokens.size() - 2].text == U"{" || tokens[tokens.size() - 2].text == U"static")) {
 					native_header = true;
+					cpp_body = options.default_cpp;
+				}
+				if (native_header && tokens.size() > 1 && tokens[tokens.size() - 2].text == U"native" &&
+						(tokens.back().text == U"cpp" || tokens.back().text == U"objcpp")) {
+					cpp_body = true;
 				}
 				if (!member) {
 					for (const char32_t *word : { U"func", U"fn", U"var", U"pass", U"elif", U"and", U"or", U"not", U"in", U"is", U"as", U"match" }) {
@@ -1139,6 +1163,16 @@ class Frontend {
 			error(origin, "Native C declarations must be at script scope.");
 			return;
 		}
+		std::u32string language = options.default_cpp ? U"cpp" : U"c";
+		if ((at(U"cpp") || at(U"objcpp")) && (token(cursor + 1).kind == Kind::NATIVE_BODY || token(cursor + 1).kind == Kind::WORD)) {
+			language = peek().text;
+			++cursor;
+		}
+		if (!result.native_language.empty() && result.native_language != language) {
+			error(origin, "All native code in a script must use the same language.");
+			return;
+		}
+		result.native_language = language;
 		if (peek().kind == Kind::NATIVE_BODY) {
 			if (is_static) {
 				error(origin, "Expected a function after static native.");
@@ -1222,14 +1256,19 @@ class Frontend {
 		native_functions += U"\n";
 		native_functions += U"#line 1 \"<" + symbol + U">\"\n";
 		const std::u32string signature = std::u32string(1, return_type->signature) + arg_types;
-		result.native_c_symbol_offsets.push_back(native_functions.size() + std::u32string(U"CGD_EXPORT bool cgd_native_").size());
-		native_functions += U"CGD_EXPORT bool " + symbol + U"(const char *signature, const CGDNativeValue *args, CGDNativeValue *result, CGDAllocator *cgd_out CGD_ANDROID_PARAMETERS) {\n"
-																						 U"\tif (strcmp(signature, \"" +
+		result.native_c_symbol_offsets.push_back(native_functions.size() + std::u32string(U"CGD_LINKAGE CGD_EXPORT bool cgd_native_").size());
+		native_functions += U"CGD_LINKAGE CGD_EXPORT bool " + symbol + U"(const char *signature, const CGDNativeValue *args, CGDNativeValue *result, CGDAllocator *cgd_out CGD_ANDROID_PARAMETERS) {\n"
+																	   U"\tif (strcmp(signature, \"" +
 				signature + U"\") != 0) { return false; }\n\tCGD_ANDROID_ENTER;\n\t";
+		native_functions += U"CGD_TRY ";
 		if (!uses_allocator && return_type->field) {
 			native_functions += std::u32string(U"result->") + return_type->field + U" = ";
 		}
-		native_functions += name.text + U"(" + c_args + U");\n\tCGD_ANDROID_LEAVE;\n\treturn true;\n}\n";
+		native_functions += name.text + U"(" + c_args + U"); CGD_CATCH\n\tCGD_ANDROID_LEAVE;\n\treturn true;\n}\n";
+		if (language != U"c") {
+			result.native_c_symbol_offsets.push_back(native_functions.size() + std::u32string(U"CGD_LINKAGE CGD_EXPORT const char *cgd_native_").size());
+			native_functions += U"CGD_LINKAGE CGD_EXPORT const char *" + symbol + U"_error(void) { return cgd_native_error; }\n";
+		}
 
 		line(std::u32string(is_static ? U"static func " : U"func ") + name.text + U"(" + gd_params + U") -> " + type.text + U":", origin);
 		++indent;
@@ -1435,32 +1474,37 @@ public:
 			result.map = SourceMap();
 		} else {
 			if (!native_declarations.empty() || !native_functions.empty()) {
-				result.native_code = U"#include <stdint.h>\n#include <stdbool.h>\n#include <string.h>\n"
-									 U"#ifdef __ANDROID__\n#include <jni.h>\n"
-									 U"static _Thread_local JNIEnv *cgd_android_env;\n"
-									 U"static _Thread_local jobject cgd_android_activity;\n"
-									 U"#define CGD_ANDROID_PARAMETERS , JNIEnv *env, jobject activity\n"
-									 U"#define CGD_ANDROID_ENTER JNIEnv *previous_env = cgd_android_env; jobject previous_activity = cgd_android_activity; cgd_android_env = env; cgd_android_activity = activity\n"
-									 U"#define CGD_ANDROID_LEAVE cgd_android_env = previous_env; cgd_android_activity = previous_activity\n"
-									 U"#define CGD_EXPORT __attribute__((visibility(\"default\")))\n"
-									 U"#else\n#define CGD_ANDROID_PARAMETERS\n#define CGD_ANDROID_ENTER\n#define CGD_ANDROID_LEAVE\n"
-									 U"#ifdef _WIN32\n#define CGD_EXPORT __declspec(dllexport)\n"
-									 U"#else\n#define CGD_EXPORT __attribute__((visibility(\"default\")))\n#endif\n#endif\n"
-									 U"#ifndef CGD_REAL_BITS\n#define CGD_REAL_BITS 32\n#endif\n"
-									 U"#if CGD_REAL_BITS == 64\ntypedef double cgd_real;\n#else\ntypedef float cgd_real;\n#endif\n"
-									 U"typedef struct { const uint8_t *data; int64_t size; } CGDBytes;\n"
-									 U"typedef struct { const int32_t *data; int64_t size; } CGDInt32s;\n"
-									 U"typedef struct { const int64_t *data; int64_t size; } CGDInt64s;\n"
-									 U"typedef struct { const float *data; int64_t size; } CGDFloat32s;\n"
-									 U"typedef struct { const double *data; int64_t size; } CGDFloat64s;\n"
-									 U"typedef struct { const cgd_real (*data)[2]; int64_t size; } CGDVector2s;\n"
-									 U"typedef struct { const cgd_real (*data)[3]; int64_t size; } CGDVector3s;\n"
-									 U"typedef struct { const char *utf8; int64_t length; } CGDString;\n"
-									 U"typedef struct { void *ctx; void *(*alloc)(void *, int64_t); } CGDAllocator;\n"
-									 U"static inline void *cgd_out_alloc(CGDAllocator *out, int64_t count) { return out->alloc(out->ctx, count); }\n"
-									 U"typedef union { int64_t integer; double floating; bool boolean; CGDBytes bytes; CGDInt32s int32s; CGDInt64s int64s; CGDFloat32s float32s; CGDFloat64s float64s; CGDVector2s vector2s; CGDVector3s vector3s; CGDString string; } CGDNativeValue;\n"
-									 U"#ifndef CGD_MERGED_EXPORT\nCGD_EXPORT uint32_t cgd_native_abi_v3(void) {\n"
-									 U"    return (CGD_REAL_BITS << 16) | (sizeof(CGDNativeValue) << 8) | _Alignof(CGDNativeValue);\n}\n#endif\n";
+				result.native_code = U"// cgd-language: " + result.native_language + U"\n#include <stdint.h>\n#include <stdbool.h>\n#include <string.h>\n"
+																					 U"#ifdef __cplusplus\n#include <exception>\n#define CGD_LINKAGE extern \"C\"\n#define CGD_TLS thread_local\n#define CGD_ALIGNOF alignof\n"
+																					 U"static thread_local char cgd_native_error[1024];\n"
+																					 U"#define CGD_TRY cgd_native_error[0] = 0; try {\n"
+																					 U"#define CGD_CATCH } catch (const std::exception &e) { strncpy(cgd_native_error, e.what(), sizeof(cgd_native_error) - 1); CGD_ANDROID_LEAVE; return false; } catch (...) { strcpy(cgd_native_error, \"Unknown C++ exception\"); CGD_ANDROID_LEAVE; return false; }\n"
+																					 U"#else\n#define CGD_LINKAGE\n#define CGD_TLS _Thread_local\n#define CGD_ALIGNOF _Alignof\n#define CGD_TRY\n#define CGD_CATCH\n#endif\n"
+																					 U"#ifdef __ANDROID__\n#include <jni.h>\n"
+																					 U"static CGD_TLS JNIEnv *cgd_android_env;\n"
+																					 U"static CGD_TLS jobject cgd_android_activity;\n"
+																					 U"#define CGD_ANDROID_PARAMETERS , JNIEnv *env, jobject activity\n"
+																					 U"#define CGD_ANDROID_ENTER JNIEnv *previous_env = cgd_android_env; jobject previous_activity = cgd_android_activity; cgd_android_env = env; cgd_android_activity = activity\n"
+																					 U"#define CGD_ANDROID_LEAVE cgd_android_env = previous_env; cgd_android_activity = previous_activity\n"
+																					 U"#define CGD_EXPORT __attribute__((visibility(\"default\")))\n"
+																					 U"#else\n#define CGD_ANDROID_PARAMETERS\n#define CGD_ANDROID_ENTER\n#define CGD_ANDROID_LEAVE\n"
+																					 U"#ifdef _WIN32\n#define CGD_EXPORT __declspec(dllexport)\n"
+																					 U"#else\n#define CGD_EXPORT __attribute__((visibility(\"default\")))\n#endif\n#endif\n"
+																					 U"#ifndef CGD_REAL_BITS\n#define CGD_REAL_BITS 32\n#endif\n"
+																					 U"#if CGD_REAL_BITS == 64\ntypedef double cgd_real;\n#else\ntypedef float cgd_real;\n#endif\n"
+																					 U"typedef struct { const uint8_t *data; int64_t size; } CGDBytes;\n"
+																					 U"typedef struct { const int32_t *data; int64_t size; } CGDInt32s;\n"
+																					 U"typedef struct { const int64_t *data; int64_t size; } CGDInt64s;\n"
+																					 U"typedef struct { const float *data; int64_t size; } CGDFloat32s;\n"
+																					 U"typedef struct { const double *data; int64_t size; } CGDFloat64s;\n"
+																					 U"typedef struct { const cgd_real (*data)[2]; int64_t size; } CGDVector2s;\n"
+																					 U"typedef struct { const cgd_real (*data)[3]; int64_t size; } CGDVector3s;\n"
+																					 U"typedef struct { const char *utf8; int64_t length; } CGDString;\n"
+																					 U"typedef struct { void *ctx; void *(*alloc)(void *, int64_t); } CGDAllocator;\n"
+																					 U"static inline void *cgd_out_alloc(CGDAllocator *out, int64_t count) { return out->alloc(out->ctx, count); }\n"
+																					 U"typedef union { int64_t integer; double floating; bool boolean; CGDBytes bytes; CGDInt32s int32s; CGDInt64s int64s; CGDFloat32s float32s; CGDFloat64s float64s; CGDVector2s vector2s; CGDVector3s vector3s; CGDString string; } CGDNativeValue;\n"
+																					 U"#ifndef CGD_MERGED_EXPORT\nCGD_LINKAGE CGD_EXPORT uint32_t cgd_native_abi_v3(void) {\n"
+																					 U"    return (CGD_REAL_BITS << 16) | (sizeof(CGDNativeValue) << 8) | CGD_ALIGNOF(CGDNativeValue);\n}\n#endif\n";
 				if (native_declaration_cursor != NO_INDEX) {
 					result.native_completion_offset = result.native_code.size() + native_declaration_cursor;
 				} else if (native_function_cursor != NO_INDEX) {

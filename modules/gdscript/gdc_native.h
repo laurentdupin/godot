@@ -22,6 +22,7 @@ class GDCNative : public Object {
 	HashMap<String, void *> libraries;
 	struct NativeFunctionEntry {
 		void *address = nullptr;
+		void *error_getter = nullptr;
 		StringName signature;
 		CharString signature_utf8;
 	};
@@ -80,6 +81,7 @@ protected:
 	static void _bind_methods();
 
 public:
+	static bool supports_source(const String &p_source, const String &p_platform);
 	struct NativeUnit {
 		String path;
 		String id;

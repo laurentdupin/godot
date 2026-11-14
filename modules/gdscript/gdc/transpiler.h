@@ -54,6 +54,7 @@ struct Options {
 	uint32_t completion_line = 0; // Recovery boundary for an unfinished editor statement.
 	Position completion_cursor = { 0, 0 };
 	bool native_completion = false;
+	bool default_cpp = false;
 	uint32_t max_nesting = 128;
 	uint32_t max_source_chars = 4 * 1024 * 1024;
 	uint32_t max_output_chars = 16 * 1024 * 1024;
@@ -67,6 +68,7 @@ struct Result {
 	};
 	std::u32string code;
 	std::u32string native_code;
+	std::u32string native_language;
 	std::vector<std::pair<size_t, size_t>> native_line_numbers;
 	std::vector<size_t> native_library_id_offsets;
 	std::vector<size_t> native_wrapper_symbol_offsets;

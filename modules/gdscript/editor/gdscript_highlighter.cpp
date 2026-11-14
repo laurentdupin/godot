@@ -504,7 +504,12 @@ Dictionary GDScriptSyntaxHighlighter::_get_line_syntax_highlighting_impl(int p_l
 
 			String word = str.substr(j, to - j);
 			Color col;
-			if (global_functions.has(word)) {
+			const bool native_language = reserved_keywords.has(SNAME("native")) &&
+					(word == "cpp" || word == "objcpp") &&
+					(str.left(j).strip_edges() == "native" || str.left(j).strip_edges() == "static native");
+			if (native_language) {
+				col = reserved_keywords[SNAME("native")];
+			} else if (global_functions.has(word)) {
 				// "assert" and "preload" are reserved, so highlight even if not followed by a bracket.
 				if (word == GDScriptTokenizer::get_token_name(GDScriptTokenizer::Token::ASSERT) || word == GDScriptTokenizer::get_token_name(GDScriptTokenizer::Token::PRELOAD)) {
 					col = global_function_color;

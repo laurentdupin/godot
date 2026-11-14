@@ -334,6 +334,7 @@ void ScriptTextEditor::_set_theme_for_script() {
 		completion_prefixes.push_back(">");
 		completion_prefixes.push_back("<");
 		completion_prefixes.push_back("/");
+		completion_prefixes.push_back(":");
 	}
 	text_edit->set_code_completion_prefixes(completion_prefixes);
 	text_edit->clear_string_delimiters();
@@ -1370,6 +1371,21 @@ void ScriptTextEditor::_native_completion_finished(const String &p_path, const S
 void ScriptTextEditor::_code_complete_script(const String &p_code, List<ScriptLanguage::CodeCompletionOption> *r_options, bool &r_force) {
 	Ref<Script> script = edited_res;
 #ifdef MODULE_GDSCRIPT_ENABLED
+	if (script->get_path().get_extension().to_lower() == "cgd") {
+		const CodeEdit *text_edit = code_editor->get_text_editor();
+		const int column = text_edit->get_caret_column();
+		const String line = text_edit->get_line(text_edit->get_caret_line()).left(column);
+		if (!r_force && line.ends_with(":") && !line.ends_with("::")) {
+			return;
+		}
+		const String leading = line.strip_edges();
+		if (r_options && (leading == "native" || leading == "static native") && line.ends_with(" ")) {
+			r_options->push_back(ScriptLanguage::CodeCompletionOption("cpp", ScriptLanguage::CODE_COMPLETION_KIND_KEYWORD));
+			r_options->push_back(ScriptLanguage::CodeCompletionOption("objcpp", ScriptLanguage::CODE_COMPLETION_KIND_KEYWORD));
+			r_force = true;
+			return;
+		}
+	}
 	String native_hint;
 	if (r_options && script->get_path().get_extension().to_lower() == "cgd" &&
 			GDCNative::get_singleton()->complete_in_editor(get_instance_id(), p_code, script->get_path(), callable_mp(this, &ScriptTextEditor::_native_completion_finished), *r_options, native_hint)) {

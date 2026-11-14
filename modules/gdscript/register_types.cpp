@@ -146,6 +146,9 @@ protected:
 			if (GDCFrontend::transpile(source, generated, map, error, line, column, false, { 0, 0 }, p_path, &native_source, nullptr, &native_id) == OK && !native_source.is_empty()) {
 				const Ref<EditorExportPreset> preset = get_export_preset();
 				const String platform = preset->get_platform()->get_os_name().to_lower();
+				if (!GDCNative::supports_source(native_source, platform)) {
+					return;
+				}
 				const bool android = platform == "android";
 				Vector<String> targets;
 				if (android) {

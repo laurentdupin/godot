@@ -247,7 +247,7 @@ Error prepare_directory(EditorFileSystemDirectory *p_directory, const String &p_
 			r_error = String();
 			continue;
 		}
-		if (!native_source.is_empty()) {
+		if (!native_source.is_empty() && GDCNative::supports_source(native_source, p_platform)) {
 			String library;
 			const Error error = GDCNative::get_singleton()->build(path, native_id, native_source, library, r_error, p_platform, p_arch, true, &r_stamps);
 			if (error != OK) {
@@ -411,15 +411,33 @@ Error resolve_target(const String &p_platform, const String &p_arch, NativeTarge
 	return OK;
 }
 
-List<String> language_flags(const NativeTarget &p_target) {
+String native_language(const String &p_source) {
+	return p_source.get_slice("\n", 1).trim_prefix("// cgd-language: ");
+}
+
+List<String> language_flags(const NativeTarget &p_target, const String &p_language = "c") {
 	List<String> args;
 	if (p_target.uses_msvc_flags()) {
-		args = { "/nologo", "/TC", "/std:c17", "/utf-8", "/MT" };
+		args = { "/nologo", "/utf-8", "/MT" };
+		if (p_language == "c") {
+			args.push_back("/TC");
+			args.push_back("/std:c17");
+		} else {
+			args.push_back("/TP");
+			args.push_back("/std:c++20");
+			args.push_back("/EHsc");
+			args.push_back("/Zc:__cplusplus");
+		}
 		if (p_target.toolchain == "clang-cl") {
 			args.push_back("--target=" + p_target.triple);
 		}
 	} else {
-		args = { "-x", "c", "-std=c17" };
+		args = { "-x", p_language == "objcpp" ? "objective-c++" : p_language == "cpp" ? "c++"
+																					  : "c",
+			p_language == "c" ? "-std=c17" : "-std=c++20" };
+		if (p_language == "objcpp") {
+			args.push_back("-fobjc-arc");
+		}
 		if (!p_target.triple.is_empty()) {
 			args.push_back("--target=" + p_target.triple);
 		}
@@ -453,6 +471,26 @@ Error add_defines(List<String> &r_args, const NativeTarget &p_target, String &r_
 	return OK;
 }
 
+Error add_cxx_flags(List<String> &r_args, const NativeTarget &p_target, const String &p_language, String &r_error) {
+	if (p_language == "c") {
+		return OK;
+	}
+	for (const String &flag : target_array("cxx_flags", p_target.platform, p_target.arch)) {
+		const bool standard = p_target.uses_msvc_flags()
+				? flag == "/std:c++20" || flag == "/std:c++latest"
+				: flag == "-std=c++20" || flag == "-std=c++23" || flag == "-std=gnu++20" || flag == "-std=gnu++23";
+		const bool optimization = p_target.uses_msvc_flags()
+				? flag == "/Od" || flag == "/O1" || flag == "/O2" || flag == "/Ox"
+				: flag == "-O0" || flag == "-O1" || flag == "-O2" || flag == "-O3" || flag == "-Os";
+		if (!standard && !optimization && !(flag == "-fexceptions" || flag == "-frtti" || flag == "-fno-rtti")) {
+			r_error = "Unsupported CGD C++ compiler flag: " + flag;
+			return ERR_INVALID_PARAMETER;
+		}
+		r_args.push_back(flag);
+	}
+	return OK;
+}
+
 Error add_compile_inputs(List<String> &r_args, const String &p_path, const NativeTarget &p_target, String &r_error) {
 	const Error error = add_defines(r_args, p_target, r_error);
 	if (error != OK) {
@@ -475,6 +513,25 @@ Error add_compile_inputs(List<String> &r_args, const String &p_path, const Nativ
 	return OK;
 }
 
+Error add_link_libraries(List<String> &r_args, const String &p_platform, const String &p_arch, bool p_windows, String &r_error) {
+	for (const String &entry : target_array("libraries", p_platform, p_arch)) {
+		if (p_platform == "macos" && entry.begins_with("-framework ")) {
+			const String framework = entry.trim_prefix("-framework ").strip_edges();
+			if (framework.is_valid_ascii_identifier()) {
+				r_args.push_back("-framework");
+				r_args.push_back(framework);
+				continue;
+			}
+		}
+		if ((p_windows && entry.begins_with("/")) || entry.begins_with("-") || entry.begins_with("@")) {
+			r_error = "Expected a library name or path in CGD native libraries: " + entry;
+			return ERR_INVALID_PARAMETER;
+		}
+		r_args.push_back(!p_windows && entry.is_valid_ascii_identifier() ? "-l" + entry : native_path(entry));
+	}
+	return OK;
+}
+
 Error capture_compiler(const String &p_compiler, const List<String> &p_args, String &r_output, int *r_code = nullptr) {
 #ifdef WINDOWS_ENABLED
 	return OS::get_singleton()->execute(p_compiler, p_args, &r_output, r_code, true);
@@ -491,7 +548,7 @@ Error capture_compiler(const String &p_compiler, const List<String> &p_args, Str
 #endif
 }
 
-bool gcc_completion_flags(const String &p_compiler, List<String> &r_args) {
+bool gcc_completion_flags(const String &p_compiler, const String &p_language, List<String> &r_args) {
 #ifdef WINDOWS_ENABLED
 	return false;
 #else
@@ -503,6 +560,7 @@ bool gcc_completion_flags(const String &p_compiler, List<String> &r_args) {
 	OS *os = OS::get_singleton();
 	Array key;
 	key.push_back(p_compiler);
+	key.push_back(p_language);
 	key.push_back(FileAccess::get_modified_time(p_compiler));
 	for (const char *name : { "PATH", "CPATH", "C_INCLUDE_PATH", "GCC_EXEC_PREFIX", "COMPILER_PATH" }) {
 		key.push_back(os->get_environment(name));
@@ -519,7 +577,7 @@ bool gcc_completion_flags(const String &p_compiler, List<String> &r_args) {
 	int code = -1;
 	if (capture_compiler(p_compiler, { "-dumpmachine" }, triple, &code) != OK || code != 0 ||
 			capture_compiler(p_compiler, { "-dumpfullversion" }, version, &code) != OK || code != 0 ||
-			capture_compiler("/usr/bin/env", { "LC_ALL=C", p_compiler, "-std=c17", "-x", "c", "-E", "-v", "/dev/null" }, includes, &code) != OK || code != 0) {
+			capture_compiler("/usr/bin/env", { "LC_ALL=C", p_compiler, p_language == "c" ? "-std=c17" : "-std=c++20", "-x", p_language == "c" ? "c" : "c++", "-E", "-v", "/dev/null" }, includes, &code) != OK || code != 0) {
 		return false;
 	}
 	List<String> flags = { "--target=" + triple.strip_edges(), "-fgnuc-version=" + version.strip_edges() };
@@ -655,7 +713,8 @@ String prepare_preamble(const NativeTarget &frontend, const Ref<DirAccess> &work
 				flags.push_back(stub);
 			} else {
 				flags.push_back("-x");
-				flags.push_back("c-header");
+				flags.push_back(native_language(native_source) == "objcpp" ? "objective-c++-header" : native_language(native_source) == "cpp" ? "c++-header"
+																																			  : "c-header");
 				flags.push_back("-o");
 				flags.push_back(pending_pch);
 				flags.push_back(header);
@@ -705,10 +764,13 @@ String prepare_preamble(const NativeTarget &frontend, const Ref<DirAccess> &work
 	return used_pch;
 }
 
-bool resolve_analysis_frontend(const String &p_path, NativeTarget &frontend, List<String> &args, String &r_error) {
+bool resolve_analysis_frontend(const String &p_path, const String &p_language, NativeTarget &frontend, List<String> &args, String &r_error) {
 	const Variant configured = setting("cgd_native/completion_target");
 	const String selection = configured.get_type() == Variant::STRING ? String(configured) : String();
 	const String platform = selection.is_empty() ? OS::get_singleton()->get_name().to_lower() : selection.get_slice("/", 0);
+	if (p_language == "objcpp" && platform != "macos") {
+		return false;
+	}
 	const String arch = selection.is_empty() ? Engine::get_singleton()->get_architecture_name() : selection.get_slice("/", 1);
 	NativeTarget target;
 	if ((!selection.is_empty() && selection.get_slice_count("/") != 2) || resolve_target(platform, arch, target, r_error) != OK) {
@@ -735,11 +797,11 @@ bool resolve_analysis_frontend(const String &p_path, NativeTarget &frontend, Lis
 	if (frontend.arch == "universal") {
 		frontend.arch = Engine::get_singleton()->get_architecture_name();
 	}
-	args = language_flags(frontend);
-	if (target.toolchain == "gcc" && !gcc_completion_flags(target.compiler, args)) {
+	args = language_flags(frontend, p_language);
+	if (target.toolchain == "gcc" && !gcc_completion_flags(target.compiler, p_language, args)) {
 		return false;
 	}
-	if (add_compile_inputs(args, p_path, target, r_error) != OK) {
+	if (add_cxx_flags(args, target, p_language, r_error) != OK || add_compile_inputs(args, p_path, target, r_error) != OK) {
 		return false;
 	}
 	if (target.toolchain == "msvc") {
@@ -887,7 +949,7 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 				}
 				String id;
 				String library;
-				if (GDCFrontend::transpile(code, generated, map, error, line, column, false, { 0, 0 }, path, &native_source, nullptr, &id, &bodies) != OK || native_source.is_empty()) {
+				if (GDCFrontend::transpile(code, generated, map, error, line, column, false, { 0, 0 }, path, &native_source, nullptr, &id, &bodies) != OK || native_source.is_empty() || !supports_source(native_source, platform)) {
 					continue;
 				}
 				units.push_back({ path, id, native_source });
@@ -949,7 +1011,7 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 	}
 	String native_id;
 	if (GDCFrontend::transpile(p_request.code, generated, map, error, line, column, false, { 0, 0 }, p_request.path, &native_source, nullptr, &native_id, &bodies) == OK &&
-			!native_source.is_empty() && resolve_analysis_frontend(p_request.path, frontend, args, error)) {
+			!native_source.is_empty() && resolve_analysis_frontend(p_request.path, native_language(native_source), frontend, args, error)) {
 		Array context;
 		context.push_back(native_id);
 		context.push_back(frontend.compiler);
@@ -1275,7 +1337,7 @@ bool GDCNative::complete_code(const String &p_code, const String &p_path, List<S
 
 	NativeTarget frontend;
 	List<String> args;
-	if (!resolve_analysis_frontend(p_path, frontend, args, error)) {
+	if (!resolve_analysis_frontend(p_path, native_language(native_source), frontend, args, error)) {
 		return true;
 	}
 	const String current_line = before.substr(line_start);
@@ -1362,6 +1424,9 @@ bool GDCNative::complete_code(const String &p_code, const String &p_path, List<S
 			continue;
 		}
 		const String completion = entry.substr(12).strip_edges();
+		if (completion.contains(" (Hidden)")) {
+			continue;
+		}
 		const int separator = completion.find(" : ");
 		String name = separator < 0 ? completion : completion.substr(0, separator);
 		const String detail = separator < 0 ? String() : completion.substr(separator + 3);
@@ -1433,6 +1498,11 @@ Error GDCNative::build(const String &p_path, const String &p_id, const String &p
 		return target_error;
 	}
 	const bool msvc = target.toolchain == "msvc";
+	const String language = native_language(p_native_source);
+	if (language == "objcpp" && !macos) {
+		r_error = p_path + ": Objective-C++ requires a macOS target.";
+		return ERR_UNAVAILABLE;
+	}
 	const String &compiler = target.compiler;
 	const String prefix = target_prefix(p_platform, p_arch);
 	const String library_name = library_filename(p_platform, p_id);
@@ -1451,7 +1521,7 @@ Error GDCNative::build(const String &p_path, const String &p_id, const String &p
 		configuration.push_back(target.triple);
 		configuration.push_back(compiler);
 		inputs[compiler] = stamp(compiler);
-		for (const char *name : { "defines", "include_dirs", "library_dirs", "libraries", "runtime_libraries" }) {
+		for (const char *name : { "defines", "include_dirs", "library_dirs", "libraries", "runtime_libraries", "cxx_flags" }) {
 			configuration.push_back(setting("cgd_native/" + String(name)));
 			configuration.push_back(setting(prefix + name));
 		}
@@ -1554,7 +1624,7 @@ Error GDCNative::build(const String &p_path, const String &p_id, const String &p
 	}
 	source.unref();
 
-	List<String> args = language_flags(target);
+	List<String> args = language_flags(target, native_language(p_native_source));
 	args.push_back(target.uses_msvc_flags() ? "/O2" : "-O2");
 	if (android) {
 		args.push_back("-Wl,-soname," + library_name);
@@ -1586,6 +1656,10 @@ Error GDCNative::build(const String &p_path, const String &p_id, const String &p
 			args.push_back((windows ? String("/clang:") : String()) + depfile);
 		}
 	}
+	const Error flags_error = add_cxx_flags(args, target, language, r_error);
+	if (flags_error != OK) {
+		return flags_error;
+	}
 	const Error inputs_error = add_compile_inputs(args, p_path, target, r_error);
 	if (inputs_error != OK) {
 		return inputs_error;
@@ -1606,12 +1680,12 @@ Error GDCNative::build(const String &p_path, const String &p_id, const String &p
 	for (const String &entry : target_array("library_dirs", p_platform, p_arch)) {
 		args.push_back((windows ? "/LIBPATH:" : "-L") + native_path(entry));
 	}
-	for (const String &entry : target_array("libraries", p_platform, p_arch)) {
-		if ((windows && entry.begins_with("/")) || entry.begins_with("-") || entry.begins_with("@")) {
-			r_error = "Expected a library name or path in CGD native libraries: " + entry;
-			return ERR_INVALID_PARAMETER;
-		}
-		args.push_back(!windows && entry.is_valid_ascii_identifier() ? "-l" + entry : native_path(entry));
+	const Error link_input_error = add_link_libraries(args, p_platform, p_arch, windows, r_error);
+	if (link_input_error != OK) {
+		return link_input_error;
+	}
+	if (!windows && language != "c") {
+		args.push_back(macos || android ? "-lc++" : "-lstdc++");
 	}
 	int code = -1;
 	String output;
@@ -1676,6 +1750,10 @@ Error GDCNative::build(const String &p_path, const String &p_id, const String &p
 #endif
 }
 
+bool GDCNative::supports_source(const String &p_source, const String &p_platform) {
+	return p_platform == "macos" || p_source.get_slice("\n", 1) != "// cgd-language: objcpp";
+}
+
 Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p_platform, const String &p_arch, String &r_library, String &r_error, Vector<Ref<DirAccess>> &r_workspaces) {
 #ifdef TOOLS_ENABLED
 	NativeTarget target;
@@ -1719,15 +1797,26 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 	const Dictionary compiler_stamp = input_stamp(target.compiler, Dictionary(), &stamps);
 	const String cache_root = native_path(ProjectSettings::get_singleton()->get_project_data_path().path_join("cgd_native/export").path_join(p_platform).path_join(p_arch));
 	DirAccess::make_dir_recursive_absolute(cache_root);
+	bool needs_cpp = false;
 	for (const NativeUnit &unit : p_units) {
 		const String source = directory.path_join(unit.id + ".c");
 		const String object = directory.path_join(unit.id + (windows ? ".obj" : ".o"));
 		const String deps = directory.path_join(unit.id + ".d");
 		const String manifest_path = cache_root.path_join(unit.id + ".manifest");
 		const String cached_object = cache_root.path_join(object.get_file());
-		List<String> args = language_flags(target);
+		const String language = native_language(unit.source);
+		if (language == "objcpp" && !macos) {
+			r_error = unit.path + ": Objective-C++ requires a macOS target.";
+			return ERR_UNAVAILABLE;
+		}
+		needs_cpp = needs_cpp || language != "c";
+		List<String> args = language_flags(target, language);
 		args.push_back(windows ? "/O2" : "-O2");
 		args.push_back(windows ? "/DCGD_MERGED_EXPORT" : "-DCGD_MERGED_EXPORT");
+		const Error flags_error = add_cxx_flags(args, target, language, r_error);
+		if (flags_error != OK) {
+			return flags_error;
+		}
 		const Error input_error = add_compile_inputs(args, unit.path, target, r_error);
 		if (input_error != OK) {
 			return input_error;
@@ -1875,12 +1964,12 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 	for (const String &entry : target_array("library_dirs", p_platform, p_arch)) {
 		link.push_back((windows ? "/LIBPATH:" : "-L") + native_path(entry));
 	}
-	for (const String &entry : target_array("libraries", p_platform, p_arch)) {
-		if ((windows && entry.begins_with("/")) || entry.begins_with("-") || entry.begins_with("@")) {
-			r_error = "Expected a library name or path in CGD native libraries: " + entry;
-			return ERR_INVALID_PARAMETER;
-		}
-		link.push_back(!windows && entry.is_valid_ascii_identifier() ? "-l" + entry : native_path(entry));
+	const Error link_input_error = add_link_libraries(link, p_platform, p_arch, windows, r_error);
+	if (link_input_error != OK) {
+		return link_input_error;
+	}
+	if (!windows && needs_cpp) {
+		link.push_back(macos || p_platform == "android" ? "-lc++" : "-lstdc++");
 	}
 	int status = -1;
 	if (capture_compiler(target.compiler, link, r_error, &status) != OK || status != 0 || !FileAccess::exists(library)) {
@@ -1991,6 +2080,7 @@ Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const St
 				}
 			}
 			ERR_FAIL_COND_V_MSG(os->get_dynamic_library_symbol_handle(library, symbol_name, function.address) != OK, Variant(), "Missing CGD native function: " + symbol_name);
+			os->get_dynamic_library_symbol_handle(library, symbol_name + "_error", function.error_getter, true);
 			function.signature = p_signature;
 			function.signature_utf8 = signature;
 		}
@@ -2086,6 +2176,12 @@ Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const St
 	using NativeFunction = bool (*)(const char *, const NativeValue *, NativeValue *, NativeAllocator *);
 	const bool called = reinterpret_cast<NativeFunction>(function.address)(signature.get_data(), args, &result, &allocator);
 #endif
+	if (!called && function.error_getter) {
+		const char *message = reinterpret_cast<const char *(*)()>(function.error_getter)();
+		if (message && *message) {
+			ERR_FAIL_V_MSG(Variant(), "CGD native C++ exception: " + String::utf8(message));
+		}
+	}
 	ERR_FAIL_COND_V_MSG(!called, Variant(), "CGD native function signature mismatch.");
 	if (!cache_hit) {
 		MutexLock lock(mutex);

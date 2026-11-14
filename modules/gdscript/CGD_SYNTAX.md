@@ -118,6 +118,9 @@ native int monitor_count() {
 
 Put native declarations at script scope. A `native { ... }` block adds C declarations to the generated translation unit. A typed `native` function can be called like any other script method. The current ABI accepts `int`, `float` and `bool` parameters and returns, plus `void` returns. See [native build configuration](CGD_INTEGRATION.md#inline-c) for compiler and library settings.
 
+Use `native cpp { ... }` and `native cpp int f() { ... }` for C++20. On macOS, use `native objcpp` for Objective-C++. Each script uses a single native language across its blocks and functions. Plain `native` takes the project default, which is C17 unless `cgd_native/default_language` is set to `"cpp"`.
+
+
 Use `static native` to call a native function without a script instance. A `PackedByteArray` parameter is exposed to C as `CGDBytes`, with a read-only `data` pointer and an `int64_t size` in bytes. The view shares the Godot array's storage for the duration of the call. An empty view has size zero. C code must keep accesses within that size and release any references to the view before returning.
 
 ```c
