@@ -985,7 +985,67 @@ bool GDCNative::is_native_position(const String &p_code, const String &p_path, i
 	return GDCFrontend::transpile(p_code, generated, map, error, line, column, true, { uint32_t(p_row + 1), uint32_t(p_column + 1) }, p_path, nullptr, &offset) == OK && offset >= 0;
 }
 
-bool GDCNative::complete_code(const String &p_code, const String &p_path, List<ScriptLanguage::CodeCompletionOption> &r_options, String &r_call_hint) {
+bool GDCNative::complete_in_editor(ObjectID p_editor, const String &p_code, const String &p_path, const Callable &p_callback, List<ScriptLanguage::CodeCompletionOption> &r_options, String &r_hint) {
+	const int caret = p_code.find_char(0xFFFF);
+	if (caret < 0 || !p_code.contains("native")) {
+		return false;
+	}
+	if (completion_result.symbol.is_empty() && completion_result.path == p_path && completion_result.code == p_code) {
+		r_options = completion_result.options;
+		r_hint = completion_result.hint;
+		return true;
+	}
+	const String before = p_code.left(caret);
+	if (!is_native_position(before + p_code.substr(caret + 1), p_path, before.count("\n"), caret - before.rfind_char('\n') - 1)) {
+		return false;
+	}
+	pending_completions.insert(p_editor, { p_editor, p_path, p_code, p_callback });
+	start_completion();
+	return true;
+}
+
+void GDCNative::request_native_hover(ObjectID p_editor, const String &p_code, const String &p_path, const String &p_symbol, const Callable &p_callback) {
+	if (completion_result.path == p_path && completion_result.code == p_code && completion_result.symbol == p_symbol) {
+		p_callback.call(p_path, p_code, completion_result.prototype);
+		return;
+	}
+	pending_completions.insert(p_editor, { p_editor, p_path, p_code, p_callback, p_symbol });
+	start_completion();
+}
+
+void GDCNative::start_completion() {
+	if (completion_task != WorkerThreadPool::INVALID_TASK_ID || pending_completions.is_empty()) {
+		return;
+	}
+	const CompletionRequest request = pending_completions.begin()->value;
+	pending_completions.erase(request.editor);
+	completion_task = WorkerThreadPool::get_singleton()->add_template_task(this, &GDCNative::compute_completion, request, true, "CGD native completion");
+}
+
+void GDCNative::compute_completion(CompletionRequest p_request) {
+	worker_completion_result = CompletionResult();
+	worker_completion_result.path = p_request.path;
+	worker_completion_result.code = p_request.code;
+	worker_completion_result.symbol = p_request.symbol;
+	complete_code(p_request.code, p_request.path, worker_completion_result.options, worker_completion_result.hint, p_request.symbol, &worker_completion_result.prototype);
+	callable_mp(this, &GDCNative::finish_completion).call_deferred(p_request.callback);
+}
+
+void GDCNative::finish_completion(const Callable &p_callback) {
+	WorkerThreadPool::get_singleton()->wait_for_task_completion(completion_task);
+	completion_task = WorkerThreadPool::INVALID_TASK_ID;
+	completion_result = std::move(worker_completion_result);
+	if (p_callback.is_valid()) {
+		if (completion_result.symbol.is_empty()) {
+			p_callback.call(completion_result.path, completion_result.code);
+		} else {
+			p_callback.call(completion_result.path, completion_result.code, completion_result.prototype);
+		}
+	}
+	start_completion();
+}
+
+bool GDCNative::complete_code(const String &p_code, const String &p_path, List<ScriptLanguage::CodeCompletionOption> &r_options, String &r_call_hint, const String &p_symbol, String *r_prototype) {
 	const int caret = p_code.find_char(0xFFFF);
 	if (caret < 0 || !p_code.contains("native")) {
 		return false;
@@ -1001,7 +1061,8 @@ bool GDCNative::complete_code(const String &p_code, const String &p_path, List<S
 	int line = 1;
 	int column = 1;
 	int offset = -1;
-	if (GDCFrontend::transpile(source, generated, map, error, line, column, true, cursor, p_path, &native_source, &offset) != OK || offset < 0) {
+	std::vector<GDC::Result::NativeBody> bodies;
+	if (GDCFrontend::transpile(source, generated, map, error, line, column, true, cursor, p_path, &native_source, &offset, nullptr, &bodies) != OK || offset < 0) {
 		return false;
 	}
 	r_call_hint = String();
@@ -1030,31 +1091,145 @@ bool GDCNative::complete_code(const String &p_code, const String &p_path, List<S
 			offset--;
 		}
 	}
-	const String native_before = native_source.substr(0, offset);
-	const String native_line = native_before.substr(native_before.rfind_char('\n') + 1);
 	Error file_error = OK;
 	Ref<DirAccess> workspace = DirAccess::create_temp("cgd-completion-" + itos(OS::get_singleton()->get_process_id()), false, &file_error);
 	if (workspace.is_null()) {
 		return true;
 	}
 	const String path = workspace->get_current_dir().path_join("completion.c");
-	Ref<FileAccess> temporary = FileAccess::open(path, FileAccess::WRITE);
-	if (temporary.is_null() || !temporary->store_string(native_source)) {
-		return true;
-	}
-	temporary->close();
-	const String location = vformat("-code-completion-at=%s:%d:%d", path, native_before.count("\n") + 1, native_line.utf8().length() + 1);
 	const String passthrough = frontend.uses_msvc_flags() ? "/clang:" : "";
-	for (const String &argument : { String("-Xclang"), location, String("-Xclang"), String("-code-completion-macros") }) {
-		args.push_back(passthrough + argument);
+	const String full_source = native_source;
+	const int full_offset = offset;
+	const List<String> full_args(args);
+	String used_pch;
+	// Keep declaration-block completion on the full translation unit. A completion
+	// in a function can reuse the declarations compiled into the preamble.
+	for (const auto &body : bodies) {
+		if (body.function_name.empty()) {
+			continue;
+		}
+		const int function_line = native_source.rfind_char('\n', int(body.offset) - 1);
+		const int split = native_source.rfind_char('\n', function_line - 1) + 1;
+		if (split <= 0 || split > offset) {
+			break;
+		}
+		const String preamble = native_source.left(split);
+		Array key;
+		key.push_back(preamble);
+		key.push_back(frontend.compiler);
+		key.push_back(FileAccess::get_modified_time(frontend.compiler));
+		for (const char *name : { "PATH", "INCLUDE", "CPATH", "C_INCLUDE_PATH", "SDKROOT", "DEVELOPER_DIR", "MACOSX_DEPLOYMENT_TARGET", "CL", "_CL_" }) {
+			key.push_back(OS::get_singleton()->get_environment(name));
+		}
+		for (const String &arg : args) {
+			key.push_back(arg);
+		}
+		const String cache = native_path(ProjectSettings::get_singleton()->get_project_data_path().path_join("cgd_native/pch"));
+		DirAccess::make_dir_recursive_absolute(cache);
+		const String base = cache.path_join(String(Variant(key)).sha256_text());
+		const String header = base + ".h";
+		const String pch = base + ".pch";
+		static Mutex preamble_mutex;
+		MutexLock lock(preamble_mutex);
+		if (DirAccess::get_files_at(cache).size() > 128) {
+			const uint64_t now = Time::get_singleton()->get_unix_time_from_system();
+			for (const String &entry : DirAccess::get_files_at(cache)) {
+				if (entry.get_basename().length() != 64 || !entry.get_basename().is_valid_hex_number(false) ||
+						(entry.get_extension() != "h" && entry.get_extension() != "c" && entry.get_extension() != "pch")) {
+					continue;
+				}
+				const String stale = cache.path_join(entry);
+				if (FileAccess::get_modified_time(stale) + 86400 * 7 < now) {
+					DirAccess::remove_absolute(stale);
+				}
+			}
+		}
+		if (!FileAccess::exists(pch)) {
+			Ref<FileAccess> file = FileAccess::open(header, FileAccess::WRITE);
+			if (file.is_null() || !file->store_string(preamble)) {
+				break;
+			}
+			file.unref();
+			List<String> flags;
+			for (const String &arg : args) {
+				if (arg != "/Zs" && arg != "-fsyntax-only") {
+					flags.push_back(arg);
+				}
+			}
+			if (frontend.uses_msvc_flags()) {
+				const String stub = base + ".c";
+				file = FileAccess::open(stub, FileAccess::WRITE);
+				if (file.is_null() || !file->store_string("#include \"" + header + "\"\n")) {
+					break;
+				}
+				file.unref();
+				flags.push_back("/c");
+				flags.push_back("/Yc" + header);
+				flags.push_back("/Fp" + pch);
+				flags.push_back("/Fo" + workspace->get_current_dir().path_join("preamble.obj"));
+				flags.push_back(stub);
+			} else {
+				flags.push_back("-x");
+				flags.push_back("c-header");
+				flags.push_back("-o");
+				flags.push_back(pch);
+				flags.push_back(header);
+			}
+			String output;
+			int status = -1;
+			if (capture_compiler(frontend.compiler, flags, output, &status) != OK || status != 0) {
+				DirAccess::remove_absolute(pch);
+				break;
+			}
+		}
+		if (FileAccess::exists(pch)) {
+			used_pch = pch;
+			if (frontend.uses_msvc_flags()) {
+				const String include = "#include \"" + header + "\"\n";
+				args.push_back("/Yu" + header);
+				args.push_back("/Fp" + pch);
+				native_source = include + native_source.substr(split);
+				offset += include.length() - split;
+			} else {
+				args.push_back("-Xclang");
+				args.push_back("-include-pch");
+				args.push_back("-Xclang");
+				args.push_back(pch);
+				native_source = native_source.substr(split);
+				offset -= split;
+			}
+		}
+		break;
 	}
-	args.push_back(path);
 	String output;
-	if (capture_compiler(frontend.compiler, args, output) != OK) {
+	const auto query = [&](const String &p_source, int p_offset, const List<String> &p_args) {
+		Ref<FileAccess> temporary = FileAccess::open(path, FileAccess::WRITE);
+		if (temporary.is_null() || !temporary->store_string(p_source)) {
+			return false;
+		}
+		temporary.unref();
+		const String native_before = p_source.left(p_offset);
+		const String native_line = native_before.substr(native_before.rfind_char('\n') + 1);
+		const String location = vformat("-code-completion-at=%s:%d:%d", path, native_before.count("\n") + 1, native_line.utf8().length() + 1);
+		List<String> flags(p_args);
+		for (const String &argument : { String("-Xclang"), location, String("-Xclang"), String("-code-completion-macros") }) {
+			flags.push_back(passthrough + argument);
+		}
+		flags.push_back(path);
+		int status = -1;
+		output = String();
+		return capture_compiler(frontend.compiler, flags, output, &status) == OK && status == 0;
+	};
+	if (!query(native_source, offset, args) && !used_pch.is_empty()) {
+		print_verbose("CGD preamble rejected: " + output.get_slice("\n", 0));
+		DirAccess::remove_absolute(used_pch);
+		query(full_source, full_offset, full_args);
+	}
+	if (output.is_empty()) {
 		return true;
 	}
 	HashSet<String> seen;
-	const bool suggest_arguments = offset != caret_offset;
+	const bool suggest_arguments = full_offset != caret_offset;
 	const PackedStringArray entries = output.split("\n", false);
 	for (const String &entry : entries) {
 		if (entry.begins_with("OVERLOAD: ")) {
@@ -1067,7 +1242,7 @@ bool GDCNative::complete_code(const String &p_code, const String &p_path, List<S
 			r_call_hint += signature;
 		}
 	}
-	if (!r_call_hint.is_empty() && !suggest_arguments) {
+	if (!r_call_hint.is_empty() && !suggest_arguments && p_symbol.is_empty()) {
 		return true;
 	}
 	for (const String &entry : entries) {
@@ -1078,6 +1253,12 @@ bool GDCNative::complete_code(const String &p_code, const String &p_path, List<S
 		const int separator = completion.find(" : ");
 		String name = separator < 0 ? completion : completion.substr(0, separator);
 		const String detail = separator < 0 ? String() : completion.substr(separator + 3);
+		if (r_prototype && !p_symbol.is_empty() && name == p_symbol) {
+			if (!r_prototype->is_empty()) {
+				*r_prototype += "\n";
+			}
+			*r_prototype += detail.is_empty() ? name : detail.replace("[#", "").replace("#]", " ").replace("<#", "").replace("#>", "").replace("{#", "").replace("#}", "");
+		}
 		ScriptLanguage::CodeCompletionKind kind = ScriptLanguage::CODE_COMPLETION_KIND_PLAIN_TEXT;
 		if (include_directive && name == "Pattern") {
 			name = include_directory + detail;
@@ -1867,6 +2048,9 @@ GDCNative::GDCNative() {
 
 GDCNative::~GDCNative() {
 #ifdef TOOLS_ENABLED
+	if (completion_task != WorkerThreadPool::INVALID_TASK_ID) {
+		WorkerThreadPool::get_singleton()->wait_for_task_completion(completion_task);
+	}
 	if (analysis_task != WorkerThreadPool::INVALID_TASK_ID) {
 		WorkerThreadPool::get_singleton()->wait_for_task_completion(analysis_task);
 	}

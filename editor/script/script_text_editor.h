@@ -72,6 +72,8 @@ class ScriptTextEditor : public CodeEditorBase {
 	String native_analysis_code;
 	uint64_t native_analysis_revision = 0;
 	void _request_native_diagnostics(uint64_t p_revision);
+	void _native_completion_finished(const String &p_path, const String &p_code);
+	void _native_hover_finished(const String &p_path, const String &p_code, const String &p_prototype, int p_row, int p_start, int p_end, bool p_shortcut);
 	List<EditorLanguage::ScriptError> native_build_errors;
 	String native_build_code;
 	Button *native_check_button = nullptr;

@@ -1361,8 +1361,23 @@ void ScriptEditor::_update_modified_scripts_for_external_editor(Ref<Script> p_fo
 	}
 }
 
+void ScriptTextEditor::_native_completion_finished(const String &p_path, const String &p_code) {
+	if (edited_res.is_valid() && edited_res->get_path() == p_path && code_editor->get_text_editor()->get_text_for_code_completion() == p_code) {
+		code_editor->get_text_editor()->request_code_completion(true);
+	}
+}
+
 void ScriptTextEditor::_code_complete_script(const String &p_code, List<ScriptLanguage::CodeCompletionOption> *r_options, bool &r_force) {
 	Ref<Script> script = edited_res;
+#ifdef MODULE_GDSCRIPT_ENABLED
+	String native_hint;
+	if (r_options && script->get_path().get_extension().to_lower() == "cgd" &&
+			GDCNative::get_singleton()->complete_in_editor(get_instance_id(), p_code, script->get_path(), callable_mp(this, &ScriptTextEditor::_native_completion_finished), *r_options, native_hint)) {
+		code_editor->get_text_editor()->set_code_hint(native_hint);
+		r_force = native_hint.is_empty();
+		return;
+	}
+#endif
 	Node *base = get_tree()->get_edited_scene_root();
 	if (base) {
 		base = _find_node_for_script(base, base, script);
@@ -1548,6 +1563,19 @@ void ScriptTextEditor::_validate_symbol(const String &p_symbol) {
 	}
 }
 
+void ScriptTextEditor::_native_hover_finished(const String &p_path, const String &p_code, const String &p_prototype, int p_row, int p_start, int p_end, bool p_shortcut) {
+	if (p_prototype.is_empty() || edited_res.is_null() || edited_res->get_path() != p_path) {
+		return;
+	}
+	CodeEdit *text = code_editor->get_text_editor();
+	const Point2i position = p_shortcut ? Point2i(text->get_caret_column(), text->get_caret_line()) : text->get_line_column_at_pos(text->get_local_mouse_position(), false, false);
+	if (position.y != p_row || position.x < p_start || position.x > p_end || text->get_text_with_cursor_char(p_row, p_start) != p_code) {
+		return;
+	}
+	Control *tooltip = EditorHelpBitTooltip::make_tooltip(text, "", "[code]" + p_prototype.replace("[", "[lb]") + "[/code]", true, p_shortcut);
+	memdelete(tooltip);
+}
+
 void ScriptTextEditor::_show_symbol_tooltip(const String &p_symbol, int p_row, int p_column, bool p_shortcut) {
 	if (!EDITOR_GET("text_editor/behavior/documentation/enable_tooltips").booleanize()) {
 		return;
@@ -1561,11 +1589,21 @@ void ScriptTextEditor::_show_symbol_tooltip(const String &p_symbol, int p_row, i
 
 	Ref<Script> script = edited_res;
 #ifdef MODULE_GDSCRIPT_ENABLED
-	if (native_symbols.has(p_symbol) && script->get_path().get_extension().to_lower() == "cgd" &&
-			GDCNative::is_native_position(code_editor->get_text_editor()->get_text(), script->get_path(), p_row, p_column)) {
-		const String prototype = native_symbols[p_symbol];
-		Control *tooltip = EditorHelpBitTooltip::make_tooltip(code_editor->get_text_editor(), "", "[code]" + prototype.replace("[", "[lb]") + "[/code]", true, p_shortcut);
-		memdelete(tooltip);
+	CodeEdit *text = code_editor->get_text_editor();
+	if (script->get_path().get_extension().to_lower() == "cgd" &&
+			GDCNative::is_native_position(text->get_text(), script->get_path(), p_row, p_column)) {
+		const String line = text->get_line(p_row);
+		int start = MIN(p_column, line.length());
+		while (start > 0 && is_unicode_identifier_continue(line[start - 1])) {
+			start--;
+		}
+		const String code = text->get_text_with_cursor_char(p_row, start);
+		const Callable callback = callable_mp(this, &ScriptTextEditor::_native_hover_finished).bind(p_row, start, start + p_symbol.length(), p_shortcut);
+		if (native_symbols.has(p_symbol)) {
+			callback.call(script->get_path(), code, native_symbols[p_symbol]);
+		} else {
+			GDCNative::get_singleton()->request_native_hover(get_instance_id(), code, script->get_path(), p_symbol, callback);
+		}
 		return;
 	}
 #endif

@@ -93,6 +93,10 @@ The initial bundle targets commit `95d622f2966ad862c8f7fe317267dff1f6a5413e`; al
 
 Analysis results are reused across CGD-only edits, including edits that move native bodies. The editor checks included headers when the application regains focus and refreshes analysis if they have changed. Diagnostics include Clang's notes and identify failures in generated native wrappers.
 
+The built-in script editor runs C completion and call hints on a worker. Results appear when the buffer and caret still match the request. Hover can query declarations at the identifier's position when the file-scope table has no match. Completion in a native function reuses a Clang precompiled preamble under `.godot/cgd_native/pch`. Completion inside a declaration block uses the full source. If Clang rejects a cached preamble, the editor retries with the full source. Live diagnostics keep a separate syntax pass because a completion query can stop before reaching later errors.
+
+In the editor completion probe, a body edit took about 83 ms on Windows and 47 ms on macOS arm64 with a cached preamble, versus 215 ms and 84 ms when the same edit required rebuilding the preamble.
+
 **Text Editor → CGD → Native Diagnostics Delay Ms** adds a 500 ms delay by default after script validation. C diagnostics show the line and column and underline the rest of the identifier at that position.
 
 The **Check Native C** toolbar button checks the active native script. **Edit → Check All Native Scripts** builds saved native scripts in the background for the editor's Run target and reports failures in Output and in open script editors. The single-script check reports individual compiler errors at their source positions. Linker failures without positions are shown at the first native body.

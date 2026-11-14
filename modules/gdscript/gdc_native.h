@@ -51,6 +51,28 @@ class GDCNative : public Object {
 	void analyze(AnalysisRequest p_request);
 	void start_analysis();
 	void finish_analysis(const String &p_path, const String &p_code, const Callable &p_callback, const Array &p_diagnostics, const Dictionary &p_symbols);
+	struct CompletionRequest {
+		ObjectID editor;
+		String path;
+		String code;
+		Callable callback;
+		String symbol;
+	};
+	struct CompletionResult {
+		String path;
+		String code;
+		List<ScriptLanguage::CodeCompletionOption> options;
+		String hint;
+		String symbol;
+		String prototype;
+	};
+	WorkerThreadPool::TaskID completion_task = WorkerThreadPool::INVALID_TASK_ID;
+	HashMap<ObjectID, CompletionRequest> pending_completions;
+	CompletionResult completion_result;
+	CompletionResult worker_completion_result;
+	void start_completion();
+	void compute_completion(CompletionRequest p_request);
+	void finish_completion(const Callable &p_callback);
 #endif
 
 	Variant invoke(const String &p_path, const StringName &p_id, const StringName &p_symbol, const StringName &p_signature, const Array &p_args);
@@ -73,7 +95,9 @@ public:
 	void request_analysis(ObjectID p_editor, const String &p_path, const String &p_code, const Callable &p_callback, bool p_check_build = false);
 	void request_project_check(ObjectID p_editor, const Callable &p_callback);
 	static bool is_native_position(const String &p_code, const String &p_path, int p_row, int p_column);
-	static bool complete_code(const String &p_code, const String &p_path, List<ScriptLanguage::CodeCompletionOption> &r_options, String &r_call_hint);
+	static bool complete_code(const String &p_code, const String &p_path, List<ScriptLanguage::CodeCompletionOption> &r_options, String &r_call_hint, const String &p_symbol = String(), String *r_prototype = nullptr);
+	bool complete_in_editor(ObjectID p_editor, const String &p_code, const String &p_path, const Callable &p_callback, List<ScriptLanguage::CodeCompletionOption> &r_options, String &r_hint);
+	void request_native_hover(ObjectID p_editor, const String &p_code, const String &p_path, const String &p_symbol, const Callable &p_callback);
 #endif
 
 	GDCNative();
