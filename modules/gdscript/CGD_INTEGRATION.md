@@ -67,6 +67,8 @@ Linux defaults to Clang and also supports `linux/x86_64/toolchain="gcc"`. Export
 
 Projects using ordinary `.gd` or `.cgd` scripts require no native build settings or C compiler. Export compiles scripts containing native C and ships the resulting libraries with the game.
 
+For macOS arm64 export validation, package the matching arm64 release template without AppleDouble metadata (for example, use `ditto --norsrc -c -k --keepParent`). Enable ETC2/ASTC import in the test project. Verify the signed app with `codesign --verify --deep --strict` and run the exported executable to exercise the native library in `Contents/Frameworks`. The ExtractAndTranslate fingerprint parity pilot passed from source and from an ad hoc signed arm64 export.
+
 Inside a native block or body, the script editor asks Clang for C17 completion using the unsaved script and the selected target's include directories and defines. The default is the editor's OS and architecture. Set `completion_target="android/arm32"` under `[cgd_native]` to edit Android code from a Windows editor with the NDK installed. A universal macOS profile uses the editor's architecture for completion.
 
 When the caret is inside a C function call, the editor shows the prototype and highlights the active parameter. CGD highlighting colors the `native` keyword, preprocessor directives such as `#include` and `#import`, and angle-bracket header paths.
