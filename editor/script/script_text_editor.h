@@ -58,6 +58,8 @@ public:
 class ScriptTextEditor : public CodeEditorBase {
 	GDCLASS(ScriptTextEditor, CodeEditorBase);
 
+	friend class ScriptEditor;
+
 	Variant pending_state;
 
 	RichTextLabel *errors_panel = nullptr;
@@ -76,7 +78,10 @@ class ScriptTextEditor : public CodeEditorBase {
 	void _native_hover_finished(const String &p_path, const String &p_code, const String &p_prototype, int p_row, int p_start, int p_end, bool p_shortcut);
 	List<EditorLanguage::ScriptError> native_build_errors;
 	String native_build_code;
-	Button *native_check_button = nullptr;
+	bool native_compile_pending = false;
+	bool native_compile_succeeded = false;
+	bool has_native_code = false;
+	void _native_compile_finished(const String &p_path, const String &p_code, const Array &p_diagnostics, const Dictionary &p_symbols);
 	void _check_native_script();
 	void _native_project_check_finished(const String &p_path, const String &p_code, const Array &p_diagnostics, const Dictionary &p_symbols);
 	void _native_diagnostics_finished(const String &p_path, const String &p_code, const Array &p_diagnostics, const Dictionary &p_symbols);

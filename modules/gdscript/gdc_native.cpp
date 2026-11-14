@@ -1147,12 +1147,18 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 			const String selection = configured.get_type() == Variant::STRING ? String(configured) : String();
 			const String platform = selection.is_empty() ? OS::get_singleton()->get_name().to_lower() : selection.get_slice("/", 0);
 			const String arch = selection.is_empty() ? Engine::get_singleton()->get_architecture_name() : selection.get_slice("/", 1);
-			if (build(p_request.path, id, native_source, library, error, platform, arch, true) != OK && !bodies.empty()) {
-				line = bodies.front().original.line;
-				column = bodies.front().original.column;
+			const Error build_error = build(p_request.path, id, native_source, library, error, platform, arch, true);
+			if (build_error != OK) {
+				if (error.is_empty()) {
+					error = vformat("Native compilation failed (%s).", error_names[build_error]);
+				}
+				if (!bodies.empty()) {
+					line = bodies.front().original.line;
+					column = bodies.front().original.column;
+				}
 			}
 		} else if (error.is_empty()) {
-			error = "This script has no native C.";
+			error = "This script has no native code.";
 		}
 		Dictionary result;
 		result["error"] = error;

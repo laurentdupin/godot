@@ -98,7 +98,7 @@ Inside a native block or body, the script editor asks Clang for C17 completion u
 
 When the caret is inside a C function call, the editor shows the prototype and highlights the active parameter. CGD highlighting colors the `native` keyword, preprocessor directives such as `#include` and `#import`, and angle-bracket header paths.
 
-The editor checks native C in the background after the script validation delay. It shows Clang diagnostics from the script in the errors and warnings panels, and provides hover signatures for file-scope C symbols. Toggle background analysis in Editor Settings under **Text Editor → CGD → Live Native Diagnostics**. For an actual compile and link of the current buffer, use **Edit → Check Native C** (`Ctrl+Alt+F7`, or `Cmd+Option+F7` on macOS). This uses the selected target's build compiler and prints build failures to Output.
+The editor checks native C in the background after the script validation delay. It shows Clang diagnostics from the script in the errors and warnings panels, and provides hover signatures for file-scope C symbols. Toggle background analysis in Editor Settings under **Text Editor → CGD → Live Native Diagnostics**. For an actual compile and link of the current buffer, use **Compile** next to Debug or **Edit → Compile Native Code** (`Ctrl+Alt+F7`, or `Cmd+Option+F7` on macOS). This uses the selected target's build compiler and prints build failures to Output.
 
 For GCC, the editor queries the selected compiler for its target triple, GNU version, and system header search paths. For MSVC, completion uses the developer prompt's `INCLUDE` order and Visual C++ version. GCC and MSVC builds can run with their respective compilers alone. C completion for either also needs Clang, with an optional `completion_compiler_path` under `[cgd_native]` to select the Clang executable. Compiler-specific extensions and predefined macros can differ from the completion frontend. Compiler diagnostics appear when running or exporting the project.
 
@@ -114,7 +114,7 @@ Live diagnostics and the file-scope hover index share that preamble. The syntax 
 
 **Text Editor → CGD → Native Diagnostics Delay Ms** adds a 500 ms delay by default after script validation. C diagnostics show the line and column and underline the rest of the identifier at that position.
 
-The **Check Native C** toolbar button checks the active native script. **Edit → Check All Native Scripts** builds saved native scripts in the background for the editor's Run target and reports failures in Output and in open script editors. The single-script check reports individual compiler errors at their source positions. Linker failures without positions are shown at the first native body.
+The **Compile** button appears for CGD scripts with native C, C++, or Objective-C++. Its dot is gray for an unchecked buffer, amber while compiling, green on success, and red on failure. Editing the buffer makes the previous result stale. **Edit → Check All Native Scripts** builds saved native scripts in the background for the editor's Run target and reports failures in Output and in open script editors. The single-script check reports individual compiler errors at their source positions. Linker failures without positions are shown at the first native body.
 
 ## Editor feature audit
 
