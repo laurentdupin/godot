@@ -1,8 +1,10 @@
-# CGD native: implementation plan (revision 3)
+# CGD native: implementation plan (revision 4)
 
 Audience: the implementer agent. Read the referenced code before changing it. Line numbers are approximate.
 
 Revision 3 reviews Phases 9b–11 as landed, records the fixes made in `cc02edd6f3`, and adds **Phase 12: editor/export parity** (per-script symbol isolation on export, Run on the merged library, Run cache cleanup). See "Review of Phases 9b–11" and "Stage 3" in the order of work.
+
+Revision 4 adds **Phase 13: printing to the Godot console from native code** (`cgd_print`, `cgd_print_warning`, `cgd_print_error`, and a C++ `cgd::print`). See "Stage 4" in the order of work.
 
 Revision 2 recorded what had landed, reviewed it, listed the remaining work, and added these tracks:
 - packed arrays and strings in the native ABI;
@@ -370,6 +372,68 @@ In `CGD_INTEGRATION.md`, state that:
 
 ---
 
+## Phase 13: printing to the Godot console from native code
+
+**Problem.** Native code can't print to Godot's console. `printf` goes to the process's stdout: it doesn't reach the editor's Output panel, the log file or the remote debugger, and on Windows each native library has its own C runtime buffers, so output appears late or not at all without `fflush`. Today the only way is to collect text in a buffer, return it as a `String`, and `print()` it from the script.
+
+**Decision.** Add three logging functions as a deliberate, narrow exception to "native code doesn't call back into Godot". No objects, signals or other engine APIs.
+
+### C API (printf-style)
+Declared in the generated preamble for C, C++ and Objective-C++:
+
+```c
+void cgd_print(const char *format, ...);          // print_line
+void cgd_print_warning(const char *format, ...);  // WARN_PRINT: yellow in Output, like push_warning
+void cgd_print_error(const char *format, ...);    // ERR_PRINT: red in Output, like push_error
+```
+
+- C's `...` carries no types, so it can't concatenate arbitrary values like GDScript's `print(a, b, c)`. Use printf formats; this is the C convention and gives compile-time checks.
+- Mark each with `__attribute__((format(printf, 1, 2)))` for Clang, GCC and clang-cl, and `_Printf_format_string_` (from `<sal.h>`) for MSVC. Live diagnostics then flag mismatched arguments (for example `%d` given a `double`) while typing.
+- Implementation in the preamble (`static inline` or `static` helpers, so per-script isolation leaves them alone): `va_list` → `vsnprintf` into a 1 KiB stack buffer; if the result is longer, allocate exactly, format again, and free. On a negative `vsnprintf` result, print "(invalid format)". Text is UTF-8. A trailing newline is not required and one trailing `\n` is stripped, so `cgd_print("x\n")` and `cgd_print("x")` look the same.
+- Thread safety: callable from any thread, including native worker threads. Godot's `print_line`, `WARN_PRINT` and `ERR_PRINT` are thread-safe.
+- Warnings and errors should carry a useful location. Make `cgd_print_warning` / `cgd_print_error` macros that pass `__FILE__` and `__LINE__` to the host function. Because of the `#line` directives, those are the `.cgd` path and its line, so the Output entry points at the script.
+
+### C++ API (`native cpp`)
+Like GDScript's `print`, joining arguments of any printable type:
+
+```cpp
+cgd::print("found ", count, " paragraphs in ", elapsed, " ms");
+cgd::print_warning(...);
+cgd::print_error(...);
+```
+
+- A variadic template with a fold expression that formats each argument (`std::format("{}", value)`, or `std::to_chars` / an `ostringstream` if `<format>` is unavailable on a target's standard library) and calls the same host functions. `const char *`, `std::string`, `std::string_view`, integers, floating point and `bool` must work; anything with a `std::formatter` works too.
+- Defined in the C++ preamble only.
+
+### Host table and ABI
+- The host functions reach native code through one table, set once per library at load, not passed on every call, so the call cost doesn't change:
+  ```c
+  typedef struct { uint32_t size; void (*print)(const char *utf8, int64_t length);
+      void (*warning)(const char *utf8, int64_t length, const char *file, int32_t line);
+      void (*error)(const char *utf8, int64_t length, const char *file, int32_t line); } CGDHost;
+  ```
+  `size` lets later versions add entries; native code must check it before using a new entry.
+- `invoke` calls an exported `cgd_native_set_host(const CGDHost *)` right after the ABI check, before resolving any function. The table is a static in `gdc_native.cpp` and lives for the whole process.
+- **Merged libraries (export and Run).** The pointer must exist once per library. Define `cgd_host` and `cgd_native_set_host` in the shared ABI object (`abi.c`, built from the preamble without `CGD_MERGED_EXPORT`). Script objects only declare `extern const CGDHost *cgd_host;`. Phase 12 P1 renames only *defined* symbols, so these references survive and resolve to the single copy. Don't define the pointer in each script: P1 would give every script its own copy and only one would be set.
+- **Per-script libraries (editor process, debugger reload).** Each library defines `cgd_host` and `cgd_native_set_host` itself (the existing `#ifndef CGD_MERGED_EXPORT` block), and `invoke` sets it per library when loading.
+- If the table hasn't been set (for example, a library loaded by an older engine), the functions fall back to `fputs` to `stderr` plus `fflush`, so output is never lost and nothing crashes.
+- Bump `NATIVE_BUILD_SCHEMA` and the ABI symbol (`cgd_native_abi_v4`). The ABI check at load must reject libraries built without the host table.
+
+### Editor
+- Completion and hover show the three functions and `cgd::print` with their prototypes; they come from the preamble, so this should need no extra work. Verify it.
+- `CGD_SYNTAX.md` and `CGD_INTEGRATION.md`: document the functions, the printf-style rule for C, the C++ form, thread safety, and that `printf` still goes to stdout only.
+
+**Done when.**
+- A C script calling `cgd_print("value=%d", 42)` shows `value=42` in the editor's Output panel during Run, in the exported game's log file, and from a `@tool` script inside the editor, on Windows and macOS arm64.
+- `cgd_print_error` appears as an error in Output with the `.cgd` path and line; `cgd_print_warning` as a warning.
+- A `native cpp` script calling `cgd::print("n=", 3, " x=", 1.5, " ", std::string("ok"))` prints `n=3 x=1.5 ok`.
+- `cgd_print("%d", 1.5)` produces a live diagnostic warning on that line.
+- Two scripts in one merged export both print, which proves the host pointer is shared and not renamed per script.
+- Eight native worker threads printing 1,000 lines each don't crash or interleave inside one line.
+- A message longer than 1 KiB prints in full.
+
+---
+
 ## Target: ExtractAndTranslate
 
 The project's own native code is one GDExtension (`Addons/VisualNovelToolbarNative`, built by `Tools/Build/BuildWindowsNativeComponents.ps1` and `BuildMacosNativeComponents.sh`). The export presets are **Windows x86_64** and **macOS arm64**. The table maps each part to what it needs from this plan.
@@ -440,9 +504,15 @@ At the end of Stage 1, Phases 1–8 are complete and the pilot is in production.
 | 15 | Phase 12 P1 + P3 | Per-script symbol isolation on export, `DllMain` / runtime-symbol check, documentation of the remaining differences. Fixes R15, which can produce wrong code today in any project with two C++ scripts. Decide the MSVC-only fallback and verify the macOS method before writing the code. |
 | 16 | Phase 12 P2 | Run on the merged library, with the timing report. |
 
+### Stage 4: native logging (revision 4)
+
+| Step | Phase | Work |
+|---|---|---|
+| 17 | Phase 13 | `cgd_print`, `cgd_print_warning`, `cgd_print_error`, the host table set at load (shared ABI object in merged libraries), `cgd::print` for C++, docs. Then replace ad hoc native logging in ExtractAndTranslate (returned log strings, `fprintf(stderr, ...)`) where it exists. |
+
 ## Out of scope
 
-- Native code calling back into Godot (objects, signals, the GDExtension interface). That's what GDExtension is for.
+- Native code calling back into Godot (objects, signals, the GDExtension interface). That's what GDExtension is for. The only exception is the Phase 13 logging functions.
 - Unloading or reloading native libraries inside the editor process.
 - C#, web and iOS targets.
 
