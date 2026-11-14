@@ -92,11 +92,6 @@ func _ready():
     get_tree().quit()
 ''')
         verify(run(godot, "--headless", "--path", directory + "/project", "--", "--stress"), stress=True)
-        target = "windows/x86_64" if windows else "macos/arm64"
-        standard = "/std:c++17" if windows else "-std=c++17"
-        write("project.godot", config + f'[cgd_native]\n{target}/cxx_flags=PackedStringArray("{standard}")\n')
-        verify(run(godot, "--headless", "--path", str(project)))
-        write("project.godot", config)
         if args.template:
             platform, arch = ("Windows Desktop", "x86_64") if windows else ("macOS", "arm64")
             settings = ('debug/export_console_wrapper=2\napplication/modify_resources=false\n' if windows else

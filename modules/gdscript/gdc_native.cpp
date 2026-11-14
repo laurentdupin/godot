@@ -489,16 +489,89 @@ String native_language(const String &p_source) {
 	return p_source.get_slice("\n", 1).trim_prefix("// cgd-language: ");
 }
 
-List<String> language_flags(const NativeTarget &p_target, const String &p_language = "c") {
-	List<String> args;
+Error capture_compiler(const String &p_compiler, const List<String> &p_args, String &r_output, int *r_code);
+
+Error standard_flag(const NativeTarget &p_target, const String &p_language, String &r_flag, String &r_error) {
+	const bool c = p_language == "c";
+	const String key = c ? "cgd_native/c_standard" : "cgd_native/cpp_standard";
+	const Variant value = setting(key);
+	const String standard = value.get_type() == Variant::STRING ? String(value) : String();
+	const String choices = c ? "c11,c17,c23,gnu11,gnu17,gnu23" : "c++20,c++23,gnu++20,gnu++23";
+	if (!choices.split(",").has(standard)) {
+		r_error = "Unsupported " + key + " value: " + String(Variant(value));
+		return ERR_INVALID_PARAMETER;
+	}
+	const bool gnu = standard.begins_with("gnu");
+	if (gnu && p_target.toolchain == "msvc") {
+		r_error = c ? "GNU C dialects need Clang or GCC; MSVC doesn't support them." : "GNU C++ dialects need Clang or GCC; MSVC doesn't support them.";
+		return ERR_UNAVAILABLE;
+	}
+	String fallback;
+	if (p_target.toolchain == "msvc") {
+		r_flag = standard == "c23" ? "/std:clatest" : standard == "c++23" ? "/std:c++latest" : "/std:" + standard;
+	} else {
+		const String prefix = p_target.uses_msvc_flags() ? "/clang:" : "";
+		r_flag = p_target.uses_msvc_flags() && (standard == "c11" || standard == "c17" || standard == "c++20") ? "/std:" + standard : prefix + "-std=" + standard;
+		if (standard.ends_with("23")) {
+			fallback = prefix + "-std=" + standard.left(standard.length() - 2) + (c ? "2x" : "2b");
+		}
+	}
+	static Mutex mutex;
+	static HashMap<String, String> supported_flags;
+	MutexLock lock(mutex);
+	const String cache_key = p_target.compiler + "\n" + p_target.triple + "\n" + p_target.arch + "\n" + r_flag + "\n" +
+			itos(FileAccess::get_modified_time(p_target.compiler)) + ":" + itos(FileAccess::get_size(p_target.compiler));
+	if (const String *cached = supported_flags.getptr(cache_key)) {
+		r_flag = *cached;
+		return OK;
+	}
+	Error temp_error;
+	Ref<DirAccess> directory = DirAccess::create_temp("cgd-standard", false, &temp_error);
+	if (directory.is_null()) {
+		r_error = "Cannot create a temporary directory to check the CGD language standard.";
+		return temp_error;
+	}
+	const String source = directory->get_current_dir().path_join(c ? "probe.c" : "probe.cpp");
+	Ref<FileAccess> file = FileAccess::open(source, FileAccess::WRITE);
+	if (file.is_null()) {
+		r_error = "Cannot write the CGD language standard probe.";
+		return ERR_CANT_CREATE;
+	}
+	file.unref();
+	const auto probe = [&](const String &p_flag, String &r_output) {
+		List<String> args = p_target.uses_msvc_flags() ? List<String>{ "/nologo", "/Zs" } : List<String>{ "-fsyntax-only" };
+		if (p_target.toolchain != "msvc" && !p_target.triple.is_empty()) {
+			args.push_back("--target=" + p_target.triple);
+		}
+		args.push_back(p_flag);
+		args.push_back(source);
+		int status = -1;
+		return capture_compiler(p_target.compiler, args, r_output, &status) == OK && status == 0;
+	};
+	String output;
+	if (!probe(r_flag, output)) {
+		if (fallback.is_empty() || !(output.contains("invalid value") || output.contains("unrecognized") || output.contains("unknown")) || !probe(fallback, output)) {
+			r_error = "This compiler doesn't support " + standard + ": " + p_target.compiler + "\n" + output;
+			return ERR_UNAVAILABLE;
+		}
+		r_flag = fallback;
+	}
+	supported_flags.insert(cache_key, r_flag);
+	return OK;
+}
+
+Error language_flags(const NativeTarget &p_target, const String &p_language, List<String> &args, String &r_error) {
+	String standard;
+	const Error error = standard_flag(p_target, p_language, standard, r_error);
+	if (error != OK) {
+		return error;
+	}
 	if (p_target.uses_msvc_flags()) {
 		args = { "/nologo", "/utf-8", "/MT" };
 		if (p_language == "c") {
 			args.push_back("/TC");
-			args.push_back("/std:c17");
 		} else {
 			args.push_back("/TP");
-			args.push_back("/std:c++20");
 			args.push_back("/EHsc");
 			args.push_back("/Zc:__cplusplus");
 		}
@@ -507,8 +580,7 @@ List<String> language_flags(const NativeTarget &p_target, const String &p_langua
 		}
 	} else {
 		args = { "-x", p_language == "objcpp" ? "objective-c++" : p_language == "cpp" ? "c++"
-																					  : "c",
-			p_language == "c" ? "-std=c17" : "-std=c++20" };
+																					  : "c" };
 		if (p_language == "objcpp") {
 			args.push_back("-fobjc-arc");
 		}
@@ -522,7 +594,8 @@ List<String> language_flags(const NativeTarget &p_target, const String &p_langua
 			}
 		}
 	}
-	return args;
+	args.push_back(standard);
+	return OK;
 }
 
 Error add_defines(List<String> &r_args, const NativeTarget &p_target, String &r_error) {
@@ -550,13 +623,14 @@ Error add_cxx_flags(List<String> &r_args, const NativeTarget &p_target, const St
 		return OK;
 	}
 	for (const String &flag : target_array("cxx_flags", p_target.platform, p_target.arch)) {
-		const bool standard = p_target.uses_msvc_flags()
-				? flag == "/std:c++17" || flag == "/std:c++20" || flag == "/std:c++latest"
-				: flag == "-std=c++17" || flag == "-std=gnu++17" || flag == "-std=c++20" || flag == "-std=c++23" || flag == "-std=gnu++20" || flag == "-std=gnu++23";
+		if (flag.begins_with("-std=") || flag.begins_with("/std:") || flag.begins_with("/clang:-std=")) {
+			r_error = "Set the C++ standard with cgd_native/cpp_standard instead of cxx_flags: " + flag;
+			return ERR_INVALID_PARAMETER;
+		}
 		const bool optimization = p_target.uses_msvc_flags()
 				? flag == "/Od" || flag == "/O1" || flag == "/O2" || flag == "/Ox"
 				: flag == "-O0" || flag == "-O1" || flag == "-O2" || flag == "-O3" || flag == "-Os";
-		if (!standard && !optimization && !(flag == "-fexceptions" || flag == "-frtti" || flag == "-fno-rtti")) {
+		if (!optimization && flag != "-frtti" && flag != "-fno-rtti") {
 			r_error = "Unsupported CGD C++ compiler flag: " + flag;
 			return ERR_INVALID_PARAMETER;
 		}
@@ -716,7 +790,7 @@ Error isolate_export_symbols(const NativeTarget &p_target, const String &p_objec
 	return OK;
 }
 
-bool gcc_completion_flags(const String &p_compiler, const String &p_language, List<String> &r_args) {
+bool gcc_completion_flags(const String &p_compiler, const String &p_language, const String &p_standard, List<String> &r_args) {
 #ifdef WINDOWS_ENABLED
 	return false;
 #else
@@ -729,6 +803,7 @@ bool gcc_completion_flags(const String &p_compiler, const String &p_language, Li
 	Array key;
 	key.push_back(p_compiler);
 	key.push_back(p_language);
+	key.push_back(p_standard);
 	key.push_back(FileAccess::get_modified_time(p_compiler));
 	for (const char *name : { "PATH", "CPATH", "C_INCLUDE_PATH", "GCC_EXEC_PREFIX", "COMPILER_PATH" }) {
 		key.push_back(os->get_environment(name));
@@ -745,7 +820,7 @@ bool gcc_completion_flags(const String &p_compiler, const String &p_language, Li
 	int code = -1;
 	if (capture_compiler(p_compiler, { "-dumpmachine" }, triple, &code) != OK || code != 0 ||
 			capture_compiler(p_compiler, { "-dumpfullversion" }, version, &code) != OK || code != 0 ||
-			capture_compiler("/usr/bin/env", { "LC_ALL=C", p_compiler, p_language == "c" ? "-std=c17" : "-std=c++20", "-x", p_language == "c" ? "c" : "c++", "-E", "-v", "/dev/null" }, includes, &code) != OK || code != 0) {
+			capture_compiler("/usr/bin/env", { "LC_ALL=C", p_compiler, p_standard, "-x", p_language == "c" ? "c" : "c++", "-E", "-v", "/dev/null" }, includes, &code) != OK || code != 0) {
 		return false;
 	}
 	List<String> flags = { "--target=" + triple.strip_edges(), "-fgnuc-version=" + version.strip_edges() };
@@ -965,8 +1040,11 @@ bool resolve_analysis_frontend(const String &p_path, const String &p_language, N
 	if (frontend.arch == "universal") {
 		frontend.arch = Engine::get_singleton()->get_architecture_name();
 	}
-	args = language_flags(frontend, p_language);
-	if (target.toolchain == "gcc" && !gcc_completion_flags(target.compiler, p_language, args)) {
+	String target_standard;
+	if (standard_flag(target, p_language, target_standard, r_error) != OK || language_flags(frontend, p_language, args, r_error) != OK) {
+		return false;
+	}
+	if (target.toolchain == "gcc" && !gcc_completion_flags(target.compiler, p_language, target_standard, args)) {
 		return false;
 	}
 	if (add_cxx_flags(args, target, p_language, r_error) != OK || add_compile_inputs(args, p_path, target, r_error) != OK) {
@@ -1459,10 +1537,17 @@ void GDCNative::request_native_hover(ObjectID p_editor, const String &p_code, co
 	start_completion();
 }
 
+void GDCNative::invalidate_native_completion() {
+	++completion_revision;
+	completion_result = CompletionResult();
+	pending_completions.clear();
+}
+
 void GDCNative::start_completion() {
 	if (completion_task != WorkerThreadPool::INVALID_TASK_ID || pending_completions.is_empty()) {
 		return;
 	}
+	active_completion_revision = completion_revision;
 	const CompletionRequest request = pending_completions.begin()->value;
 	pending_completions.erase(request.editor);
 	completion_task = WorkerThreadPool::get_singleton()->add_template_task(this, &GDCNative::compute_completion, request, true, "CGD native completion");
@@ -1480,6 +1565,10 @@ void GDCNative::compute_completion(CompletionRequest p_request) {
 void GDCNative::finish_completion(const Callable &p_callback) {
 	WorkerThreadPool::get_singleton()->wait_for_task_completion(completion_task);
 	completion_task = WorkerThreadPool::INVALID_TASK_ID;
+	if (active_completion_revision != completion_revision) {
+		start_completion();
+		return;
+	}
 	completion_result = std::move(worker_completion_result);
 	if (p_callback.is_valid()) {
 		if (completion_result.symbol.is_empty()) {
@@ -1740,6 +1829,12 @@ Error GDCNative::build(const String &p_path, const String &p_id, const String &p
 	}
 	const String &compiler = target.compiler;
 	const String prefix = target_prefix(p_platform, p_arch);
+	List<String> compile_flags;
+	const Error language_error = language_flags(target, native_language(p_native_source), compile_flags, r_error);
+	if (language_error != OK) {
+		return language_error;
+	}
+
 	const String library_name = library_filename(p_platform, p_id);
 	const String cache = native_path(run_cache_path(p_platform, p_arch, p_id));
 	String fingerprint;
@@ -1752,6 +1847,7 @@ Error GDCNative::build(const String &p_path, const String &p_id, const String &p
 		Array configuration;
 		configuration.push_back(NATIVE_BUILD_SCHEMA);
 		configuration.push_back(p_id);
+		configuration.push_back(compile_flags.back()->get());
 		configuration.push_back(target.toolchain);
 		configuration.push_back(target.triple);
 		configuration.push_back(compiler);
@@ -1859,7 +1955,7 @@ Error GDCNative::build(const String &p_path, const String &p_id, const String &p
 	}
 	source.unref();
 
-	List<String> args = language_flags(target, native_language(p_native_source));
+	List<String> args(compile_flags);
 	args.push_back(target.uses_msvc_flags() ? "/O2" : "-O2");
 	if (android) {
 		args.push_back("-Wl,-soname," + library_name);
@@ -2050,7 +2146,11 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 			return ERR_UNAVAILABLE;
 		}
 		needs_cpp = needs_cpp || language != "c";
-		List<String> args = language_flags(target, language);
+		List<String> args;
+		const Error language_error = language_flags(target, language, args, r_error);
+		if (language_error != OK) {
+			return language_error;
+		}
 		args.push_back(windows ? "/O2" : "-O2");
 		args.push_back(windows ? "/DCGD_MERGED_EXPORT" : "-DCGD_MERGED_EXPORT");
 		if (!windows) {
@@ -2166,6 +2266,7 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 		link_inputs.push_back(target.toolchain);
 		link_inputs.push_back(target.triple);
 		link_inputs.push_back(object_fingerprints);
+		link_inputs.push_back(setting("cgd_native/c_standard"));
 		const auto stamp = [&](const String &p_path) {
 			const Dictionary value = input_stamp(p_path, previous_inputs.get(p_path, Dictionary()), &stamps);
 			r_run_cache->inputs[p_path] = value;
@@ -2243,7 +2344,11 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 		return ERR_CANT_CREATE;
 	}
 	abi_file.unref();
-	List<String> abi_args = language_flags(target);
+	List<String> abi_args;
+	const Error abi_language_error = language_flags(target, "c", abi_args, r_error);
+	if (abi_language_error != OK) {
+		return abi_language_error;
+	}
 	if (windows) {
 		abi_args.push_back("/c");
 		abi_args.push_back("/Fo" + abi_object);

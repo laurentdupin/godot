@@ -999,6 +999,24 @@ void ScriptTextEditor::_validate_script() {
 	TextEditorBase::_validate_script();
 }
 
+void ScriptTextEditor::_native_settings_changed() {
+#ifdef MODULE_GDSCRIPT_ENABLED
+	const Variant c_standard = GLOBAL_GET("cgd_native/c_standard");
+	const Variant cpp_standard = GLOBAL_GET("cgd_native/cpp_standard");
+	if (c_standard == native_c_standard && cpp_standard == native_cpp_standard) {
+		return;
+	}
+	native_c_standard = c_standard;
+	native_cpp_standard = cpp_standard;
+	GDCNative::get_singleton()->invalidate_native_completion();
+	if (has_native_code) {
+		native_build_code.clear();
+		native_symbols.clear();
+		_validate_script();
+	}
+#endif
+}
+
 void ScriptTextEditor::_request_native_diagnostics(uint64_t p_revision) {
 #ifdef MODULE_GDSCRIPT_ENABLED
 	if (p_revision == native_analysis_revision && edited_res.is_valid() && EDITOR_GET("text_editor/cgd/live_native_diagnostics").booleanize()) {
@@ -2913,6 +2931,11 @@ void ScriptTextEditor::_enable_code_editor() {
 }
 
 ScriptTextEditor::ScriptTextEditor() {
+#ifdef MODULE_GDSCRIPT_ENABLED
+	native_c_standard = GLOBAL_GET("cgd_native/c_standard");
+	native_cpp_standard = GLOBAL_GET("cgd_native/cpp_standard");
+	ProjectSettings::get_singleton()->connect("settings_changed", callable_mp(this, &ScriptTextEditor::_native_settings_changed));
+#endif
 	editor_box->add_child(code_editor);
 	editor_box->add_child(warnings_panel);
 

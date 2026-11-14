@@ -118,7 +118,7 @@ native int monitor_count() {
 
 Put native declarations at script scope. A `native { ... }` block adds C declarations to the generated translation unit. A typed `native` function can be called like any other script method. The current ABI accepts `int`, `float` and `bool` parameters and returns, plus `void` returns. See [native build configuration](CGD_INTEGRATION.md#inline-c) for compiler and library settings.
 
-Use `native cpp { ... }` and `native cpp int f() { ... }` for C++20. On macOS, use `native objcpp` for Objective-C++. Each script uses a single native language across its blocks and functions. Plain `native` takes the project default, which is C17 unless `cgd_native/default_language` is set to `"cpp"`.
+Use `native cpp { ... }` and `native cpp int f() { ... }` for C++ (`cgd_native/cpp_standard`, C++20 by default). On macOS, use `native objcpp` for Objective-C++. Each script uses a single native language across its blocks and functions. Plain `native` takes the project default, which is C17 unless `cgd_native/default_language` is set to `"cpp"`.
 
 In a native body, use `cgd_print("value=%d", value)`, `cgd_print_warning(...)`, or `cgd_print_error(...)` for Godot output. These functions take printf-style format strings. C++ and Objective-C++ can also use `cgd::print("value=", value)`, `cgd::print_warning(...)`, and `cgd::print_error(...)` to join printable arguments. Warnings and errors report the CGD file and line.
 

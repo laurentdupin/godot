@@ -42,11 +42,11 @@ The editing test opens a Node3D CGD script in the actual script editor and reque
 
 ## Inline C
 
-A file-scope `native { ... }` block supplies C headers, macros and helpers to that script's generated C file. A `native int f() { ... }` declaration exposes a typed script method whose body is compiled as C17. Native parameters and returns support `int` (C `int64_t`), `float` (C `double`) and `bool`. Functions may also return `void`. The CGD declaration stays at script scope. C braces must balance across the source of each block, including conditional preprocessing branches.
+A file-scope `native { ... }` block supplies C headers, macros and helpers to that script's generated C file. A `native int f() { ... }` declaration exposes a typed script method whose body is compiled using `cgd_native/c_standard` (C17 by default). Native parameters and returns support `int` (C `int64_t`), `float` (C `double`) and `bool`. Functions may also return `void`. The CGD declaration stays at script scope. C braces must balance across the source of each block, including conditional preprocessing branches.
 
-A script can use `native cpp { ... }` and `native cpp int f() { ... }` to compile as C++20, or `native objcpp` for Objective-C++ on macOS. Every native declaration in a script uses the same language. Set `cgd_native/default_language` to `"cpp"` to use C++ for unqualified `native` declarations. The default is C17. The Godot-facing types remain the native CGD ABI types, so C++ containers and Objective-C objects stay inside the native implementation. Exceptions raised by C++ are caught at the ABI boundary and logged by Godot.
+A script can use `native cpp { ... }` and `native cpp int f() { ... }` to compile using `cgd_native/cpp_standard` (C++20 by default), or `native objcpp` for Objective-C++ on macOS. Every native declaration in a script uses the same language. Set `cgd_native/default_language` to `"cpp"` to use C++ for unqualified `native` declarations. The default is C17. The Godot-facing types remain the native CGD ABI types, so C++ containers and Objective-C objects stay inside the native implementation. Exceptions raised by C++ are caught at the ABI boundary and logged by Godot.
 
-For macOS frameworks, add entries such as `"-framework AppKit"` to the target's `libraries` array. The target's optional `cxx_flags` array accepts supported C++ standard, optimization, and RTTI options. Exceptions remain enabled for the ABI wrapper.
+For macOS frameworks, add entries such as `"-framework AppKit"` to the target's `libraries` array. The target's optional `cxx_flags` array accepts supported optimization and RTTI options. Exceptions remain enabled for the ABI wrapper.
 
 
 Native parameters also support read-only `PackedByteArray` views. Use `static native` for a static script method. Native builds use `-O2` or `/O2`. The runtime checks the native ABI and engine precision before dispatch, so rebuild native exports and their templates together after updating.
@@ -136,3 +136,8 @@ The follow-up audit covers explicit `.gd` checks and language-extension comparis
 C++ and Objective-C++ can also use `cgd::print`, `cgd::print_warning`, and `cgd::print_error` with printable values. These join arguments without adding spaces. Strings, numbers, and booleans work, as do streamable types and custom formatters on standard libraries that provide `std::format`.
 
 Use matching editor and export templates with the logging ABI. The host registers logging when loading the native library. Calls made before registration, such as from native static initializers, write to stderr.
+
+
+### Project language standards
+
+Set **Project Settings → Cgd Native → C Standard** to `c11`, `c17`, `c23`, `gnu11`, `gnu17`, or `gnu23`. Set **Cpp Standard** to `c++20`, `c++23`, `gnu++20`, or `gnu++23`. The defaults are `c17` and `c++20`. Objective-C++ uses the C++ setting. The same settings apply to compilation, editor analysis, Run, and exports. Clang and GCC can use the GNU dialects. MSVC supports the ISO choices and maps C23 and C++23 to its latest modes. The compiler must support the requested dialect. Move any existing standard flag from `cxx_flags` to the project-wide setting.

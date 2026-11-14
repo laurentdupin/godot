@@ -224,6 +224,8 @@ static void _editor_init() {
 
 void initialize_gdscript_module(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SERVERS) {
+		GLOBAL_DEF(PropertyInfo(Variant::STRING, "cgd_native/c_standard", PROPERTY_HINT_ENUM, "c11,c17,c23,gnu11,gnu17,gnu23"), "c17");
+		GLOBAL_DEF(PropertyInfo(Variant::STRING, "cgd_native/cpp_standard", PROPERTY_HINT_ENUM, "c++20,c++23,gnu++20,gnu++23"), "c++20");
 		GDREGISTER_CLASS(GDScript);
 		GDREGISTER_INTERNAL_CLASS(GDScriptFunctionState);
 		GDREGISTER_ABSTRACT_CLASS(GDCNative);

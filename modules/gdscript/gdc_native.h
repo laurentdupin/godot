@@ -69,6 +69,8 @@ class GDCNative : public Object {
 	};
 	WorkerThreadPool::TaskID completion_task = WorkerThreadPool::INVALID_TASK_ID;
 	HashMap<ObjectID, CompletionRequest> pending_completions;
+	uint64_t completion_revision = 0;
+	uint64_t active_completion_revision = 0;
 	CompletionResult completion_result;
 	CompletionResult worker_completion_result;
 	void start_completion();
@@ -102,6 +104,7 @@ public:
 	Error build_export(const Vector<NativeUnit> &p_units, const String &p_platform, const String &p_arch, String &r_library, String &r_error, Vector<Ref<DirAccess>> &r_workspaces, MergedRunCache *r_run_cache = nullptr);
 #ifdef TOOLS_ENABLED
 	static bool prepare_editor_run();
+	void invalidate_native_completion();
 	void request_analysis(ObjectID p_editor, const String &p_path, const String &p_code, const Callable &p_callback, bool p_check_build = false);
 	void request_project_check(ObjectID p_editor, const Callable &p_callback);
 	static bool is_native_position(const String &p_code, const String &p_path, int p_row, int p_column);
