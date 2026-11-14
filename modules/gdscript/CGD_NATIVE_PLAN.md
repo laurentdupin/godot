@@ -349,3 +349,12 @@ At the end of Stage 1, Phases 1–8 are complete and the pilot is in production.
 - Native code calling back into Godot (objects, signals, the GDExtension interface). That's what GDExtension is for.
 - Unloading or reloading native libraries inside the editor process.
 - C#, web and iOS targets.
+
+
+### Step 12 workload evaluation
+
+The macOS lifecycle port passed the single-instance and activation smoke tests, including a separate duplicate process and a signed arm64 app export. The Windows lifecycle smoke still passes.
+
+The paragraph evaluation used 300 synthetic OCR detections with per-character rectangles. On macOS arm64 the existing native detector took about 8.0 ms, the CGD script fallback took 153 ms, and flattening inputs and rebuilding mock groups took 3.4 ms. The prototype did not run the grouping algorithm through CGD or reconstruct full paragraph metadata. The measured bridge cost does not establish a production speedup over the existing native detector, so the detector remains in the extension.
+
+The evaluated production workloads call native once per capture or OCR batch, or on lifecycle events. No measured workload justified a handle-based wrapper in Step 13.
