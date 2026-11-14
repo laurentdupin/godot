@@ -1499,6 +1499,24 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 	callable_mp(this, &GDCNative::finish_analysis).call_deferred(p_request.path, p_request.code, p_request.callback, diagnostics, symbols);
 }
 
+int GDCNative::has_native_code(const String &p_code, const String &p_path) {
+	// Mentioning the word (a comment, a string, a path such as res://native_x.cgd)
+	// isn't native code: only a parsed native block or function is.
+	if (!p_code.contains("native")) {
+		return 0;
+	}
+	String generated;
+	String error;
+	String native_source;
+	GDC::SourceMap map;
+	int line = 1;
+	int column = 1;
+	if (GDCFrontend::transpile(p_code, generated, map, error, line, column, false, { 0, 0 }, p_path, &native_source) != OK) {
+		return -1;
+	}
+	return native_source.is_empty() ? 0 : 1;
+}
+
 bool GDCNative::is_native_position(const String &p_code, const String &p_path, int p_row, int p_column) {
 	String generated;
 	String error;

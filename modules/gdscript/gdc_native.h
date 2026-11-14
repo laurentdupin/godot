@@ -108,6 +108,8 @@ public:
 	void request_analysis(ObjectID p_editor, const String &p_path, const String &p_code, const Callable &p_callback, bool p_check_build = false);
 	void request_project_check(ObjectID p_editor, const Callable &p_callback);
 	static bool is_native_position(const String &p_code, const String &p_path, int p_row, int p_column);
+	// 1 if the script declares native code, 0 if it doesn't, -1 if it doesn't parse (unknown).
+	static int has_native_code(const String &p_code, const String &p_path);
 	static bool complete_code(const String &p_code, const String &p_path, List<ScriptLanguage::CodeCompletionOption> &r_options, String &r_call_hint, const String &p_symbol = String(), String *r_prototype = nullptr);
 	bool complete_in_editor(ObjectID p_editor, const String &p_code, const String &p_path, const Callable &p_callback, List<ScriptLanguage::CodeCompletionOption> &r_options, String &r_hint);
 	void request_native_hover(ObjectID p_editor, const String &p_code, const String &p_path, const String &p_symbol, const Callable &p_callback);

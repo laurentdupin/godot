@@ -984,7 +984,15 @@ void ScriptTextEditor::_validate_script() {
 
 #ifdef MODULE_GDSCRIPT_ENABLED
 	const uint64_t revision = ++native_analysis_revision;
-	has_native_code = script->get_path().has_extension("cgd") && text.contains("native");
+	if (!script->get_path().has_extension("cgd")) {
+		has_native_code = false;
+	} else {
+		// Keep the last known answer while the script has a syntax error.
+		const int native = GDCNative::has_native_code(text, script->get_path());
+		if (native >= 0) {
+			has_native_code = native == 1;
+		}
+	}
 	if (has_native_code &&
 			EDITOR_GET("text_editor/cgd/live_native_diagnostics").booleanize()) {
 		const double delay = double(EDITOR_GET("text_editor/cgd/native_diagnostics_delay_ms")) / 1000.0;
@@ -1056,9 +1064,13 @@ void ScriptTextEditor::_native_diagnostics_finished(const String &p_path, const 
 			native_warnings.push_back({ line, column, line, end_column, "NATIVE_C_WARNING", "C: " + message });
 		}
 	}
-	_update_errors();
-	_update_warnings();
-	_update_background_color();
+	// A tab that was never shown has no gutters yet; it applies the stored
+	// results when it is first opened and validated.
+	if (editor_enabled) {
+		_update_errors();
+		_update_warnings();
+		_update_background_color();
+	}
 }
 
 void ScriptTextEditor::_native_compile_finished(const String &p_path, const String &p_code, const Array &p_diagnostics, const Dictionary &p_symbols) {
@@ -1093,8 +1105,10 @@ void ScriptTextEditor::_native_build_finished(const String &p_path, const String
 			native_build_errors.push_back({ p_path, line, column, line, MIN(column + 1, text->get_line(line - 1).length() + 1), diagnostic["error"] });
 		}
 	}
-	_update_errors();
-	_update_background_color();
+	if (editor_enabled) {
+		_update_errors();
+		_update_background_color();
+	}
 }
 
 void ScriptTextEditor::_check_native_script() {
@@ -1120,7 +1134,9 @@ void ScriptTextEditor::_native_project_check_finished(const String &p_path, cons
 				Array report;
 				report.push_back(diagnostic);
 				report.append_array(diagnostic["positioned"]);
-				editor->_native_build_finished(path, diagnostic["source"], report, Dictionary());
+				// The check reads the file from disk; the editor buffer always uses LF.
+				const String source = String(diagnostic["source"]).replace("\r\n", "\n");
+				editor->_native_build_finished(path, source, report, Dictionary());
 				editor->emit_signal(SNAME("_validation_updated"));
 				routed = true;
 				break;
@@ -1278,7 +1294,8 @@ void ScriptTextEditor::_update_errors() {
 	bool last_is_safe = false;
 	CodeEdit *te = code_editor->get_text_editor();
 
-	for (int i = 0; i < te->get_line_count(); i++) {
+	// The gutter indexes are only known once the code editor is enabled.
+	for (int i = 0; line_number_gutter >= 0 && i < te->get_line_count(); i++) {
 		if (highlight_safe) {
 			if (safe_lines.has(i + 1)) {
 				te->set_line_gutter_item_color(i, line_number_gutter, safe_line_number_color);
@@ -2169,7 +2186,7 @@ void ScriptTextEditor::_notification(int p_what) {
 #ifdef MODULE_GDSCRIPT_ENABLED
 	if (p_what == NOTIFICATION_APPLICATION_FOCUS_IN && edited_res.is_valid() && edited_res->get_path().get_extension().to_lower() == "cgd") {
 		const String code = code_editor->get_text_editor()->get_text();
-		if (code.contains("native") && EDITOR_GET("text_editor/cgd/live_native_diagnostics").booleanize()) {
+		if (has_native_code && EDITOR_GET("text_editor/cgd/live_native_diagnostics").booleanize()) {
 			GDCNative::get_singleton()->request_analysis(get_instance_id(), edited_res->get_path(), code, callable_mp(this, &ScriptTextEditor::_native_diagnostics_finished));
 		}
 	}
