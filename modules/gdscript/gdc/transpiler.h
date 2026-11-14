@@ -69,6 +69,8 @@ struct Result {
 	std::u32string native_code;
 	std::vector<std::pair<size_t, size_t>> native_line_numbers;
 	std::vector<size_t> native_library_id_offsets;
+	std::vector<size_t> native_wrapper_symbol_offsets;
+	std::vector<size_t> native_c_symbol_offsets;
 	std::vector<NativeBody> native_bodies;
 	size_t native_completion_offset = std::u32string::npos;
 	SourceMap map;

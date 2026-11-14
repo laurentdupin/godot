@@ -1209,6 +1209,7 @@ class Frontend {
 			c_args += c_args.empty() ? U"cgd_out" : U", cgd_out";
 		}
 		std::u32string symbol = U"cgd_native_";
+		symbol += U"0000000000000000_";
 		for (char c : std::to_string(next_native++)) {
 			symbol.push_back(c);
 		}
@@ -1221,6 +1222,7 @@ class Frontend {
 		native_functions += U"\n";
 		native_functions += U"#line 1 \"<" + symbol + U">\"\n";
 		const std::u32string signature = std::u32string(1, return_type->signature) + arg_types;
+		result.native_c_symbol_offsets.push_back(native_functions.size() + std::u32string(U"CGD_EXPORT bool cgd_native_").size());
 		native_functions += U"CGD_EXPORT bool " + symbol + U"(const char *signature, const CGDNativeValue *args, CGDNativeValue *result, CGDAllocator *cgd_out CGD_ANDROID_PARAMETERS) {\n"
 																						 U"\tif (strcmp(signature, \"" +
 				signature + U"\") != 0) { return false; }\n\tCGD_ANDROID_ENTER;\n\t";
@@ -1235,6 +1237,7 @@ class Frontend {
 		call += U"CGDNative.invoke_v3(" + native_path_literal() + U", &\"";
 		start(origin);
 		result.native_library_id_offsets.push_back(result.code.size() + call.size());
+		result.native_wrapper_symbol_offsets.push_back(result.code.size() + call.size() + options.native_library_id.size() + std::u32string(U"\", &\"cgd_native_").size());
 		call += options.native_library_id + U"\", &\"" +
 				symbol + U"\", &\"" + signature + U"\", [" + gd_args + U"])";
 		line(call, origin);
@@ -1456,8 +1459,8 @@ public:
 									 U"typedef struct { void *ctx; void *(*alloc)(void *, int64_t); } CGDAllocator;\n"
 									 U"static inline void *cgd_out_alloc(CGDAllocator *out, int64_t count) { return out->alloc(out->ctx, count); }\n"
 									 U"typedef union { int64_t integer; double floating; bool boolean; CGDBytes bytes; CGDInt32s int32s; CGDInt64s int64s; CGDFloat32s float32s; CGDFloat64s float64s; CGDVector2s vector2s; CGDVector3s vector3s; CGDString string; } CGDNativeValue;\n"
-									 U"CGD_EXPORT uint32_t cgd_native_abi_v3(void) {\n"
-									 U"    return (CGD_REAL_BITS << 16) | (sizeof(CGDNativeValue) << 8) | _Alignof(CGDNativeValue);\n}\n";
+									 U"#ifndef CGD_MERGED_EXPORT\nCGD_EXPORT uint32_t cgd_native_abi_v3(void) {\n"
+									 U"    return (CGD_REAL_BITS << 16) | (sizeof(CGDNativeValue) << 8) | _Alignof(CGDNativeValue);\n}\n#endif\n";
 				if (native_declaration_cursor != NO_INDEX) {
 					result.native_completion_offset = result.native_code.size() + native_declaration_cursor;
 				} else if (native_function_cursor != NO_INDEX) {
@@ -1474,6 +1477,9 @@ public:
 				}
 				for (const auto &body : function_bodies) {
 					result.native_bodies.push_back({ body.original, result.native_code.size() + native_declarations.size() + body.offset, body.function_name });
+				}
+				for (size_t &offset : result.native_c_symbol_offsets) {
+					offset += result.native_code.size() + native_declarations.size();
 				}
 				result.native_code += native_declarations + native_functions;
 			}

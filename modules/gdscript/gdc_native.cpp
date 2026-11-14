@@ -31,7 +31,7 @@ GDCNative *GDCNative::singleton = nullptr;
 
 namespace {
 
-constexpr int NATIVE_BUILD_SCHEMA = 5;
+constexpr int NATIVE_BUILD_SCHEMA = 6;
 
 union NativeValue {
 	int64_t integer;
@@ -675,7 +675,7 @@ static Array positioned_build_errors(const String &p_path, const String &p_nativ
 			String message = match->get_string(5);
 			const String filename = match->get_string(1);
 			if (filename.begins_with("<cgd_native_") && filename.ends_with(">")) {
-				int function_index = filename.substr(12, filename.length() - 13).to_int();
+				int function_index = filename.left(filename.length() - 1).get_slice("_", 3).to_int();
 				for (const auto &body : p_bodies) {
 					if (!body.function_name.empty() && function_index-- == 0) {
 						error_line = body.original.line;
@@ -722,6 +722,7 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 			const String platform = OS::get_singleton()->get_name().to_lower();
 			const String arch = Engine::get_singleton()->get_architecture_name();
 			HashMap<String, Dictionary> stamps;
+			Vector<NativeUnit> units;
 			for (const String &path : p_request.project_paths) {
 				const String code = FileAccess::get_file_as_string(path);
 				if (!code.contains("native")) {
@@ -729,8 +730,11 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 				}
 				String id;
 				String library;
-				if (GDCFrontend::transpile(code, generated, map, error, line, column, false, { 0, 0 }, path, &native_source, nullptr, &id, &bodies) != OK ||
-						native_source.is_empty() || build(path, id, native_source, library, error, platform, arch, true, &stamps) == OK) {
+				if (GDCFrontend::transpile(code, generated, map, error, line, column, false, { 0, 0 }, path, &native_source, nullptr, &id, &bodies) != OK || native_source.is_empty()) {
+					continue;
+				}
+				units.push_back({ path, id, native_source });
+				if (build(path, id, native_source, library, error, platform, arch, true, &stamps) == OK) {
 					continue;
 				}
 				Dictionary failure;
@@ -741,6 +745,23 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 				failure["positioned"] = positioned_build_errors(path, native_source, bodies, error);
 				failure["error"] = error;
 				diagnostics.push_back(failure);
+			}
+			if (!units.is_empty() && diagnostics.is_empty()) {
+				String library;
+				if (build_export(units, platform, arch, library, error) != OK) {
+					Dictionary failure;
+					failure["error"] = error;
+					for (const NativeUnit &unit : units) {
+						if (error.begins_with(unit.path + ":")) {
+							failure["path"] = unit.path;
+							failure["source"] = FileAccess::get_file_as_string(unit.path);
+							failure["line"] = 1;
+							failure["column"] = 1;
+							break;
+						}
+					}
+					diagnostics.push_back(failure);
+				}
 			}
 			callable_mp(this, &GDCNative::finish_analysis).call_deferred(p_request.path, p_request.code, p_request.callback, diagnostics, symbols);
 			return;
@@ -854,7 +875,7 @@ void GDCNative::analyze(AnalysisRequest p_request) {
 					int generated_body = -1;
 					if (entry.begins_with("<cgd_native_")) {
 						const int end = entry.find(">");
-						const String number = entry.substr(12, end - 12);
+						const String number = entry.left(end).get_slice("_", 3);
 						if (end >= 0 && number.is_valid_int()) {
 							const int index = int(number.to_int());
 							int function = 0;
@@ -1362,6 +1383,262 @@ Error GDCNative::build(const String &p_path, const String &p_id, const String &p
 #endif
 }
 
+Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p_platform, const String &p_arch, String &r_library, String &r_error) {
+#ifdef TOOLS_ENABLED
+	NativeTarget target;
+	const Error target_error = resolve_target(p_platform, p_arch, target, r_error);
+	if (target_error != OK) {
+		return target_error;
+	}
+	const bool windows = target.uses_msvc_flags();
+	const bool macos = p_platform == "macos";
+	if (macos && p_arch == "universal") {
+		String x64;
+		String arm64;
+		Error error = build_export(p_units, p_platform, "x86_64", x64, r_error);
+		if (error != OK) {
+			return error;
+		}
+		error = build_export(p_units, p_platform, "arm64", arm64, r_error);
+		if (error != OK) {
+			return error;
+		}
+		const String output_dir = x64.get_base_dir().path_join("universal");
+		DirAccess::make_dir_recursive_absolute(output_dir);
+		r_library = output_dir.path_join("libcgd_native.dylib");
+		int status = -1;
+		if (capture_compiler("/usr/bin/lipo", { "-create", x64, arm64, "-output", r_library }, r_error, &status) != OK || status != 0) {
+			return ERR_COMPILATION_FAILED;
+		}
+		return OK;
+	}
+	Error temp_error = OK;
+	Ref<DirAccess> workspace = DirAccess::create_temp("cgd-export", false, &temp_error);
+	if (workspace.is_null()) {
+		r_error = "Cannot create CGD native export directory.";
+		return ERR_CANT_CREATE;
+	}
+	const String directory = workspace->get_current_dir();
+	const String filename = windows ? "cgd_native.dll" : macos ? "libcgd_native.dylib"
+															   : "libcgd_native.so";
+	List<String> objects;
+	String symbol_tool;
+#ifdef WINDOWS_ENABLED
+	symbol_tool = find_clang_cl().get_base_dir().path_join("llvm-nm.exe");
+	if (!FileAccess::exists(symbol_tool)) {
+		symbol_tool = find_on_path("llvm-nm.exe");
+	}
+#else
+	symbol_tool = macos ? "/usr/bin/nm" : find_on_path("nm");
+#endif
+	if (symbol_tool.is_empty()) {
+		r_error = "CGD native exports need nm to validate native helper linkage.";
+		return ERR_FILE_NOT_FOUND;
+	}
+	HashMap<String, Dictionary> stamps;
+	const Dictionary compiler_stamp = input_stamp(target.compiler, Dictionary(), &stamps);
+	const String cache_root = native_path(ProjectSettings::get_singleton()->get_project_data_path().path_join("cgd_native/export").path_join(p_platform).path_join(p_arch));
+	DirAccess::make_dir_recursive_absolute(cache_root);
+	String helper_errors;
+	for (const NativeUnit &unit : p_units) {
+		const String source = directory.path_join(unit.id + ".c");
+		const String object = directory.path_join(unit.id + (windows ? ".obj" : ".o"));
+		const String deps = directory.path_join(unit.id + ".d");
+		const String manifest_path = cache_root.path_join(unit.id + ".manifest");
+		const String cached_object = cache_root.path_join(object.get_file());
+		List<String> args = language_flags(target);
+		args.push_back(windows ? "/O2" : "-O2");
+		args.push_back(windows ? "/DCGD_MERGED_EXPORT" : "-DCGD_MERGED_EXPORT");
+		const Error input_error = add_compile_inputs(args, unit.path, target, r_error);
+		if (input_error != OK) {
+			return input_error;
+		}
+		Array configuration;
+		configuration.push_back(NATIVE_BUILD_SCHEMA);
+		configuration.push_back(target.compiler);
+		configuration.push_back(compiler_stamp);
+		for (const String &arg : args) {
+			configuration.push_back(arg);
+		}
+		for (const char *name : { "PATH", "INCLUDE", "CPATH", "C_INCLUDE_PATH", "SDKROOT", "DEVELOPER_DIR", "MACOSX_DEPLOYMENT_TARGET", "CL", "_CL_" }) {
+			configuration.push_back(OS::get_singleton()->get_environment(name));
+		}
+		const String fingerprint = String(Variant(configuration)).sha256_text();
+		Ref<FileAccess> manifest = FileAccess::open(manifest_path, FileAccess::READ);
+		if (manifest.is_valid() && FileAccess::exists(cached_object)) {
+			const Variant data = manifest->get_var();
+			if (data.get_type() == Variant::DICTIONARY) {
+				const Dictionary entry = data;
+				const Dictionary dependencies = entry.get("dependencies", Dictionary());
+				bool fresh = entry.get("fingerprint", String()) == Variant(fingerprint);
+				for (const KeyValue<Variant, Variant> &dependency : dependencies) {
+					const String header = dependency.key;
+					fresh = fresh && FileAccess::exists(header) && input_stamp(header, dependency.value, nullptr) == Dictionary(dependency.value);
+				}
+				if (fresh) {
+					objects.push_back(cached_object);
+					print_verbose("CGD native export object cache hit: " + unit.path);
+					continue;
+				}
+			}
+		}
+		manifest.unref();
+		Ref<FileAccess> file = FileAccess::open(source, FileAccess::WRITE);
+		if (file.is_null() || !file->store_string(unit.source)) {
+			r_error = "Cannot write native export source: " + unit.path;
+			return ERR_CANT_CREATE;
+		}
+		file.unref();
+		if (windows) {
+			args.push_back("/c");
+			args.push_back("/Fo" + object);
+			if (target.toolchain == "msvc") {
+				args.push_back("/sourceDependencies");
+				args.push_back(deps);
+			} else {
+				args.push_back("/clang:-MD");
+				args.push_back("/clang:-MF");
+				args.push_back("/clang:" + deps);
+			}
+		} else {
+			args.push_back("-c");
+			args.push_back("-fPIC");
+			args.push_back("-fvisibility=hidden");
+			args.push_back("-MD");
+			args.push_back("-MF");
+			args.push_back(deps);
+			args.push_back("-o");
+			args.push_back(object);
+		}
+		args.push_back(source);
+		int status = -1;
+		String output;
+		print_verbose("Compiling CGD native export object: " + unit.path);
+		if (capture_compiler(target.compiler, args, output, &status) != OK || status != 0 || !FileAccess::exists(object)) {
+			r_error = unit.path + ": " + output;
+			return ERR_COMPILATION_FAILED;
+		}
+		String symbols;
+		const List<String> symbol_args = macos ? List<String>{ "-g", "-U", "-j", object } : List<String>{ "--extern-only", "--defined-only", "--format=just-symbols", object };
+		if (capture_compiler(symbol_tool, symbol_args, symbols, &status) != OK || status != 0) {
+			r_error = unit.path + ": Cannot inspect native object symbols.\n" + symbols;
+			return ERR_COMPILATION_FAILED;
+		}
+		bool invalid_helpers = false;
+		for (const String &line : symbols.split("\n", false)) {
+			const String symbol = line.strip_edges().trim_prefix(macos ? "_" : "");
+			if (!symbol.is_empty() && !symbol.begins_with("cgd_native_" + unit.id.left(16) + "_") && symbol != "@feat.00" && symbol != "_fltused" && symbol != "__fltused") {
+				helper_errors += unit.path + ": Native helpers must be static (scripts are linked together on export): " + symbol + "\n";
+				invalid_helpers = true;
+			}
+		}
+		if (invalid_helpers) {
+			continue;
+		}
+		const PackedStringArray headers = target.toolchain == "msvc" ? msvc_dependencies(deps) : compiler_dependencies(deps);
+		Dictionary dependencies;
+		for (const String &header : headers) {
+			if (header != source && FileAccess::exists(header)) {
+				dependencies[header] = input_stamp(header, Dictionary(), &stamps);
+			}
+		}
+		Dictionary entry;
+		entry["fingerprint"] = fingerprint;
+		entry["dependencies"] = dependencies;
+		if (FileAccess::exists(deps) && DirAccess::copy_absolute(object, cached_object) == OK) {
+			manifest = FileAccess::open(manifest_path, FileAccess::WRITE);
+			if (manifest.is_valid() && manifest->store_var(entry)) {
+				objects.push_back(cached_object);
+				continue;
+			}
+		}
+		objects.push_back(object);
+	}
+	if (!helper_errors.is_empty()) {
+		r_error = helper_errors;
+		return ERR_INVALID_DATA;
+	}
+	const String abi_source = directory.path_join("abi.c");
+	const String abi_object = directory.path_join(windows ? "abi.obj" : "abi.o");
+	const String preamble = p_units[0].source.get_slice("\n#line ", 0);
+	Ref<FileAccess> abi_file = FileAccess::open(abi_source, FileAccess::WRITE);
+	if (abi_file.is_null() || !abi_file->store_string(preamble)) {
+		return ERR_CANT_CREATE;
+	}
+	abi_file.unref();
+	List<String> abi_args = language_flags(target);
+	if (windows) {
+		abi_args.push_back("/c");
+		abi_args.push_back("/Fo" + abi_object);
+	} else {
+		abi_args.push_back("-fPIC");
+		abi_args.push_back("-c");
+		abi_args.push_back("-o");
+		abi_args.push_back(abi_object);
+	}
+	abi_args.push_back(abi_source);
+	int abi_status = -1;
+	if (capture_compiler(target.compiler, abi_args, r_error, &abi_status) != OK || abi_status != 0) {
+		return ERR_COMPILATION_FAILED;
+	}
+	objects.push_back(abi_object);
+	const String library = directory.path_join(filename);
+	List<String> link;
+	if (windows) {
+		link = { "/nologo", "/LD", "/MT" };
+		if (target.toolchain == "clang-cl") {
+			link.push_back("--target=" + target.triple);
+		}
+	} else {
+		link = { macos ? "-dynamiclib" : "-shared", "-o", library };
+		if (!target.triple.is_empty()) {
+			link.push_back("--target=" + target.triple);
+		}
+		if (macos) {
+			link.push_back("-arch");
+			link.push_back(p_arch);
+			link.push_back("-Wl,-install_name,@rpath/" + filename);
+			link.push_back("-Wl,-rpath,@loader_path");
+		} else {
+			link.push_back("-Wl,--no-undefined");
+			link.push_back("-Wl,-soname," + filename);
+			link.push_back("-Wl,-rpath,$ORIGIN");
+		}
+	}
+	for (const String &object : objects) {
+		link.push_back(object);
+	}
+	if (windows) {
+		link.push_back("/link");
+		link.push_back("/OUT:" + library);
+		link.push_back("/IMPLIB:" + directory.path_join("cgd_native.lib"));
+	}
+	for (const String &entry : target_array("library_dirs", p_platform, p_arch)) {
+		link.push_back((windows ? "/LIBPATH:" : "-L") + native_path(entry));
+	}
+	for (const String &entry : target_array("libraries", p_platform, p_arch)) {
+		if ((windows && entry.begins_with("/")) || entry.begins_with("-") || entry.begins_with("@")) {
+			r_error = "Expected a library name or path in CGD native libraries: " + entry;
+			return ERR_INVALID_PARAMETER;
+		}
+		link.push_back(!windows && entry.is_valid_ascii_identifier() ? "-l" + entry : native_path(entry));
+	}
+	int status = -1;
+	if (capture_compiler(target.compiler, link, r_error, &status) != OK || status != 0 || !FileAccess::exists(library)) {
+		return ERR_COMPILATION_FAILED;
+	}
+	r_library = library;
+	{
+		MutexLock lock(build_mutex);
+		export_directories.push_back(workspace);
+	}
+	return OK;
+#else
+	r_error = "CGD native exports require an editor build.";
+	return ERR_UNAVAILABLE;
+#endif
+}
+
 Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const StringName &p_symbol, const StringName &p_signature, const Array &p_args) {
 	OS *os = OS::get_singleton();
 	NativeFunctionEntry function;
@@ -1378,7 +1655,7 @@ Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const St
 			const String id = p_id;
 			const String symbol_name = p_symbol;
 			ERR_FAIL_COND_V_MSG(id.length() != 64 || !id.is_valid_hex_number(false), Variant(), "Invalid CGD native library identifier.");
-			ERR_FAIL_COND_V_MSG(!symbol_name.begins_with("cgd_native_") || !symbol_name.substr(11).is_valid_int(), Variant(), "Invalid CGD native function identifier.");
+			ERR_FAIL_COND_V_MSG(!symbol_name.begins_with("cgd_native_") || !symbol_name.get_slice("_", 3).is_valid_int() || !symbol_name.begins_with("cgd_native_" + id.left(16) + "_"), Variant(), "Invalid CGD native function identifier.");
 			const CharString signature = p_signature.string().utf8();
 			ERR_FAIL_COND_V_MSG(signature.length() != p_args.size() + 1, Variant(), "Invalid CGD native function signature.");
 			void **cached = libraries.getptr(p_id);
@@ -1386,12 +1663,14 @@ Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const St
 			if (!library) {
 				String dll;
 #ifdef ANDROID_ENABLED
-				dll = library_filename("android", p_id);
+				dll = "libcgd_native.so";
 #else
 				const String platform = os->get_name().to_lower();
 				if (ProjectSettings::get_singleton()->is_using_datapack()) {
 					const String directory = platform == "macos" ? "../Frameworks" : "cgd_native";
-					dll = os->get_executable_path().get_base_dir().path_join(directory).path_join(library_filename(platform, p_id)).simplify_path();
+					dll = os->get_executable_path().get_base_dir().path_join(directory).path_join(platform == "windows" ? "cgd_native.dll" : platform == "macos" ? "libcgd_native.dylib"
+																																								 : "libcgd_native.so")
+								  .simplify_path();
 				} else {
 					const String arch = Engine::get_singleton()->get_architecture_name();
 					const bool prebuilt = os->get_environment("GODOT_CGD_NATIVE_PREBUILT") == ProjectSettings::get_singleton()->get_resource_path();
@@ -1428,7 +1707,12 @@ Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const St
 #ifndef ANDROID_ENABLED
 				ERR_FAIL_COND_V_MSG(!FileAccess::exists(dll), Variant(), "Cannot find CGD native library: " + dll);
 #endif
-				if (void **loaded = libraries.getptr(p_id)) {
+#ifdef ANDROID_ENABLED
+				const String library_key = dll;
+#else
+				const String library_key = ProjectSettings::get_singleton()->is_using_datapack() ? dll : id;
+#endif
+				if (void **loaded = libraries.getptr(library_key)) {
 					library = *loaded;
 				} else {
 					ERR_FAIL_COND_V_MSG(os->open_dynamic_library(dll, library, &options) != OK, Variant(), "Cannot load CGD native library: " + dll);
@@ -1438,7 +1722,7 @@ Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const St
 						os->close_dynamic_library(library);
 						ERR_FAIL_V_MSG(Variant(), "Incompatible CGD native ABI or engine precision. Rebuild the native library: " + dll);
 					}
-					libraries.insert(p_id, library);
+					libraries.insert(library_key, library);
 				}
 			}
 			ERR_FAIL_COND_V_MSG(os->get_dynamic_library_symbol_handle(library, symbol_name, function.address) != OK, Variant(), "Missing CGD native function: " + symbol_name);

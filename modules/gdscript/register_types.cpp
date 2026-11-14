@@ -89,12 +89,12 @@ class GDScriptExportPlugin : public EditorExportPlugin {
 
 	static constexpr EditorExportPreset::ScriptExportMode DEFAULT_SCRIPT_MODE = EditorExportPreset::MODE_SCRIPT_BINARY_TOKENS_COMPRESSED;
 	EditorExportPreset::ScriptExportMode script_mode = DEFAULT_SCRIPT_MODE;
-	HashSet<String> native_runtime_added;
+	HashMap<String, Vector<GDCNative::NativeUnit>> native_units;
 
 protected:
 	virtual void _export_begin(const HashSet<String> &p_features, bool p_debug, const String &p_path, int p_flags) override {
 		script_mode = DEFAULT_SCRIPT_MODE;
-		native_runtime_added.clear();
+		native_units.clear();
 
 		const Ref<EditorExportPreset> &preset = get_export_preset();
 		if (preset.is_valid()) {
@@ -160,19 +160,7 @@ protected:
 					error = p_path + ": CGD native C requires a supported desktop or Android export target.";
 				}
 				for (const String &arch : targets) {
-					String dll;
-					if (GDCNative::get_singleton()->build(p_path, native_id, native_source, dll, error, platform, arch) != OK) {
-						break;
-					}
-					const Vector<String> tags = android ? Vector<String>{ arch } : Vector<String>();
-					const String destination = android || platform == "macos" ? String() : String("cgd_native");
-					add_shared_object(dll, tags, destination);
-					if (!native_runtime_added.has(arch)) {
-						for (const String &library : GDCNative::runtime_libraries(platform, arch)) {
-							add_shared_object(ProjectSettings::get_singleton()->globalize_path(library), tags, destination);
-						}
-						native_runtime_added.insert(arch);
-					}
+					native_units[arch].push_back({ p_path, native_id, native_source });
 				}
 			}
 		}
@@ -181,6 +169,33 @@ protected:
 			fail_export(ERR_INVALID_DATA); // Consumed by EditorExportPlatform's per-plugin check.
 			skip(); // Never silently package failed source as successful compiled output.
 		}
+	}
+
+	virtual void _export_finalize_files() override {
+		if (native_units.is_empty()) {
+			return;
+		}
+		const String platform = get_export_preset()->get_platform()->get_os_name().to_lower();
+		for (const auto &entry : native_units) {
+			String library;
+			String error;
+			if (GDCNative::get_singleton()->build_export(entry.value, platform, entry.key, library, error) != OK) {
+				get_export_preset()->get_platform()->add_message(EditorExportPlatform::EXPORT_MESSAGE_ERROR, "GDScript / GD-C", error);
+				fail_export(ERR_COMPILATION_FAILED);
+				return;
+			}
+			const Vector<String> tags = platform == "android" ? Vector<String>{ entry.key } : Vector<String>();
+			const String destination = platform == "windows" || platform == "linux" ? String("cgd_native") : String();
+			add_shared_object(library, tags, destination);
+			for (const String &runtime : GDCNative::runtime_libraries(platform, entry.key)) {
+				add_shared_object(ProjectSettings::get_singleton()->globalize_path(runtime), tags, destination);
+			}
+		}
+		native_units.clear();
+	}
+
+	virtual void _export_end() override {
+		native_units.clear();
 	}
 
 public:

@@ -87,6 +87,12 @@ Error GDCFrontend::transpile(const String &p_source, String &r_source, GDC::Sour
 		for (size_t offset : result.native_library_id_offsets) {
 			result.code.replace(offset, 64, id.get_data(), 64);
 		}
+		for (size_t offset : result.native_wrapper_symbol_offsets) {
+			result.code.replace(offset, 16, id.get_data(), 16);
+		}
+		for (size_t offset : result.native_c_symbol_offsets) {
+			result.native_code.replace(offset, 16, id.get_data(), 16);
+		}
 		if (r_native_id) {
 			*r_native_id = id;
 		}
