@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace GDC {
@@ -47,16 +48,33 @@ struct Diagnostic {
 };
 
 struct Options {
+	std::u32string script_path;
+	std::u32string native_library_id;
 	bool completion = false; // Close unfinished groups and allow a final missing semicolon.
 	uint32_t completion_line = 0; // Recovery boundary for an unfinished editor statement.
 	Position completion_cursor = { 0, 0 };
+	bool native_completion = false;
+	bool default_cpp = false;
 	uint32_t max_nesting = 128;
 	uint32_t max_source_chars = 4 * 1024 * 1024;
 	uint32_t max_output_chars = 16 * 1024 * 1024;
 };
 
 struct Result {
+	struct NativeBody {
+		Position original;
+		size_t offset;
+		std::u32string function_name;
+	};
 	std::u32string code;
+	std::u32string native_code;
+	std::u32string native_language;
+	std::vector<std::pair<size_t, size_t>> native_line_numbers;
+	std::vector<size_t> native_library_id_offsets;
+	std::vector<size_t> native_wrapper_symbol_offsets;
+	std::vector<size_t> native_c_symbol_offsets;
+	std::vector<NativeBody> native_bodies;
+	size_t native_completion_offset = std::u32string::npos;
 	SourceMap map;
 	std::vector<Diagnostic> diagnostics;
 	bool ok() const { return diagnostics.empty(); }

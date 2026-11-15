@@ -40,6 +40,7 @@
 #include "core/object/class_db.h"
 #include "core/object/editor_language.h"
 #include "core/os/keyboard.h"
+#include "core/string/char_utils.h"
 #include "editor/debugger/editor_debugger_node.h"
 #include "editor/doc/editor_help.h"
 #include "editor/docks/filesystem_dock.h"
@@ -55,6 +56,7 @@
 #include "editor/settings/editor_command_palette.h"
 #include "editor/settings/editor_settings.h"
 #include "editor/themes/editor_scale.h"
+#include "scene/gui/button.h"
 #include "scene/gui/grid_container.h"
 #include "scene/gui/menu_button.h"
 #include "scene/gui/rich_text_label.h"
@@ -62,6 +64,12 @@
 #include "scene/main/scene_tree.h"
 #include "scene/resources/style_box_flat.h"
 #include "servers/rendering/rendering_server.h"
+
+#include "modules/modules_enabled.gen.h"
+
+#ifdef MODULE_GDSCRIPT_ENABLED
+#include "modules/gdscript/gdc_native.h"
+#endif
 
 void ConnectionInfoDialog::ok_pressed() {
 }
@@ -151,6 +159,10 @@ void ScriptTextEditor::EditMenusScTE::EditMenusScTE::_update_breakpoint_list() {
 
 ScriptTextEditor::EditMenusScTE::EditMenusScTE(ScriptEditor *p_se) : EditMenusCEB(p_se, "Breakpoints") {
 	edit_menu->get_popup()->add_shortcut(ED_GET_SHORTCUT("script_text_editor/evaluate_selection"), EDIT_EVALUATE);
+#ifdef MODULE_GDSCRIPT_ENABLED
+	edit_menu->get_popup()->add_shortcut(ED_GET_SHORTCUT("script_text_editor/check_native_c"), EDIT_CHECK_NATIVE_C);
+	edit_menu->get_popup()->add_item(TTR("Check All Native Scripts"), EDIT_CHECK_ALL_NATIVE_C);
+#endif
 	_popup_move_item(EDIT_DUPLICATE_LINES, edit_menu->get_popup());
 	goto_menu->get_popup()->add_shortcut(ED_GET_SHORTCUT("script_text_editor/goto_function"), SEARCH_LOCATE_FUNCTION);
 	_popup_move_item(SEARCH_GOTO_LINE, goto_menu->get_popup(), false);
@@ -317,6 +329,14 @@ void ScriptTextEditor::_set_theme_for_script() {
 
 	Ref<Script> script = edited_res;
 	Vector<String> strings = script->get_language()->get_string_delimiters_for_path(script->get_path());
+	TypedArray<String> completion_prefixes = { ".", ",", "(", "=", "$", "@", "\"", "'" };
+	if (script->get_path().get_extension().to_lower() == "cgd") {
+		completion_prefixes.push_back(">");
+		completion_prefixes.push_back("<");
+		completion_prefixes.push_back("/");
+		completion_prefixes.push_back(":");
+	}
+	text_edit->set_code_completion_prefixes(completion_prefixes);
 	text_edit->clear_string_delimiters();
 	for (const String &string : strings) {
 		String beg = string.get_slicec(' ', 0);
@@ -745,25 +765,27 @@ void ScriptTextEditor::_update_background_color() {
 
 	// Set the warning background.
 	if (warning_line_color.a != 0.0 || warning_underline_color.a != 0.0) {
-		for (const EditorLanguage::Warning &warning : warnings) {
-			int warning_start_line = CLAMP(warning.start_line - 1, 0, te->get_line_count() - 1);
-			int warning_start_column = warning.start_column - 1;
-			int warning_end_line = CLAMP(warning.end_line - 1, 0, te->get_line_count() - 1);
-			int warning_end_column = warning.end_column - 1;
-			int folded_line_header = te->get_folded_line_header(warning_start_line);
+		for (const List<EditorLanguage::Warning> *list : { &warnings, &native_warnings }) {
+			for (const EditorLanguage::Warning &warning : *list) {
+				int warning_start_line = CLAMP(warning.start_line - 1, 0, te->get_line_count() - 1);
+				int warning_start_column = warning.start_column - 1;
+				int warning_end_line = CLAMP(warning.end_line - 1, 0, te->get_line_count() - 1);
+				int warning_end_column = warning.end_column - 1;
+				int folded_line_header = te->get_folded_line_header(warning_start_line);
 
-			if (warning_underline_color.a != 0.0) {
-				te->add_underline(warning_underline_color, warning_start_line, warning_start_column, warning_end_line, warning_end_column);
-			}
+				if (warning_underline_color.a != 0.0) {
+					te->add_underline(warning_underline_color, warning_start_line, warning_start_column, warning_end_line, warning_end_column);
+				}
 
-			if (warning_line_color.a != 0.0) {
-				// If the warning highlight is too long, only highlight the start line.
-				const int warning_max_lines = 20;
+				if (warning_line_color.a != 0.0) {
+					// If the warning highlight is too long, only highlight the start line.
+					const int warning_max_lines = 20;
 
-				te->set_line_background_color(folded_line_header, warning_line_color);
-				if (warning_end_line - warning_start_line < warning_max_lines) {
-					for (int i = warning_start_line + 1; i <= warning_end_line; i++) {
-						te->set_line_background_color(i, warning_line_color);
+					te->set_line_background_color(folded_line_header, warning_line_color);
+					if (warning_end_line - warning_start_line < warning_max_lines) {
+						for (int i = warning_start_line + 1; i <= warning_end_line; i++) {
+							te->set_line_background_color(i, warning_line_color);
+						}
 					}
 				}
 			}
@@ -772,19 +794,21 @@ void ScriptTextEditor::_update_background_color() {
 
 	// Set the error background.
 	if (marked_line_color.a != 0.0 || error_underline_color.a != 0.0) {
-		for (const EditorLanguage::ScriptError &error : errors) {
-			int error_start_line = CLAMP(error.start_line - 1, 0, te->get_line_count() - 1);
-			int error_start_column = error.start_column - 1;
-			int error_end_line = CLAMP(error.end_line - 1, 0, te->get_line_count() - 1);
-			int error_end_column = error.end_column - 1;
-			int folded_line_header = te->get_folded_line_header(error_start_line);
+		for (const List<EditorLanguage::ScriptError> *list : { &errors, &native_errors, &native_build_errors }) {
+			for (const EditorLanguage::ScriptError &error : *list) {
+				int error_start_line = CLAMP(error.start_line - 1, 0, te->get_line_count() - 1);
+				int error_start_column = error.start_column - 1;
+				int error_end_line = CLAMP(error.end_line - 1, 0, te->get_line_count() - 1);
+				int error_end_column = error.end_column - 1;
+				int folded_line_header = te->get_folded_line_header(error_start_line);
 
-			if (error_underline_color.a != 0.0) {
-				te->add_underline(error_underline_color, error_start_line, error_start_column, error_end_line, error_end_column);
-			}
+				if (error_underline_color.a != 0.0) {
+					te->add_underline(error_underline_color, error_start_line, error_start_column, error_end_line, error_end_column);
+				}
 
-			if (marked_line_color.a != 0.0) {
-				te->set_line_background_color(folded_line_header, marked_line_color);
+				if (marked_line_color.a != 0.0) {
+					te->set_line_background_color(folded_line_header, marked_line_color);
+				}
 			}
 		}
 	}
@@ -907,6 +931,15 @@ void ScriptTextEditor::_validate_script() {
 	errors.clear();
 	depended_errors.clear();
 	safe_lines.clear();
+	if (text != native_analysis_code && !text.contains("native")) {
+		native_errors.clear();
+		native_warnings.clear();
+		native_symbols.clear();
+		native_analysis_code = String();
+	}
+	if (native_build_code != text) {
+		native_build_errors.clear();
+	}
 
 	Ref<Script> script = edited_res;
 	if (!script->get_language()->get_editor_language()->validate(text, script->get_path(), &errors, &warnings, &fnc, &safe_lines)) {
@@ -949,6 +982,24 @@ void ScriptTextEditor::_validate_script() {
 	_update_errors();
 	_update_background_color();
 
+#ifdef MODULE_GDSCRIPT_ENABLED
+	const uint64_t revision = ++native_analysis_revision;
+	if (!script->get_path().has_extension("cgd")) {
+		has_native_code = false;
+	} else {
+		// Keep the last known answer while the script has a syntax error.
+		const int native = GDCNative::has_native_code(text, script->get_path());
+		if (native >= 0) {
+			has_native_code = native == 1;
+		}
+	}
+	if (has_native_code &&
+			EDITOR_GET("text_editor/cgd/live_native_diagnostics").booleanize()) {
+		const double delay = double(EDITOR_GET("text_editor/cgd/native_diagnostics_delay_ms")) / 1000.0;
+		get_tree()->create_timer(MAX(0.0, delay))->connect("timeout", callable_mp(this, &ScriptTextEditor::_request_native_diagnostics).bind(revision));
+	}
+#endif
+
 	if (!pending_dragged_exports.is_empty()) {
 		_assign_dragged_export_variables();
 	}
@@ -956,8 +1007,155 @@ void ScriptTextEditor::_validate_script() {
 	TextEditorBase::_validate_script();
 }
 
+void ScriptTextEditor::_native_settings_changed() {
+#ifdef MODULE_GDSCRIPT_ENABLED
+	const Variant c_standard = GLOBAL_GET("cgd_native/c_standard");
+	const Variant cpp_standard = GLOBAL_GET("cgd_native/cpp_standard");
+	if (c_standard == native_c_standard && cpp_standard == native_cpp_standard) {
+		return;
+	}
+	native_c_standard = c_standard;
+	native_cpp_standard = cpp_standard;
+	GDCNative::get_singleton()->invalidate_native_completion();
+	if (has_native_code) {
+		native_build_code.clear();
+		native_symbols.clear();
+		_validate_script();
+	}
+#endif
+}
+
+void ScriptTextEditor::_request_native_diagnostics(uint64_t p_revision) {
+#ifdef MODULE_GDSCRIPT_ENABLED
+	if (p_revision == native_analysis_revision && edited_res.is_valid() && EDITOR_GET("text_editor/cgd/live_native_diagnostics").booleanize()) {
+		GDCNative::get_singleton()->request_analysis(get_instance_id(), edited_res->get_path(), code_editor->get_text_editor()->get_text(), callable_mp(this, &ScriptTextEditor::_native_diagnostics_finished));
+	}
+#endif
+}
+
+void ScriptTextEditor::_native_diagnostics_finished(const String &p_path, const String &p_code, const Array &p_diagnostics, const Dictionary &p_symbols) {
+	const Ref<Script> script = edited_res;
+	const CodeEdit *text = code_editor->get_text_editor();
+	if (script.is_null() || script->get_path() != p_path || text->get_text() != p_code) {
+		return;
+	}
+	native_errors.clear();
+	native_warnings.clear();
+	native_symbols = p_symbols;
+	native_analysis_code = p_code;
+	for (const Variant &value : p_diagnostics) {
+		const Dictionary entry = value;
+		const int line = entry["line"];
+		if (line < 1 || line > text->get_line_count()) {
+			continue;
+		}
+		const String source_line = text->get_line(line - 1);
+		const int column = CLAMP(int(entry["column"]), 1, source_line.length() + 1);
+		int end_column = MIN(column + 1, source_line.length() + 1);
+		if (column <= source_line.length() && is_unicode_identifier_continue(source_line[column - 1])) {
+			while (end_column <= source_line.length() && is_unicode_identifier_continue(source_line[end_column - 1])) {
+				end_column++;
+			}
+		}
+		const String message = entry["message"];
+		if (bool(entry["error"])) {
+			native_errors.push_back({ p_path, line, column, line, end_column, "C: " + message });
+		} else {
+			native_warnings.push_back({ line, column, line, end_column, "NATIVE_C_WARNING", "C: " + message });
+		}
+	}
+	// A tab that was never shown has no gutters yet; it applies the stored
+	// results when it is first opened and validated.
+	if (editor_enabled) {
+		_update_errors();
+		_update_warnings();
+		_update_background_color();
+	}
+}
+
+void ScriptTextEditor::_native_compile_finished(const String &p_path, const String &p_code, const Array &p_diagnostics, const Dictionary &p_symbols) {
+	native_compile_pending = false;
+	_native_build_finished(p_path, p_code, p_diagnostics, p_symbols);
+	emit_signal(SNAME("_validation_updated"));
+}
+
+void ScriptTextEditor::_native_build_finished(const String &p_path, const String &p_code, const Array &p_diagnostics, const Dictionary &p_symbols) {
+	const Dictionary result = p_diagnostics[0];
+	const String error = result["error"];
+	if (error.is_empty()) {
+		print_line("Native compilation succeeded: " + p_path);
+		EditorToaster::get_singleton()->popup_str(TTR("Native compilation succeeded."));
+	} else {
+		ERR_PRINT(error);
+		EditorToaster::get_singleton()->popup_str(TTR("Native compilation failed. See Output for details."), EditorToaster::SEVERITY_ERROR);
+	}
+	const Ref<Script> script = edited_res;
+	const CodeEdit *text = code_editor->get_text_editor();
+	if (script.is_null() || script->get_path() != p_path || text->get_text() != p_code) {
+		return;
+	}
+	native_build_code = p_code;
+	native_compile_succeeded = error.is_empty();
+	native_build_errors.clear();
+	if (!error.is_empty()) {
+		for (int i = p_diagnostics.size() > 1 ? 1 : 0; i < p_diagnostics.size(); ++i) {
+			const Dictionary diagnostic = p_diagnostics[i];
+			const int line = CLAMP(int(diagnostic["line"]), 1, text->get_line_count());
+			const int column = CLAMP(int(diagnostic["column"]), 1, text->get_line(line - 1).length() + 1);
+			native_build_errors.push_back({ p_path, line, column, line, MIN(column + 1, text->get_line(line - 1).length() + 1), diagnostic["error"] });
+		}
+	}
+	if (editor_enabled) {
+		_update_errors();
+		_update_background_color();
+	}
+}
+
+void ScriptTextEditor::_check_native_script() {
+#ifdef MODULE_GDSCRIPT_ENABLED
+	const Ref<Script> script = edited_res;
+	if (script.is_valid() && has_native_code && !native_compile_pending) {
+		native_compile_pending = true;
+		emit_signal(SNAME("_validation_updated"));
+		GDCNative::get_singleton()->request_analysis(get_instance_id(), script->get_path(), code_editor->get_text_editor()->get_text(), callable_mp(this, &ScriptTextEditor::_native_compile_finished), true);
+	}
+#endif
+}
+
+void ScriptTextEditor::_native_project_check_finished(const String &p_path, const String &p_code, const Array &p_diagnostics, const Dictionary &p_symbols) {
+	const Array editors = ScriptEditor::get_singleton()->call("get_open_script_editors");
+	for (const Variant &value : p_diagnostics) {
+		const Dictionary diagnostic = value;
+		const String path = diagnostic["path"];
+		bool routed = false;
+		for (const Variant &entry : editors) {
+			ScriptTextEditor *editor = Object::cast_to<ScriptTextEditor>(entry.operator Object *());
+			if (editor && editor->edited_res.is_valid() && editor->edited_res->get_path() == path) {
+				Array report;
+				report.push_back(diagnostic);
+				report.append_array(diagnostic["positioned"]);
+				// The check reads the file from disk; the editor buffer always uses LF.
+				const String source = String(diagnostic["source"]).replace("\r\n", "\n");
+				editor->_native_build_finished(path, source, report, Dictionary());
+				editor->emit_signal(SNAME("_validation_updated"));
+				routed = true;
+				break;
+			}
+		}
+		if (!routed) {
+			ERR_PRINT(String(diagnostic["error"]));
+		}
+	}
+	if (p_diagnostics.is_empty()) {
+		print_line("All native script checks passed.");
+		EditorToaster::get_singleton()->popup_str(TTR("All native script checks passed."));
+	} else {
+		EditorToaster::get_singleton()->popup_str(TTR("Native script checks failed. See Output for details."), EditorToaster::SEVERITY_ERROR);
+	}
+}
+
 void ScriptTextEditor::_update_warnings() {
-	int warning_nb = warnings.size();
+	int warning_nb = warnings.size() + native_warnings.size();
 	warnings_panel->clear();
 
 	bool has_connections_table = false;
@@ -992,53 +1190,67 @@ void ScriptTextEditor::_update_warnings() {
 
 	// Add script warnings.
 	warnings_panel->push_table(3);
-	for (const EditorLanguage::Warning &w : warnings) {
-		Dictionary ignore_meta;
-		ignore_meta["line"] = w.start_line - 1;
-		ignore_meta["code"] = w.string_code.to_lower();
-		warnings_panel->push_cell();
-		warnings_panel->push_meta(ignore_meta);
-		warnings_panel->push_color(
-				warnings_panel->get_theme_color(SNAME("accent_color"), EditorStringName(Editor)).lerp(warnings_panel->get_theme_color(SNAME("mono_color"), EditorStringName(Editor)), 0.5f));
-		warnings_panel->add_text(TTR("[Ignore]"));
-		warnings_panel->pop(); // Color.
-		warnings_panel->pop(); // Meta ignore.
-		warnings_panel->pop(); // Cell.
+	for (const List<EditorLanguage::Warning> *list : { &warnings, &native_warnings }) {
+		for (const EditorLanguage::Warning &w : *list) {
+			Dictionary ignore_meta;
+			ignore_meta["line"] = w.start_line - 1;
+			ignore_meta["code"] = w.string_code.to_lower();
+			warnings_panel->push_cell();
+			if (list == &warnings) {
+				warnings_panel->push_meta(ignore_meta);
+				warnings_panel->push_color(
+						warnings_panel->get_theme_color(SNAME("accent_color"), EditorStringName(Editor)).lerp(warnings_panel->get_theme_color(SNAME("mono_color"), EditorStringName(Editor)), 0.5f));
+				warnings_panel->add_text(TTR("[Ignore]"));
+				warnings_panel->pop(); // Color.
+				warnings_panel->pop(); // Meta ignore.
+			}
+			warnings_panel->pop(); // Cell.
 
-		warnings_panel->push_cell();
-		warnings_panel->push_meta(w.start_line - 1);
-		warnings_panel->push_color(warnings_panel->get_theme_color(SNAME("warning_color"), EditorStringName(Editor)));
-		warnings_panel->add_text(vformat(TTR("Line %d (%s):"), w.start_line, w.string_code));
-		warnings_panel->pop(); // Color.
-		warnings_panel->pop(); // Meta goto.
-		warnings_panel->pop(); // Cell.
+			warnings_panel->push_cell();
+			warnings_panel->push_meta(w.start_line - 1);
+			warnings_panel->push_color(warnings_panel->get_theme_color(SNAME("warning_color"), EditorStringName(Editor)));
+			warnings_panel->add_text(vformat(TTR("Line %d (%s):"), w.start_line, w.string_code));
+			warnings_panel->pop(); // Color.
+			warnings_panel->pop(); // Meta goto.
+			warnings_panel->pop(); // Cell.
 
-		warnings_panel->push_cell();
-		warnings_panel->add_text(w.message);
-		warnings_panel->add_newline();
-		warnings_panel->pop(); // Cell.
+			warnings_panel->push_cell();
+			warnings_panel->add_text(w.message);
+			warnings_panel->add_newline();
+			warnings_panel->pop(); // Cell.
+		}
 	}
 	warnings_panel->pop(); // Table.
 }
 
 void ScriptTextEditor::_update_errors() {
-	code_editor->set_error_count(errors.size());
+	code_editor->set_error_count(errors.size() + native_errors.size() + native_build_errors.size());
 
 	errors_panel->clear();
 	errors_panel->push_table(2);
-	for (const EditorLanguage::ScriptError &err : errors) {
-		errors_panel->push_cell();
-		errors_panel->push_meta(err.start_line - 1);
-		errors_panel->push_color(warnings_panel->get_theme_color(SNAME("error_color"), EditorStringName(Editor)));
-		errors_panel->add_text(vformat(TTR("Line %d:"), err.start_line));
-		errors_panel->pop(); // Color.
-		errors_panel->pop(); // Meta goto.
-		errors_panel->pop(); // Cell.
+	for (const List<EditorLanguage::ScriptError> *list : { &errors, &native_errors, &native_build_errors }) {
+		for (const EditorLanguage::ScriptError &err : *list) {
+			errors_panel->push_cell();
+			if (list == &errors) {
+				errors_panel->push_meta(err.start_line - 1);
+			} else {
+				Dictionary location;
+				location["path"] = err.path;
+				location["line"] = err.start_line - 1;
+				location["column"] = err.start_column - 1;
+				errors_panel->push_meta(location);
+			}
+			errors_panel->push_color(warnings_panel->get_theme_color(SNAME("error_color"), EditorStringName(Editor)));
+			errors_panel->add_text(list == &errors ? vformat(TTR("Line %d:"), err.start_line) : vformat(TTR("Line %d, column %d:"), err.start_line, err.start_column));
+			errors_panel->pop(); // Color.
+			errors_panel->pop(); // Meta goto.
+			errors_panel->pop(); // Cell.
 
-		errors_panel->push_cell();
-		errors_panel->add_text(err.message);
-		errors_panel->add_newline();
-		errors_panel->pop(); // Cell.
+			errors_panel->push_cell();
+			errors_panel->add_text(err.message);
+			errors_panel->add_newline();
+			errors_panel->pop(); // Cell.
+		}
 	}
 	errors_panel->pop(); // Table
 
@@ -1082,7 +1294,8 @@ void ScriptTextEditor::_update_errors() {
 	bool last_is_safe = false;
 	CodeEdit *te = code_editor->get_text_editor();
 
-	for (int i = 0; i < te->get_line_count(); i++) {
+	// The gutter indexes are only known once the code editor is enabled.
+	for (int i = 0; line_number_gutter >= 0 && i < te->get_line_count(); i++) {
 		if (highlight_safe) {
 			if (safe_lines.has(i + 1)) {
 				te->set_line_gutter_item_color(i, line_number_gutter, safe_line_number_color);
@@ -1194,8 +1407,38 @@ void ScriptEditor::_update_modified_scripts_for_external_editor(Ref<Script> p_fo
 	}
 }
 
+void ScriptTextEditor::_native_completion_finished(const String &p_path, const String &p_code) {
+	if (edited_res.is_valid() && edited_res->get_path() == p_path && code_editor->get_text_editor()->get_text_for_code_completion() == p_code) {
+		code_editor->get_text_editor()->request_code_completion(true);
+	}
+}
+
 void ScriptTextEditor::_code_complete_script(const String &p_code, List<ScriptLanguage::CodeCompletionOption> *r_options, bool &r_force) {
 	Ref<Script> script = edited_res;
+#ifdef MODULE_GDSCRIPT_ENABLED
+	if (script->get_path().get_extension().to_lower() == "cgd") {
+		const CodeEdit *text_edit = code_editor->get_text_editor();
+		const int column = text_edit->get_caret_column();
+		const String line = text_edit->get_line(text_edit->get_caret_line()).left(column);
+		if (!r_force && line.ends_with(":") && !line.ends_with("::")) {
+			return;
+		}
+		const String leading = line.strip_edges();
+		if (r_options && (leading == "native" || leading == "static native") && line.ends_with(" ")) {
+			r_options->push_back(ScriptLanguage::CodeCompletionOption("cpp", ScriptLanguage::CODE_COMPLETION_KIND_KEYWORD));
+			r_options->push_back(ScriptLanguage::CodeCompletionOption("objcpp", ScriptLanguage::CODE_COMPLETION_KIND_KEYWORD));
+			r_force = true;
+			return;
+		}
+	}
+	String native_hint;
+	if (r_options && script->get_path().get_extension().to_lower() == "cgd" &&
+			GDCNative::get_singleton()->complete_in_editor(get_instance_id(), p_code, script->get_path(), callable_mp(this, &ScriptTextEditor::_native_completion_finished), *r_options, native_hint)) {
+		code_editor->get_text_editor()->set_code_hint(native_hint);
+		r_force = native_hint.is_empty();
+		return;
+	}
+#endif
 	Node *base = get_tree()->get_edited_scene_root();
 	if (base) {
 		base = _find_node_for_script(base, base, script);
@@ -1381,6 +1624,19 @@ void ScriptTextEditor::_validate_symbol(const String &p_symbol) {
 	}
 }
 
+void ScriptTextEditor::_native_hover_finished(const String &p_path, const String &p_code, const String &p_prototype, int p_row, int p_start, int p_end, bool p_shortcut) {
+	if (p_prototype.is_empty() || edited_res.is_null() || edited_res->get_path() != p_path) {
+		return;
+	}
+	CodeEdit *text = code_editor->get_text_editor();
+	const Point2i position = p_shortcut ? Point2i(text->get_caret_column(), text->get_caret_line()) : text->get_line_column_at_pos(text->get_local_mouse_position(), false, false);
+	if (position.y != p_row || position.x < p_start || position.x > p_end || text->get_text_with_cursor_char(p_row, p_start) != p_code) {
+		return;
+	}
+	Control *tooltip = EditorHelpBitTooltip::make_tooltip(text, "", "[code]" + p_prototype.replace("[", "[lb]") + "[/code]", true, p_shortcut);
+	memdelete(tooltip);
+}
+
 void ScriptTextEditor::_show_symbol_tooltip(const String &p_symbol, int p_row, int p_column, bool p_shortcut) {
 	if (!EDITOR_GET("text_editor/behavior/documentation/enable_tooltips").booleanize()) {
 		return;
@@ -1393,6 +1649,26 @@ void ScriptTextEditor::_show_symbol_tooltip(const String &p_symbol, int p_row, i
 	}
 
 	Ref<Script> script = edited_res;
+#ifdef MODULE_GDSCRIPT_ENABLED
+	CodeEdit *text = code_editor->get_text_editor();
+	if (script->get_path().get_extension().to_lower() == "cgd" &&
+			GDCNative::is_native_position(text->get_text(), script->get_path(), p_row, p_column)) {
+		const String line = text->get_line(p_row);
+		int start = MIN(p_column, line.length());
+		while (start > 0 && is_unicode_identifier_continue(line[start - 1])) {
+			start--;
+		}
+		const String code = text->get_text_with_cursor_char(p_row, start);
+		const Callable callback = callable_mp(this, &ScriptTextEditor::_native_hover_finished).bind(p_row, start, start + p_symbol.length(), p_shortcut);
+		if (native_symbols.has(p_symbol)) {
+			const PackedStringArray prototypes = native_symbols[p_symbol];
+			callback.call(script->get_path(), code, String("\n").join(prototypes));
+		} else {
+			GDCNative::get_singleton()->request_native_hover(get_instance_id(), code, script->get_path(), p_symbol, callback);
+		}
+		return;
+	}
+#endif
 	Node *base = get_tree()->get_edited_scene_root();
 	if (base) {
 		base = _find_node_for_script(base, base, script);
@@ -1746,6 +2022,21 @@ void ScriptTextEditor::_gutter_clicked(int p_line, int p_gutter) {
 }
 
 bool ScriptTextEditor::_edit_option(int p_op) {
+#ifdef MODULE_GDSCRIPT_ENABLED
+	if (p_op == EDIT_CHECK_NATIVE_C) {
+		const Ref<Script> script = edited_res;
+		if (script.is_valid() && script->get_path().get_extension().to_lower() == "cgd") {
+			_check_native_script();
+			return true;
+		}
+		return false;
+	}
+	if (p_op == EDIT_CHECK_ALL_NATIVE_C) {
+		EditorToaster::get_singleton()->popup_str(TTR("Checking native scripts…"));
+		GDCNative::get_singleton()->request_project_check(ScriptEditor::get_singleton()->get_instance_id(), callable_mp(this, &ScriptTextEditor::_native_project_check_finished));
+		return true;
+	}
+#endif
 	CodeEdit *tx = code_editor->get_text_editor();
 	tx->apply_ime();
 
@@ -1892,6 +2183,14 @@ void ScriptTextEditor::_edit_option_toggle_inline_comment() {
 }
 
 void ScriptTextEditor::_notification(int p_what) {
+#ifdef MODULE_GDSCRIPT_ENABLED
+	if (p_what == NOTIFICATION_APPLICATION_FOCUS_IN && edited_res.is_valid() && edited_res->get_path().get_extension().to_lower() == "cgd") {
+		const String code = code_editor->get_text_editor()->get_text();
+		if (has_native_code && EDITOR_GET("text_editor/cgd/live_native_diagnostics").booleanize()) {
+			GDCNative::get_singleton()->request_analysis(get_instance_id(), edited_res->get_path(), code, callable_mp(this, &ScriptTextEditor::_native_diagnostics_finished));
+		}
+	}
+#endif
 	switch (p_what) {
 		case NOTIFICATION_TRANSLATION_CHANGED: {
 			if (is_ready() && is_visible_in_tree()) {
@@ -2555,6 +2854,9 @@ Dictionary ScriptTextEditor::_get_context_data() const {
 
 void ScriptTextEditor::register_editor() {
 	ED_SHORTCUT("script_text_editor/move_up", TTRC("Move Up"), KeyModifierMask::ALT | Key::UP);
+#ifdef MODULE_GDSCRIPT_ENABLED
+	ED_SHORTCUT("script_text_editor/check_native_c", TTRC("Compile Native Code"), KeyModifierMask::CMD_OR_CTRL | KeyModifierMask::ALT | Key::F7);
+#endif
 	ED_SHORTCUT("script_text_editor/move_down", TTRC("Move Down"), KeyModifierMask::ALT | Key::DOWN);
 	ED_SHORTCUT("script_text_editor/delete_line", TTRC("Delete Line"), KeyModifierMask::CMD_OR_CTRL | KeyModifierMask::SHIFT | Key::K);
 	ED_SHORTCUT("script_text_editor/join_lines", TTRC("Join Lines"), KeyModifierMask::CMD_OR_CTRL | KeyModifierMask::SHIFT | Key::J);
@@ -2646,6 +2948,11 @@ void ScriptTextEditor::_enable_code_editor() {
 }
 
 ScriptTextEditor::ScriptTextEditor() {
+#ifdef MODULE_GDSCRIPT_ENABLED
+	native_c_standard = GLOBAL_GET("cgd_native/c_standard");
+	native_cpp_standard = GLOBAL_GET("cgd_native/cpp_standard");
+	ProjectSettings::get_singleton()->connect("settings_changed", callable_mp(this, &ScriptTextEditor::_native_settings_changed));
+#endif
 	editor_box->add_child(code_editor);
 	editor_box->add_child(warnings_panel);
 

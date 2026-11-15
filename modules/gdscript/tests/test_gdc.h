@@ -14,6 +14,45 @@
 
 namespace TestGDC {
 
+TEST_CASE("[GDC] Native library identity follows C code and script path") {
+	const auto transpile_id = [](const String &p_code, const String &p_path) {
+		String generated;
+		String native;
+		String error;
+		String id;
+		GDC::SourceMap map;
+		int line = 0;
+		int column = 0;
+		CHECK(GDCFrontend::transpile(p_code, generated, map, error, line, column, false, { 0, 0 }, p_path, &native, nullptr, &id) == OK);
+		CHECK(id.length() == 64);
+		CHECK(generated.contains(id));
+		return id;
+	};
+	const String source = "native int answer() { return 42; }\n";
+	const String id = transpile_id(source, "res://sample.cgd");
+	CHECK(id == transpile_id("// CGD-only edit\n" + source, "res://sample.cgd"));
+	CHECK(id != transpile_id(source.replace("42", "43"), "res://sample.cgd"));
+	CHECK(id != transpile_id(source, "res://other.cgd"));
+}
+
+TEST_CASE("[GDC] C++ native declarations preserve raw strings and numeric separators") {
+	GDC::Options options;
+	options.script_path = U"res://native_cpp.cgd";
+	const auto cpp = GDC::transpile(
+			U"native cpp {\n#include <string>\n}\n"
+			U"static native cpp int answer() { auto text = u8R\"tag(} { /*)tag\"; return text[0] + 1'000; }",
+			options);
+	REQUIRE(cpp.ok());
+	CHECK(cpp.native_language == U"cpp");
+	CHECK(cpp.native_code.find(U"u8R\"tag(} { /*)tag\"") != std::u32string::npos);
+	CHECK(cpp.native_code.find(U"1'000") != std::u32string::npos);
+	CHECK_FALSE(GDC::transpile(U"native {} native cpp int answer() { return 1; }", options).ok());
+	options.default_cpp = true;
+	const auto default_cpp = GDC::transpile(U"native int answer() { return 1'000; }", options);
+	CHECK(default_cpp.ok());
+	CHECK(default_cpp.native_language == U"cpp");
+}
+
 TEST_CASE("[GDC] Native parser accepts C syntax and preserves original line numbers") {
 	GDScriptParser parser;
 	const String source = "extends RefCounted;\n\nint answer() {\n    return 42;\n}\n";

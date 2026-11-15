@@ -156,8 +156,18 @@ Current platform packages:
 | --- | --- | --- |
 | Windows | x86_64, ARM64 | CPU, Vulkan, D3D12 |
 | Linux | x86_64, ARM64 | CPU, Vulkan |
-| Android API 24+ | ARM64, x86_64 | CPU, Vulkan |
+| Android API 24+ | ARMv7, ARM64, x86_64 | CPU, Vulkan |
 | macOS | x86_64, ARM64 | CPU, Metal |
+
+Android renderer support differs by architecture: `hcsr_newest` supports only ARMv7 (`armeabi-v7a`), while ARM64 and x86_64 use `hcsr_old`.
+
+For Android ARMv7 with `hcsr_newest`, run SCons on Windows with `platform=android arch=arm32 module_html_css_renderer=hcsr_newest`. Set `ANDROID_HOME` to the Android SDK directory with Godot's pinned NDK installed. The build uses CMake, Ninja, .NET 10, and its `linux-bionic-arm` NativeAOT runtime pack. To build just the renderer bundle:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File thirdparty/hcsr_newest/tools/build-hcsr-bundle-android.ps1 -AndroidNdkRoot C:/Android/ndk/29.0.14206865
+```
+
+Use `target=template_release generate_apk=yes` to package the Godot template. Enable only `armeabi-v7a` in the Android export preset for this template.
 
 BSD, iOS, visionOS, and Web remain rejected by the HCSR build selection.
 

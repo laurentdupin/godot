@@ -122,14 +122,19 @@ elif _html_css_renderer == "hcsr_old_2":
     env_html_css.Prepend(CPPPATH=[os.path.join(hcsr_old_2_root, "native", "include")])
 elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll") and env["platform"] != "windows":
     if not _platform_helpers.newest_target_supported(_html_css_renderer, env["platform"], env["arch"]):
-        print("hcsr_newest supports static Linux/macOS x86_64/ARM64 builds; hcsr_newest_dll also supports Linux.")
+        print("hcsr_newest supports static Linux/macOS x86_64/ARM64 and Android ARMv7 builds; hcsr_newest_dll also supports Linux.")
         Exit(1)
     if (env["platform"] == "linuxbsd" and not sys.platform.startswith("linux")) or (env["platform"] == "macos" and sys.platform != "darwin"):
         print("Build the hcsr_newest NativeAOT package on the target OS (Linux or macOS). BSD/cross-OS builds are not supported.")
         Exit(1)
+    if env["platform"] == "android" and sys.platform != "win32":
+        print("Build the hcsr_newest Android ARMv7 package from a Windows host. It uses PowerShell and the NDK windows-x86_64 toolchain.")
+        Exit(1)
     hcsr_newest_root = env.Dir("#thirdparty/hcsr_newest").abspath
     newest_arch = "x64" if env["arch"] == "x86_64" else "arm64"
     newest_rid = ("linux-" if env["platform"] == "linuxbsd" else "osx-") + newest_arch
+    if env["platform"] == "android":
+        newest_rid = "linux-bionic-arm"
     newest_linkage = "dynamic" if _html_css_renderer == "hcsr_newest_dll" else "static"
     newest_bundle_directory = os.path.join(hcsr_newest_root, "build", "hcsr-bundle", newest_linkage, newest_rid, "Release")
     newest_scene_library = os.path.join(newest_bundle_directory, "libhcsr_scene_combined.a")
@@ -151,17 +156,23 @@ elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll") and env["platform"
         newest_is_current = False
     if not newest_is_current:
         if not env["module_html_css_hcsr_auto_build"]:
-            print("hcsr_newest Unix bundle is missing or stale and auto-build is disabled.")
+            print("hcsr_newest %s bundle is missing or stale and auto-build is disabled." % ("Android" if env["platform"] == "android" else "Unix"))
             Exit(1)
-        completed = subprocess.run(["bash", os.path.join(hcsr_newest_root, "tools", "build-hcsr-bundle-unix.sh"),
-            "--platform", "linux" if env["platform"] == "linuxbsd" else "macos", "--architecture", env["arch"], "--linkage", newest_linkage], cwd=hcsr_newest_root)
+        if env["platform"] == "android":
+            command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                os.path.join(hcsr_newest_root, "tools", "build-hcsr-bundle-android.ps1"),
+                "-AndroidNdkRoot", env["ANDROID_NDK_ROOT"], "-Python", sys.executable]
+        else:
+            command = ["bash", os.path.join(hcsr_newest_root, "tools", "build-hcsr-bundle-unix.sh"),
+                "--platform", "linux" if env["platform"] == "linuxbsd" else "macos", "--architecture", env["arch"], "--linkage", newest_linkage]
+        completed = subprocess.run(command, cwd=hcsr_newest_root)
         if completed.returncode != 0 or not all(os.path.isfile(path) for path in newest_products):
-            print("hcsr_newest Unix bundle build failed.")
+            print("hcsr_newest %s bundle build failed." % ("Android" if env["platform"] == "android" else "Unix"))
             Exit(1)
     newest_defines = ["HTML_CSS_USE_HCSR_NEWEST"]
     if newest_linkage == "static":
         newest_defines += ["HCSR_SCENE_STATIC", "HCSR_RENDER_STATIC"]
-    if env["platform"] == "linuxbsd" and env.get("vulkan", False):
+    if env["platform"] in ("linuxbsd", "android") and env.get("vulkan", False):
         newest_defines += ["HTML_CSS_HCSR_NEWEST_VULKAN"]
     if env["platform"] == "macos" and env.get("metal", False):
         newest_defines += ["HTML_CSS_HCSR_NEWEST_METAL"]
@@ -279,7 +290,7 @@ def _html_css_hcsr_static_library_path():
     if env["module_html_css_hcsr_lib_path"]:
         return _html_css_resolve_repo_file(env["module_html_css_hcsr_lib_path"])
     if env["platform"] == "android":
-        android_rid = "linux-bionic-arm64" if env["arch"] == "arm64" else "linux-bionic-x64"
+        android_rid = {"arm32": "linux-bionic-arm", "arm64": "linux-bionic-arm64", "x86_64": "linux-bionic-x64"}[env["arch"]]
         return _html_css_resolve_repo_file(
             os.path.join(
                 "thirdparty",
@@ -344,12 +355,12 @@ def _html_css_hcsr_static_library_path():
 
 
 def _html_css_ensure_hcsr_static_library():
-    supported_arch = env["arch"] in ("x86_64", "arm64")
+    supported_arch = env["arch"] in ("x86_64", "arm64") or (env["platform"] == "android" and env["arch"] == "arm32")
     supported_target = supported_arch and env["platform"] in ("windows", "android", "linuxbsd", "macos")
     if env["platform"] == "linuxbsd" and not sys.platform.startswith("linux"):
         supported_target = False
     if not supported_target:
-        print("HTML/CSS HCSR supports Windows, Linux, and macOS x86_64/ARM64 plus Android x86_64/ARM64 targets. BSD is not supported.")
+        print("HTML/CSS HCSR supports Windows, Linux, and macOS x86_64/ARM64 plus Android x86_64/ARM64/ARMv7 targets. BSD is not supported.")
         Exit(1)
 
     library_path = _html_css_hcsr_static_library_path()
@@ -411,7 +422,7 @@ def _html_css_ensure_hcsr_static_library():
 
     if env["platform"] == "android":
         build_script = _html_css_resolve_repo_file(os.path.join("thirdparty", "hcsr_old", "tools", "build-android-native.ps1"))
-        android_abi = "arm64-v8a" if env["arch"] == "arm64" else "x86_64"
+        android_abi = {"arm32": "armeabi-v7a", "arm64": "arm64-v8a", "x86_64": "x86_64"}[env["arch"]]
         print("HTML/CSS HCSR Android archive is missing or stale; building nested %s NativeAOT bridge:" % android_abi)
         print("  " + build_script)
         completed = subprocess.run(
@@ -686,6 +697,9 @@ elif _html_css_renderer in ("hcsr_newest", "hcsr_newest_dll"):
     elif env["platform"] == "linuxbsd":
         env.Append(LINKFLAGS=["-Wl,-z,nostart-stop-gc", newest_initializer])
         env.Append(LIBS=[env.File(newest_scene_library), "dl", "pthread", "m", "z", "rt"])
+    elif env["platform"] == "android":
+        env.Append(LINKFLAGS=["-Wl,-z,nostart-stop-gc", "-Wl,--exclude-libs,libhcsr_scene_combined.a", newest_initializer])
+        env.Append(LIBS=[env.File(newest_scene_library), "dl", "m", "z", "atomic", "log"])
     elif env["platform"] != "windows":
         env.Append(LINKFLAGS=_platform_helpers.unix_link_flags(env["platform"], newest_initializer, newest_scene_library))
     else:

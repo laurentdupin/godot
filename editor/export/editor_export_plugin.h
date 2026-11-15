@@ -136,6 +136,7 @@ protected:
 	virtual void _export_file(const String &p_path, const String &p_type, const HashSet<String> &p_features);
 	virtual void _export_begin(const HashSet<String> &p_features, bool p_debug, const String &p_path, int p_flags);
 	virtual void _export_end();
+	virtual void _export_finalize_files() {}
 	virtual void _end_generate_apple_embedded_project(const String &p_path, bool p_will_build_archive);
 
 	static void _bind_methods();

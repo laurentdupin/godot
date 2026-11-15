@@ -228,6 +228,9 @@ class ScriptEditor : public EditorDock {
 	};
 
 	HBoxContainer *menu_hb = nullptr;
+	Button *native_compile_button = nullptr;
+	void _update_native_compile_button();
+	void _compile_native_script();
 	MenuButton *file_menu = nullptr;
 	MenuButton *script_search_menu = nullptr;
 	MenuButton *debug_menu = nullptr;

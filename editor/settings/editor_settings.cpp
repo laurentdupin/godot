@@ -891,6 +891,8 @@ void EditorSettings::_load_defaults(Ref<ConfigFile> p_extra_config) {
 	_initial_set("text_editor/completion/auto_brace_complete", true, true);
 	_initial_set("text_editor/completion/code_complete_enabled", true, true);
 	EDITOR_SETTING(Variant::FLOAT, PROPERTY_HINT_RANGE, "text_editor/completion/code_complete_delay", 0.3, "0.01,5,0.01,or_greater")
+	EDITOR_SETTING(Variant::BOOL, PROPERTY_HINT_NONE, "text_editor/cgd/live_native_diagnostics", true, "")
+	EDITOR_SETTING(Variant::INT, PROPERTY_HINT_RANGE, "text_editor/cgd/native_diagnostics_delay_ms", 500, "0,5000,50,or_greater")
 	_initial_set("text_editor/completion/put_callhint_tooltip_below_current_line", true);
 	_initial_set("text_editor/completion/complete_file_paths", true);
 	_initial_set("text_editor/completion/add_type_hints", true, true);

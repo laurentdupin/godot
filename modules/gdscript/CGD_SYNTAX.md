@@ -1,6 +1,6 @@
 # GD-C syntax (C-style source only)
 
-`.cgd` accepts C-style source declarations and blocks. GDScript-style aliases are rejected, including during editor completion. The engine still translates GD-C to GDScript internally and runs it on the existing VM; this is not a C/C++ compiler.
+`.cgd` accepts C-style source declarations and blocks. GDScript-style aliases are rejected, including during editor completion. The engine translates ordinary GD-C code to GDScript and runs it on the existing VM. Explicit `native` declarations can contain inline C on supported targets.
 
 ## Functions and variables
 
@@ -104,8 +104,49 @@ Translation extraction recognizes `// NO_TRANSLATE` and `// TRANSLATORS: ...` ei
 
 These checks operate on source tokens, so strings containing words such as "func" are unaffected and methods such as `String.match()` remain callable. Existing `.gd` files still use normal GDScript.
 
+## Inline C
+
+```c
+native {
+    #include <windows.h>
+}
+
+native int monitor_count() {
+    return GetSystemMetrics(SM_CMONITORS);
+}
+```
+
+Put native declarations at script scope. A `native { ... }` block adds C declarations to the generated translation unit. A typed `native` function can be called like any other script method. The current ABI accepts `int`, `float` and `bool` parameters and returns, plus `void` returns. See [native build configuration](CGD_INTEGRATION.md#inline-c) for compiler and library settings.
+
+Use `native cpp { ... }` and `native cpp int f() { ... }` for C++ (`cgd_native/cpp_standard`, C++20 by default). On macOS, use `native objcpp` for Objective-C++. Each script uses a single native language across its blocks and functions. Plain `native` takes the project default, which is C17 unless `cgd_native/default_language` is set to `"cpp"`.
+
+In a native body, use `cgd_print("value=%d", value)`, `cgd_print_warning(...)`, or `cgd_print_error(...)` for Godot output. These functions take printf-style format strings. C++ and Objective-C++ can also use `cgd::print("value=", value)`, `cgd::print_warning(...)`, and `cgd::print_error(...)` to join printable arguments. Warnings and errors report the CGD file and line.
+
+
+
+Use `static native` to call a native function without a script instance. A `PackedByteArray` parameter is exposed to C as `CGDBytes`, with a read-only `data` pointer and an `int64_t size` in bytes. The view shares the Godot array's storage for the duration of the call. An empty view has size zero. C code must keep accesses within that size and release any references to the view before returning.
+
+```c
+static native int first_byte(PackedByteArray bytes) {
+    return bytes.size > 0 ? bytes.data[0] : -1;
+}
+```
+
+Native functions also accept `PackedInt32Array`, `PackedInt64Array`, `PackedFloat32Array`, `PackedFloat64Array`, `PackedVector2Array`, `PackedVector3Array`, and `String`. Array views expose `data` and `size`. Vector data uses `data[index][component]` with the engine's real-number precision. A `CGDString` exposes `utf8` and its byte `length`.
+
+For a packed array or String return, the C body returns void and writes to storage from `cgd_out_alloc(cgd_out, count)`. Count is in elements for arrays and UTF-8 bytes for strings. A second allocation replaces the first and invalidates its pointer. Zero count or a body that never allocates produces an empty value. Check the returned pointer before writing. Invalid counts or allocation failures report a native call error.
+
+```c
+static native String copy_string(String value) {
+    char *output = cgd_out_alloc(cgd_out, value.length);
+    if (output) {
+        memcpy(output, value.utf8, (size_t)value.length);
+    }
+}
+```
+
 ## Runtime limits
 
-GD-C retains Godot's Variant values, reference semantics, type system and script permissions. It adds no pointers, manual memory management, preprocessor, exceptions, C-style casts, overloads, structs, namespaces, or separate native runtime. Not every C/C++ construct is supported.
+Ordinary GD-C retains Godot's Variant values, reference semantics, type system and script permissions. The C compiler handles pointers, structs and preprocessing inside native blocks and bodies.
 
 The frontend enforces input, output and nesting limits. It preserves source coordinates through generated-code maps; exported binary columns remain limited by the native token format. The `__gdc_` identifier prefix is reserved for generated locals.

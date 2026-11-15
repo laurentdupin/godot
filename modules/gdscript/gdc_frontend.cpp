@@ -3,6 +3,8 @@
 
 #include "gdscript_parser.h"
 
+#include "core/config/project_settings.h"
+
 #include <utility>
 
 namespace {
@@ -35,7 +37,9 @@ bool GDCFrontend::is_binary_path(const String &p_path) {
 }
 
 Error GDCFrontend::transpile(const String &p_source, String &r_source, GDC::SourceMap &r_map,
-		String &r_error, int &r_line, int &r_column, bool p_completion, GDC::Position p_completion_cursor) {
+		String &r_error, int &r_line, int &r_column, bool p_completion, GDC::Position p_completion_cursor,
+		const String &p_path, String *r_native_source, int *r_native_completion_offset, String *r_native_id,
+		std::vector<GDC::Result::NativeBody> *r_native_bodies) {
 	r_source = String();
 	r_map = GDC::SourceMap();
 	r_error = String();
@@ -47,8 +51,23 @@ Error GDCFrontend::transpile(const String &p_source, String &r_source, GDC::Sour
 		input.push_back(p_source[i]);
 	}
 	GDC::Options options;
+	options.script_path.assign(p_path.get_data(), p_path.length());
+	options.native_library_id.assign(64, U'0');
+	if (ProjectSettings *settings = ProjectSettings::get_singleton(); settings && settings->has_setting("cgd_native/default_language")) {
+		options.default_cpp = settings->get_setting("cgd_native/default_language") == Variant("cpp");
+	}
+	if (r_native_id) {
+		*r_native_id = String();
+	}
+	if (r_native_source) {
+		*r_native_source = String();
+	}
 	options.completion = p_completion;
 	options.completion_cursor = p_completion_cursor;
+	options.native_completion = r_native_completion_offset != nullptr;
+	if (r_native_completion_offset) {
+		*r_native_completion_offset = -1;
+	}
 	GDC::Result result = GDC::transpile(input, options);
 	if (!result.ok() && p_completion && p_completion_cursor.line > 0) {
 		// Retry only failed input, preserving valid multiline expressions as written.
@@ -62,9 +81,46 @@ Error GDCFrontend::transpile(const String &p_source, String &r_source, GDC::Sour
 		r_column = diagnostic.position.column;
 		return ERR_PARSE_ERROR;
 	}
+	if (!result.native_code.empty()) {
+		const String precision = "#define CGD_REAL_BITS " + itos(sizeof(real_t) * 8) + "\n";
+		std::u32string normalized = result.native_code;
+		for (auto it = result.native_line_numbers.rbegin(); it != result.native_line_numbers.rend(); ++it) {
+			normalized.replace(it->first, it->second, U"1");
+		}
+		const std::string native_utf8 = GDC::encode_utf8(normalized);
+		const String id = (p_path + "\n" + precision + String::utf8(native_utf8.data(), native_utf8.size())).sha256_text();
+		for (size_t offset : result.native_library_id_offsets) {
+			result.code.replace(offset, 64, id.get_data(), 64);
+		}
+		for (size_t offset : result.native_wrapper_symbol_offsets) {
+			result.code.replace(offset, 16, id.get_data(), 16);
+		}
+		for (size_t offset : result.native_c_symbol_offsets) {
+			result.native_code.replace(offset, 16, id.get_data(), 16);
+		}
+		if (r_native_id) {
+			*r_native_id = id;
+		}
+		if (r_native_source) {
+			const std::string native_code = GDC::encode_utf8(result.native_code);
+			*r_native_source = precision + String::utf8(native_code.data(), native_code.size());
+		}
+		if (result.native_completion_offset != std::u32string::npos) {
+			result.native_completion_offset += precision.length();
+		}
+		for (auto &body : result.native_bodies) {
+			body.offset += precision.length();
+		}
+	}
 	const std::string utf8 = GDC::encode_utf8(result.code);
 	r_source = String::utf8(utf8.c_str(), utf8.size());
 	r_map = std::move(result.map);
+	if (r_native_completion_offset && result.native_completion_offset != std::u32string::npos) {
+		*r_native_completion_offset = int(result.native_completion_offset);
+	}
+	if (r_native_bodies) {
+		*r_native_bodies = std::move(result.native_bodies);
+	}
 	return OK;
 }
 
@@ -86,7 +142,7 @@ Vector<uint8_t> GDCFrontend::compile_binary(const String &p_source, const String
 		int line = 1;
 		int column = 1;
 		String generated;
-		if (transpile(source, generated, map, message, line, column) != OK) {
+		if (transpile(source, generated, map, message, line, column, false, { 0, 0 }, p_path) != OK) {
 			r_error = vformat("%s:%d:%d: %s", p_path, line, column, message);
 			return Vector<uint8_t>();
 		}

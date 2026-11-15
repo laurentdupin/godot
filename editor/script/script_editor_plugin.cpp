@@ -2149,6 +2149,7 @@ void ScriptEditor::_notification(int p_what) {
 			tab_container->add_theme_style_override(SceneStringName(panel), get_theme_stylebox(SNAME("ScriptEditor"), EditorStringName(EditorStyles)));
 
 			_calculate_script_name_button_size();
+			_update_native_compile_button();
 
 			if (this == script_editor) {
 				help_search->set_button_icon(get_editor_theme_icon(SNAME("HelpSearch")));
@@ -3750,7 +3751,44 @@ void ScriptEditor::update_docs_from_script(const Ref<Script> &p_script) {
 	}
 }
 
+void ScriptEditor::_compile_native_script() {
+	if (ScriptTextEditor *editor = Object::cast_to<ScriptTextEditor>(_get_current_editor())) {
+		editor->_check_native_script();
+	}
+}
+
+void ScriptEditor::_update_native_compile_button() {
+	if (!native_compile_button) {
+		return;
+	}
+	const ScriptTextEditor *editor = Object::cast_to<ScriptTextEditor>(_get_current_editor());
+	const bool show_compile = editor && editor->has_native_code;
+	native_compile_button->set_visible(show_compile);
+	if (!show_compile) {
+		return;
+	}
+
+	const bool pending = editor->native_compile_pending;
+	native_compile_button->set_disabled(pending);
+	String tooltip = TTR("Compile the native code in this script.");
+	Color color = native_compile_button->get_theme_color(SNAME("font_disabled_color"));
+	if (pending) {
+		tooltip = TTR("Compiling native code…");
+		color = get_theme_color(SNAME("warning_color"), EditorStringName(Editor));
+	} else if (editor->native_build_code == editor->get_code_editor()->get_text_editor()->get_text()) {
+		const bool succeeded = editor->native_compile_succeeded;
+		tooltip = succeeded ? TTR("Native compilation succeeded. Click to compile again.") : TTR("Native compilation failed. See Output for details.");
+		color = get_theme_color(succeeded ? SNAME("success_color") : SNAME("error_color"), EditorStringName(Editor));
+	}
+	native_compile_button->set_tooltip_text(tooltip);
+	native_compile_button->set_button_icon(get_editor_theme_icon(SNAME("CompileStatusDot")));
+	for (const char *name : { "icon_normal_color", "icon_hover_color", "icon_pressed_color", "icon_hover_pressed_color", "icon_focus_color", "icon_disabled_color" }) {
+		native_compile_button->add_theme_color_override(name, color);
+	}
+}
+
 void ScriptEditor::_update_selected_editor_menu() {
+	_update_native_compile_button();
 	for (ScriptEditorBase::EditMenusBase *editor_menu : editor_menus) {
 		editor_menu->set_visible(editor_menu->handles(_get_current_editor()));
 	}
@@ -3979,6 +4017,7 @@ void ScriptEditor::register_create_script_editor_function(CreateScriptEditorFunc
 }
 
 void ScriptEditor::_validation_updated() {
+	_update_native_compile_button();
 	document_list->update_list();
 
 	document_outline->update_outline();
@@ -4297,6 +4336,12 @@ ScriptEditor::ScriptEditor(const String &p_config_section, const String &p_cache
 		debugger->connect("breakpoint_set_in_tree", callable_mp(this, &ScriptEditor::_set_breakpoint));
 		debugger->connect("breakpoints_cleared_in_tree", callable_mp(this, &ScriptEditor::_clear_breakpoints));
 	}
+
+	native_compile_button = memnew(Button(TTR("Compile")));
+	native_compile_button->set_theme_type_variation("FlatMenuButton");
+	native_compile_button->hide();
+	native_compile_button->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditor::_compile_native_script));
+	menu_hb->add_child(native_compile_button);
 
 	script_name_button_hbox = memnew(HBoxContainer);
 	script_name_button_hbox->set_h_size_flags(SIZE_EXPAND_FILL);

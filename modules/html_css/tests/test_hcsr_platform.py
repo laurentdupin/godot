@@ -35,7 +35,8 @@ class PlatformTests(unittest.TestCase):
         env = Environment(platform, arch, renderer)
         if metal is not None: env["metal"] = metal
         with patch('sys.platform', host), patch('os.path.isfile', return_value=True), \
-             patch('builtins.open', mock_open(read_data='revision\n')), \
+             patch('builtins.open', side_effect=lambda path, *args, **kwargs: mock_open(
+                 read_data='0\n' if str(path).endswith('.allocation_trace_build') else 'revision\n')()), \
              patch('subprocess.run', return_value=SimpleNamespace(stdout='revision\n', returncode=0)) as build:
             runpy.run_path(str(MODULE/'SCsub'), init_globals={'env':env, 'env_modules':env, 'Import':lambda _:None, 'Copy':lambda *args:None})
         self.assertEqual(build.call_count, 1, 'A current package must not rebuild')
@@ -74,6 +75,13 @@ class PlatformTests(unittest.TestCase):
         self.assertIn('HTML_CSS_HCSR_NEWEST_D3D12',env['CPPDEFINES'])
         self.assertIn('HTML_CSS_HCSR_NEWEST_VULKAN',env['CPPDEFINES'])
         self.assertIn('d3d12.lib',env['LINKFLAGS'])
+    def test_android_arm32(self):
+        env = self.configure('android', 'arm32', 'win32')
+        self.assertIn('HCSR_SCENE_STATIC', env['CPPDEFINES'])
+        self.assertIn('HTML_CSS_HCSR_NEWEST_VULKAN', env['CPPDEFINES'])
+        archive = env['LIBS'][0].abspath.replace('\\', '/')
+        self.assertTrue(archive.endswith('/static/linux-bionic-arm/Release/libhcsr_scene_combined.a'))
+        self.assertIn('-Wl,--exclude-libs,libhcsr_scene_combined.a', env['LINKFLAGS'])
     def test_macos_without_metal(self):
         env = self.configure('macos', 'arm64', 'darwin', metal=False)
         self.assertNotIn('HTML_CSS_HCSR_NEWEST_METAL', env['CPPDEFINES'])
@@ -87,6 +95,30 @@ class PlatformTests(unittest.TestCase):
             runpy.run_path(str(MODULE/'SCsub'), init_globals={'env':env, 'env_modules':env, 'Import':lambda _:None, 'Copy':lambda *args:None})
         self.assertEqual(build.call_count, 2)
         self.assertIn('build-hcsr-bundle-unix.sh', build.call_args.args[0][1])
+
+    def test_android_arm32_rebuilds_with_powershell(self):
+        env = Environment('android', 'arm32')
+        env['ANDROID_NDK_ROOT'] = 'C:/Android/ndk/29.0.14206865'
+        with patch('sys.platform', 'win32'), \
+             patch('os.path.isfile', side_effect=lambda path: not str(path).endswith('.godot_hcsr_newest_commit')), \
+             patch('builtins.open', side_effect=lambda path, *args, **kwargs: mock_open(
+                 read_data='0\n' if str(path).endswith('.allocation_trace_build') else 'revision\n')()), \
+             patch('subprocess.run', return_value=SimpleNamespace(stdout='revision\n', returncode=0)) as build:
+            runpy.run_path(str(MODULE/'SCsub'), init_globals={'env':env, 'env_modules':env, 'Import':lambda _:None, 'Copy':lambda *args:None})
+        self.assertEqual(build.call_count, 2)
+        command = build.call_args.args[0]
+        self.assertEqual(command[0], 'powershell')
+        self.assertTrue(command[command.index('-File') + 1].replace('\\', '/').endswith('tools/build-hcsr-bundle-android.ps1'))
+        self.assertEqual(command[command.index('-AndroidNdkRoot') + 1], 'C:/Android/ndk/29.0.14206865')
+        self.assertEqual(command[command.index('-Python') + 1], sys.executable)
+
+    def test_android_arm32_requires_windows_host(self):
+        for host in ('linux', 'darwin'):
+            with self.subTest(host=host), self.assertRaises(SystemExit):
+                self.configure('android', 'arm32', host)
+
+    def test_android_other_arch_rejected_for_newest(self):
+        with self.assertRaises(SystemExit): self.configure('android', 'arm64', 'win32')
 
     def test_cross_os_rejected(self):
         with self.assertRaises(SystemExit): self.configure('macos','arm64','linux')

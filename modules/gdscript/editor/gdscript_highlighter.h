@@ -95,6 +95,8 @@ private:
 	Color annotation_color;
 	Color string_name_color;
 	Color type_color;
+	Color preprocessor_color;
+	bool highlight_cgd = false;
 
 	enum CommentMarkerLevel {
 		COMMENT_MARKER_CRITICAL,

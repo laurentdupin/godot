@@ -1722,6 +1722,12 @@ Error EditorExportPlatform::export_project_files(const Ref<EditorExportPreset> &
 	}
 
 	// Add any files that might've been defined during the final steps of the export plugins.
+	for (Ref<EditorExportPlugin> &plugin : export_plugins) {
+		plugin->_export_finalize_files();
+		if (plugin->export_error != OK) {
+			return plugin->export_error;
+		}
+	}
 	err = add_shared_objects_and_extra_files_from_export_plugins();
 	if (err != OK) {
 		return err;

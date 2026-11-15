@@ -58,6 +58,8 @@ public:
 class ScriptTextEditor : public CodeEditorBase {
 	GDCLASS(ScriptTextEditor, CodeEditorBase);
 
+	friend class ScriptEditor;
+
 	Variant pending_state;
 
 	RichTextLabel *errors_panel = nullptr;
@@ -66,6 +68,27 @@ class ScriptTextEditor : public CodeEditorBase {
 	Vector<String> functions;
 	List<EditorLanguage::Warning> warnings;
 	List<EditorLanguage::ScriptError> errors;
+	List<EditorLanguage::ScriptError> native_errors;
+	List<EditorLanguage::Warning> native_warnings;
+	Dictionary native_symbols;
+	String native_analysis_code;
+	uint64_t native_analysis_revision = 0;
+	void _request_native_diagnostics(uint64_t p_revision);
+	void _native_settings_changed();
+	Variant native_c_standard;
+	Variant native_cpp_standard;
+	void _native_completion_finished(const String &p_path, const String &p_code);
+	void _native_hover_finished(const String &p_path, const String &p_code, const String &p_prototype, int p_row, int p_start, int p_end, bool p_shortcut);
+	List<EditorLanguage::ScriptError> native_build_errors;
+	String native_build_code;
+	bool native_compile_pending = false;
+	bool native_compile_succeeded = false;
+	bool has_native_code = false;
+	void _native_compile_finished(const String &p_path, const String &p_code, const Array &p_diagnostics, const Dictionary &p_symbols);
+	void _check_native_script();
+	void _native_project_check_finished(const String &p_path, const String &p_code, const Array &p_diagnostics, const Dictionary &p_symbols);
+	void _native_diagnostics_finished(const String &p_path, const String &p_code, const Array &p_diagnostics, const Dictionary &p_symbols);
+	void _native_build_finished(const String &p_path, const String &p_code, const Array &p_diagnostics, const Dictionary &p_symbols);
 	HashMap<String, List<EditorLanguage::ScriptError>> depended_errors;
 	HashSet<int> safe_lines;
 
@@ -104,6 +127,8 @@ class ScriptTextEditor : public CodeEditorBase {
 		EDIT_PICK_COLOR,
 		EDIT_EVALUATE,
 		EDIT_CREATE_CODE_REGION,
+		EDIT_CHECK_NATIVE_C,
+		EDIT_CHECK_ALL_NATIVE_C,
 
 		SEARCH_LOCATE_FUNCTION,
 
