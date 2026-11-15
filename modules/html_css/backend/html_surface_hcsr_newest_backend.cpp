@@ -377,8 +377,6 @@ void HTMLSurfaceHCSRNewestBackend::_suspend_main_on_render_thread(uint64_t p_sta
 	state->prepared_backdrop.clear();
 	state->active_backdrop.clear();
 	state->canvas_required = false;
-	state->image_atlas_statistics = state->scene_renderer.get_statistics();
-	state->image_atlas_statistics.merge(state->backdrop.get_statistics());
 }
 
 void HTMLSurfaceHCSRNewestBackend::_prepare_canvas_on_render_thread(uint64_t p_state_pointer, const CanvasRenderTargetPreparation::Input &p_input) {
@@ -399,8 +397,6 @@ void HTMLSurfaceHCSRNewestBackend::_prepare_canvas_on_render_thread(uint64_t p_s
 	}
 	state->canvas_recordings++;
 	state->canvas_record_ms = double(OS::get_singleton()->get_ticks_usec()-start)/1000.0;
-	state->image_atlas_statistics = state->scene_renderer.get_statistics();
-	state->image_atlas_statistics.merge(state->backdrop.get_statistics());
 }
 
 void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_pointer) {
@@ -516,8 +512,6 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
                 uint64_t(uintptr_t(state)), state->scene, packet);
     }
 	hcsr_draw_packet_destroy(packet_handle);
-	Dictionary atlas_statistics = state->scene_renderer.get_statistics();
-    atlas_statistics.merge(state->backdrop.get_statistics());
 	const double record_seconds = (double)(OS::get_singleton()->get_ticks_usec() - record_start_usec) / 1000000.0;
 	double input_to_visible_seconds = 0.0;
 	{
@@ -526,7 +520,6 @@ void HTMLSurfaceHCSRNewestBackend::_render_on_render_thread(uint64_t p_state_poi
 			state->pending_packet = 0;
 		}
 		state->render_pending = false;
-		state->image_atlas_statistics = atlas_statistics;
 		state->canvas_required = rendered && canvas_required;
         state->needs_another_frame |= state->raster_resources.has_pending_glyphs();
         state->needs_another_frame |= atlas_dump_pending;
@@ -697,6 +690,8 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
         set_terminal(state, "hcsr_newest could not install the host stylesheet service.");
         return ERR_CANT_CREATE;
     }
+	static const bool profile = OS::get_singleton()->get_environment("HCSR_RECORD_PROFILE") == "1";
+	const uint64_t source_start = profile ? OS::get_singleton()->get_ticks_usec() : 0;
 	if (hcsr_source_create(state->runtime, &source_desc, &state->source) != HCSR_OK) {
 		set_terminal(state, scene_error(state, "hcsr_newest could not create the document source."));
 		return ERR_INVALID_DATA;
@@ -706,9 +701,14 @@ Error HTMLSurfaceHCSRNewestBackend::_rebuild_scene() {
 	scene_desc.viewport_width = state->logical_size.x;
 	scene_desc.viewport_height = state->logical_size.y;
 	scene_desc.device_scale = state->device_scale;
+	const uint64_t scene_start = profile ? OS::get_singleton()->get_ticks_usec() : 0;
 	if (hcsr_scene_create(state->source, &scene_desc, &state->scene) != HCSR_OK) {
 		set_terminal(state, scene_error(state, "hcsr_newest could not create the scene."));
 		return ERR_CANT_CREATE;
+	}
+	if (profile) {
+		const uint64_t scene_end = OS::get_singleton()->get_ticks_usec();
+		print_line("HCSR_SCENE_CREATE|" + uitos(scene_start - source_start) + "|" + uitos(scene_end - scene_start));
 	}
 	// Submit accepted startup updates before the first step can build a packet.
 	for (const State::PendingMutationBatch &batch : state->pending_mutations) {
@@ -967,7 +967,22 @@ Dictionary HTMLSurfaceHCSRNewestBackend::trim_process_managed_memory() {
     return result;
 }
 
+void HTMLSurfaceHCSRNewestBackend::_collect_atlas_statistics_on_render_thread(uint64_t p_state_pointer) {
+	State *state = (State *)(uintptr_t)p_state_pointer;
+	MutexLock lock(state->mutex);
+	if (state->closing) return;
+	state->image_atlas_statistics = state->scene_renderer.get_statistics();
+	state->image_atlas_statistics.merge(state->backdrop.get_statistics());
+}
+
 Dictionary HTMLSurfaceHCSRNewestBackend::get_frame_synchronization() const {
+	// The shared atlas is owned by the render thread across all views.
+	// Synchronize only for this explicit diagnostics query, before locking the view.
+	RenderingServer *server = RenderingServer::get_singleton();
+	if (server) {
+		server->call_on_render_thread(callable_mp_static(&HTMLSurfaceHCSRNewestBackend::_collect_atlas_statistics_on_render_thread).bind((uint64_t)(uintptr_t)state));
+		if (!server->is_on_render_thread()) server->sync();
+	}
 	MutexLock lock(state->mutex);
 	Dictionary result;
 	result["canvas_recordings"] = int64_t(state->canvas_recordings);

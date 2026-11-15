@@ -1,4 +1,5 @@
 #include "hcsr_newest_raster_resources.h"
+#include "core/os/os.h"
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/rendering_server.h"
 #include <unordered_map>
@@ -103,6 +104,10 @@ bool HCSRNewestRasterResources::prepare_pool_rd(RenderingDevice *device,uint64_t
     pool->device=device;
     const bool dirty=pool->uploaded!=atlas_revision();
     if(!dirty && !pool->pages.is_empty())return true;
+    static const bool profile = OS::get_singleton()->get_environment("HCSR_RECORD_PROFILE") == "1";
+    const uint64_t start = profile ? OS::get_singleton()->get_ticks_usec() : 0;
+    const uint64_t initial_bytes = bytes;
+    int uploads = 0;
     if(pool->pages.resize(page_count())!=OK)return false;
     for(int index=0;index<pool->pages.size();++index) {
         auto &page=pool->pages.write[index];
@@ -123,15 +128,21 @@ bool HCSRNewestRasterResources::prepare_pool_rd(RenderingDevice *device,uint64_t
         }
         auto updates=page_updates(index);
         if(restore){updates.clear();const auto bounds=page_live_bounds(index);if(bounds.has_area())updates.push_back(bounds);}
-        for(const auto &rect:updates) {
-            auto pixels=page_pixels(index,rect);for(int i=0;i<pixels.size();i+=4)SWAP(pixels.write[i],pixels.write[i+2]);
+        for (const Rect2i &rect : updates) {
+            auto pixels = page_pixels(index, rect);
+            uint8_t *rgba = pixels.ptrw();
+            for (int i = 0; i < pixels.size(); i += 4) SWAP(rgba[i], rgba[i + 2]);
             format.width=rect.size.x;format.height=rect.size.y;format.usage_bits=RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT;
             Vector<Vector<uint8_t>> data;data.push_back(pixels);
             auto patch=device->texture_create(format,RD::TextureView(),data);if(!patch.is_valid())return false;
             auto error=device->texture_copy(patch,page.texture,Vector3(),Vector3(rect.position.x,rect.position.y,0),Vector3(rect.size.x,rect.size.y,1),0,0,0,0);
             device->free_rid(patch);if(error!=OK)return false;bytes+=pixels.size();
+            ++uploads;
         }
         acknowledge_upload(index);
+    }
+    if (profile && uploads > 0) {
+        print_line("HCSR_ATLAS_UPLOAD|" + uitos(OS::get_singleton()->get_ticks_usec() - start) + "|" + itos(uploads) + "|" + uitos(bytes - initial_bytes));
     }
     pool->uploaded=atlas_revision();return true;
 }
