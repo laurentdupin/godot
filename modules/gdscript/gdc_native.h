@@ -92,6 +92,9 @@ public:
 	};
 	static GDCNative *get_singleton() { return singleton; }
 	static PackedStringArray runtime_libraries(const String &p_platform, const String &p_arch);
+	// The exported library's file name and its folder relative to the executable
+	// (cgd_native/export/library_name and cgd_native/export/directory).
+	static Error export_library_layout(const String &p_platform, String &r_filename, String &r_directory, String &r_error);
 	Error build(const String &p_path, const String &p_id, const String &p_native_source, String &r_library, String &r_error, const String &p_platform, const String &p_arch, bool p_cache_for_run = false, HashMap<String, Dictionary> *p_run_stamps = nullptr);
 	struct MergedRunCache {
 		String directory;

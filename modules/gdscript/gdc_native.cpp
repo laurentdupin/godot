@@ -152,6 +152,26 @@ String merged_library_filename(const String &p_platform) {
 	return p_platform == "windows" ? "cgd_native.dll" : p_platform == "macos" ? "libcgd_native.dylib" : "libcgd_native.so";
 }
 
+bool is_safe_path_component(const String &p_component) {
+	if (p_component.is_empty() || p_component == "." || p_component == ".." || p_component.ends_with(".") || p_component.ends_with(" ")) {
+		return false;
+	}
+	for (int i = 0; i < p_component.length(); i++) {
+		const char32_t c = p_component[i];
+		if (!is_ascii_alphanumeric_char(c) && c != '_' && c != '-' && c != '.' && c != ' ') {
+			return false;
+		}
+	}
+	// Windows device names can't be used as file or folder names.
+	const String stem = p_component.get_slice(".", 0).to_upper();
+	for (const char *reserved : { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" }) {
+		if (stem == reserved) {
+			return false;
+		}
+	}
+	return true;
+}
+
 String run_cache_root(const String &p_platform, const String &p_arch) {
 	return ProjectSettings::get_singleton()->get_project_data_path().path_join("cgd_native").path_join(p_platform).path_join(p_arch);
 }
@@ -1824,6 +1844,43 @@ bool GDCNative::prepare_editor_run() {
 }
 #endif
 
+Error GDCNative::export_library_layout(const String &p_platform, String &r_filename, String &r_directory, String &r_error) {
+	const Variant configured_name = setting("cgd_native/export/library_name");
+	const String name = configured_name.get_type() == Variant::NIL ? String("cgd_native") : String(configured_name).strip_edges();
+	if (!is_safe_path_component(name) || name.contains(" ") || name.length() > 64) {
+		r_error = "Invalid cgd_native/export/library_name \"" + name + "\": use letters, digits, '_', '-' or '.', without a path or extension.";
+		return ERR_INVALID_PARAMETER;
+	}
+	const String lower = name.to_lower();
+	if (lower.ends_with(".dll") || lower.ends_with(".so") || lower.ends_with(".dylib") || lower == "godot_android" || lower == "c++_shared") {
+		r_error = "Invalid cgd_native/export/library_name \"" + name + "\": give the base name only, and not one used by Godot.";
+		return ERR_INVALID_PARAMETER;
+	}
+	r_filename = p_platform == "windows" ? name + ".dll" : p_platform == "macos" ? "lib" + name + ".dylib"
+																			   : "lib" + name + ".so";
+	r_directory = String();
+	// macOS keeps the library in Contents/Frameworks for code signing, and Android
+	// loads it from the package's library folder, so only the name applies there.
+	if (p_platform == "windows" || p_platform == "linux") {
+		const Variant configured_directory = setting("cgd_native/export/directory");
+		const String directory = configured_directory.get_type() == Variant::NIL ? String("cgd_native") : String(configured_directory).strip_edges().replace_char('\\', '/').trim_suffix("/");
+		if (!directory.is_empty()) {
+			if (directory.begins_with("/") || directory.contains(":")) {
+				r_error = "Invalid cgd_native/export/directory \"" + directory + "\": use a folder relative to the executable.";
+				return ERR_INVALID_PARAMETER;
+			}
+			for (const String &component : directory.split("/")) {
+				if (!is_safe_path_component(component)) {
+					r_error = "Invalid cgd_native/export/directory \"" + directory + "\": use letters, digits, '_', '-', '.' or spaces, without '..'.";
+					return ERR_INVALID_PARAMETER;
+				}
+			}
+			r_directory = directory;
+		}
+	}
+	return OK;
+}
+
 PackedStringArray GDCNative::runtime_libraries(const String &p_platform, const String &p_arch) {
 	return target_array("runtime_libraries", p_platform, p_arch);
 }
@@ -2127,7 +2184,7 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 		}
 		const String output_dir = x64.get_base_dir().path_join("universal");
 		DirAccess::make_dir_recursive_absolute(output_dir);
-		r_library = output_dir.path_join("libcgd_native.dylib");
+		r_library = output_dir.path_join(x64.get_file());
 		int status = -1;
 		if (capture_compiler("/usr/bin/lipo", { "-create", x64, arm64, "-output", r_library }, r_error, &status) != OK || status != 0) {
 			return ERR_COMPILATION_FAILED;
@@ -2141,8 +2198,17 @@ Error GDCNative::build_export(const Vector<NativeUnit> &p_units, const String &p
 		return ERR_CANT_CREATE;
 	}
 	const String directory = workspace->get_current_dir();
-	const String filename = windows ? "cgd_native.dll" : macos ? "libcgd_native.dylib"
-															   : "libcgd_native.so";
+	String filename;
+	String export_directory;
+	if (r_run_cache) {
+		// Run keeps its own cache layout; only exports use the project's name.
+		filename = merged_library_filename(p_platform);
+	} else {
+		const Error layout_error = export_library_layout(p_platform, filename, export_directory, r_error);
+		if (layout_error != OK) {
+			return layout_error;
+		}
+	}
 	List<String> objects;
 	HashMap<String, Dictionary> stamps;
 	const Dictionary previous_inputs = r_run_cache ? Dictionary(r_run_cache->previous.get("inputs", Dictionary())) : Dictionary();
@@ -2470,14 +2536,20 @@ Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const St
 			if (!library) {
 				String dll;
 #ifdef ANDROID_ENABLED
-				dll = "libcgd_native.so";
+				String directory;
+				String layout_error;
+				ERR_FAIL_COND_V_MSG(export_library_layout("android", dll, directory, layout_error) != OK, Variant(), layout_error);
 #else
 				const String platform = os->get_name().to_lower();
 				if (ProjectSettings::get_singleton()->is_using_datapack()) {
-					const String directory = platform == "macos" ? "../Frameworks" : "cgd_native";
-					dll = os->get_executable_path().get_base_dir().path_join(directory).path_join(platform == "windows" ? "cgd_native.dll" : platform == "macos" ? "libcgd_native.dylib"
-																																								 : "libcgd_native.so")
-								  .simplify_path();
+					String filename;
+					String directory;
+					String layout_error;
+					ERR_FAIL_COND_V_MSG(export_library_layout(platform, filename, directory, layout_error) != OK, Variant(), layout_error);
+					if (platform == "macos") {
+						directory = "../Frameworks";
+					}
+					dll = os->get_executable_path().get_base_dir().path_join(directory).path_join(filename).simplify_path();
 				} else {
 					const String arch = Engine::get_singleton()->get_architecture_name();
 					const bool prebuilt = os->get_environment("GODOT_CGD_NATIVE_PREBUILT") == ProjectSettings::get_singleton()->get_resource_path();

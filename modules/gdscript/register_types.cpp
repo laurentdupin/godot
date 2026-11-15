@@ -180,6 +180,14 @@ protected:
 			return;
 		}
 		const String platform = get_export_preset()->get_platform()->get_os_name().to_lower();
+		String library_filename;
+		String destination;
+		String layout_error;
+		if (GDCNative::export_library_layout(platform, library_filename, destination, layout_error) != OK) {
+			get_export_preset()->get_platform()->add_message(EditorExportPlatform::EXPORT_MESSAGE_ERROR, "GDScript / GD-C", layout_error);
+			fail_export(ERR_INVALID_PARAMETER);
+			return;
+		}
 		for (const auto &entry : native_units) {
 			String library;
 			String error;
@@ -189,7 +197,6 @@ protected:
 				return;
 			}
 			const Vector<String> tags = platform == "android" ? Vector<String>{ entry.key } : Vector<String>();
-			const String destination = platform == "windows" || platform == "linux" ? String("cgd_native") : String();
 			add_shared_object(library, tags, destination);
 			for (const String &runtime : GDCNative::runtime_libraries(platform, entry.key)) {
 				add_shared_object(ProjectSettings::get_singleton()->globalize_path(runtime), tags, destination);
@@ -226,6 +233,10 @@ void initialize_gdscript_module(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SERVERS) {
 		GLOBAL_DEF(PropertyInfo(Variant::STRING, "cgd_native/c_standard", PROPERTY_HINT_ENUM, "c11,c17,c23,gnu11,gnu17,gnu23"), "c17");
 		GLOBAL_DEF(PropertyInfo(Variant::STRING, "cgd_native/cpp_standard", PROPERTY_HINT_ENUM, "c++20,c++23,gnu++20,gnu++23"), "c++20");
+		// Base name of the exported native library: cgd_native.dll, libcgd_native.so, libcgd_native.dylib.
+		GLOBAL_DEF(PropertyInfo(Variant::STRING, "cgd_native/export/library_name"), "cgd_native");
+		// Folder beside the executable on Windows and Linux; empty places it next to the executable.
+		GLOBAL_DEF(PropertyInfo(Variant::STRING, "cgd_native/export/directory"), "cgd_native");
 		GDREGISTER_CLASS(GDScript);
 		GDREGISTER_INTERNAL_CLASS(GDScriptFunctionState);
 		GDREGISTER_ABSTRACT_CLASS(GDCNative);
