@@ -1484,6 +1484,14 @@ void AudioServer::finish() {
 		AudioDriverManager::get_driver(i)->finish();
 	}
 
+	// Stopped playbacks are only removed from the list by the mix step. With the
+	// drivers finished no more mixing happens, so release whatever is left now;
+	// otherwise those playbacks (and their streams) outlive resource cleanup.
+	for (AudioStreamPlaybackListNode *playback_node : playback_list) {
+		_delete_stream_playback_list_node(playback_node);
+	}
+	_cleanup_lists();
+
 	for (int i = 0; i < buses.size(); i++) {
 		memdelete(buses[i]);
 	}
