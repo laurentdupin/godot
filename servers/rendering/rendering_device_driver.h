@@ -279,6 +279,7 @@ public:
 	};
 
 	virtual TextureID texture_create(const TextureFormat &p_format, const TextureView &p_view) = 0;
+	virtual TextureSamples texture_get_nearest_supported_samples(const TextureFormat &p_format) = 0;
 	virtual TextureID texture_create_from_extension(uint64_t p_native_texture, const TextureFormat &p_format) = 0;
 	// Imports an Android AHardwareBuffer and retains its native reference until
 	// texture_free(). Other platforms return an invalid ID.

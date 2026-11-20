@@ -198,6 +198,7 @@ class RenderingDeviceDriverVulkan : public RenderingDeviceDriver {
 
 	PipelineStatistics pipeline_statistics;
 	DriverWorkarounds driver_workarounds;
+	BinaryMutex *powervr_rogue_shader_crash_workaround_mutex = nullptr;
 
 	void _register_requested_device_extension(const CharString &p_extension_name, bool p_required);
 	Error _initialize_device_extensions();
@@ -308,6 +309,7 @@ public:
 
 public:
 	virtual TextureID texture_create(const TextureFormat &p_format, const TextureView &p_view) override final;
+	virtual TextureSamples texture_get_nearest_supported_samples(const TextureFormat &p_format) override final;
 	virtual TextureID texture_create_from_extension(uint64_t p_native_texture, const TextureFormat &p_format) override final;
 	virtual TextureID texture_create_from_android_hardware_buffer(uint64_t p_hardware_buffer, const TextureFormat &p_format) override final;
 #if defined(LINUXBSD_ENABLED) && defined(__linux__)

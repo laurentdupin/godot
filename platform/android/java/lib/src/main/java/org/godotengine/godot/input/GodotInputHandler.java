@@ -42,6 +42,7 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.hardware.display.DisplayManager;
 import android.hardware.input.InputManager;
 import android.os.Build;
 import android.util.Log;
@@ -57,6 +58,7 @@ import android.view.Surface;
 import android.view.WindowManager;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.RestrictTo;
 
 import java.util.Collections;
 import java.util.HashSet;
@@ -88,6 +90,7 @@ public class GodotInputHandler implements InputManager.InputDeviceListener, Sens
 
 	private final Godot godot;
 	private final InputManager mInputManager;
+	private final DisplayManager mDisplayManager;
 	private final WindowManager windowManager;
 	final GestureDetector gestureDetector;
 	final ScaleGestureDetector scaleGestureDetector;
@@ -104,16 +107,30 @@ public class GodotInputHandler implements InputManager.InputDeviceListener, Sens
 	private boolean overrideVolumeButtons = false;
 	private boolean hasHardwareKeyboardConfig = false;
 
+	private final DisplayManager.DisplayListener mDisplayListener = new DisplayManager.DisplayListener() {
+		@Override
+		public void onDisplayAdded(int displayId) {}
+
+		@Override
+		public void onDisplayRemoved(int displayId) {}
+
+		@Override
+		public void onDisplayChanged(int displayId) {
+			updateCachedRotation();
+		}
+	};
+
 	public GodotInputHandler(Context context, Godot godot) {
 		this.godot = godot;
 		mInputManager = (InputManager)context.getSystemService(Context.INPUT_SERVICE);
 		mInputManager.registerInputDeviceListener(this, null);
 
+		mDisplayManager = (DisplayManager)context.getSystemService(Context.DISPLAY_SERVICE);
 		windowManager = (WindowManager)context.getSystemService(Context.WINDOW_SERVICE);
 
 		this.godotGestureHandler = new GodotGestureHandler(this);
 		this.gestureDetector = new GestureDetector(context, godotGestureHandler);
-		enableLongPress(false);
+		this.gestureDetector.setIsLongpressEnabled(true);
 
 		this.scaleGestureDetector = new ScaleGestureDetector(context, godotGestureHandler);
 		this.scaleGestureDetector.setStylusScaleEnabled(true);
@@ -126,10 +143,20 @@ public class GodotInputHandler implements InputManager.InputDeviceListener, Sens
 
 	/**
 	 * Enable long press events. This is false by default.
+	 * @deprecated Long-press is now always enabled. Calling this method has no effect.
 	 */
+	@Deprecated
 	public void enableLongPress(boolean enable) {
-		this.gestureDetector.setIsLongpressEnabled(enable);
-		this.godotGestureHandler.setLongPressEnabled(enable);
+		Log.d(TAG, "This method is no-op. Long-Press is now always enabled.");
+	}
+
+	/**
+	 * Enables or disables right-click emulation.
+	 * <p><b>Internal Use Only:</b> This method is intended solely for internal use and should not be used by external callers.
+	 */
+	@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+	public void enableRightClickEmulation(boolean enable) {
+		this.godotGestureHandler.setRightClickEmulation(enable);
 	}
 
 	/**
@@ -612,10 +639,10 @@ public class GodotInputHandler implements InputManager.InputDeviceListener, Sens
 	}
 
 	boolean handleMouseEvent(final MotionEvent event, int eventActionOverride, boolean doubleTap) {
-		return handleMouseEvent(event, eventActionOverride, event.getButtonState(), doubleTap);
+		return handleMouseEvent(event, eventActionOverride, event.getButtonState(), doubleTap, false);
 	}
 
-	boolean handleMouseEvent(final MotionEvent event, int eventActionOverride, int buttonMaskOverride, boolean doubleTap) {
+	boolean handleMouseEvent(final MotionEvent event, int eventActionOverride, int buttonMaskOverride, boolean doubleTap, boolean emulated) {
 		final float x = event.getX();
 		final float y = event.getY();
 
@@ -641,14 +668,14 @@ public class GodotInputHandler implements InputManager.InputDeviceListener, Sens
 		if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
 			sourceMouseRelative = event.isFromSource(InputDevice.SOURCE_MOUSE_RELATIVE);
 		}
-		return handleMouseEvent(eventActionOverride, buttonMaskOverride, x, y, horizontalFactor, verticalFactor, doubleTap, sourceMouseRelative, pressure, getEventTiltX(event), getEventTiltY(event));
+		return handleMouseEvent(eventActionOverride, buttonMaskOverride, x, y, horizontalFactor, verticalFactor, doubleTap, sourceMouseRelative, pressure, getEventTiltX(event), getEventTiltY(event), emulated);
 	}
 
 	boolean handleMouseEvent(int eventAction, boolean sourceMouseRelative) {
-		return handleMouseEvent(eventAction, 0, 0f, 0f, 0f, 0f, false, sourceMouseRelative, 1f, 0f, 0f);
+		return handleMouseEvent(eventAction, 0, 0f, 0f, 0f, 0f, false, sourceMouseRelative, 1f, 0f, 0f, false);
 	}
 
-	boolean handleMouseEvent(int eventAction, int buttonsMask, float x, float y, float deltaX, float deltaY, boolean doubleClick, boolean sourceMouseRelative, float pressure, float tiltX, float tiltY) {
+	boolean handleMouseEvent(int eventAction, int buttonsMask, float x, float y, float deltaX, float deltaY, boolean doubleClick, boolean sourceMouseRelative, float pressure, float tiltX, float tiltY, boolean emulated) {
 		InputEventRunnable runnable = InputEventRunnable.obtain();
 		if (runnable == null) {
 			return false;
@@ -681,7 +708,7 @@ public class GodotInputHandler implements InputManager.InputDeviceListener, Sens
 			case MotionEvent.ACTION_HOVER_MOVE:
 			case MotionEvent.ACTION_MOVE:
 			case MotionEvent.ACTION_SCROLL: {
-				runnable.setMouseEvent(eventAction, buttonsMask, x, y, deltaX, deltaY, doubleClick, sourceMouseRelative, pressure, tiltX, tiltY);
+				runnable.setMouseEvent(eventAction, buttonsMask, x, y, deltaX, deltaY, doubleClick, sourceMouseRelative, pressure, tiltX, tiltY, emulated);
 				dispatchInputEventRunnable(runnable);
 				return true;
 			}
@@ -694,10 +721,14 @@ public class GodotInputHandler implements InputManager.InputDeviceListener, Sens
 	}
 
 	boolean handleTouchEvent(final MotionEvent event, int eventActionOverride) {
-		return handleTouchEvent(event, eventActionOverride, false);
+		return handleTouchEvent(event, eventActionOverride, false, false);
 	}
 
 	boolean handleTouchEvent(final MotionEvent event, int eventActionOverride, boolean doubleTap) {
+		return handleTouchEvent(event, eventActionOverride, doubleTap, false);
+	}
+
+	boolean handleTouchEvent(final MotionEvent event, int eventActionOverride, boolean doubleTap, boolean longPress) {
 		if (event.getPointerCount() == 0) {
 			return true;
 		}
@@ -714,7 +745,7 @@ public class GodotInputHandler implements InputManager.InputDeviceListener, Sens
 			case MotionEvent.ACTION_MOVE:
 			case MotionEvent.ACTION_POINTER_UP:
 			case MotionEvent.ACTION_POINTER_DOWN: {
-				runnable.setTouchEvent(event, eventActionOverride, doubleTap);
+				runnable.setTouchEvent(event, eventActionOverride, doubleTap, longPress);
 				dispatchInputEventRunnable(runnable);
 				return true;
 			}
@@ -895,13 +926,26 @@ public class GodotInputHandler implements InputManager.InputDeviceListener, Sens
 	}
 
 	public void onConfigurationChanged(Configuration newConfig) {
-		updateCachedRotation();
-
 		boolean newHardwareKeyboardConfig = newConfig.keyboard != Configuration.KEYBOARD_NOKEYS &&
 				newConfig.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO;
 		if (hasHardwareKeyboardConfig != newHardwareKeyboardConfig) {
 			hasHardwareKeyboardConfig = newHardwareKeyboardConfig;
 			GodotLib.hardwareKeyboardConnected(hasHardwareKeyboard());
+		}
+	}
+
+	@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+	public void onActivityResumed() {
+		if (mDisplayManager != null) {
+			mDisplayManager.registerDisplayListener(mDisplayListener, null);
+		}
+		updateCachedRotation();
+	}
+
+	@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+	public void onActivityPaused() {
+		if (mDisplayManager != null) {
+			mDisplayManager.unregisterDisplayListener(mDisplayListener);
 		}
 	}
 }

@@ -1,8 +1,8 @@
-diff --git a/src/loaders/svg/tvgSvgSceneBuilder.cpp b/src/loaders/svg/tvgSvgSceneBuilder.cpp
-index 50e91adaab..f07bb58188 100644
---- a/src/loaders/svg/tvgSvgSceneBuilder.cpp
-+++ b/src/loaders/svg/tvgSvgSceneBuilder.cpp
-@@ -370,6 +370,12 @@ static Paint* _applyFilter(SvgLoaderData& loaderData, Paint* paint, const SvgNod
+diff --git a/thirdparty/thorvg/src/loaders/svg/tvgSvgBuilder.cpp b/thirdparty/thorvg/src/loaders/svg/tvgSvgBuilder.cpp
+index 10249956c2..d274b07d75 100644
+--- a/thirdparty/thorvg/src/loaders/svg/tvgSvgBuilder.cpp
++++ b/thirdparty/thorvg/src/loaders/svg/tvgSvgBuilder.cpp
+@@ -499,6 +499,12 @@ static Paint* _applyFilter(SvgParserContext& ctx, Paint* paint, const SvgNode* n
          }
      }
  

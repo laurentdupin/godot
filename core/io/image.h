@@ -213,6 +213,11 @@ public:
 		float rdo_quality_loss = 0;
 	};
 
+	static void _srgb2lin_hft4(void *p_td, uint32_t p_i);
+	static void _srgb2lin_hft3(void *p_td, uint32_t p_i);
+	static void _lin2srgb_hft4(void *p_td, uint32_t p_i);
+	static void _lin2srgb_hft3(void *p_td, uint32_t p_i);
+
 	// External saver function pointers.
 
 	static inline SavePNGFunc save_png_func = nullptr;
@@ -407,7 +412,7 @@ public:
 	Image() = default; // Create an empty image.
 	Image(int p_width, int p_height, bool p_use_mipmaps, Format p_format); // Create an empty image of a specific size and format.
 	Image(int p_width, int p_height, bool p_mipmaps, Format p_format, const Vector<uint8_t> &p_data); // Import an image of a specific size and format from a byte vector.
-	Image(const uint8_t *p_mem_png_jpg, int p_len = -1); // Import either a png or jpg from a pointer.
+	Image(const uint8_t *p_mem_png_jpg, int p_len); // Import either a png or jpg from a pointer.
 	Image(const char **p_xpm); // Import an XPM image.
 
 	AlphaMode detect_alpha() const;

@@ -195,7 +195,7 @@ TEST_CASE("[GDC][SceneTree][Editor] Completion suggests inherited properties and
 	EditorLanguage *editor = GDScriptLanguage::get_singleton()->get_editor_language();
 	const String caret = String::chr(0xFFFF);
 	for (const String &tail : { "\n}", "\n    print(1);\n}", ";\n}" }) {
-		List<ScriptLanguage::CodeCompletionOption> options;
+		List<EditorLanguage::CompletionOption> options;
 		bool forced = false;
 		String hint;
 		const String source = "extends Node3D;\nvoid _process(float delta) {\n    posit" + caret + tail;
@@ -210,7 +210,7 @@ TEST_CASE("[GDC][SceneTree][Editor] Completion suggests inherited properties and
 		CHECK(global_position);
 	}
 	for (const String &expression : { "position.", "offset." }) {
-		List<ScriptLanguage::CodeCompletionOption> options;
+		List<EditorLanguage::CompletionOption> options;
 		bool forced = false;
 		String hint;
 		const String source = "extends Node3D;\nvoid _ready() {\n    Vector3 offset = Vector3.ZERO;\n    " + expression + caret + "\n}";
@@ -231,7 +231,7 @@ TEST_CASE("[GDC][SceneTree][Editor] Incomplete source is safe during completion 
 		REQUIRE(parser.parse(source, "res://editing.cgd", true) == ERR_PARSE_ERROR);
 		const bool has_tree = parser.get_tree() != nullptr;
 		rejected_before_parsing += !has_tree;
-		List<ScriptLanguage::CodeCompletionOption> options;
+		List<EditorLanguage::CompletionOption> options;
 		bool forced = true;
 		String hint;
 		Error completion_error = editor->complete_code(source + String::chr(0xFFFF), "res://editing.cgd", nullptr, &options, forced, hint);
@@ -252,7 +252,7 @@ TEST_CASE("[GDC][SceneTree][Editor] Incomplete source is safe during completion 
 	const String starter = "extends Node3D;\n\nvoid _ready() {\n}\n\nvoid _process(float delta) {\n}\n";
 	for (int length = 0; length <= starter.length(); length++) {
 		const String source = starter.left(length) + String::chr(0xFFFF);
-		List<ScriptLanguage::CodeCompletionOption> options;
+		List<EditorLanguage::CompletionOption> options;
 		bool forced = false;
 		String hint;
 		Error completion_error = editor->complete_code(source, "res://editing.cgd", nullptr, &options, forced, hint);

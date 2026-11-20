@@ -1547,7 +1547,7 @@ bool GDCNative::is_native_position(const String &p_code, const String &p_path, i
 	return GDCFrontend::transpile(p_code, generated, map, error, line, column, true, { uint32_t(p_row + 1), uint32_t(p_column + 1) }, p_path, nullptr, &offset) == OK && offset >= 0;
 }
 
-bool GDCNative::complete_in_editor(ObjectID p_editor, const String &p_code, const String &p_path, const Callable &p_callback, List<ScriptLanguage::CodeCompletionOption> &r_options, String &r_hint) {
+bool GDCNative::complete_in_editor(ObjectID p_editor, const String &p_code, const String &p_path, const Callable &p_callback, List<EditorLanguage::CompletionOption> &r_options, String &r_hint) {
 	const int caret = p_code.find_char(0xFFFF);
 	if (caret < 0 || !p_code.contains("native")) {
 		return false;
@@ -1618,7 +1618,7 @@ void GDCNative::finish_completion(const Callable &p_callback) {
 	start_completion();
 }
 
-bool GDCNative::complete_code(const String &p_code, const String &p_path, List<ScriptLanguage::CodeCompletionOption> &r_options, String &r_call_hint, const String &p_symbol, String *r_prototype) {
+bool GDCNative::complete_code(const String &p_code, const String &p_path, List<EditorLanguage::CompletionOption> &r_options, String &r_call_hint, const String &p_symbol, String *r_prototype) {
 	const int caret = p_code.find_char(0xFFFF);
 	if (caret < 0 || !p_code.contains("native")) {
 		return false;
@@ -1741,24 +1741,24 @@ bool GDCNative::complete_code(const String &p_code, const String &p_path, List<S
 			}
 			*r_prototype += detail.is_empty() ? name : detail.replace("[#", "").replace("#]", " ").replace("<#", "").replace("#>", "").replace("{#", "").replace("#}", "");
 		}
-		ScriptLanguage::CodeCompletionKind kind = ScriptLanguage::CODE_COMPLETION_KIND_PLAIN_TEXT;
+		EditorLanguage::CompletionKind kind = EditorLanguage::CompletionKind::PLAIN_TEXT;
 		if (include_directive && name == "Pattern") {
 			name = include_directory + detail;
-			kind = ScriptLanguage::CODE_COMPLETION_KIND_FILE_PATH;
+			kind = EditorLanguage::CompletionKind::FILE_PATH;
 			if (delimiter >= 0 && current_line[delimiter] == '"') {
 				name = "\"" + name;
 			}
 		} else if (!name.is_valid_unicode_identifier() || name.begins_with("CGD_") || name.begins_with("cgd_native_")) {
 			continue;
 		} else if (detail.contains(name + "(")) {
-			kind = ScriptLanguage::CODE_COMPLETION_KIND_FUNCTION;
+			kind = EditorLanguage::CompletionKind::FUNCTION;
 		}
 		if (seen.has(name)) {
 			continue;
 		}
 		seen.insert(name);
-		ScriptLanguage::CodeCompletionOption option(name, kind);
-		if (kind == ScriptLanguage::CODE_COMPLETION_KIND_FUNCTION) {
+		EditorLanguage::CompletionOption option(name, kind);
+		if (kind == EditorLanguage::CompletionKind::FUNCTION) {
 			option.insert_text += "(";
 		}
 		r_options.push_back(option);

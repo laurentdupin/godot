@@ -139,6 +139,16 @@ def query_scons_version(python_executable: Path) -> str | None:
     return completed.stdout.strip()
 
 
+def has_python_module(python_executable: Path, module: str) -> bool:
+    completed = subprocess.run(
+        [str(python_executable), "-c", f"import {module}"],
+        cwd=GODOT_ROOT,
+        capture_output=True,
+        check=False,
+    )
+    return completed.returncode == 0
+
+
 def bootstrap_virtual_environment() -> Path:
     python_executable = virtual_environment_python()
     if not python_executable.is_file():
@@ -171,6 +181,28 @@ def bootstrap_virtual_environment() -> Path:
         )
         if completed.returncode != 0:
             raise RuntimeError("SCons installation failed.")
+
+    # Godot's SCons build compresses generated editor data with zstandard.
+    if not has_python_module(python_executable, "zstandard"):
+        PIP_CACHE_DIRECTORY.mkdir(parents=True, exist_ok=True)
+        environment = os.environ.copy()
+        environment["PIP_CACHE_DIR"] = str(PIP_CACHE_DIRECTORY)
+        print("Installing zstandard into the local virtual environment.", flush=True)
+        completed = subprocess.run(
+            [
+                str(python_executable),
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                "zstandard",
+            ],
+            cwd=GODOT_ROOT,
+            env=environment,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError("zstandard installation failed.")
 
     return python_executable
 

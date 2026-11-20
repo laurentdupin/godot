@@ -148,6 +148,16 @@ public:
 		_FORCE_INLINE_ bool is_variant() const { return kind == VARIANT || kind == RESOLVING || kind == UNRESOLVED; }
 		_FORCE_INLINE_ bool is_hard_type() const { return type_source > INFERRED; }
 
+		_FORCE_INLINE_ GDScriptParser::DataType as_hard_type() const {
+			if (!is_set() || has_no_type() || is_hard_type()) {
+				return *this;
+			}
+			DataType ret;
+			ret.type_source = ANNOTATED_INFERRED;
+			ret.kind = VARIANT;
+			return ret;
+		}
+
 		String to_string() const;
 		_FORCE_INLINE_ String to_string_strict() const { return is_hard_type() ? to_string() : "Variant"; }
 
@@ -157,7 +167,7 @@ public:
 		_FORCE_INLINE_ static DataType get_variant_type() { // Default DataType for container elements.
 			DataType datatype;
 			datatype.kind = VARIANT;
-			datatype.type_source = INFERRED;
+			datatype.type_source = ANNOTATED_INFERRED;
 			return datatype;
 		}
 
@@ -766,7 +776,7 @@ public:
 		String extends_path;
 		Vector<IdentifierNode *> extends; // List for indexing: extends A.B.C
 		DataType base_type;
-		// Metatype that represents this class.
+		// Metatype that represents this class. Always contains a hard-type.
 		DataType self_type;
 		String fqcn; // Fully-qualified class name. Identifies uniquely any class in the project.
 
@@ -1023,8 +1033,6 @@ public:
 	};
 
 	struct PatternNode : public Node {
-		DataType type_constraint;
-
 		enum Type {
 			PT_LITERAL,
 			PT_EXPRESSION,
@@ -1374,6 +1382,7 @@ public:
 private:
 	friend class GDScriptAnalyzer;
 	friend class GDScriptParserRef;
+	friend class GDScriptLinter;
 
 	void _remap_gdc_positions(const GDC::SourceMap &p_map);
 
@@ -1424,8 +1433,11 @@ private:
 	bool is_script_ignoring_warnings = false;
 	HashSet<int> warning_ignored_lines[GDScriptWarning::WARNING_MAX];
 	int warning_ignore_start_lines[GDScriptWarning::WARNING_MAX];
-	HashSet<int> unsafe_lines;
 #endif // DEBUG_ENABLED
+
+#ifdef TOOLS_ENABLED
+	HashSet<int> unsafe_lines;
+#endif
 
 	GDScriptTokenizer *tokenizer = nullptr;
 	GDScriptTokenizer::Token previous;
@@ -1502,6 +1514,9 @@ private:
 	void update_extents(Node *p_node);
 	void reset_extents(Node *p_node, GDScriptTokenizer::Token p_token);
 	void reset_extents(Node *p_node, Node *p_from);
+	void set_synthetic_extents(Node *p_node) {
+		p_node->start_line = p_node->end_line = p_node->start_column = p_node->end_column = -1;
+	}
 
 	template <typename T>
 	T *alloc_node() {
@@ -1542,6 +1557,7 @@ private:
 	void push_error(const String &p_message, const GDScriptTokenizer::Token &p_origin);
 
 #ifdef DEBUG_ENABLED
+public:
 	void push_warning(const Node *p_source, GDScriptWarning::Code p_code, const Vector<String> &p_symbols);
 	template <typename... Symbols>
 	void push_warning(const Node *p_source, GDScriptWarning::Code p_code, const Symbols &...p_symbols) {
@@ -1552,6 +1568,8 @@ private:
 	void push_warning(int p_start_line, int p_start_column, int p_end_line, int p_end_column, GDScriptWarning::Code p_code, const Symbols &...p_symbols) {
 		push_warning(p_start_line, p_start_column, p_end_line, p_end_column, p_code, Vector<String>{ p_symbols... });
 	}
+
+private:
 	void apply_pending_warnings();
 	void evaluate_warning_directory_rules_for_script_path();
 #endif // DEBUG_ENABLED
@@ -1606,6 +1624,7 @@ private:
 	bool onready_annotation(AnnotationNode *p_annotation, Node *p_target, ClassNode *p_class);
 	template <PropertyHint t_hint, Variant::Type t_type>
 	bool export_annotations(AnnotationNode *p_annotation, Node *p_target, ClassNode *p_class);
+	bool _export_annotations(AnnotationNode *p_annotation, Node *p_target, ClassNode *p_class, PropertyHint p_hint, Variant::Type p_type);
 	bool export_storage_annotation(AnnotationNode *p_annotation, Node *p_target, ClassNode *p_class);
 	bool export_custom_annotation(AnnotationNode *p_annotation, Node *p_target, ClassNode *p_class);
 	bool export_tool_button_annotation(AnnotationNode *p_annotation, Node *p_target, ClassNode *p_class);
@@ -1695,14 +1714,15 @@ public:
 #ifdef DEBUG_ENABLED
 	static void update_project_settings();
 	const List<GDScriptWarning> &get_warnings() const { return warnings; }
-	const HashSet<int> &get_unsafe_lines() const { return unsafe_lines; }
-	int get_last_line_number() const { return current.end_line; }
 #endif // DEBUG_ENABLED
 
 #ifdef TOOLS_ENABLED
 	static HashMap<String, String> theme_color_names;
 
 	HashMap<int, GDScriptTokenizer::CommentData> comment_data;
+
+	const HashSet<int> &get_unsafe_lines() const { return unsafe_lines; }
+	int get_last_line_number() const { return current.end_line; }
 #endif // TOOLS_ENABLED
 
 	GDScriptParser();

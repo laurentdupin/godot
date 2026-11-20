@@ -396,6 +396,8 @@ void EditorRunBar::_run_native(const Ref<EditorExportPreset> &p_preset) {
 			return; // Build failed.
 		}
 
+		is_native = true;
+
 		EditorDebuggerNode::get_singleton()->start(p_preset->get_platform()->get_debug_protocol());
 		emit_signal(SNAME("play_pressed"));
 		editor_run.run_native_notify();
@@ -476,6 +478,8 @@ void EditorRunBar::stop_playing() {
 		return;
 	}
 
+	is_native = false;
+
 	current_mode = RunMode::STOPPED;
 	editor_run.stop();
 	EditorDebuggerNode::get_singleton()->stop();
@@ -505,6 +509,10 @@ String EditorRunBar::get_playing_scene() const {
 
 Error EditorRunBar::start_native_device(int p_device_id) const {
 	return run_native->start_run_native(p_device_id);
+}
+
+bool EditorRunBar::is_running_natively() const {
+	return is_native && is_playing();
 }
 
 ProcessID EditorRunBar::has_child_process(ProcessID p_pid) const {

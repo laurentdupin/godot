@@ -59,6 +59,7 @@ class ScriptTextEditor : public CodeEditorBase {
 	GDCLASS(ScriptTextEditor, CodeEditorBase);
 
 	friend class ScriptEditor;
+	friend class DocumentEditorContainer;
 
 	Variant pending_state;
 
@@ -135,6 +136,7 @@ class ScriptTextEditor : public CodeEditorBase {
 		SHOW_TOOLTIP_AT_CARET,
 		HELP_CONTEXTUAL,
 		LOOKUP_SYMBOL,
+		RENAME_SYMBOL,
 	};
 
 	class EditMenusScTE : public EditMenusCEB {
@@ -146,7 +148,7 @@ class ScriptTextEditor : public CodeEditorBase {
 	public:
 		virtual bool handles(ScriptEditorBase *p_seb) override { return Object::cast_to<ScriptTextEditor>(p_seb); }
 
-		EditMenusScTE(ScriptEditor *p_se);
+		EditMenusScTE(DocumentEditorContainer *p_document_editor_container);
 	};
 
 	void _script_res_changed();
@@ -164,6 +166,16 @@ class ScriptTextEditor : public CodeEditorBase {
 	String _get_dropped_resource_as_exported_member(const Ref<Resource> &p_resource, const Vector<ObjectID> &p_script_instance_obj_ids);
 	void _assign_dragged_export_variables();
 
+	Timer *hover_tooltip_timer = nullptr;
+	Point2i hover_tooltip_pos;
+	void _on_hover_tooltip_timer_timeout();
+	void _apply_project_settings();
+	static bool _is_line_col_in_range(int p_line, int p_column, int p_from_line, int p_from_column, int p_to_line, int p_to_column) {
+		// TODO: Duplicate of logic from TextEdit::_is_line_col_in_range, minus the include_edges logic.
+		// At some point, this function should probably be unified.
+		return (p_line >= p_from_line && p_line <= p_to_line && (p_line > p_from_line || p_column >= p_from_column) && (p_line < p_to_line || p_column <= p_to_column));
+	}
+
 	static ScriptEditorBase *create_editor(const Ref<Resource> &p_resource);
 
 protected:
@@ -174,7 +186,7 @@ protected:
 	void _update_warnings();
 	void _update_errors();
 
-	virtual void _code_complete_script(const String &p_code, List<ScriptLanguage::CodeCompletionOption> *r_options, bool &r_force) override;
+	virtual void _code_complete_script(const String &p_code, List<EditorLanguage::CompletionOption> *r_options, bool &r_force) override;
 
 	void _set_theme_for_script();
 	void _show_errors_panel(bool p_show);
@@ -211,7 +223,7 @@ protected:
 
 	void _goto_line(int p_line);
 
-	void _make_ste_context_menu(bool p_selection, bool p_color, bool p_foldable, bool p_open_docs, const Vector2 &p_pos);
+	void _make_ste_context_menu(bool p_selection, bool p_color, bool p_foldable, bool p_open_docs, bool p_allow_rename, const Vector2 &p_pos);
 	Dictionary _get_context_data() const;
 
 	virtual void _text_edit_gui_input(const Ref<InputEvent> &p_ev) override;
@@ -230,7 +242,7 @@ public:
 	virtual void enable_editor() override;
 	virtual Vector<String> get_functions() override;
 
-	virtual EditMenusBase *create_edit_menu(ScriptEditor *p_se) override { return memnew(EditMenusScTE(p_se)); }
+	virtual EditMenusBase *create_edit_menu(DocumentEditorContainer *p_document_editor_container) override { return memnew(EditMenusScTE(p_document_editor_container)); }
 
 	virtual Ref<Texture2D> get_theme_icon() override;
 

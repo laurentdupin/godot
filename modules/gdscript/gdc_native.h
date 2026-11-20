@@ -9,6 +9,7 @@
 #include "core/variant/array.h"
 
 #ifdef TOOLS_ENABLED
+#include "core/object/editor_language.h"
 #include "core/object/script_language.h"
 #include "core/object/worker_thread_pool.h"
 #endif
@@ -62,7 +63,7 @@ class GDCNative : public Object {
 	struct CompletionResult {
 		String path;
 		String code;
-		List<ScriptLanguage::CodeCompletionOption> options;
+		List<EditorLanguage::CompletionOption> options;
 		String hint;
 		String symbol;
 		String prototype;
@@ -113,8 +114,8 @@ public:
 	static bool is_native_position(const String &p_code, const String &p_path, int p_row, int p_column);
 	// 1 if the script declares native code, 0 if it doesn't, -1 if it doesn't parse (unknown).
 	static int has_native_code(const String &p_code, const String &p_path);
-	static bool complete_code(const String &p_code, const String &p_path, List<ScriptLanguage::CodeCompletionOption> &r_options, String &r_call_hint, const String &p_symbol = String(), String *r_prototype = nullptr);
-	bool complete_in_editor(ObjectID p_editor, const String &p_code, const String &p_path, const Callable &p_callback, List<ScriptLanguage::CodeCompletionOption> &r_options, String &r_hint);
+	static bool complete_code(const String &p_code, const String &p_path, List<EditorLanguage::CompletionOption> &r_options, String &r_call_hint, const String &p_symbol = String(), String *r_prototype = nullptr);
+	bool complete_in_editor(ObjectID p_editor, const String &p_code, const String &p_path, const Callable &p_callback, List<EditorLanguage::CompletionOption> &r_options, String &r_hint);
 	void request_native_hover(ObjectID p_editor, const String &p_code, const String &p_path, const String &p_symbol, const Callable &p_callback);
 #endif
 

@@ -57,12 +57,6 @@ private:
 	VBoxContainer *main_screen_vbox = nullptr;
 	Vector<EditorPlugin *> editor_table;
 #endif
-	EditorPlugin *selected_plugin = nullptr;
-	bool edit_in_progress = false;
-	bool has_pending_edit = false;
-	ObjectID editing_object;
-	ObjectID pending_edit_object;
-
 	void _on_tab_changed(int p_tab);
 
 protected:
@@ -71,6 +65,7 @@ protected:
 	virtual void update_visibility() override { show(); } // Never hide main screen.
 	virtual TabStyle get_tab_style() const override;
 	virtual Rect2 get_drag_hint_rect() const override;
+	virtual bool can_switch_dock() const override;
 
 public:
 #ifndef DISABLE_DEPRECATED
@@ -80,12 +75,8 @@ public:
 	void remove_main_plugin(EditorPlugin *p_editor);
 #endif
 
-	void edit(Object *p_object);
-
 	void select_next();
 	void select_prev();
-	EditorPlugin *get_selected_plugin() const;
-	bool can_auto_switch_screens() const;
 
 	EditorMainScreen();
 };

@@ -82,6 +82,7 @@ class ScriptCreateDialog : public ConfirmationDialog {
 	ScriptLanguage *_get_language(int p_index) const;
 	String _get_extension(int p_index) const;
 	bool re_check_path = false;
+	bool missing_base_dir = false;
 
 	Control *path_controls[2];
 	Control *name_controls[2];

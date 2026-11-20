@@ -328,6 +328,7 @@ private:
 	HashMap<DXGI_FORMAT, uint32_t> format_sample_counts_mask_cache;
 	Mutex format_sample_counts_mask_cache_mutex;
 
+	uint32_t _find_common_supported_sample_counts_mask(VectorView<DXGI_FORMAT> p_formats);
 	uint32_t _find_max_common_supported_sample_count(VectorView<DXGI_FORMAT> p_formats);
 	UINT _compute_component_mapping(const TextureView &p_view);
 	UINT _compute_plane_slice(DataFormat p_format, BitField<TextureAspectBits> p_aspect_bits);
@@ -343,6 +344,7 @@ protected:
 
 public:
 	virtual TextureID texture_create(const TextureFormat &p_format, const TextureView &p_view) override final;
+	virtual TextureSamples texture_get_nearest_supported_samples(const TextureFormat &p_format) override final;
 	virtual TextureID texture_create_from_extension(uint64_t p_native_texture, const TextureFormat &p_format) override final;
 	virtual TextureID texture_create_from_shared_handle(uint64_t p_native_handle, const TextureFormat &p_format) override final;
 	virtual void texture_set_external_layout(TextureID p_texture, TextureLayout p_layout) override final;

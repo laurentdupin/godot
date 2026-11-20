@@ -31,13 +31,11 @@
 #include "editor_main_screen.h"
 
 #include "core/object/callable_mp.h"
-#include "core/object/object.h"
 #include "editor/docks/editor_dock.h"
 #include "editor/docks/editor_dock_manager.h"
 #include "editor/editor_node.h"
 #include "editor/plugins/editor_plugin.h"
 #include "editor/scene/3d/node_3d_editor_plugin.h"
-#include "editor/script/script_editor_plugin.h"
 #include "editor/settings/editor_settings.h"
 #include "editor/themes/editor_scale.h"
 
@@ -120,70 +118,21 @@ Rect2 EditorMainScreen::get_drag_hint_rect() const {
 	const Rect2 tab_rect = get_internal_container()->get_global_rect();
 	const Rect2 content_rect = get_global_rect();
 	Rect2 final_rect = tab_rect.merge(content_rect);
-	float tab_x = get_tab_bar()->get_global_transform().xform(get_tab_bar()->get_tab_rect(0).position).x;
-	final_rect.position.x = MIN(tab_x, content_rect.position.x);
-	tab_x = get_tab_bar()->get_global_transform().xform(get_tab_bar()->get_tab_rect(-1).get_end()).x;
-	final_rect.set_end(Vector2(MAX(tab_x, content_rect.get_end().x), final_rect.get_end().y));
+	if (get_tab_count() > 0) {
+		float tab_x = get_tab_bar()->get_global_transform().xform(get_tab_bar()->get_tab_rect(0).position).x;
+		final_rect.position.x = MIN(tab_x, content_rect.position.x);
+		tab_x = get_tab_bar()->get_global_transform().xform(get_tab_bar()->get_tab_rect(-1).get_end()).x;
+		final_rect.set_end(Vector2(MAX(tab_x, content_rect.get_end().x), final_rect.get_end().y));
+	}
 	return final_rect;
 }
 
-void EditorMainScreen::edit(Object *p_object) {
-	const ObjectID requested_object = p_object ? p_object->get_instance_id() : ObjectID();
-	if (edit_in_progress) {
-		// Coalesce nested requests, but finish the current deactivation first.
-		// Repeating the active request must not recursively edit the same object.
-		pending_edit_object = requested_object;
-		has_pending_edit = requested_object != editing_object;
-		return;
+bool EditorMainScreen::can_switch_dock() const {
+	if (get_current_tab() == -1) {
+		return true;
 	}
-
-	edit_in_progress = true;
-	ObjectID next_object = requested_object;
-	int transition_count = 0;
-	do {
-		has_pending_edit = false;
-		editing_object = next_object;
-		Object *object = next_object.is_valid() ? ObjectDB::get_instance(next_object) : nullptr;
-		if (next_object.is_valid() && object == nullptr) {
-			break; // A queued object was freed by a plugin callback.
-		}
-		EditorPlugin *handling_plugin = EditorNode::get_editor_data().get_handling_main_editor(object);
-		EditorPlugin *previous_plugin = selected_plugin;
-		const ObjectID handling_id = handling_plugin ? handling_plugin->get_instance_id() : ObjectID();
-		const ObjectID previous_id = previous_plugin ? previous_plugin->get_instance_id() : ObjectID();
-		selected_plugin = handling_plugin;
-		if (previous_plugin && previous_plugin != handling_plugin) {
-			previous_plugin->edit(nullptr);
-			previous_plugin = Object::cast_to<EditorPlugin>(ObjectDB::get_instance(previous_id));
-			if (previous_plugin && handling_id.is_valid()) {
-				previous_plugin->make_visible(false);
-			}
-		}
-		handling_plugin = Object::cast_to<EditorPlugin>(ObjectDB::get_instance(handling_id));
-		if (handling_plugin && selected_plugin == handling_plugin) {
-			// edit(nullptr) may also have freed the originally requested object.
-			object = next_object.is_valid() ? ObjectDB::get_instance(next_object) : nullptr;
-			handling_plugin->edit(object);
-			handling_plugin = Object::cast_to<EditorPlugin>(ObjectDB::get_instance(handling_id));
-			if (handling_plugin && selected_plugin == handling_plugin) {
-				handling_plugin->make_visible(true);
-			}
-		} else if (!handling_plugin && handling_id.is_valid()) {
-			selected_plugin = nullptr;
-		}
-		if (handling_id.is_valid() && ObjectDB::get_instance(handling_id) == nullptr) {
-			selected_plugin = nullptr; // A visibility/edit callback unloaded the plugin.
-		}
-		next_object = pending_edit_object;
-		transition_count++;
-	} while (has_pending_edit && transition_count < 64);
-
-	const bool transition_limit_reached = has_pending_edit;
-	has_pending_edit = false;
-	pending_edit_object = ObjectID();
-	editing_object = ObjectID();
-	edit_in_progress = false;
-	ERR_FAIL_COND_MSG(transition_limit_reached, "Main-screen plugins repeatedly requested conflicting editor selections.");
+	EditorDock *dock = get_dock(get_current_tab());
+	return dock->is_allow_switch_screen();
 }
 
 void EditorMainScreen::select_next() {
@@ -208,18 +157,6 @@ void EditorMainScreen::select_prev() {
 	}
 }
 
-EditorPlugin *EditorMainScreen::get_selected_plugin() const {
-	return selected_plugin;
-}
-
-bool EditorMainScreen::can_auto_switch_screens() const {
-	if (get_current_tab() == -1) {
-		return true;
-	}
-	EditorDock *dock = get_dock(get_current_tab());
-	return dock->is_allow_switch_screen();
-}
-
 #ifndef DISABLE_DEPRECATED
 VBoxContainer *EditorMainScreen::get_control() const {
 	return main_screen_vbox;
@@ -230,9 +167,6 @@ void EditorMainScreen::add_main_plugin(EditorPlugin *p_editor) {
 }
 
 void EditorMainScreen::remove_main_plugin(EditorPlugin *p_editor) {
-	if (selected_plugin == p_editor) {
-		selected_plugin = nullptr;
-	}
 	if (p_editor->has_meta("_dock")) {
 		EditorDock *dock = Object::cast_to<EditorDock>(p_editor->get_meta("_dock").get_validated_object());
 		if (dock) {
