@@ -1273,12 +1273,12 @@ class Frontend {
 		line(std::u32string(is_static ? U"static func " : U"func ") + name.text + U"(" + gd_params + U") -> " + type.text + U":", origin);
 		++indent;
 		std::u32string call = type.text == U"void" ? U"" : U"return ";
-		call += U"CGDNative.invoke_v3(" + native_path_literal() + U", &\"";
+		call += U"CGDNative.invoke_v4(" + native_path_literal() + U", &\"";
 		start(origin);
 		result.native_library_id_offsets.push_back(result.code.size() + call.size());
 		result.native_wrapper_symbol_offsets.push_back(result.code.size() + call.size() + options.native_library_id.size() + std::u32string(U"\", &\"cgd_native_").size());
 		call += options.native_library_id + U"\", &\"" +
-				symbol + U"\", &\"" + signature + U"\", [" + gd_args + U"])";
+				symbol + U"\", &\"" + signature + U"\"" + (gd_args.empty() ? U"" : U", " + gd_args) + U")";
 		line(call, origin);
 		--indent;
 		++cursor;

@@ -47,7 +47,7 @@ int main() {
 			native_options);
 	check(native_script.ok(), "native C and CGD parse together");
 	contains(native_script, U"func f(n: int, use_it: bool) -> float:", "native wrapper retains types");
-	contains(native_script, U"CGDNative.invoke_v3(\"res://win32.cgd\", &\"example\", &\"cgd_native_0000000000000000_0\", &\"fib\", [n, use_it])", "native wrapper identifies the script and ABI");
+	contains(native_script, U"CGDNative.invoke_v4(\"res://win32.cgd\", &\"example\", &\"cgd_native_0000000000000000_0\", &\"fib\", n, use_it)", "native wrapper identifies the script and ABI");
 	check(native_script.native_code.find(U"#line 2 \"res://win32.cgd\"\n\n#include <windows.h>") != std::u32string::npos, "native include and source location retained");
 	check(native_script.native_code.find(U"static double f(int64_t n, bool use_it)") != std::u32string::npos, "native ABI uses Godot-sized numeric types");
 	check(native_script.native_code.find(U"/* } */ char brace = '}';") != std::u32string::npos, "native body survives verbatim");
