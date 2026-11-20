@@ -392,7 +392,7 @@ void RendererViewport::_draw_viewport(Viewport *p_viewport) {
 
 #ifndef XR_DISABLED
 #if DEBUG_ENABLED
-	if (p_viewport->use_xr && !RSG::scene->is_xr_camera(p_viewport->camera)) {
+	if (p_viewport->use_xr && can_draw_3d && !RSG::scene->is_xr_camera(p_viewport->camera)) {
 		WARN_PRINT("Viewport marked with use_xr but current camera is not an XRCamera3D");
 	}
 #endif
