@@ -947,7 +947,17 @@ void FindInFilesContainer::create_rename_control(const String &p_symbol, const E
 
 	Ref<Script> scr = ResourceLoader::load(p_lookup.script_path);
 	ERR_FAIL_COND(scr.is_null());
-	exts.insert(scr->get_language()->get_extension());
+	ScriptLanguage *language = scr->get_language();
+	exts.insert(language->get_extension());
+	// A language can own several source extensions (for example .gd and .cgd);
+	// symbols may be referenced from any of them.
+	List<String> script_extensions;
+	ResourceLoader::get_recognized_extensions_for_type("Script", &script_extensions);
+	for (const String &ext : script_extensions) {
+		if (language->handles_extension(ext)) {
+			exts.insert(ext);
+		}
+	}
 
 	FindInFilesSearch *finder = new_panel->get_finder();
 	finder->set_search_text(p_symbol);
