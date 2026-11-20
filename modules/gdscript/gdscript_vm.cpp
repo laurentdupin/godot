@@ -2383,12 +2383,12 @@ Variant GDScriptFunction::call(GDScriptInstance *p_instance, const Variant **p_a
 				int argc = _code_ptr[ip + 1];
 				GD_ERR_BREAK(argc < 0);
 				int cell = _code_ptr[ip + 2];
-				Variant::Type return_type = (Variant::Type)_code_ptr[ip + 3];
-				GD_ERR_BREAK(return_type < 0 || return_type >= Variant::VARIANT_MAX);
+				Variant::Type native_return_type = (Variant::Type)_code_ptr[ip + 3];
+				GD_ERR_BREAK(native_return_type < 0 || native_return_type >= Variant::VARIANT_MAX);
 
 				GET_INSTRUCTION_ARG(dst, argc);
 
-				GDCNative::get_singleton()->call_cell(cell, (const Variant **)instruction_args, argc, dst, return_type);
+				GDCNative::get_singleton()->call_cell(cell, (const Variant **)instruction_args, argc, dst, native_return_type);
 
 				ip += 4;
 			}

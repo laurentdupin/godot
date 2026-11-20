@@ -2782,6 +2782,25 @@ Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const St
 	return invoke_args(p_path, p_id, p_symbol, p_signature, pointers, p_args.size());
 }
 
+// Typed VM slots (and typed call targets) must keep their declared type.
+static void coerce_native_result(Variant &r_value, Variant::Type p_type) {
+	if (p_type >= Variant::VARIANT_MAX || r_value.get_type() == p_type) {
+		return;
+	}
+	Callable::CallError error;
+	Variant converted;
+	if (r_value.get_type() != Variant::NIL && Variant::can_convert_strict(r_value.get_type(), p_type)) {
+		const Variant *argument = &r_value;
+		Variant::construct(p_type, converted, &argument, 1, error);
+		if (error.error == Callable::CallError::CALL_OK) {
+			r_value = converted;
+			return;
+		}
+	}
+	Variant::construct(p_type, converted, nullptr, 0, error);
+	r_value = converted;
+}
+
 int GDCNative::find_or_create_cell(const StringName &p_key) {
 	if (const int *existing = wrapper_cells.getptr(p_key)) {
 		return *existing;
@@ -2866,25 +2885,6 @@ Variant GDCNative::call_unregistered_wrapper(const StringName &p_key, const Vari
 	Variant result = script->callp(StringName(key.substr(separator + 2)), p_args, p_argcount, call_error);
 	ERR_FAIL_COND_V_MSG(call_error.error != Callable::CallError::CALL_OK, Variant(), "Cannot call CGD native function " + key);
 	return result;
-}
-
-// Typed VM slots (and typed call targets) must keep their declared type.
-static void coerce_native_result(Variant &r_value, Variant::Type p_type) {
-	if (p_type >= Variant::VARIANT_MAX || r_value.get_type() == p_type) {
-		return;
-	}
-	Callable::CallError error;
-	Variant converted;
-	if (r_value.get_type() != Variant::NIL && Variant::can_convert_strict(r_value.get_type(), p_type)) {
-		const Variant *argument = &r_value;
-		Variant::construct(p_type, converted, &argument, 1, error);
-		if (error.error == Callable::CallError::CALL_OK) {
-			r_value = converted;
-			return;
-		}
-	}
-	Variant::construct(p_type, converted, nullptr, 0, error);
-	r_value = converted;
 }
 
 void GDCNative::call_cell(int p_cell, const Variant **p_args, int p_argcount, Variant *r_ret, Variant::Type p_return_type) {
