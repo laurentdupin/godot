@@ -90,6 +90,7 @@ void uninitialize_html_css_module(ModuleInitializationLevel p_level) {
 	if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
 		return;
 	}
+	HTMLView::finalize_default_material();
 #if defined(DEBUG_ENABLED) && defined(HTML_CSS_USE_HCSR)
 	HCSRPerformanceMonitor::finalize();
 #endif

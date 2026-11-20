@@ -575,6 +575,7 @@ void HTMLView::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_ENTER_TREE: {
 #ifdef HTML_CSS_USE_HCSR_NEWEST
+			_apply_default_material();
 			RenderingServer::get_singleton()->connect(SNAME("frame_pre_draw"), callable_mp(this, &HTMLView::_frame_pre_draw));
 #endif
 			_connect_viewport_size_changed();
@@ -612,6 +613,10 @@ void HTMLView::_notification(int p_what) {
 		} break;
 
 		case NOTIFICATION_DRAW: {
+#ifdef HTML_CSS_USE_HCSR_NEWEST
+			// Restores the default after the material property is cleared.
+			_apply_default_material();
+#endif
 			RS::get_singleton()->canvas_item_set_render_target_preparation(get_canvas_item(), surface->get_canvas_render_target_preparation());
 			_update_backdrop_filter_canvas();
 			Ref<Texture2D> texture = surface->get_texture();
@@ -2347,17 +2352,39 @@ Size2 HTMLView::get_minimum_size() const {
 	return Size2();
 }
 
-HTMLView::HTMLView() {
 #ifdef HTML_CSS_USE_HCSR_NEWEST
-	// Newest outputs contain premultiplied sRGB, including transparent clears.
-	Ref<Shader> paint_shader;
-	paint_shader.instantiate();
-	paint_shader->set_code("shader_type canvas_item; render_mode blend_premul_alpha, unshaded; void vertex() { COLOR.rgb *= COLOR.a; }");
-	Ref<ShaderMaterial> paint_material;
-	paint_material.instantiate();
-	paint_material->set_shader(paint_shader);
-	set_material(paint_material);
+Ref<ShaderMaterial> HTMLView::premultiplied_material;
+
+RID HTMLView::_get_premultiplied_material_rid() {
+	// Created on the main thread by the first HTMLView. Shared by every view and
+	// never assigned to the `material` property, so ClassDB does not cache an
+	// instance as the property's default value and scenes do not embed it.
+	if (premultiplied_material.is_null()) {
+		// Newest outputs contain premultiplied sRGB, including transparent clears.
+		Ref<Shader> paint_shader;
+		paint_shader.instantiate();
+		paint_shader->set_code("shader_type canvas_item; render_mode blend_premul_alpha, unshaded; void vertex() { COLOR.rgb *= COLOR.a; }");
+		premultiplied_material.instantiate();
+		premultiplied_material->set_shader(paint_shader);
+	}
+	return premultiplied_material->get_rid();
+}
+
+void HTMLView::_apply_default_material() {
+	// A user-assigned material (or use_parent_material) replaces the default.
+	if (get_material().is_null() && !get_use_parent_material()) {
+		RS::get_singleton()->canvas_item_set_material(get_canvas_item(), _get_premultiplied_material_rid());
+	}
+}
 #endif
+
+void HTMLView::finalize_default_material() {
+#ifdef HTML_CSS_USE_HCSR_NEWEST
+	premultiplied_material.unref();
+#endif
+}
+
+HTMLView::HTMLView() {
 	surface.instantiate();
 	surface->set_changed_callback(callable_mp(this, &HTMLView::_surface_changed));
 	surface->set_frame_queued_callback(callable_mp(this, &HTMLView::_surface_frame_queued));

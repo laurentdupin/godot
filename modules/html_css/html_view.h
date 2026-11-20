@@ -143,6 +143,11 @@ private:
 	Size2i _get_target_physical_size() const;
 	float _get_target_device_scale_factor() const;
 	static bool _is_output_aspect_compatible(const Size2i &p_logical_size, const Size2i &p_output_size);
+#ifdef HTML_CSS_USE_HCSR_NEWEST
+	static Ref<ShaderMaterial> premultiplied_material;
+	static RID _get_premultiplied_material_rid();
+	void _apply_default_material();
+#endif
 	void _update_surface_size(bool p_force_render = true);
 	Vector2 _local_to_html_position(const Vector2 &p_position) const;
 	int _modifiers_from_event(const Ref<InputEvent> &p_event, MouseButton p_button = MouseButton::NONE, bool p_button_pressed = false) const;
@@ -169,6 +174,10 @@ protected:
 	static void _bind_methods();
 
 public:
+	// Releases the shared premultiplied-alpha material. Called when the module is
+	// uninitialized, while the RenderingServer still exists.
+	static void finalize_default_material();
+
 	void set_document(const Ref<HTMLDocument> &p_document);
 	Ref<HTMLDocument> get_document() const;
 
