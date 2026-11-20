@@ -528,6 +528,9 @@ public:
 		// wrapper with exactly typed arguments; the compiler then calls the native
 		// function through GDCNative's registry instead of the wrapper.
 		StringName cgd_native_key;
+		// Also set when every argument type matches exactly and the signature only uses
+		// int, float, bool (and void for the return): the compiler emits OPCODE_CALL_CGD_NATIVE.
+		bool cgd_native_typed = false;
 
 		CallNode() {
 			type = CALL;

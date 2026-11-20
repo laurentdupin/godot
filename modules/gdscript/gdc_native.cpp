@@ -16,6 +16,7 @@
 #include "core/string/char_utils.h"
 #include "core/string/regex.h"
 #include "core/templates/local_vector.h"
+#include "core/variant/variant_internal.h"
 
 #ifdef ANDROID_ENABLED
 #include "platform/android/java_godot_wrapper.h"
@@ -2781,22 +2782,44 @@ Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const St
 	return invoke_args(p_path, p_id, p_symbol, p_signature, pointers, p_args.size());
 }
 
+int GDCNative::find_or_create_cell(const StringName &p_key) {
+	if (const int *existing = wrapper_cells.getptr(p_key)) {
+		return *existing;
+	}
+	ERR_FAIL_COND_V_MSG(cell_count >= NATIVE_CELL_CHUNK * NATIVE_CELL_CHUNKS, -1, "Too many CGD static native functions for direct calls.");
+	const int index = cell_count;
+	std::atomic<NativeCell *> &chunk = cell_chunks[index / NATIVE_CELL_CHUNK];
+	if (chunk.load(std::memory_order_relaxed) == nullptr) {
+		chunk.store(memnew_arr(NativeCell, NATIVE_CELL_CHUNK), std::memory_order_release);
+	}
+	get_cell(index)->key = p_key;
+	cell_count++;
+	wrapper_cells.insert(p_key, index);
+	return index;
+}
+
+int GDCNative::get_wrapper_cell(const StringName &p_key) {
+	RWLockWrite write_lock(wrappers_lock);
+	return find_or_create_cell(p_key);
+}
+
 void GDCNative::register_wrapper(const StringName &p_key, const String &p_path, const StringName &p_id, const StringName &p_symbol, const StringName &p_signature) {
 	RWLockWrite write_lock(wrappers_lock);
-	if (const NativeWrapper *const *existing = wrappers.getptr(p_key)) {
-		const NativeWrapper *current = *existing;
-		if (current->path == p_path && current->id == p_id && current->symbol == p_symbol && current->signature == p_signature) {
-			return;
-		}
+	const int index = find_or_create_cell(p_key);
+	ERR_FAIL_COND(index < 0);
+	NativeCell *cell = get_cell(index);
+	const NativeWrapper *current = cell->current.load(std::memory_order_acquire);
+	if (current && current->path == p_path && current->id == p_id && current->symbol == p_symbol && current->signature == p_signature) {
+		return;
 	}
-	// Never modify a published entry: calls may be reading it without the lock.
+	// Never modify a published entry: calls read it without the lock.
 	NativeWrapper *wrapper = memnew(NativeWrapper);
 	wrapper->path = p_path;
 	wrapper->id = p_id;
 	wrapper->symbol = p_symbol;
 	wrapper->signature = p_signature;
 	wrapper_storage.push_back(wrapper);
-	wrappers[p_key] = wrapper;
+	cell->current.store(wrapper, std::memory_order_release);
 }
 
 Variant GDCNative::_invoke_function(const Variant **p_args, int p_argcount, Callable::CallError &r_error) {
@@ -2816,24 +2839,115 @@ Variant GDCNative::_invoke_function(const Variant **p_args, int p_argcount, Call
 	const NativeWrapper *wrapper = nullptr;
 	{
 		RWLockRead read_lock(wrappers_lock);
-		if (const NativeWrapper *const *found = wrappers.getptr(key)) {
-			wrapper = *found;
+		if (const int *index = wrapper_cells.getptr(key)) {
+			wrapper = get_cell(*index)->current.load(std::memory_order_acquire);
 		}
 	}
 	if (wrapper == nullptr) {
-		// The wrapper's script compiles before code that calls it, so this only
-		// happens if it failed to compile. Call it by name to report the real error.
-		const String key_string = key;
-		const int separator = key_string.rfind("::");
-		ERR_FAIL_COND_V_MSG(separator < 0, Variant(), "Invalid CGD native function key: " + key_string);
-		Ref<Script> script = ResourceLoader::load(key_string.substr(0, separator));
-		ERR_FAIL_COND_V_MSG(script.is_null(), Variant(), "Cannot load the script of CGD native function " + key_string);
-		Callable::CallError call_error;
-		Variant result = script->callp(StringName(key_string.substr(separator + 2)), p_args + 1, p_argcount - 1, call_error);
-		ERR_FAIL_COND_V_MSG(call_error.error != Callable::CallError::CALL_OK, Variant(), "Cannot call CGD native function " + key_string);
-		return result;
+		return call_unregistered_wrapper(key, p_args + 1, p_argcount - 1);
 	}
 	return invoke_args(wrapper->path, wrapper->id, wrapper->symbol, wrapper->signature, p_args + 1, p_argcount - 1);
+}
+
+Variant GDCNative::call_unregistered_wrapper(const StringName &p_key, const Variant **p_args, int p_argcount) {
+	// The wrapper's script compiles before code that calls it, so this only happens
+	// if it failed to compile. Call it by name to report the real error.
+	const String key = p_key;
+	const int separator = key.rfind("::");
+	ERR_FAIL_COND_V_MSG(separator < 0, Variant(), "Invalid CGD native function key: " + key);
+	Ref<Script> script = ResourceLoader::load(key.substr(0, separator));
+	ERR_FAIL_COND_V_MSG(script.is_null(), Variant(), "Cannot load the script of CGD native function " + key);
+	Callable::CallError call_error;
+	Variant result = script->callp(StringName(key.substr(separator + 2)), p_args, p_argcount, call_error);
+	ERR_FAIL_COND_V_MSG(call_error.error != Callable::CallError::CALL_OK, Variant(), "Cannot call CGD native function " + key);
+	return result;
+}
+
+void GDCNative::call_cell(int p_cell, const Variant **p_args, int p_argcount, Variant *r_ret) {
+	NativeCell *cell = (p_cell >= 0 && p_cell < NATIVE_CELL_CHUNK * NATIVE_CELL_CHUNKS) ? get_cell(p_cell) : nullptr;
+	ERR_FAIL_NULL_MSG(cell, "Invalid CGD native call handle.");
+	const NativeWrapper *wrapper = cell->current.load(std::memory_order_acquire);
+	if (unlikely(wrapper == nullptr)) {
+		*r_ret = call_unregistered_wrapper(cell->key, p_args, p_argcount);
+		return;
+	}
+	const NativeFunctionEntry *entry = wrapper->resolved.load(std::memory_order_acquire);
+#ifndef ANDROID_ENABLED
+	if (likely(entry != nullptr) && p_argcount <= 8 && entry->signature_utf8.length() == p_argcount + 1) {
+		const char *signature = entry->signature_utf8.get_data();
+		NativeValue args[8];
+		bool typed = true;
+		for (int i = 0; i < p_argcount && typed; ++i) {
+			const Variant *argument = p_args[i];
+			switch (signature[i + 1]) {
+				case 'i':
+					typed = argument->get_type() == Variant::INT;
+					if (typed) {
+						args[i].integer = *VariantInternal::get_int(argument);
+					}
+					break;
+				case 'f':
+					typed = argument->get_type() == Variant::FLOAT;
+					if (typed) {
+						args[i].floating = *VariantInternal::get_float(argument);
+					}
+					break;
+				case 'b':
+					typed = argument->get_type() == Variant::BOOL;
+					if (typed) {
+						args[i].boolean = *VariantInternal::get_bool(argument);
+					}
+					break;
+				default:
+					typed = false;
+			}
+		}
+		if (typed) {
+			NativeValue result = {};
+			NativeOutput output{ signature[0] };
+			NativeAllocator allocator{ &output, allocate_native_output };
+			using NativeFunction = bool (*)(const char *, const NativeValue *, NativeValue *, NativeAllocator *);
+			if (likely(reinterpret_cast<NativeFunction>(entry->address)(signature, args, &result, &allocator))) {
+				switch (signature[0]) {
+					case 'i':
+						*r_ret = result.integer;
+						return;
+					case 'f':
+						*r_ret = result.floating;
+						return;
+					case 'b':
+						*r_ret = result.boolean;
+						return;
+					case 'v':
+						*r_ret = Variant();
+						return;
+					default:
+						break;
+				}
+			} else {
+				if (entry->error_getter) {
+					const char *message = reinterpret_cast<const char *(*)()>(entry->error_getter)();
+					if (message && *message) {
+						*r_ret = Variant();
+						ERR_FAIL_MSG("CGD native C++ exception: " + String::utf8(message));
+					}
+				}
+				*r_ret = Variant();
+				ERR_FAIL_MSG("CGD native function signature mismatch.");
+			}
+		}
+	}
+#endif
+	// First call (loads the library), unexpected argument values, other signatures, or Android.
+	*r_ret = invoke_args(wrapper->path, wrapper->id, wrapper->symbol, wrapper->signature, p_args, p_argcount);
+	if (entry == nullptr) {
+		RWLockRead read_lock(functions_lock);
+		const auto *library_functions = functions.getptr(wrapper->id);
+		const NativeFunctionEntry *resolved = library_functions ? library_functions->getptr(wrapper->symbol) : nullptr;
+		if (resolved && resolved->signature == wrapper->signature) {
+			wrapper->resolved.store(resolved, std::memory_order_release);
+		}
+	}
 }
 
 Variant GDCNative::_invoke_vararg(const Variant **p_args, int p_argcount, Callable::CallError &r_error) {
@@ -2890,10 +3004,15 @@ GDCNative::~GDCNative() {
 	for (const KeyValue<String, void *> &entry : libraries) {
 		OS::get_singleton()->close_dynamic_library(entry.value);
 	}
-	wrappers.clear();
+	wrapper_cells.clear();
 	for (NativeWrapper *wrapper : wrapper_storage) {
 		memdelete(wrapper);
 	}
 	wrapper_storage.clear();
+	for (std::atomic<NativeCell *> &chunk : cell_chunks) {
+		if (NativeCell *cells = chunk.exchange(nullptr)) {
+			memdelete_arr(cells);
+		}
+	}
 	singleton = nullptr;
 }

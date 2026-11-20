@@ -1322,6 +1322,21 @@ void GDScriptByteCodeGenerator::write_call_method_bind(const Address &p_target, 
 	ct.cleanup();
 }
 
+void GDScriptByteCodeGenerator::write_call_cgd_native(const Address &p_target, int p_cell, Variant::Type p_return_type, const Vector<Address> &p_arguments) {
+	CallTarget ct = get_call_target(p_target, p_return_type);
+	if (ct.target.mode == Address::TEMPORARY && temporaries[ct.target.address].type != p_return_type) {
+		write_type_adjust(ct.target, p_return_type);
+	}
+	append_opcode_and_argcount(GDScriptFunction::OPCODE_CALL_CGD_NATIVE, 1 + p_arguments.size());
+	for (int i = 0; i < p_arguments.size(); i++) {
+		append(p_arguments[i]);
+	}
+	append(ct.target);
+	append(p_arguments.size());
+	append(p_cell);
+	ct.cleanup();
+}
+
 void GDScriptByteCodeGenerator::write_call_method_bind_validated(const Address &p_target, const Address &p_base, const MethodBind *p_method, const Vector<Address> &p_arguments) {
 	Variant::Type return_type = Variant::NIL;
 	bool has_return = p_method->has_return();

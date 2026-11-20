@@ -30,6 +30,8 @@
 
 #include "gdscript.h"
 #include "gdscript_function.h"
+
+#include "gdc_native.h"
 #include "gdscript_helper.h"
 #include "gdscript_lambda_callable.h"
 
@@ -275,6 +277,7 @@ void (*type_init_function_table[])(Variant *) = {
 		&&OPCODE_CALL_NATIVE_STATIC_VALIDATED_NO_RETURN, \
 		&&OPCODE_CALL_METHOD_BIND_VALIDATED_RETURN, \
 		&&OPCODE_CALL_METHOD_BIND_VALIDATED_NO_RETURN, \
+		&&OPCODE_CALL_CGD_NATIVE, \
 		&&OPCODE_AWAIT, \
 		&&OPCODE_AWAIT_RESUME, \
 		&&OPCODE_CREATE_LAMBDA, \
@@ -2366,6 +2369,24 @@ Variant GDScriptFunction::call(GDScriptInstance *p_instance, const Variant **p_a
 					function_call_time += t_taken;
 				}
 #endif
+
+				ip += 3;
+			}
+			DISPATCH_OPCODE;
+
+			OPCODE(OPCODE_CALL_CGD_NATIVE) {
+				LOAD_INSTRUCTION_ARGS
+				CHECK_SPACE(3 + instr_arg_count);
+
+				ip += instr_arg_count;
+
+				int argc = _code_ptr[ip + 1];
+				GD_ERR_BREAK(argc < 0);
+				int cell = _code_ptr[ip + 2];
+
+				GET_INSTRUCTION_ARG(dst, argc);
+
+				GDCNative::get_singleton()->call_cell(cell, (const Variant **)instruction_args, argc, dst);
 
 				ip += 3;
 			}

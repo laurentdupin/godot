@@ -854,6 +854,27 @@ void GDScriptFunction::disassemble(const Vector<String> &p_code_lines) const {
 				incr = 5 + argc;
 			} break;
 
+			case OPCODE_CALL_CGD_NATIVE: {
+				int instr_var_args = _code_ptr[++ip];
+
+				text += "call cgd-native ";
+
+				int argc = _code_ptr[ip + 1 + instr_var_args];
+				text += DADDR(1 + argc) + " = ";
+
+				text += "cell#" + itos(_code_ptr[ip + 2 + instr_var_args]);
+				text += "(";
+
+				for (int i = 0; i < argc; i++) {
+					if (i > 0) {
+						text += ", ";
+					}
+					text += DADDR(1 + i);
+				}
+				text += ")";
+
+				incr = 4 + argc;
+			} break;
 			case OPCODE_CALL_METHOD_BIND_VALIDATED_NO_RETURN: {
 				int instr_var_args = _code_ptr[++ip];
 

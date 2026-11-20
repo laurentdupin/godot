@@ -20,6 +20,22 @@ static native int version() {
     return 1;
 }
 
+native {
+static int64_t bump_count = 0;
+}
+
+static native void bump() {
+    bump_count++;
+}
+
+static native int bumps() {
+    return bump_count;
+}
+
+static native bool is_even(int value) {
+    return value % 2 == 0;
+}
+
 static int add_one(int value) {
     return add(value, 1);
 }
@@ -57,17 +73,25 @@ void _initialize() {
     check(MATH.add(untyped, 1) == 8, "untyped argument through the wrapper");
     check(Callable(MATH, "add").call(1, 1) == 2, "call by name through the wrapper");
     check(MATH.version() == 1 && OTHER.read_version() == 1, "version before reload");
+    MATH.bump();
+    MATH.bump();
+    check(MATH.bumps() == 2, "void function through the typed call");
+    check(MATH.is_even(4) && !MATH.is_even(7), "bool function through the typed call");
+    Variant untyped_even = 6;
+    check(MATH.is_even(untyped_even), "bool function through the wrapper");
 
     // Direct calls must skip the wrapper, which costs a full script call.
     const int N = 200000;
-    int total = 0;
+    int direct_total = 0;
     int started = Time.get_ticks_usec();
-    for (int i = 0; i < N; i++) { total += MATH.add(i, 1); }
+    for (int i = 0; i < N; i++) { direct_total += MATH.add(i, 1); }
     int direct_us = Time.get_ticks_usec() - started;
+    int wrapper_total = 0;
     started = Time.get_ticks_usec();
-    for (int i = 0; i < N; i++) { Variant value = i; total += MATH.add(value, 1); }
+    for (int i = 0; i < N; i++) { Variant value = i; wrapper_total += MATH.add(value, 1); }
     int wrapper_us = Time.get_ticks_usec() - started;
-    print("CGD_DIRECT_CALL_TIMING direct_us=", direct_us, " wrapper_us=", wrapper_us, " total=", total);
+    print("CGD_DIRECT_CALL_TIMING direct_us=", direct_us, " wrapper_us=", wrapper_us, " total=", direct_total);
+    check(direct_total == wrapper_total, "typed and wrapper calls return the same results");
     check(direct_us < wrapper_us * 0.85, "direct calls are not faster than wrapper calls");
 
     // Reload only the native script: callers compiled earlier must reach the new code.

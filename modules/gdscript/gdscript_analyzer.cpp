@@ -3855,6 +3855,7 @@ void GDScriptAnalyzer::reduce_call(GDScriptParser::CallNode *p_call, bool p_is_a
 
 void GDScriptAnalyzer::resolve_cgd_native_call(GDScriptParser::CallNode *p_call, const GDScriptParser::DataType &p_base_type, bool p_is_self) {
 	p_call->cgd_native_key = StringName();
+	p_call->cgd_native_typed = false;
 	// Static calls aren't dispatched virtually. An unqualified one compiles against
 	// the current class and `Class.function()` against that class, so the function
 	// found here is the one that runs.
@@ -3883,6 +3884,7 @@ void GDScriptAnalyzer::resolve_cgd_native_call(GDScriptParser::CallNode *p_call,
 	}
 	// The wrapper's typed parameters convert or reject arguments; only skip it when
 	// every argument already has the parameter's type (or is an int for a float).
+	bool exact = true;
 	for (uint32_t i = 0; i < p_call->arguments.size(); i++) {
 		const GDScriptParser::DataType &parameter_type = function->parameters[i]->type_constraint;
 		const GDScriptParser::DataType &argument_type = p_call->arguments[i]->type_constraint;
@@ -3890,11 +3892,22 @@ void GDScriptAnalyzer::resolve_cgd_native_call(GDScriptParser::CallNode *p_call,
 				!argument_type.is_hard_type() || argument_type.kind != GDScriptParser::DataType::BUILTIN || argument_type.is_meta_type) {
 			return;
 		}
-		if (argument_type.builtin_type != parameter_type.builtin_type && !(parameter_type.builtin_type == Variant::FLOAT && argument_type.builtin_type == Variant::INT)) {
-			return;
+		if (argument_type.builtin_type != parameter_type.builtin_type) {
+			if (!(parameter_type.builtin_type == Variant::FLOAT && argument_type.builtin_type == Variant::INT)) {
+				return;
+			}
+			exact = false;
 		}
 	}
 	p_call->cgd_native_key = function->cgd_native_key;
+
+	const String signature = function->cgd_native_signature;
+	bool scalar = exact && signature.length() == int(p_call->arguments.size()) + 1 && p_call->arguments.size() <= 8;
+	for (int i = 0; scalar && i < signature.length(); i++) {
+		const char32_t letter = signature[i];
+		scalar = letter == 'i' || letter == 'f' || letter == 'b' || (i == 0 && letter == 'v');
+	}
+	p_call->cgd_native_typed = scalar;
 }
 
 void GDScriptAnalyzer::reduce_cast(GDScriptParser::CastNode *p_cast) {

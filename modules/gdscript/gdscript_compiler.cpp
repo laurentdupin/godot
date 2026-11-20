@@ -637,17 +637,27 @@ GDScriptCodeGenerator::Address GDScriptCompiler::_parse_expression(CodeGen &code
 			} else if (!call->cgd_native_key.is_empty() && !is_awaited && !(call->callee->type == GDScriptParser::Node::IDENTIFIER && ClassDB::has_method(codegen.script->native->get_name(), call->function_name))) {
 				// Statically resolved call to a CGD native wrapper: call the native
 				// function directly through the registry, which follows reloads.
-				static const StringName invoke_function_name = "invoke_function";
-				const MethodBind *method = ClassDB::get_method(GDCNative::get_class_static(), invoke_function_name);
-				if (GDCNative::get_singleton() == nullptr || method == nullptr) {
-					_set_error("Compiler bug (please report): CGD native call support is unavailable.", call);
-					r_error = ERR_COMPILATION_FAILED;
-					return GDScriptCodeGenerator::Address();
+				const int cell = call->cgd_native_typed && GDCNative::get_singleton() ? GDCNative::get_singleton()->get_wrapper_cell(call->cgd_native_key) : -1;
+				if (cell >= 0) {
+					// int/float/bool only: a dedicated opcode reads the typed slots directly.
+					Variant::Type return_type = Variant::NIL;
+					if (call->type_constraint.is_hard_type() && call->type_constraint.kind == GDScriptParser::DataType::BUILTIN) {
+						return_type = call->type_constraint.builtin_type;
+					}
+					gen->write_call_cgd_native(result, cell, return_type, arguments);
+				} else {
+					static const StringName invoke_function_name = "invoke_function";
+					const MethodBind *method = ClassDB::get_method(GDCNative::get_class_static(), invoke_function_name);
+					if (GDCNative::get_singleton() == nullptr || method == nullptr) {
+						_set_error("Compiler bug (please report): CGD native call support is unavailable.", call);
+						r_error = ERR_COMPILATION_FAILED;
+						return GDScriptCodeGenerator::Address();
+					}
+					Vector<GDScriptCodeGenerator::Address> native_arguments;
+					native_arguments.push_back(codegen.add_constant(call->cgd_native_key));
+					native_arguments.append_array(arguments);
+					gen->write_call_method_bind(result, codegen.add_constant(GDCNative::get_singleton()), method, native_arguments);
 				}
-				Vector<GDScriptCodeGenerator::Address> native_arguments;
-				native_arguments.push_back(codegen.add_constant(call->cgd_native_key));
-				native_arguments.append_array(arguments);
-				gen->write_call_method_bind(result, codegen.add_constant(GDCNative::get_singleton()), method, native_arguments);
 			} else {
 				// Regular function.
 				const GDScriptParser::ExpressionNode *callee = call->callee;

@@ -10,6 +10,8 @@
 #include "core/templates/local_vector.h"
 #include "core/variant/array.h"
 
+#include <atomic>
+
 #ifdef TOOLS_ENABLED
 #include "core/object/editor_language.h"
 #include "core/object/script_language.h"
@@ -34,16 +36,33 @@ class GDCNative : public Object {
 	RWLock functions_lock;
 	HashMap<StringName, HashMap<StringName, NativeFunctionEntry>> functions;
 	// Current target of each compiled `static native` wrapper, keyed "<path>::<name>".
-	// Entries are immutable and kept until shutdown; a recompile publishes a new one.
+	// Entries are immutable (except the cached resolution) and kept until shutdown;
+	// a recompile publishes a new one in the key's cell.
 	struct NativeWrapper {
 		String path;
 		StringName id;
 		StringName symbol;
 		StringName signature;
+		// Set after the first successful call; points into `functions`, which never moves entries.
+		mutable std::atomic<const NativeFunctionEntry *> resolved{ nullptr };
 	};
+	// A cell gives compiled bytecode a stable integer handle for a wrapper key.
+	struct NativeCell {
+		StringName key;
+		std::atomic<const NativeWrapper *> current{ nullptr };
+	};
+	static constexpr int NATIVE_CELL_CHUNK = 256;
+	static constexpr int NATIVE_CELL_CHUNKS = 256;
 	RWLock wrappers_lock;
-	HashMap<StringName, const NativeWrapper *> wrappers;
+	HashMap<StringName, int> wrapper_cells;
+	std::atomic<NativeCell *> cell_chunks[NATIVE_CELL_CHUNKS] = {};
+	int cell_count = 0; // Guarded by wrappers_lock.
 	LocalVector<NativeWrapper *> wrapper_storage;
+	NativeCell *get_cell(int p_index) const {
+		NativeCell *chunk = cell_chunks[p_index / NATIVE_CELL_CHUNK].load(std::memory_order_acquire);
+		return chunk ? &chunk[p_index % NATIVE_CELL_CHUNK] : nullptr;
+	}
+	int find_or_create_cell(const StringName &p_key); // Requires the write lock.
 	Ref<DirAccess> build_dir;
 #ifdef TOOLS_ENABLED
 	WorkerThreadPool::TaskID analysis_task = WorkerThreadPool::INVALID_TASK_ID;
@@ -102,6 +121,7 @@ class GDCNative : public Object {
 	Variant _invoke_vararg(const Variant **p_args, int p_argcount, Callable::CallError &r_error);
 	// invoke_function: a wrapper key followed by the call arguments (direct calls emitted by the compiler).
 	Variant _invoke_function(const Variant **p_args, int p_argcount, Callable::CallError &r_error);
+	Variant call_unregistered_wrapper(const StringName &p_key, const Variant **p_args, int p_argcount);
 
 protected:
 	static void _bind_methods();
@@ -115,6 +135,11 @@ public:
 	};
 	static GDCNative *get_singleton() { return singleton; }
 	void register_wrapper(const StringName &p_key, const String &p_path, const StringName &p_id, const StringName &p_symbol, const StringName &p_signature);
+	// Stable handle for typed calls compiled by GDScript; -1 when the table is full.
+	int get_wrapper_cell(const StringName &p_key);
+	// Typed call emitted by the GDScript compiler (OPCODE_CALL_CGD_NATIVE). The compiler
+	// guarantees int/float/bool arguments; other values fall back to the generic path.
+	void call_cell(int p_cell, const Variant **p_args, int p_argcount, Variant *r_ret);
 	static PackedStringArray runtime_libraries(const String &p_platform, const String &p_arch);
 	// The exported library's file name and its folder relative to the executable
 	// (cgd_native/export/library_name and cgd_native/export/directory).

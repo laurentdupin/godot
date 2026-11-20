@@ -132,6 +132,8 @@ public:
 	virtual void write_call_native_static_validated(const Address &p_target, const MethodBind *p_method, const Vector<Address> &p_arguments) = 0;
 	virtual void write_call_method_bind(const Address &p_target, const Address &p_base, const MethodBind *p_method, const Vector<Address> &p_arguments) = 0;
 	virtual void write_call_method_bind_validated(const Address &p_target, const Address &p_base, const MethodBind *p_method, const Vector<Address> &p_arguments) = 0;
+	// Typed call to a CGD `static native` function through a GDCNative cell.
+	virtual void write_call_cgd_native(const Address &p_target, int p_cell, Variant::Type p_return_type, const Vector<Address> &p_arguments) = 0;
 	virtual void write_call_self(const Address &p_target, const StringName &p_function_name, const Vector<Address> &p_arguments) = 0;
 	virtual void write_call_self_async(const Address &p_target, const StringName &p_function_name, const Vector<Address> &p_arguments) = 0;
 	virtual void write_lambda(const Address &p_target, GDScriptFunction *p_function, const Vector<Address> &p_captures, bool p_use_self) = 0;
