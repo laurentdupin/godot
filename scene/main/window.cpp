@@ -1491,9 +1491,10 @@ void Window::_update_viewport_size() {
 
 #ifndef XR_DISABLED
 	if (is_xr) {
+		// Keep the content-scale attach rect: desktop input maps through
+		// window_transform * desktop_stretch_transform, which inverts exactly this
+		// placement of the 2D override area on the desktop window.
 		_set_size(_get_size(), _get_view_count(), final_size_override, _is_size_allocated());
-		// The desktop window shows the XR output stretched over the whole window.
-		attach_to_screen_rect = Rect2i(Point2i(), size);
 	}
 #endif // XR_DISABLED
 

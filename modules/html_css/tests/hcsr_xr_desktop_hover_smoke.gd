@@ -117,6 +117,22 @@ html,body{margin:0;width:100%;height:100%;background:#101820}
 		_fail("The desktop SubViewportContainer did not follow resized desktop 2D metrics while XR was active.")
 		return
 
+	# Letterboxed content scale: the desktop window shows the XR viewport in the
+	# letterboxed rect, so desktop input must keep the same margin and scale.
+	root.size = Vector2i(1000, 600)
+	root.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+	root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_KEEP
+	root.content_scale_size = Vector2i(400, 300)
+	await _settle(3)
+	var letterbox_transform := root.get_screen_transform()
+	if not letterbox_transform.origin.is_equal_approx(Vector2(100, 0)) or not letterbox_transform.get_scale().is_equal_approx(Vector2(2, 2)):
+		_fail("Letterboxed XR desktop input transform is %s; expected a (100, 0) margin and 2x scale." % letterbox_transform)
+		return
+	if root.get_visible_rect().size != Vector2(400, 300):
+		_fail("Letterboxed XR desktop 2D metrics are %s instead of the 400x300 content scale size." % root.get_visible_rect().size)
+		return
+	root.content_scale_mode = Window.CONTENT_SCALE_MODE_DISABLED
+
 	root.use_xr = false
 	XRServer.primary_interface = null
 	XRServer.remove_interface(mock_xr)
