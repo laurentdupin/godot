@@ -124,7 +124,7 @@ In a native body, use `cgd_print("value=%d", value)`, `cgd_print_warning(...)`, 
 
 
 
-Use `static native` to call a native function without a script instance. A `PackedByteArray` parameter is exposed to C as `CGDBytes`, with a read-only `data` pointer and an `int64_t size` in bytes. The view shares the Godot array's storage for the duration of the call. An empty view has size zero. C code must keep accesses within that size and release any references to the view before returning.
+Use `static native` to call a native function without a script instance. Calls to a `static native` function made unqualified from its own script, or through its class (`NativeMath.add(...)` or a preloaded constant), skip the generated wrapper when every argument already has the parameter's type (an `int` may be passed for a `float`). These direct calls follow hot reloads of the native script. Other calls, such as those with untyped arguments or by name, go through the wrapper. A `PackedByteArray` parameter is exposed to C as `CGDBytes`, with a read-only `data` pointer and an `int64_t size` in bytes. The view shares the Godot array's storage for the duration of the call. An empty view has size zero. C code must keep accesses within that size and release any references to the view before returning.
 
 ```c
 static native int first_byte(PackedByteArray bytes) {

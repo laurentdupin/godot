@@ -7,6 +7,7 @@
 #include "core/os/mutex.h"
 #include "core/os/rw_lock.h"
 #include "core/templates/hash_map.h"
+#include "core/templates/local_vector.h"
 #include "core/variant/array.h"
 
 #ifdef TOOLS_ENABLED
@@ -32,6 +33,17 @@ class GDCNative : public Object {
 	// under a shared lock instead of the loader mutex.
 	RWLock functions_lock;
 	HashMap<StringName, HashMap<StringName, NativeFunctionEntry>> functions;
+	// Current target of each compiled `static native` wrapper, keyed "<path>::<name>".
+	// Entries are immutable and kept until shutdown; a recompile publishes a new one.
+	struct NativeWrapper {
+		String path;
+		StringName id;
+		StringName symbol;
+		StringName signature;
+	};
+	RWLock wrappers_lock;
+	HashMap<StringName, const NativeWrapper *> wrappers;
+	LocalVector<NativeWrapper *> wrapper_storage;
 	Ref<DirAccess> build_dir;
 #ifdef TOOLS_ENABLED
 	WorkerThreadPool::TaskID analysis_task = WorkerThreadPool::INVALID_TASK_ID;
@@ -88,6 +100,8 @@ class GDCNative : public Object {
 	Variant invoke(const String &p_path, const StringName &p_id, const StringName &p_symbol, const StringName &p_signature, const Array &p_args);
 	// invoke_v4: path, library_id, symbol and signature followed by the call arguments.
 	Variant _invoke_vararg(const Variant **p_args, int p_argcount, Callable::CallError &r_error);
+	// invoke_function: a wrapper key followed by the call arguments (direct calls emitted by the compiler).
+	Variant _invoke_function(const Variant **p_args, int p_argcount, Callable::CallError &r_error);
 
 protected:
 	static void _bind_methods();
@@ -100,6 +114,7 @@ public:
 		String source;
 	};
 	static GDCNative *get_singleton() { return singleton; }
+	void register_wrapper(const StringName &p_key, const String &p_path, const StringName &p_id, const StringName &p_symbol, const StringName &p_signature);
 	static PackedStringArray runtime_libraries(const String &p_platform, const String &p_arch);
 	// The exported library's file name and its folder relative to the executable
 	// (cgd_native/export/library_name and cgd_native/export/directory).

@@ -30,6 +30,8 @@
 
 #include "gdscript_compiler.h"
 
+#include "gdc_native.h"
+
 #include "gdscript.h"
 #include "gdscript_analyzer.h"
 #include "gdscript_byte_codegen.h"
@@ -632,6 +634,20 @@ GDScriptCodeGenerator::Address GDScriptCompiler::_parse_expression(CodeGen &code
 			} else if (!call->is_super && call->callee->type == GDScriptParser::Node::IDENTIFIER && GDScriptUtilityFunctions::function_exists(call->function_name)) {
 				// GDScript utility function.
 				gen->write_call_gdscript_utility(result, call->function_name, arguments);
+			} else if (!call->cgd_native_key.is_empty() && !is_awaited && !(call->callee->type == GDScriptParser::Node::IDENTIFIER && ClassDB::has_method(codegen.script->native->get_name(), call->function_name))) {
+				// Statically resolved call to a CGD native wrapper: call the native
+				// function directly through the registry, which follows reloads.
+				static const StringName invoke_function_name = "invoke_function";
+				const MethodBind *method = ClassDB::get_method(GDCNative::get_class_static(), invoke_function_name);
+				if (GDCNative::get_singleton() == nullptr || method == nullptr) {
+					_set_error("Compiler bug (please report): CGD native call support is unavailable.", call);
+					r_error = ERR_COMPILATION_FAILED;
+					return GDScriptCodeGenerator::Address();
+				}
+				Vector<GDScriptCodeGenerator::Address> native_arguments;
+				native_arguments.push_back(codegen.add_constant(call->cgd_native_key));
+				native_arguments.append_array(arguments);
+				gen->write_call_method_bind(result, codegen.add_constant(GDCNative::get_singleton()), method, native_arguments);
 			} else {
 				// Regular function.
 				const GDScriptParser::ExpressionNode *callee = call->callee;
@@ -2313,6 +2329,12 @@ GDScriptFunction *GDScriptCompiler::_parse_function(Error &r_error, GDScript *p_
 		is_abstract = p_func->is_abstract;
 		is_static = p_func->is_static;
 		rpc_config = p_func->rpc_config;
+
+		if (!p_func->cgd_native_key.is_empty() && GDCNative::get_singleton()) {
+			// Publish the wrapper's current native function before any code can call it,
+			// so direct calls from this and other scripts follow reloads.
+			GDCNative::get_singleton()->register_wrapper(p_func->cgd_native_key, p_func->cgd_native_path, p_func->cgd_native_id, p_func->cgd_native_symbol, p_func->cgd_native_signature);
+		}
 
 		// TODO: `_gdtype_from_datatype()` always uses `Variant` for coroutines, so we compensate for that here.
 		// Perhaps the behavior of `_gdtype_from_datatype()` should be changed instead?

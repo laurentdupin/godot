@@ -7,8 +7,10 @@
 #include "core/config/project_settings.h"
 #include "core/io/file_access.h"
 #include "core/io/json.h"
+#include "core/io/resource_loader.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
+#include "core/object/script_language.h"
 #include "core/os/os.h"
 #include "core/os/time.h"
 #include "core/string/char_utils.h"
@@ -2779,6 +2781,61 @@ Variant GDCNative::invoke(const String &p_path, const StringName &p_id, const St
 	return invoke_args(p_path, p_id, p_symbol, p_signature, pointers, p_args.size());
 }
 
+void GDCNative::register_wrapper(const StringName &p_key, const String &p_path, const StringName &p_id, const StringName &p_symbol, const StringName &p_signature) {
+	RWLockWrite write_lock(wrappers_lock);
+	if (const NativeWrapper *const *existing = wrappers.getptr(p_key)) {
+		const NativeWrapper *current = *existing;
+		if (current->path == p_path && current->id == p_id && current->symbol == p_symbol && current->signature == p_signature) {
+			return;
+		}
+	}
+	// Never modify a published entry: calls may be reading it without the lock.
+	NativeWrapper *wrapper = memnew(NativeWrapper);
+	wrapper->path = p_path;
+	wrapper->id = p_id;
+	wrapper->symbol = p_symbol;
+	wrapper->signature = p_signature;
+	wrapper_storage.push_back(wrapper);
+	wrappers[p_key] = wrapper;
+}
+
+Variant GDCNative::_invoke_function(const Variant **p_args, int p_argcount, Callable::CallError &r_error) {
+	if (p_argcount < 1) {
+		r_error.error = Callable::CallError::CALL_ERROR_TOO_FEW_ARGUMENTS;
+		r_error.expected = 1;
+		return Variant();
+	}
+	if (p_args[0]->get_type() != Variant::STRING_NAME) {
+		r_error.error = Callable::CallError::CALL_ERROR_INVALID_ARGUMENT;
+		r_error.argument = 0;
+		r_error.expected = Variant::STRING_NAME;
+		return Variant();
+	}
+	r_error.error = Callable::CallError::CALL_OK;
+	const StringName key = *p_args[0];
+	const NativeWrapper *wrapper = nullptr;
+	{
+		RWLockRead read_lock(wrappers_lock);
+		if (const NativeWrapper *const *found = wrappers.getptr(key)) {
+			wrapper = *found;
+		}
+	}
+	if (wrapper == nullptr) {
+		// The wrapper's script compiles before code that calls it, so this only
+		// happens if it failed to compile. Call it by name to report the real error.
+		const String key_string = key;
+		const int separator = key_string.rfind("::");
+		ERR_FAIL_COND_V_MSG(separator < 0, Variant(), "Invalid CGD native function key: " + key_string);
+		Ref<Script> script = ResourceLoader::load(key_string.substr(0, separator));
+		ERR_FAIL_COND_V_MSG(script.is_null(), Variant(), "Cannot load the script of CGD native function " + key_string);
+		Callable::CallError call_error;
+		Variant result = script->callp(StringName(key_string.substr(separator + 2)), p_args + 1, p_argcount - 1, call_error);
+		ERR_FAIL_COND_V_MSG(call_error.error != Callable::CallError::CALL_OK, Variant(), "Cannot call CGD native function " + key_string);
+		return result;
+	}
+	return invoke_args(wrapper->path, wrapper->id, wrapper->symbol, wrapper->signature, p_args + 1, p_argcount - 1);
+}
+
 Variant GDCNative::_invoke_vararg(const Variant **p_args, int p_argcount, Callable::CallError &r_error) {
 	if (p_argcount < 4) {
 		r_error.error = Callable::CallError::CALL_ERROR_TOO_FEW_ARGUMENTS;
@@ -2808,6 +2865,11 @@ void GDCNative::_bind_methods() {
 		info.arguments.push_back(PropertyInfo(Variant::STRING_NAME, "signature"));
 		ClassDB::bind_vararg_method(METHOD_FLAGS_DEFAULT, "invoke_v4", &GDCNative::_invoke_vararg, info);
 	}
+	{
+		MethodInfo info("invoke_function");
+		info.arguments.push_back(PropertyInfo(Variant::STRING_NAME, "key"));
+		ClassDB::bind_vararg_method(METHOD_FLAGS_DEFAULT, "invoke_function", &GDCNative::_invoke_function, info);
+	}
 }
 
 GDCNative::GDCNative() {
@@ -2828,5 +2890,10 @@ GDCNative::~GDCNative() {
 	for (const KeyValue<String, void *> &entry : libraries) {
 		OS::get_singleton()->close_dynamic_library(entry.value);
 	}
+	wrappers.clear();
+	for (NativeWrapper *wrapper : wrapper_storage) {
+		memdelete(wrapper);
+	}
+	wrapper_storage.clear();
 	singleton = nullptr;
 }

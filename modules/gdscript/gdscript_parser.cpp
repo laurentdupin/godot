@@ -1996,11 +1996,65 @@ GDScriptParser::FunctionNode *GDScriptParser::parse_function(bool p_is_static) {
 		function->body = body;
 	} else {
 		function->body = parse_suite("function declaration", body);
+		detect_cgd_native_wrapper(function);
 	}
 
 	current_function = previous_function;
 	complete_extents(function);
 	return function;
+}
+
+void GDScriptParser::detect_cgd_native_wrapper(FunctionNode *p_function) {
+	// Matches the wrapper the CGD transpiler generates for `static native` functions.
+	// Calling it is equivalent to calling CGDNative.invoke_v4 with these literals and
+	// the same arguments, which lets the compiler skip the wrapper for exactly typed calls.
+	if (!p_function->is_static || p_function->identifier == nullptr || p_function->is_vararg() || p_function->body == nullptr || p_function->body->statements.size() != 1) {
+		return;
+	}
+	Node *statement = p_function->body->statements[0];
+	ExpressionNode *expression = nullptr;
+	if (statement->type == Node::RETURN) {
+		expression = static_cast<ReturnNode *>(statement)->return_value;
+	} else if (statement->type == Node::CALL) {
+		expression = static_cast<ExpressionNode *>(statement);
+	}
+	if (expression == nullptr || expression->type != Node::CALL) {
+		return;
+	}
+	const CallNode *call = static_cast<const CallNode *>(expression);
+	if (call->is_super || call->function_name != SNAME("invoke_v4") || call->callee == nullptr || call->callee->type != Node::SUBSCRIPT) {
+		return;
+	}
+	const SubscriptNode *subscript = static_cast<const SubscriptNode *>(call->callee);
+	if (!subscript->is_attribute || subscript->base == nullptr || subscript->base->type != Node::IDENTIFIER || static_cast<const IdentifierNode *>(subscript->base)->name != SNAME("CGDNative")) {
+		return;
+	}
+	if (call->arguments.size() != 4 + p_function->parameters.size()) {
+		return;
+	}
+	Variant literals[4];
+	for (int i = 0; i < 4; i++) {
+		if (call->arguments[i] == nullptr || call->arguments[i]->type != Node::LITERAL) {
+			return;
+		}
+		literals[i] = static_cast<const LiteralNode *>(call->arguments[i])->value;
+		if (literals[i].get_type() != (i == 0 ? Variant::STRING : Variant::STRING_NAME)) {
+			return;
+		}
+	}
+	for (uint32_t i = 0; i < p_function->parameters.size(); i++) {
+		const ParameterNode *parameter = p_function->parameters[i];
+		const ExpressionNode *argument = call->arguments[4 + i];
+		if (parameter == nullptr || parameter->identifier == nullptr || parameter->initializer != nullptr || parameter->datatype_specifier == nullptr ||
+				argument == nullptr || argument->type != Node::IDENTIFIER || static_cast<const IdentifierNode *>(argument)->name != parameter->identifier->name) {
+			return;
+		}
+	}
+	p_function->cgd_native_path = literals[0];
+	p_function->cgd_native_id = literals[1];
+	p_function->cgd_native_symbol = literals[2];
+	p_function->cgd_native_signature = literals[3];
+	p_function->cgd_native_key = StringName(p_function->cgd_native_path + "::" + String(p_function->identifier->name));
 }
 
 GDScriptParser::AnnotationNode *GDScriptParser::parse_annotation(uint32_t p_valid_targets) {

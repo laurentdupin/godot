@@ -524,6 +524,10 @@ public:
 		StringName function_name;
 		bool is_super = false;
 		bool is_static = false;
+		// Set by the analyzer when this static call provably targets a CGD native
+		// wrapper with exactly typed arguments; the compiler then calls the native
+		// function through GDCNative's registry instead of the wrapper.
+		StringName cgd_native_key;
 
 		CallNode() {
 			type = CALL;
@@ -887,6 +891,14 @@ public:
 
 		TypeNode *return_type = nullptr;
 		DataType return_type_constraint;
+		// Set for a static function whose body is exactly
+		// `CGDNative.invoke_v4(path, id, symbol, signature, <parameters in order>)`,
+		// as generated for CGD `static native` functions. The key is "<path>::<name>".
+		StringName cgd_native_key;
+		String cgd_native_path;
+		StringName cgd_native_id;
+		StringName cgd_native_symbol;
+		StringName cgd_native_signature;
 
 		SuiteNode *body = nullptr;
 		bool is_abstract = false;
@@ -1610,6 +1622,7 @@ private:
 	EnumNode *parse_enum(bool p_is_static);
 	ParameterNode *parse_parameter();
 	FunctionNode *parse_function(bool p_is_static);
+	void detect_cgd_native_wrapper(FunctionNode *p_function);
 	bool parse_function_signature(FunctionNode *p_function, SuiteNode *p_body, const String &p_type, int p_signature_start);
 	SuiteNode *parse_suite(const String &p_context, SuiteNode *p_suite = nullptr, bool p_for_lambda = false);
 	// Annotations

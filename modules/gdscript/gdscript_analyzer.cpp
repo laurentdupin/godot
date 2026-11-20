@@ -3776,6 +3776,7 @@ void GDScriptAnalyzer::reduce_call(GDScriptParser::CallNode *p_call, bool p_is_a
 #endif // DEBUG_ENABLED
 
 		call_type = return_type;
+		resolve_cgd_native_call(p_call, base_type, is_self);
 	} else {
 		bool found = false;
 
@@ -3850,6 +3851,50 @@ void GDScriptAnalyzer::reduce_call(GDScriptParser::CallNode *p_call, bool p_is_a
 	}
 
 	p_call->type_constraint = call_type;
+}
+
+void GDScriptAnalyzer::resolve_cgd_native_call(GDScriptParser::CallNode *p_call, const GDScriptParser::DataType &p_base_type, bool p_is_self) {
+	p_call->cgd_native_key = StringName();
+	// Static calls aren't dispatched virtually. An unqualified one compiles against
+	// the current class and `Class.function()` against that class, so the function
+	// found here is the one that runs.
+	if (p_call->is_super || !p_call->is_static || p_call->callee == nullptr) {
+		return;
+	}
+	const GDScriptParser::ClassNode *target_class = nullptr;
+	if (p_call->callee->type == GDScriptParser::Node::IDENTIFIER && p_is_self) {
+		target_class = parser->current_class;
+	} else if (p_call->callee->type == GDScriptParser::Node::SUBSCRIPT && !p_is_self && p_base_type.is_meta_type && p_base_type.kind == GDScriptParser::DataType::CLASS) {
+		target_class = p_base_type.class_type;
+	}
+	const GDScriptParser::FunctionNode *function = nullptr;
+	while (target_class != nullptr) {
+		if (target_class->has_member(p_call->function_name)) {
+			const GDScriptParser::ClassNode::Member &member = target_class->get_member(p_call->function_name);
+			if (member.type == GDScriptParser::ClassNode::Member::FUNCTION) {
+				function = member.function;
+			}
+			break;
+		}
+		target_class = target_class->base_type.kind == GDScriptParser::DataType::CLASS ? target_class->base_type.class_type : nullptr;
+	}
+	if (function == nullptr || !function->is_static || function->cgd_native_key == StringName() || p_call->arguments.size() != function->parameters.size()) {
+		return;
+	}
+	// The wrapper's typed parameters convert or reject arguments; only skip it when
+	// every argument already has the parameter's type (or is an int for a float).
+	for (uint32_t i = 0; i < p_call->arguments.size(); i++) {
+		const GDScriptParser::DataType &parameter_type = function->parameters[i]->type_constraint;
+		const GDScriptParser::DataType &argument_type = p_call->arguments[i]->type_constraint;
+		if (!parameter_type.is_hard_type() || parameter_type.kind != GDScriptParser::DataType::BUILTIN ||
+				!argument_type.is_hard_type() || argument_type.kind != GDScriptParser::DataType::BUILTIN || argument_type.is_meta_type) {
+			return;
+		}
+		if (argument_type.builtin_type != parameter_type.builtin_type && !(parameter_type.builtin_type == Variant::FLOAT && argument_type.builtin_type == Variant::INT)) {
+			return;
+		}
+	}
+	p_call->cgd_native_key = function->cgd_native_key;
 }
 
 void GDScriptAnalyzer::reduce_cast(GDScriptParser::CastNode *p_cast) {
