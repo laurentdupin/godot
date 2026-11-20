@@ -41,6 +41,23 @@ static int add_one(int value) {
 }
 '''
 
+CPP_MATH = '''extends RefCounted;
+
+native cpp {
+#include <stdexcept>
+}
+
+static native cpp int checked(int value) {
+    if (value < 0) throw std::runtime_error("negative value");
+    return value * 2;
+}
+
+static native cpp float checked_float(float value) {
+    if (value < 0) throw std::runtime_error("negative float");
+    return value / 2;
+}
+'''
+
 OTHER = '''extends RefCounted;
 
 const auto MATH = preload("res://math.cgd");
@@ -54,6 +71,7 @@ RUNNER = '''extends SceneTree;
 
 const auto MATH = preload("res://math.cgd");
 const auto OTHER = preload("res://other.cgd");
+const auto CPP = preload("res://cpp_math.cgd");
 
 bool failed = false;
 
@@ -79,6 +97,18 @@ void _initialize() {
     check(MATH.is_even(4) && !MATH.is_even(7), "bool function through the typed call");
     Variant untyped_even = 6;
     check(MATH.is_even(untyped_even), "bool function through the wrapper");
+
+    // C++ through the typed call, including an exception: the failed call must
+    // leave a value of the declared type so later typed code keeps working.
+    check(CPP.checked(21) == 42, "C++ typed call");
+    int failed_int = CPP.checked(-1);
+    float failed_float = CPP.checked_float(-1.0);
+    check(failed_int == 0 && failed_float == 0.0, "failed C++ calls return the type's default value");
+    int after = 0;
+    for (int i = 0; i < 1000; i++) { after += CPP.checked(1); }
+    check(after == 2000, "typed arithmetic and loops after a C++ exception");
+    Variant failed_wrapper = -1;
+    check(int(CPP.checked(failed_wrapper)) == 0, "failed C++ call through the wrapper");
 
     // Direct calls must skip the wrapper, which costs a full script call.
     const int N = 200000;
@@ -126,6 +156,7 @@ def main():
         (project / "math.cgd").write_text(MATH_V1, encoding="utf-8")
         (project / "math_v2.cgd.txt").write_text(MATH_V1.replace("return 1;", "return 2;"), encoding="utf-8")
         (project / "other.cgd").write_text(OTHER, encoding="utf-8")
+        (project / "cpp_math.cgd").write_text(CPP_MATH, encoding="utf-8")
         (project / "runner.cgd").write_text(RUNNER, encoding="utf-8")
 
         def run(*arguments):

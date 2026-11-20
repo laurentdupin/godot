@@ -2828,14 +2828,20 @@ Variant GDCNative::_invoke_function(const Variant **p_args, int p_argcount, Call
 		r_error.expected = 1;
 		return Variant();
 	}
-	if (p_args[0]->get_type() != Variant::STRING_NAME) {
+	if (p_argcount < 2) {
+		r_error.error = Callable::CallError::CALL_ERROR_TOO_FEW_ARGUMENTS;
+		r_error.expected = 2;
+		return Variant();
+	}
+	if (p_args[0]->get_type() != Variant::STRING_NAME || p_args[1]->get_type() != Variant::INT) {
 		r_error.error = Callable::CallError::CALL_ERROR_INVALID_ARGUMENT;
-		r_error.argument = 0;
-		r_error.expected = Variant::STRING_NAME;
+		r_error.argument = p_args[0]->get_type() != Variant::STRING_NAME ? 0 : 1;
+		r_error.expected = r_error.argument == 0 ? Variant::STRING_NAME : Variant::INT;
 		return Variant();
 	}
 	r_error.error = Callable::CallError::CALL_OK;
 	const StringName key = *p_args[0];
+	const Variant::Type return_type = Variant::Type(int64_t(*p_args[1]));
 	const NativeWrapper *wrapper = nullptr;
 	{
 		RWLockRead read_lock(wrappers_lock);
@@ -2843,10 +2849,9 @@ Variant GDCNative::_invoke_function(const Variant **p_args, int p_argcount, Call
 			wrapper = get_cell(*index)->current.load(std::memory_order_acquire);
 		}
 	}
-	if (wrapper == nullptr) {
-		return call_unregistered_wrapper(key, p_args + 1, p_argcount - 1);
-	}
-	return invoke_args(wrapper->path, wrapper->id, wrapper->symbol, wrapper->signature, p_args + 1, p_argcount - 1);
+	Variant result = wrapper == nullptr ? call_unregistered_wrapper(key, p_args + 2, p_argcount - 2) : invoke_args(wrapper->path, wrapper->id, wrapper->symbol, wrapper->signature, p_args + 2, p_argcount - 2);
+	coerce_native_result(result, return_type);
+	return result;
 }
 
 Variant GDCNative::call_unregistered_wrapper(const StringName &p_key, const Variant **p_args, int p_argcount) {
@@ -2863,7 +2868,33 @@ Variant GDCNative::call_unregistered_wrapper(const StringName &p_key, const Vari
 	return result;
 }
 
-void GDCNative::call_cell(int p_cell, const Variant **p_args, int p_argcount, Variant *r_ret) {
+// Typed VM slots (and typed call targets) must keep their declared type.
+static void coerce_native_result(Variant &r_value, Variant::Type p_type) {
+	if (p_type >= Variant::VARIANT_MAX || r_value.get_type() == p_type) {
+		return;
+	}
+	Callable::CallError error;
+	Variant converted;
+	if (r_value.get_type() != Variant::NIL && Variant::can_convert_strict(r_value.get_type(), p_type)) {
+		const Variant *argument = &r_value;
+		Variant::construct(p_type, converted, &argument, 1, error);
+		if (error.error == Callable::CallError::CALL_OK) {
+			r_value = converted;
+			return;
+		}
+	}
+	Variant::construct(p_type, converted, nullptr, 0, error);
+	r_value = converted;
+}
+
+void GDCNative::call_cell(int p_cell, const Variant **p_args, int p_argcount, Variant *r_ret, Variant::Type p_return_type) {
+	call_cell_untyped(p_cell, p_args, p_argcount, r_ret);
+	if (unlikely(r_ret->get_type() != p_return_type)) {
+		coerce_native_result(*r_ret, p_return_type);
+	}
+}
+
+void GDCNative::call_cell_untyped(int p_cell, const Variant **p_args, int p_argcount, Variant *r_ret) {
 	NativeCell *cell = (p_cell >= 0 && p_cell < NATIVE_CELL_CHUNK * NATIVE_CELL_CHUNKS) ? get_cell(p_cell) : nullptr;
 	ERR_FAIL_NULL_MSG(cell, "Invalid CGD native call handle.");
 	const NativeWrapper *wrapper = cell->current.load(std::memory_order_acquire);
@@ -2982,6 +3013,7 @@ void GDCNative::_bind_methods() {
 	{
 		MethodInfo info("invoke_function");
 		info.arguments.push_back(PropertyInfo(Variant::STRING_NAME, "key"));
+		info.arguments.push_back(PropertyInfo(Variant::INT, "return_type"));
 		ClassDB::bind_vararg_method(METHOD_FLAGS_DEFAULT, "invoke_function", &GDCNative::_invoke_function, info);
 	}
 }

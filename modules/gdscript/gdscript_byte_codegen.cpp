@@ -1334,6 +1334,7 @@ void GDScriptByteCodeGenerator::write_call_cgd_native(const Address &p_target, i
 	append(ct.target);
 	append(p_arguments.size());
 	append(p_cell);
+	append(int(p_return_type));
 	ct.cleanup();
 }
 

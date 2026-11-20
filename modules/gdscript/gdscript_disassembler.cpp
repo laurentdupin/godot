@@ -862,7 +862,7 @@ void GDScriptFunction::disassemble(const Vector<String> &p_code_lines) const {
 				int argc = _code_ptr[ip + 1 + instr_var_args];
 				text += DADDR(1 + argc) + " = ";
 
-				text += "cell#" + itos(_code_ptr[ip + 2 + instr_var_args]);
+				text += "cell#" + itos(_code_ptr[ip + 2 + instr_var_args]) + " -> " + Variant::get_type_name(Variant::Type(_code_ptr[ip + 3 + instr_var_args]));
 				text += "(";
 
 				for (int i = 0; i < argc; i++) {
@@ -873,7 +873,7 @@ void GDScriptFunction::disassemble(const Vector<String> &p_code_lines) const {
 				}
 				text += ")";
 
-				incr = 4 + argc;
+				incr = 5 + argc;
 			} break;
 			case OPCODE_CALL_METHOD_BIND_VALIDATED_NO_RETURN: {
 				int instr_var_args = _code_ptr[++ip];

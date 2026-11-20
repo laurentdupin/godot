@@ -122,6 +122,7 @@ class GDCNative : public Object {
 	// invoke_function: a wrapper key followed by the call arguments (direct calls emitted by the compiler).
 	Variant _invoke_function(const Variant **p_args, int p_argcount, Callable::CallError &r_error);
 	Variant call_unregistered_wrapper(const StringName &p_key, const Variant **p_args, int p_argcount);
+	void call_cell_untyped(int p_cell, const Variant **p_args, int p_argcount, Variant *r_ret);
 
 protected:
 	static void _bind_methods();
@@ -139,7 +140,9 @@ public:
 	int get_wrapper_cell(const StringName &p_key);
 	// Typed call emitted by the GDScript compiler (OPCODE_CALL_CGD_NATIVE). The compiler
 	// guarantees int/float/bool arguments; other values fall back to the generic path.
-	void call_cell(int p_cell, const Variant **p_args, int p_argcount, Variant *r_ret);
+	// r_ret always ends up with p_return_type (the type the caller was compiled for), even on errors,
+	// because typed VM slots must keep their type.
+	void call_cell(int p_cell, const Variant **p_args, int p_argcount, Variant *r_ret, Variant::Type p_return_type);
 	static PackedStringArray runtime_libraries(const String &p_platform, const String &p_arch);
 	// The exported library's file name and its folder relative to the executable
 	// (cgd_native/export/library_name and cgd_native/export/directory).

@@ -655,6 +655,12 @@ GDScriptCodeGenerator::Address GDScriptCompiler::_parse_expression(CodeGen &code
 					}
 					Vector<GDScriptCodeGenerator::Address> native_arguments;
 					native_arguments.push_back(codegen.add_constant(call->cgd_native_key));
+					// The result lands in a typed temporary, so GDCNative keeps it of this type even on errors.
+					Variant::Type expected_type = Variant::VARIANT_MAX;
+					if (call->type_constraint.is_hard_type() && call->type_constraint.kind == GDScriptParser::DataType::BUILTIN) {
+						expected_type = call->type_constraint.builtin_type;
+					}
+					native_arguments.push_back(codegen.add_constant(int64_t(expected_type)));
 					native_arguments.append_array(arguments);
 					gen->write_call_method_bind(result, codegen.add_constant(GDCNative::get_singleton()), method, native_arguments);
 				}

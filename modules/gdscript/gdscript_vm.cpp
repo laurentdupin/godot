@@ -2376,19 +2376,21 @@ Variant GDScriptFunction::call(GDScriptInstance *p_instance, const Variant **p_a
 
 			OPCODE(OPCODE_CALL_CGD_NATIVE) {
 				LOAD_INSTRUCTION_ARGS
-				CHECK_SPACE(3 + instr_arg_count);
+				CHECK_SPACE(4 + instr_arg_count);
 
 				ip += instr_arg_count;
 
 				int argc = _code_ptr[ip + 1];
 				GD_ERR_BREAK(argc < 0);
 				int cell = _code_ptr[ip + 2];
+				Variant::Type return_type = (Variant::Type)_code_ptr[ip + 3];
+				GD_ERR_BREAK(return_type < 0 || return_type >= Variant::VARIANT_MAX);
 
 				GET_INSTRUCTION_ARG(dst, argc);
 
-				GDCNative::get_singleton()->call_cell(cell, (const Variant **)instruction_args, argc, dst);
+				GDCNative::get_singleton()->call_cell(cell, (const Variant **)instruction_args, argc, dst, return_type);
 
-				ip += 3;
+				ip += 4;
 			}
 			DISPATCH_OPCODE;
 
