@@ -5,6 +5,13 @@ creates its own Python/SCons environment and saves selections in the ignored
 `build_script/settings.json`. New configurations use `hcsr_newest`; existing
 saved renderer selections are preserved.
 
+Before building, the helper compares the installed AccessKit (screen reader
+support) with the version in `misc/scripts/install_accesskit.py` and runs that
+upstream installer when they differ; SCons would otherwise silently build
+without it. Pass `-- accesskit=no` to skip it, or `-- accesskit_sdk_path=...`
+to manage it yourself. On Windows the helper also ignores Git Bash's `MSYSTEM`,
+so builds find dependencies in `%LOCALAPPDATA%\Godot\build_deps` from any shell.
+
 To select the newest HCSR architecture and build without a custom suffix:
 
 ```sh

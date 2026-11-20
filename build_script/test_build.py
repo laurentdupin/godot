@@ -109,5 +109,69 @@ class NewestRendererPlatformTests(unittest.TestCase):
                                 build.validate_settings(settings, platform)
 
 
+class AccessKitDependencyTests(unittest.TestCase):
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        root = Path(self._directory.name)
+        self.installer = root / "install_accesskit.py"
+        self.installer.write_text('ac_version = "0.23.1"\n', encoding="utf-8")
+        self.folder = root / "accesskit"
+        patches = (
+            patch.object(build, "ACCESSKIT_INSTALLER", self.installer),
+            patch.object(build, "accesskit_folder", return_value=self.folder),
+        )
+        for patcher in patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.addCleanup(self._directory.cleanup)
+
+    def _install(self, version):
+        self.folder.mkdir(exist_ok=True)
+        (self.folder / "version").write_text(version, encoding="utf-8")
+
+    def test_required_version_is_read_from_upstream_installer(self):
+        self.assertEqual(build.required_accesskit_version(), "0.23.1")
+
+    def test_matching_installation_is_left_alone(self):
+        self._install("0.23.1")
+        with patch.object(build.subprocess, "run") as run:
+            build.ensure_accesskit([])
+        run.assert_not_called()
+
+    def test_outdated_or_unversioned_installation_runs_installer(self):
+        for state in ("0.22.3-1", None):
+            with self.subTest(state=state):
+                if state is None:
+                    (self.folder / "version").unlink(missing_ok=True)
+                    self.folder.mkdir(exist_ok=True)
+                else:
+                    self._install(state)
+
+                def installer(*_args, **_kwargs):
+                    self._install("0.23.1")
+                    return build.subprocess.CompletedProcess([], 0)
+
+                with patch.object(build.subprocess, "run", side_effect=installer) as run:
+                    build.ensure_accesskit([])
+                self.assertEqual(run.call_args.args[0][-1], str(self.installer))
+
+    def test_failed_installation_is_reported(self):
+        self._install("0.21.3")
+        with patch.object(build.subprocess, "run", return_value=build.subprocess.CompletedProcess([], 1)):
+            with self.assertRaises(RuntimeError):
+                build.ensure_accesskit([])
+
+    def test_disabled_or_custom_accesskit_is_not_managed(self):
+        for arguments in (["accesskit=no"], ["accesskit=false"], ["accesskit_sdk_path=C:/ak"]):
+            with self.subTest(arguments=arguments), patch.object(build.subprocess, "run") as run:
+                build.ensure_accesskit(arguments)
+            run.assert_not_called()
+
+    def test_windows_builds_ignore_msystem_unless_mingw(self):
+        with patch.object(build.sys, "platform", "win32"), patch.dict(os.environ, {"MSYSTEM": "MINGW64"}):
+            self.assertNotIn("MSYSTEM", build.dependency_environment([]))
+            self.assertIn("MSYSTEM", build.dependency_environment(["use_mingw=yes"]))
+
+
 if __name__ == "__main__":
     unittest.main()

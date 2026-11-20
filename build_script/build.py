@@ -207,6 +207,80 @@ def bootstrap_virtual_environment() -> Path:
     return python_executable
 
 
+ACCESSKIT_INSTALLER = GODOT_ROOT / "misc" / "scripts" / "install_accesskit.py"
+
+
+def dependency_environment(extra_arguments: Sequence[str] = ()) -> dict[str, str]:
+    environment = os.environ.copy()
+    # Git Bash/MSYS2 set MSYSTEM, which makes Godot's Windows scripts use the
+    # MinGW cross-compile layout (bin/build_deps) instead of
+    # %LOCALAPPDATA%\Godot\build_deps. This helper builds with MSVC.
+    if sys.platform == "win32" and not any(argument.startswith("use_mingw=") for argument in extra_arguments):
+        environment.pop("MSYSTEM", None)
+    return environment
+
+
+def accesskit_folder() -> Path:
+    local_app_data = os.getenv("LOCALAPPDATA")
+    if sys.platform == "win32" and local_app_data:
+        return Path(local_app_data) / "Godot" / "build_deps" / "accesskit"
+    return GODOT_ROOT / "bin" / "build_deps" / "accesskit"
+
+
+def required_accesskit_version() -> str | None:
+    try:
+        source = ACCESSKIT_INSTALLER.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(r'^ac_version = "([^"]+)"', source, re.MULTILINE)
+    return match.group(1) if match else None
+
+
+def installed_accesskit_version(folder: Path) -> str | None:
+    # Godot's installer records the version since AccessKit 0.23.1; older
+    # installations have no version file and are treated as outdated.
+    try:
+        return (folder / "version").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
+def accesskit_managed_by_helper(extra_arguments: Sequence[str]) -> bool:
+    for argument in extra_arguments:
+        key, _, value = argument.partition("=")
+        if key == "accesskit" and value.lower() in ("no", "false", "0", "off"):
+            return False
+        if key == "accesskit_sdk_path":
+            return False
+    return True
+
+
+def ensure_accesskit(extra_arguments: Sequence[str]) -> None:
+    """Install the AccessKit version Godot requires, as SCons silently disables it otherwise."""
+    if not accesskit_managed_by_helper(extra_arguments):
+        return
+    required = required_accesskit_version()
+    if required is None:
+        return
+    folder = accesskit_folder()
+    installed = installed_accesskit_version(folder)
+    if installed == required:
+        return
+    found = installed or ("an unversioned installation" if folder.exists() else "nothing")
+    print(f"AccessKit {required} is required; found {found} in {folder}. Running {ACCESSKIT_INSTALLER.name}.", flush=True)
+    completed = subprocess.run(
+        [sys.executable, str(ACCESSKIT_INSTALLER)],
+        cwd=GODOT_ROOT,
+        env=dependency_environment(extra_arguments),
+        check=False,
+    )
+    if completed.returncode != 0 or installed_accesskit_version(folder) != required:
+        raise RuntimeError(
+            f"AccessKit {required} installation failed. Retry, or build without screen reader support "
+            "by passing `-- accesskit=no`."
+        )
+
+
 def choose(label: str, values: Sequence[str], current: str) -> str:
     print(f"\n{label}:")
     for index, value in enumerate(values, start=1):
@@ -619,9 +693,11 @@ def run() -> int:
     if arguments.print_command:
         return 0
 
+    if not arguments.clean:
+        ensure_accesskit(extra_arguments)
     force_macos_hcsr_relink(settings, godot_platform)
     sys.stdout.flush()
-    completed = subprocess.run(command, cwd=GODOT_ROOT, check=False)
+    completed = subprocess.run(command, cwd=GODOT_ROOT, env=dependency_environment(extra_arguments), check=False)
     if completed.returncode != 0 or arguments.clean:
         return completed.returncode
 
